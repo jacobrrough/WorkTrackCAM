@@ -1,0 +1,65 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - 4-axis Grbl post for Makera Carvera + rotary 4th-axis attachment.
+  - A axis is the rotary axis (rotation around X by default on Carvera).
+  - Lines starting with ";" are operator-visible comments in output.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+  - Additional context for 4-axis: axisCount, aAxisRangeDeg, aAxisOrientation.
+--}}
+; {{machine.name}} — {{machine.id}}
+; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table.
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0°).
+; (5) Air-cut with spindle off at 10 % feed override before a real cut.
+; (6) Confirm your Carvera firmware supports the A word in Grbl (some builds
+;     require the rotary axis plugin — check Makera documentation).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{#if machine.aAxisRangeDeg}}; A-axis range: ±{{machine.aAxisRangeDeg}}° (verify against firmware soft limits)
+{{/if}}
+G21              ; millimeters — must match Carvera controller settings
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z{{machine.workAreaMm.z}} ; safe Z retract — adjust to your actual safe clearance
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis rotary)
+; Spindle on (Grbl — confirm S value matches your bit and material)
+{{spindleOn}}
+{{#if inverseTimeFeed}}; --- Inverse-time feed mode (G93) for continuous rotary axis motion ---
+; F-word = 1/time (inverse minutes). Each G1 block must carry its own F value.
+; G94 is restored after the toolpath to return to normal feed-per-minute mode.
+; NOTE: Not all Grbl builds support G93. Verify your firmware supports it.
+G93              ; inverse-time feed mode ON
+{{/if}}; --- 4-axis toolpath moves begin (X Y Z A words) ---
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; --- end toolpath ---
+{{#if inverseTimeFeed}}G94              ; restore feed-per-minute mode
+{{/if}}; Spindle off
+{{spindleOff}}
+; Retract Z to machine max clearance and park
+; (Toolpath already returns A to 0° and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z{{machine.workAreaMm.z}} ; full retract for unload
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
+M30

@@ -1,0 +1,18 @@
+{
+  "id": "makera-carvera-3axis",
+  "name": "Makera Carvera (3-Axis)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 360, "y": 240, "z": 140 },
+  "maxFeedMmMin": 2400,
+  "postTemplate": "carvera_3axis.hbs",
+  "dialect": "grbl",
+  "axisCount": 3,
+  "maxSpindleRpm": 15000,
+  "minSpindleRpm": 6000,
+  "meta": {
+    "manufacturer": "Makera",
+    "model": "Carvera",
+    "source": "bundled",
+    "cncProfile": "3d"
+  }
+}

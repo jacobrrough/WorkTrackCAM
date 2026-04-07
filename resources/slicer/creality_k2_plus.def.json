@@ -1,0 +1,20 @@
+{
+  "name": "Creality K2 Plus",
+  "version": 2,
+  "inherits": "fdmprinter",
+  "metadata": {
+    "visible": true,
+    "author": "Unified Fab Studio",
+    "manufacturer": "Creality",
+    "type": "machine"
+  },
+  "overrides": {
+    "machine_name": { "default_value": "Creality K2 Plus" },
+    "machine_width": { "default_value": 500 },
+    "machine_depth": { "default_value": 500 },
+    "machine_height": { "default_value": 500 },
+    "machine_head_with_fans_polygon": {
+      "default_value": "[[-30, 20], [-30, -20], [30, -20], [30, 20]]"
+    }
+  }
+}

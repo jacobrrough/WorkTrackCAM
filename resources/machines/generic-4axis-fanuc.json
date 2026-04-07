@@ -1,0 +1,17 @@
+{
+  "id": "generic-4axis-fanuc",
+  "name": "Generic 4-Axis CNC (Fanuc)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 500, "y": 300, "z": 200 },
+  "maxFeedMmMin": 5000,
+  "postTemplate": "cnc_4axis_fanuc.hbs",
+  "dialect": "fanuc_4axis",
+  "axisCount": 4,
+  "aAxisRangeDeg": 360,
+  "aAxisOrientation": "x",
+  "maxRotaryRpm": 20,
+  "meta": {
+    "manufacturer": "Generic",
+    "model": "Generic 4-axis CNC with Fanuc controller and A-axis rotary table. Adjust work area, feed limits, and spindle speed to match your specific machine. Generated G-code uses fanuc_4axis dialect. Verify against your Fanuc controller manual and run an air cut first."
+  }
+}

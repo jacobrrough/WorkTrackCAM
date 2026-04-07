@@ -1,0 +1,43 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - Lines starting with ";" are intentional operator-visible comments in the output file.
+  - Do not put mustache expressions inside ";" lines unless you mean to interpolate there.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+; {{machine.name}} — {{machine.id}}
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{units}}        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+{{spindleOn}}
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; Spindle off (dialect snippet — usually M5)
+{{spindleOff}}
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z{{machine.workAreaMm.z}} ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30

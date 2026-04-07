@@ -1,0 +1,60 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - 5-axis Fanuc post template — simultaneous 5-axis with G43.4 RTCP.
+  - A axis = rotary (around X), B axis = tilt (around Y for table-table/table-head).
+  - G93 inverse time feed is OPTIONAL — only enable if your controller requires it
+    for simultaneous 5-axis moves. Most modern Fanuc 30i/31i support G01 F in mm/min.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+; {{machine.name}} — {{machine.id}}
+; 5-AXIS SIMULTANEOUS G-CODE — Fanuc dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine kinematic type matches profile (table-table, table-head,
+;     or head-head). Wrong kinematics = wrong tool tip position = CRASH.
+; (2) Confirm G43.4 (RTCP / TCP) is available and calibrated on your control.
+;     Without RTCP, the programmed XYZ point is the rotary center, NOT the
+;     tool tip — the tool will gouge or miss the part.
+; (3) Confirm A-axis and B-axis travel limits match the profile ranges.
+; (4) Confirm tool length compensation (H value) is correct — G43.4 uses it.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) Watch for singularities near A=0/B=0 (gimbal lock region) — feed may
+;     spike. Reduce override near vertical orientations.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{#if machine.aAxisRangeDeg}}; A-axis range: {{machine.aAxisRangeDeg}}°{{/if}}
+{{#if machine.bAxisRangeDeg}}; B-axis range: {{machine.bAxisRangeDeg}}°{{/if}}
+{{#if machine.fiveAxisType}}; Kinematic chain: {{machine.fiveAxisType}}{{/if}}
+{{#if machine.maxTiltDeg}}; Max tilt from vertical: {{machine.maxTiltDeg}}°{{/if}}
+{{units}}        ; G21=mm / G20=inch — must match controller defaults
+G90              ; absolute distance mode (X Y Z A B all absolute)
+G17              ; XY plane for arcs
+G40 G49 G80     ; cancel cutter comp, tool length comp, canned cycles
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; --- RTCP (Rotary Tool Center Point) ---
+; G43.4 tells the control to keep the tool tip at programmed XYZ regardless
+; of A/B rotation. Remove this line ONLY if your post-processor already
+; accounts for kinematic offsets in the XYZ coordinates.
+G43.4 H{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}        ; RTCP on — verify H number matches your tool offset
+; Spindle on
+{{spindleOn}}
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; --- end toolpath ---
+; Spindle off
+{{spindleOff}}
+; Cancel RTCP before retracting
+G49              ; cancel tool length / RTCP
+; Safe retract
+G0 Z{{machine.workAreaMm.z}}
+G0 A0 B0         ; return rotary axes to zero
+G0 X0 Y0         ; park — adjust to your safe park position
+M30

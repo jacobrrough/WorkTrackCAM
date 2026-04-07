@@ -1,0 +1,20 @@
+{
+  "id": "generic-5axis-tt",
+  "name": "Generic 5-Axis (Table-Table)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 500, "y": 400, "z": 300 },
+  "maxFeedMmMin": 8000,
+  "postTemplate": "cnc_5axis_fanuc.hbs",
+  "dialect": "fanuc",
+  "axisCount": 5,
+  "aAxisRangeDeg": 360,
+  "aAxisOrientation": "x",
+  "bAxisOrientation": "y",
+  "bAxisRangeDeg": 240,
+  "fiveAxisType": "table-table",
+  "maxTiltDeg": 90,
+  "meta": {
+    "source": "bundled",
+    "cncProfile": "3d"
+  }
+}

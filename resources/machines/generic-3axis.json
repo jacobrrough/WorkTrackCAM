@@ -1,0 +1,13 @@
+{
+  "id": "generic-3axis",
+  "name": "Generic 3-axis (mm)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 200, "y": 200, "z": 100 },
+  "maxFeedMmMin": 5000,
+  "postTemplate": "cnc_generic_mm.hbs",
+  "dialect": "generic_mm",
+  "meta": {
+    "manufacturer": "Stub",
+    "model": "Placeholder envelope — replace workAreaMm, maxFeedMmMin, dialect with your machine; treat max feed as untrusted until you verify; see docs/MACHINES.md"
+  }
+}

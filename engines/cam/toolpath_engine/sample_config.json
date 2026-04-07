@@ -1,0 +1,41 @@
+{
+  "stlPath": "path/to/your/part.stl",
+  "toolpathJsonPath": "output/toolpath.json",
+  "strategy": "adaptive_clear",
+  "_available_strategies": "adaptive_clear, waterline, raster, pencil, rest, spiral_finish, morphing_finish",
+
+  "toolDiameterMm": 6.0,
+  "toolShape": "flat",
+  "cornerRadiusMm": 0.0,
+  "fluteLengthMm": 25.0,
+  "fluteCount": 2,
+
+  "feedMmMin": 1500,
+  "plungeMmMin": 500,
+  "rampAngleDeg": 3.0,
+  "spindleRpm": 18000,
+  "stepoverMm": 1.5,
+  "zStepMm": 1.0,
+  "safeZMm": 10.0,
+  "retractZMm": 5.0,
+
+  "materialName": "aluminum_6061",
+  "maxEngagementDeg": 90.0,
+
+  "stockXMin": -2.0,
+  "stockXMax": 52.0,
+  "stockYMin": -2.0,
+  "stockYMax": 52.0,
+  "stockZMin": -10.0,
+  "stockZMax": 2.0,
+
+  "xTravelMm": 300,
+  "yTravelMm": 160,
+  "zTravelMm": 65,
+  "maxFeedMmMin": 5000,
+  "maxSpindleRpm": 24000,
+
+  "toleranceMm": 0.01,
+  "surfaceFinishRaUm": 3.2,
+  "postDialect": "grbl"
+}

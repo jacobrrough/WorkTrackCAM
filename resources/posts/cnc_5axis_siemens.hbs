@@ -1,0 +1,56 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - 5-axis Siemens Sinumerik post template — simultaneous 5-axis with TRAORI.
+  - A axis = rotary (around X), B axis = tilt (around Y).
+  - TRAORI activates 5-axis transformation (equivalent to Fanuc G43.4 RTCP).
+  - TRAFOOF deactivates it.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+; {{machine.name}} — {{machine.id}}
+; 5-AXIS SIMULTANEOUS G-CODE — Siemens Sinumerik dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine data (MD) for kinematic chain matches this profile.
+;     TRAORI reads pivot point distances from MD — wrong MD = wrong TCP.
+; (2) Confirm TRAORI is licensed and configured ($MC_TRAFO_TYPE_1, etc.).
+; (3) Confirm A-axis and B/C-axis travel limits and soft limits.
+; (4) Confirm tool length in the tool table (D1) is correct.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) CYCLE800 (SWIVEL) may be needed before TRAORI if using tilted work
+;     planes — this template does not emit CYCLE800.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{#if machine.aAxisRangeDeg}}; A-axis range: {{machine.aAxisRangeDeg}}°{{/if}}
+{{#if machine.bAxisRangeDeg}}; B-axis range: {{machine.bAxisRangeDeg}}°{{/if}}
+{{#if machine.fiveAxisType}}; Kinematic chain: {{machine.fiveAxisType}}{{/if}}
+{{#if machine.maxTiltDeg}}; Max tilt from vertical: {{machine.maxTiltDeg}}°{{/if}}
+{{units}}        ; G21=mm / G20=inch — must match controller defaults
+G90              ; absolute distance mode
+G17              ; XY plane for arcs
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; --- Activate 5-axis orientation transformation ---
+; TRAORI tells Sinumerik to maintain tool tip at programmed XYZ regardless
+; of rotary axis positions. This is mandatory for simultaneous 5-axis.
+TRAORI(1)        ; activate transformation — number matches your kinematic setup
+; Spindle on
+{{spindleOn}}
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; --- end toolpath ---
+; Spindle off
+{{spindleOff}}
+; Deactivate transformation before retracting
+TRAFOOF          ; transformation off
+; Safe retract
+G0 Z{{machine.workAreaMm.z}}
+G0 A0 B0         ; return rotary axes to zero
+G0 X0 Y0         ; park — adjust to your safe park position
+M30

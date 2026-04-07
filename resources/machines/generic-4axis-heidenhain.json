@@ -1,0 +1,17 @@
+{
+  "id": "generic-4axis-heidenhain",
+  "name": "Generic 4-Axis CNC (Heidenhain TNC)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 500, "y": 400, "z": 250 },
+  "maxFeedMmMin": 5000,
+  "postTemplate": "cnc_4axis_heidenhain.hbs",
+  "dialect": "heidenhain_4axis",
+  "axisCount": 4,
+  "aAxisRangeDeg": 360,
+  "aAxisOrientation": "x",
+  "maxRotaryRpm": 20,
+  "meta": {
+    "manufacturer": "Generic",
+    "model": "Generic 4-axis CNC with Heidenhain TNC controller and A-axis rotary table. Uses DIN/ISO mode (not Klartext). Adjust work area, feed limits, and spindle speed to match your specific machine. Verify against your TNC manual and run an air cut first."
+  }
+}

@@ -1,0 +1,68 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - Carvera 3-axis post — Smoothieware-based firmware.
+  - Supports Carvera's 6-slot automatic tool changer (ATC): T1–T6.
+  - T0 = wireless probe, T-1 = no tool. This template uses T1 by default.
+  - After M6 tool change, the machine automatically probes tool length.
+  - G43 H(tool#) applies tool length compensation; G49 cancels it.
+  - CRITICAL: Uses M2 for program end, NOT M30 — M30 on Smoothieware may delete
+    the file from the SD card.
+  - Spindle range: 6000–15000 RPM. S value comes from dialect snippet.
+  - G4 P2 dwell after spindle start lets the spindle reach commanded RPM.
+  - M9 at end turns off coolant/vacuum.
+  - Lines starting with ";" are operator-visible comments in output.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+; Makera Carvera — 3-Axis G-code
+; Machine: {{machine.name}} — {{machine.id}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+; Spindle range: {{machine.minSpindleRpm}}–{{machine.maxSpindleRpm}} RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}            ; select tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}} and execute tool change (auto-probes length)
+G43 H{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}           ; apply tool length compensation for tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}
+
+; Safe retract and spindle start
+G0 Z{{machine.workAreaMm.z}} ; safe Z retract
+{{spindleOn}}
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; --- end toolpath ---
+
+; --- End ---
+{{spindleOff}}
+G49              ; cancel tool length compensation
+G0 Z{{machine.workAreaMm.z}} ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)

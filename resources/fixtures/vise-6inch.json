@@ -1,0 +1,57 @@
+{
+  "id": "vise-6inch",
+  "name": "6\" Machinist Vise",
+  "type": "vise",
+  "description": "Standard 6-inch precision machinist vise for general milling and clamping operations.",
+
+  "boundingBox": {
+    "xMm": 280,
+    "yMm": 160,
+    "zMm": 100
+  },
+
+  "jawWidthMm": 150,
+  "jawHeightMm": 40,
+  "maxOpeningMm": 165,
+  "jawPositions": {
+    "fixedJawYMm": 0,
+    "movableJawYMm": 165
+  },
+
+  "clampingZones": [
+    {
+      "label": "Fixed jaw face",
+      "minMm": { "x": 65, "y": 0, "z": 60 },
+      "maxMm": { "x": 215, "y": 5, "z": 100 }
+    },
+    {
+      "label": "Movable jaw face",
+      "minMm": { "x": 65, "y": 160, "z": 60 },
+      "maxMm": { "x": 215, "y": 165, "z": 100 }
+    }
+  ],
+
+  "safeZones": [
+    {
+      "label": "Above jaws",
+      "minMm": { "x": 0, "y": 0, "z": 100 },
+      "maxMm": { "x": 280, "y": 160, "z": 999 }
+    },
+    {
+      "label": "Open area between jaws (top)",
+      "minMm": { "x": 65, "y": 5, "z": 60 },
+      "maxMm": { "x": 215, "y": 160, "z": 999 }
+    }
+  ],
+
+  "mounting": {
+    "type": "bolt-down",
+    "boltPattern": [
+      { "xMm": 35, "yMm": 80 },
+      { "xMm": 245, "yMm": 80 }
+    ],
+    "boltSizeMm": 16
+  },
+
+  "notes": "Suitable for parts up to ~150 mm wide. Jaw step height 40 mm. Mount with M16 T-slot bolts."
+}

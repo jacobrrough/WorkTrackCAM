@@ -1,0 +1,22 @@
+# WorkTrackCAM Python Engine Dependencies
+# Python >= 3.9 required (uses match, walrus operator patterns, __future__ annotations)
+#
+# Install:
+#   pip install -r engines/requirements.txt
+#
+# For OpenCAMLib (optional, high-performance OCL waterline/raster):
+#   pip install opencamlib
+#   (wheels available for Python 3.7-3.11; other versions may need a local build)
+
+# ── Core (required for all CAM strategies) ─────────────────────────────
+# numpy: vectorized STL loading, drop-cutter heightfields, surface analysis
+numpy>=1.21,<3
+
+# ── Optional (enhanced developer experience) ──────────────────────────
+# structlog: structured JSON log output; engine falls back to stdlib logging
+structlog>=23.1,<26
+
+# ── Optional (OpenCAMLib integration) ─────────────────────────────────
+# opencamlib: high-performance drop-cutter via C++ extension (ocl_toolpath.py)
+# Uncomment to install; requires a compatible build for your Python version.
+# opencamlib

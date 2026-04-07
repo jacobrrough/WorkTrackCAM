@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Test & Typecheck (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+      fail-fast: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+      - name: Build production bundle
+        run: npx electron-vite build
+
+      - name: Smoke test — verify build output
+        shell: bash
+        run: |
+          echo "=== Smoke test: checking build output ==="
+          # Verify renderer entry point exists
+          test -f out/renderer/index.html || { echo "FAIL: out/renderer/index.html missing"; exit 1; }
+          # Verify main process entry point exists
+          test -f out/main/index.js || { echo "FAIL: out/main/index.js missing"; exit 1; }
+          # Verify preload script exists
+          test -f out/preload/index.js || { echo "FAIL: out/preload/index.js missing"; exit 1; }
+          # Verify renderer JS bundle is non-empty
+          RENDERER_JS=$(find out/renderer/assets -name '*.js' 2>/dev/null | head -1)
+          if [ -z "$RENDERER_JS" ]; then
+            echo "FAIL: no JS bundle found in out/renderer/assets/"
+            exit 1
+          fi
+          echo "PASS: all expected build outputs present"

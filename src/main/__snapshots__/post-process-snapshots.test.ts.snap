@@ -1,0 +1,2802 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Snapshot — 5-axis templates with options > Fanuc 5-axis with tool number T3 and WCS G55 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 5-AXIS SIMULTANEOUS G-CODE — Fanuc dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine kinematic type matches profile (table-table, table-head,
+;     or head-head). Wrong kinematics = wrong tool tip position = CRASH.
+; (2) Confirm G43.4 (RTCP / TCP) is available and calibrated on your control.
+;     Without RTCP, the programmed XYZ point is the rotary center, NOT the
+;     tool tip — the tool will gouge or miss the part.
+; (3) Confirm A-axis and B-axis travel limits match the profile ranges.
+; (4) Confirm tool length compensation (H value) is correct — G43.4 uses it.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) Watch for singularities near A=0/B=0 (gimbal lock region) — feed may
+;     spike. Reduce override near vertical orientations.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360°
+; B-axis range: 120°
+; Kinematic chain: table-head
+; Max tilt from vertical: 60°
+G21        ; G21=mm / G20=inch — must match controller defaults
+G90              ; absolute distance mode (X Y Z A B all absolute)
+G17              ; XY plane for arcs
+G40 G49 G80     ; cancel cutter comp, tool length comp, canned cycles
+; Active work offset — verify fixture zero matches G54–G59 selection
+G55
+; Operation: 5ax Fanuc T3 G55
+; --- RTCP (Rotary Tool Center Point) ---
+; G43.4 tells the control to keep the tool tip at programmed XYZ regardless
+; of A/B rotation. Remove this line ONLY if your post-processor already
+; accounts for kinematic offsets in the XYZ coordinates.
+G43.4 H3        ; RTCP on — verify H number matches your tool offset
+; Spindle on
+M3 S10000
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+G0 X0 Y0 Z30 A0 B0
+G1 X10 Y10 Z-1.000 A15 B10 F500
+G1 X20 Y10 Z-1.000 A30 B-5 F500
+G1 X20 Y20 Z-1.500 A15 B0 F500
+G0 Z30 A0 B0
+; --- end toolpath ---
+; Spindle off
+M5
+; Cancel RTCP before retracting
+G49              ; cancel tool length / RTCP
+; Safe retract
+G0 Z100
+G0 A0 B0         ; return rotary axes to zero
+G0 X0 Y0         ; park — adjust to your safe park position
+M30
+"
+`;
+
+exports[`Snapshot — 5-axis templates with options > Siemens 5-axis with TRAORI and line numbering 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 5-AXIS SIMULTANEOUS G-CODE — Siemens Sinumerik dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine data (MD) for kinematic chain matches this profile.
+;     TRAORI reads pivot point distances from MD — wrong MD = wrong TCP.
+; (2) Confirm TRAORI is licensed and configured ($MC_TRAFO_TYPE_1, etc.).
+; (3) Confirm A-axis and B/C-axis travel limits and soft limits.
+; (4) Confirm tool length in the tool table (D1) is correct.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) CYCLE800 (SWIVEL) may be needed before TRAORI if using tilted work
+;     planes — this template does not emit CYCLE800.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360°
+; B-axis range: 120°
+; Kinematic chain: table-table
+; Max tilt from vertical: 60°
+N10 G21        ; G21=mm / G20=inch — must match controller defaults
+N20 G90              ; absolute distance mode
+N30 G17              ; XY plane for arcs
+; Operation: 5ax Siemens Numbered
+; --- Activate 5-axis orientation transformation ---
+; TRAORI tells Sinumerik to maintain tool tip at programmed XYZ regardless
+; of rotary axis positions. This is mandatory for simultaneous 5-axis.
+N40 TRAORI(1)        ; activate transformation — number matches your kinematic setup
+; Spindle on
+N50 M3 S10000
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+N60 G0 X0 Y0 Z30 A0 B0
+N70 G1 X10 Y10 Z-1.000 A15 B10 F500
+N80 G1 X20 Y10 Z-1.000 A30 B-5 F500
+N90 G1 X20 Y20 Z-1.500 A15 B0 F500
+N100 G0 Z30 A0 B0
+; --- end toolpath ---
+; Spindle off
+N110 M5
+; Deactivate transformation before retracting
+N120 TRAFOOF          ; transformation off
+; Safe retract
+N130 G0 Z100
+N140 G0 A0 B0         ; return rotary axes to zero
+N150 G0 X0 Y0         ; park — adjust to your safe park position
+N160 M30
+"
+`;
+
+exports[`Snapshot — WCS offsets > G54 (WCS index 1) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
+; Operation: WCS G54
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — WCS offsets > G57 (WCS index 4) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G57
+; Operation: WCS G57
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — WCS offsets > G59 (WCS index 6) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G59
+; Operation: WCS G59
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — arc fitting > arc fitting DISABLED: G1 moves preserved as-is 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Arc Fitting Disabled
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G1 X8.6603 Y5.0000 Z0 F600
+G1 X5.0000 Y8.6603 Z0 F600
+G1 X0.0000 Y10.0000 Z0 F600
+G1 X-5.0000 Y8.6603 Z0 F600
+G1 X-8.6603 Y5.0000 Z0 F600
+G1 X-10.0000 Y0.0000 Z0 F600
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — arc fitting > arc fitting ENABLED: G1 sequences converted to G2/G3 arcs 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Arc Fitting Enabled
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — arc fitting > arc fitting on Fanuc 4-axis template 1`] = `
+"(Comprehensive Snapshot Mill — snapshot-comprehensive)
+(4-AXIS A-ROTARY G-CODE — FANUC DIALECT)
+(---------------------------------------------------------------------------)
+(UNVERIFIED G-CODE — VERIFY EVERY LINE AGAINST YOUR FANUC CONTROLLER MANUAL)
+(BEFORE RUNNING ON A MACHINE. OUTPUT IS NOT GUARANTEED SAFE FOR ANY MACHINE.)
+(---------------------------------------------------------------------------)
+(CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:)
+(1 — CONFIRM THE ROTARY TABLE OR CHUCK IS FIRMLY CLAMPED TO THE MACHINE TABLE.)
+(2 — CONFIRM THE WORKPIECE IS CENTRED ON THE ROTARY AXIS — OFF-CENTRE)
+(    STOCK CAUSES GOUGING AND CRASHES.)
+(3 — CONFIRM CYLINDER DIAMETER MATCHES THE VALUE USED TO GENERATE TOOLPATHS.)
+(4 — SET A-AXIS WCS ZERO — USUALLY THE LEFT FACE OF THE CYLINDER AT A=0 DEG.)
+(5 — AIR-CUT WITH SPINDLE OFF AT 10 PCT FEED OVERRIDE BEFORE A REAL CUT.)
+(6 — CONFIRM YOUR FANUC CONTROL SUPPORTS A-AXIS COMMANDS AND THAT THE)
+(    ROTARY AXIS IS PROPERLY CONFIGURED IN PARAMETERS.)
+(---------------------------------------------------------------------------)
+(RETRACT ORDER: LIFT Z TO SAFE CLEARANCE BEFORE COMMANDING LARGE A MOVES.)
+(BEFORE PRODUCTION: DRY RUN — SPINDLE OFF, Z HIGH, FEED REDUCED.)
+(SEE DOCS/MACHINES.MD — SAFE Z, WCS, UNITS, SPINDLE M-CODES.)
+(---------------------------------------------------------------------------)
+(WORK AREA MM: 300 X 200 X 100)
+(A-AXIS RANGE: 360 DEG — VERIFY AGAINST MACHINE TRAVEL LIMITS)
+G21              (METRIC — MUST MATCH CONTROLLER SETTING)
+G90                    (ABSOLUTE DISTANCE MODE — X Y Z A ALL ABSOLUTE)
+G17                    (XY PLANE FOR G2/G3 ARCS)
+G40 G49 G80           (CANCEL CUTTER COMP, TOOL LENGTH COMP, CANNED CYCLES)
+(OPERATION: Arc Fitting Fanuc 4-Axis)
+(SAFE RETRACT — LIFT Z BEFORE ANY A-AXIS ROTATION TO AVOID COLLISIONS)
+G0 Z100
+(SPINDLE ON — CONFIRM S VALUE MATCHES YOUR TOOL AND MATERIAL)
+M3 S10000
+(--- 4-AXIS TOOLPATH MOVES BEGIN — X Y Z A WORDS ---)
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+G0 Z10
+(--- END TOOLPATH ---)
+(SPINDLE OFF)
+M5
+(SAFE RETRACT AND RETURN TO REFERENCE POSITION)
+G91 G28 Z0            (RETURN Z TO REFERENCE POINT — INCREMENTAL MODE)
+G91 G28 X0 Y0         (RETURN X Y TO HOME POSITION)
+G90                    (RESTORE ABSOLUTE MODE)
+G0 A0                 (RETURN A-AXIS TO ZERO)
+M30                   (PROGRAM END AND REWIND)
+"
+`;
+
+exports[`Snapshot — arc fitting > arc fitting with custom tolerance 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Arc Fitting Tolerance 0.01mm
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — combined options > all options combined: Fanuc dialect 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N15 G90              ; absolute distance mode
+N20 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N25 G54
+; Operation: All Options Fanuc
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N30 M3 S8000
+N35 G0 X0 Y0 Z10
+N40 G0 X5 Y5 Z5
+N45 G41 D1
+N50 G1 X15 Y5 Z0 F800
+N55 G3 X5 Y5 Z0 I-5 J5 F800
+N60 G40
+N65 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N70 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N75 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N80 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N85 M30
+"
+`;
+
+exports[`Snapshot — combined options > arc fitting + cutter compensation + WCS offset 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Arc + Comp + WCS
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G42 D2
+G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — combined options > arc fitting + line numbering 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N100 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N110 G90              ; absolute distance mode
+N120 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Arc + Line Numbers
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N130 M3 S12000
+N140 G0 X0 Y0 Z10
+N150 G0 X10 Y0 Z0
+N160 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+N170 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N180 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N190 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N200 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N210 M30
+"
+`;
+
+exports[`Snapshot — combined options > cutter compensation + line numbering 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N20 G90              ; absolute distance mode
+N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Comp + Line Numbers
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N40 M3 S12000
+N50 G0 X0 Y0 Z10
+N60 G0 X5 Y5 Z5
+N70 G41 D7
+N80 G1 Z-1.000 F300
+N90 G1 X15 Y5 F800
+N100 G1 X15 Y15 F800
+N110 G1 X5 Y15 F800
+N120 G1 X5 Y5 F800
+N130 G40
+N140 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N150 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N180 M30
+"
+`;
+
+exports[`Snapshot — combined options > subroutines + line numbering (Fanuc) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N20 G90              ; absolute distance mode
+N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Subs + Line Numbers
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N40 M3 S10000
+N50 G0 X0 Y0 Z10
+; --- Subroutine call (4x repeat) ---
+N60 M98 P1000 L4
+N70 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N80 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N90 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N100 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N110 M30
+
+; --- SUBROUTINE DEFINITIONS ---
+N120 O1000 (SUBROUTINE 1000)
+N130 G0 Z5
+N140 G1 Z-1.000 F300
+N150 G1 X10 Y0 F800
+N160 M99
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation LEFT (G41): climb milling 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Cutter Comp Left (G41)
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G41
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation LEFT with D-register (G41 D5) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Cutter Comp G41 D5
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G41 D5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation NONE: no G41/G42/G40 in output 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Cutter Comp None
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation RIGHT (G42): conventional milling 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Cutter Comp Right (G42)
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G42
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation RIGHT with D-register (G42 D3) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Cutter Comp G42 D3
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G42 D3
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — cutter compensation > cutter compensation combined with arc fitting 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Comp + Arc Fitting
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X10 Y0 Z0
+G41
+G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+G40
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Carvera 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Makera Carvera — 3-Axis G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Comprehensive Dialect Test
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T2            ; select tool 2 and execute tool change (auto-probes length)
+G43 H2           ; apply tool length compensation for tool 2
+
+; Safe retract and spindle start
+G0 Z100 ; safe Z retract
+M3 S9000
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; --- end toolpath ---
+
+; --- End ---
+M5
+G49              ; cancel tool length compensation
+G0 Z100 ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Carvera 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Makera Carvera — 4-Axis Rotary G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Comprehensive Dialect Test
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Rotary attachment secured to table
+; [2] Stock centered in chuck, tailstock engaged
+; [3] Stock diameter matches CAM setup (Y dimension)
+; [4] Z=0 is at stock CENTER (rotation axis), NOT surface
+; [5] A=0 set via controller or G28.3 A0
+; [6] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: continuous (verify against firmware soft limits)
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Safe retract, center on rotary axis, and spindle start
+G0 Z100 ; safe Z retract
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis)
+M3 S9000
+G4 P2            ; dwell 2s for spindle to reach speed
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; --- End ---
+M5
+G0 Z100 ; retract Z
+G0 A0            ; return A to zero
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Fanuc 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S9000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Fanuc 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"(Comprehensive Snapshot Mill — snapshot-comprehensive)
+(4-AXIS A-ROTARY G-CODE — FANUC DIALECT)
+(---------------------------------------------------------------------------)
+(UNVERIFIED G-CODE — VERIFY EVERY LINE AGAINST YOUR FANUC CONTROLLER MANUAL)
+(BEFORE RUNNING ON A MACHINE. OUTPUT IS NOT GUARANTEED SAFE FOR ANY MACHINE.)
+(---------------------------------------------------------------------------)
+(CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:)
+(1 — CONFIRM THE ROTARY TABLE OR CHUCK IS FIRMLY CLAMPED TO THE MACHINE TABLE.)
+(2 — CONFIRM THE WORKPIECE IS CENTRED ON THE ROTARY AXIS — OFF-CENTRE)
+(    STOCK CAUSES GOUGING AND CRASHES.)
+(3 — CONFIRM CYLINDER DIAMETER MATCHES THE VALUE USED TO GENERATE TOOLPATHS.)
+(4 — SET A-AXIS WCS ZERO — USUALLY THE LEFT FACE OF THE CYLINDER AT A=0 DEG.)
+(5 — AIR-CUT WITH SPINDLE OFF AT 10 PCT FEED OVERRIDE BEFORE A REAL CUT.)
+(6 — CONFIRM YOUR FANUC CONTROL SUPPORTS A-AXIS COMMANDS AND THAT THE)
+(    ROTARY AXIS IS PROPERLY CONFIGURED IN PARAMETERS.)
+(---------------------------------------------------------------------------)
+(RETRACT ORDER: LIFT Z TO SAFE CLEARANCE BEFORE COMMANDING LARGE A MOVES.)
+(BEFORE PRODUCTION: DRY RUN — SPINDLE OFF, Z HIGH, FEED REDUCED.)
+(SEE DOCS/MACHINES.MD — SAFE Z, WCS, UNITS, SPINDLE M-CODES.)
+(---------------------------------------------------------------------------)
+(WORK AREA MM: 300 X 200 X 100)
+(A-AXIS RANGE: 360 DEG — VERIFY AGAINST MACHINE TRAVEL LIMITS)
+G21              (METRIC — MUST MATCH CONTROLLER SETTING)
+G90                    (ABSOLUTE DISTANCE MODE — X Y Z A ALL ABSOLUTE)
+G17                    (XY PLANE FOR G2/G3 ARCS)
+G40 G49 G80           (CANCEL CUTTER COMP, TOOL LENGTH COMP, CANNED CYCLES)
+(ACTIVE WORK OFFSET — VERIFY FIXTURE ZERO MATCHES G54-G59 SELECTION)
+G56
+(OPERATION: Comprehensive Dialect Test)
+(SAFE RETRACT — LIFT Z BEFORE ANY A-AXIS ROTATION TO AVOID COLLISIONS)
+G0 Z100
+(SPINDLE ON — CONFIRM S VALUE MATCHES YOUR TOOL AND MATERIAL)
+M3 S9000
+(--- 4-AXIS TOOLPATH MOVES BEGIN — X Y Z A WORDS ---)
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+(--- END TOOLPATH ---)
+(SPINDLE OFF)
+M5
+(SAFE RETRACT AND RETURN TO REFERENCE POSITION)
+G91 G28 Z0            (RETURN Z TO REFERENCE POINT — INCREMENTAL MODE)
+G91 G28 X0 Y0         (RETURN X Y TO HOME POSITION)
+G90                    (RESTORE ABSOLUTE MODE)
+G0 A0                 (RETURN A-AXIS TO ZERO)
+M30                   (PROGRAM END AND REWIND)
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Fanuc 5-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 5-AXIS SIMULTANEOUS G-CODE — Fanuc dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine kinematic type matches profile (table-table, table-head,
+;     or head-head). Wrong kinematics = wrong tool tip position = CRASH.
+; (2) Confirm G43.4 (RTCP / TCP) is available and calibrated on your control.
+;     Without RTCP, the programmed XYZ point is the rotary center, NOT the
+;     tool tip — the tool will gouge or miss the part.
+; (3) Confirm A-axis and B-axis travel limits match the profile ranges.
+; (4) Confirm tool length compensation (H value) is correct — G43.4 uses it.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) Watch for singularities near A=0/B=0 (gimbal lock region) — feed may
+;     spike. Reduce override near vertical orientations.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360°
+; B-axis range: 120°
+; Kinematic chain: table-head
+; Max tilt from vertical: 60°
+G21        ; G21=mm / G20=inch — must match controller defaults
+G90              ; absolute distance mode (X Y Z A B all absolute)
+G17              ; XY plane for arcs
+G40 G49 G80     ; cancel cutter comp, tool length comp, canned cycles
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- RTCP (Rotary Tool Center Point) ---
+; G43.4 tells the control to keep the tool tip at programmed XYZ regardless
+; of A/B rotation. Remove this line ONLY if your post-processor already
+; accounts for kinematic offsets in the XYZ coordinates.
+G43.4 H2        ; RTCP on — verify H number matches your tool offset
+; Spindle on
+M3 S9000
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+G0 X0 Y0 Z30 A0 B0
+G1 X10 Y10 Z-1.000 A15 B10 F500
+G1 X20 Y10 Z-1.000 A30 B-5 F500
+G1 X20 Y20 Z-1.500 A15 B0 F500
+G0 Z30 A0 B0
+; --- end toolpath ---
+; Spindle off
+M5
+; Cancel RTCP before retracting
+G49              ; cancel tool length / RTCP
+; Safe retract
+G0 Z100
+G0 A0 B0         ; return rotary axes to zero
+G0 X0 Y0         ; park — adjust to your safe park position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > GRBL 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S9000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > GRBL 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table.
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0°).
+; (5) Air-cut with spindle off at 10 % feed override before a real cut.
+; (6) Confirm your Carvera firmware supports the A word in Grbl (some builds
+;     require the rotary axis plugin — check Makera documentation).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: ±360° (verify against firmware soft limits)
+G21              ; millimeters — must match Carvera controller settings
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis rotary)
+; Spindle on (Grbl — confirm S value matches your bit and material)
+M3 S9000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance and park
+; (Toolpath already returns A to 0° and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Heidenhain 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S9000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Heidenhain 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — Heidenhain TNC (DIN/ISO mode)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Heidenhain TNC manual
+; before running on a machine. Output is not guaranteed safe for any machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Switch the TNC to DIN/ISO mode (not Klartext). This program uses
+;     standard G-code, not Heidenhain conversational format.
+; (2) Confirm the rotary table or chuck is firmly clamped and the A-axis
+;     motor is enabled in machine parameters (MP).
+; (3) Confirm the workpiece is centred on the rotary axis — off-centre
+;     stock causes gouging and crashes.
+; (4) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (5) Set A-axis datum — use the TNC Datum Setup screen to zero the A axis
+;     at your reference position.
+; (6) Air-cut with spindle off at 10% feed override before a real cut.
+; (7) Confirm your TNC machine parameters for the A-axis are correct:
+;     axis limits, acceleration, max RPM. Check MP7420 (axis assignment)
+;     and MP1000 (rotary axis configuration).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to safe clearance before commanding large A moves.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360 deg — verify against TNC MP axis limits
+; --- Safety header ---
+G21              ; millimeters — must match TNC setting
+G90                    ; absolute distance mode (X Y Z A all absolute)
+G17                    ; XY plane for G2/G3 arcs
+G40                    ; cancel cutter radius compensation
+G49                    ; cancel tool length compensation
+G80                    ; cancel canned cycles
+; Active work offset — verify fixture zero matches G54-G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- Tool call (Heidenhain DIN/ISO mode — verify tool in TNC tool table) ---
+T2 M6                  ; select tool 2 and execute tool change
+G43 H2                 ; apply tool length compensation from TNC tool table
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100   ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (Heidenhain — confirm S value and M3/M4 match your spindle config)
+M3 S9000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Safe retract and park
+G0 Z100   ; full retract for unload
+G0 A0                  ; return A-axis to zero
+G0 X0 Y0              ; park X Y — adjust to your preferred park position
+M30                    ; program end
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > LinuxCNC 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"%
+; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — linuxcnc_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your LinuxCNC INI/HAL
+; configuration and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table and the
+;     A-axis motor/driver is enabled in your LinuxCNC INI file ([AXIS_A] section).
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0).
+;     Use LinuxCNC AXIS GUI or GMOCCAPY DRO to zero the A axis at your
+;     reference position.
+; (5) Air-cut with spindle off at 10% feed override before a real cut.
+; (6) Confirm your LinuxCNC INI has [AXIS_A] properly configured:
+;     MAX_VELOCITY, MAX_ACCELERATION, MIN_LIMIT, MAX_LIMIT must match
+;     your rotary table capabilities and stepper/servo tuning.
+; (7) Confirm HOME_SEQUENCE and homing parameters for the A axis are set
+;     if your rotary table has a home switch.
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from your CAM package.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: +/-360 deg (verify against INI [AXIS_A] MIN_LIMIT / MAX_LIMIT)
+; --- Safety header ---
+G21              ; millimeters — must match LinuxCNC INI [TRAJ] LINEAR_UNITS = mm
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; switch to G18 (XZ) if needed for 4-axis arcs
+G40              ; cancel cutter radius compensation
+G49              ; cancel tool length compensation
+G80              ; cancel canned cycles
+; Active work offset — verify fixture zero matches G54-G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- Tool call (LinuxCNC supports M6 tool change with T-word) ---
+; Verify tool number, length offset, and diameter in LinuxCNC tool table.
+T2 M6            ; select tool 2 and execute tool change
+G43 H2           ; apply tool length compensation from tool table entry 2
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (LinuxCNC — confirm S value and M3/M4 match your spindle HAL config)
+M3 S9000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance before parking
+; (Toolpath already returns A to 0 deg and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 A0            ; return A-axis to zero
+G0 X0 Y0         ; park X Y — adjust to your preferred home position
+M2               ; program end — LinuxCNC convention (M2 preferred over M30)
+%
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Mach3 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S9000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Mach3 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"%
+; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — mach3_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3 configuration
+; and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table and the
+;     A-axis motor/driver is enabled in Mach3 Config > Motor Tuning.
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0).
+;     Use Mach3 DRO to zero the A axis at your reference position.
+; (5) Air-cut with spindle off at 10% feed override before a real cut.
+; (6) Confirm your Mach3 configuration supports the A word (Config > General
+;     Config > Rotary axis enabled). Verify steps/degree in Motor Tuning.
+; (7) Confirm soft limits for A axis match your rotary table travel.
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from your CAM package.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: +/-360 deg (verify against Mach3 soft limits)
+; --- Safety header ---
+G21              ; millimeters — must match Mach3 setup (Config > Native Units)
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; switch to G18 (XZ) if needed for 4-axis arcs
+G40              ; cancel cutter radius compensation
+G80              ; cancel canned cycles
+; Active work offset — verify fixture zero matches G54-G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- Tool call (Mach3 supports M6 tool change) ---
+; Verify tool number, length offset, and diameter in Mach3 tool table.
+T2 M6            ; select tool 2 and execute tool change
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (Mach3 — confirm S value and M3/M4 match your spindle setup)
+M3 S9000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance before parking
+; (Toolpath already returns A to 0 deg and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 X0 Y0         ; park X Y — adjust to your preferred home position
+M30              ; program end — rewinds Mach3 to start
+%
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Siemens 3-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S9000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Siemens 4-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — Siemens Sinumerik dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Sinumerik controller
+; documentation and machine data (MD) before running on a machine.
+; Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary table or chuck is firmly clamped to the machine table
+;     and the A-axis servo is enabled in machine data.
+; (2) Confirm the workpiece is centred on the rotary axis — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero — touch off the A axis at your reference position.
+;     Use Sinumerik HMI Work Offset screen to set the A zero.
+; (5) Air-cut with spindle off at 10% feed override before a real cut.
+; (6) Confirm your Sinumerik machine data has the A-axis properly configured:
+;     MD30300 (IS_ROT_AX), MD30310 (ROT_IS_MODULO), MD36100 (POS_LIMIT_PLUS),
+;     MD36110 (POS_LIMIT_MINUS) must match your rotary table capabilities.
+; (7) Confirm jog, MDI, and reference modes work for the A axis before running
+;     this program in AUTO mode.
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to safe clearance before commanding large A moves.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360 deg — verify against Sinumerik MD soft limits
+; --- Safety header ---
+G21              ; millimeters — must match Sinumerik setting data SD42010
+G90                    ; absolute distance mode (X Y Z A all absolute)
+G17                    ; XY plane for G2/G3 arcs
+G40                    ; cancel cutter radius compensation
+G49                    ; cancel tool length compensation
+G80                    ; cancel canned cycles
+; Active work offset — verify fixture zero matches G54-G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- Tool call (Sinumerik — verify tool number and D correction in tool table) ---
+T2 D1                  ; select tool 2, cutting edge 1
+M6                     ; execute tool change
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100   ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (Sinumerik — confirm S value matches your spindle and tool)
+M3 S9000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Safe retract and park
+G0 Z100   ; full retract for unload
+G0 A0                  ; return A-axis to zero
+G0 X0 Y0              ; park X Y — adjust to your preferred park position
+M30                    ; program end and rewind
+"
+`;
+
+exports[`Snapshot — every dialect with tool change and WCS > Siemens 5-axis with tool T2, WCS G56, RPM 9000 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 5-AXIS SIMULTANEOUS G-CODE — Siemens Sinumerik dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller manual before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 5-AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm machine data (MD) for kinematic chain matches this profile.
+;     TRAORI reads pivot point distances from MD — wrong MD = wrong TCP.
+; (2) Confirm TRAORI is licensed and configured ($MC_TRAFO_TYPE_1, etc.).
+; (3) Confirm A-axis and B/C-axis travel limits and soft limits.
+; (4) Confirm tool length in the tool table (D1) is correct.
+; (5) Air-cut with spindle off at 10% feed override before any real cut.
+; (6) CYCLE800 (SWIVEL) may be needed before TRAORI if using tilted work
+;     planes — this template does not emit CYCLE800.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360°
+; B-axis range: 120°
+; Kinematic chain: table-table
+; Max tilt from vertical: 60°
+G21        ; G21=mm / G20=inch — must match controller defaults
+G90              ; absolute distance mode
+G17              ; XY plane for arcs
+; Active work offset — verify fixture zero matches G54–G59 selection
+G56
+; Operation: Comprehensive Dialect Test
+; --- Activate 5-axis orientation transformation ---
+; TRAORI tells Sinumerik to maintain tool tip at programmed XYZ regardless
+; of rotary axis positions. This is mandatory for simultaneous 5-axis.
+TRAORI(1)        ; activate transformation — number matches your kinematic setup
+; Spindle on
+M3 S9000
+; --- 5-axis toolpath moves begin (X Y Z A B words) ---
+G0 X0 Y0 Z30 A0 B0
+G1 X10 Y10 Z-1.000 A15 B10 F500
+G1 X20 Y10 Z-1.000 A30 B-5 F500
+G1 X20 Y20 Z-1.500 A15 B0 F500
+G0 Z30 A0 B0
+; --- end toolpath ---
+; Spindle off
+M5
+; Deactivate transformation before retracting
+TRAFOOF          ; transformation off
+; Safe retract
+G0 Z100
+G0 A0 B0         ; return rotary axes to zero
+G0 X0 Y0         ; park — adjust to your safe park position
+M30
+"
+`;
+
+exports[`Snapshot — inverse time feed mode > inverse time feed DISABLED: no G93/G94 in output 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table.
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0°).
+; (5) Air-cut with spindle off at 10 % feed override before a real cut.
+; (6) Confirm your Carvera firmware supports the A word in Grbl (some builds
+;     require the rotary axis plugin — check Makera documentation).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: ±360° (verify against firmware soft limits)
+G21              ; millimeters — must match Carvera controller settings
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Operation: No Inverse Time
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis rotary)
+; Spindle on (Grbl — confirm S value matches your bit and material)
+M3 S12000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance and park
+; (Toolpath already returns A to 0° and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
+M30
+"
+`;
+
+exports[`Snapshot — inverse time feed mode > inverse time feed ENABLED: G93 before toolpath, G94 after 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table.
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0°).
+; (5) Air-cut with spindle off at 10 % feed override before a real cut.
+; (6) Confirm your Carvera firmware supports the A word in Grbl (some builds
+;     require the rotary axis plugin — check Makera documentation).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: ±360° (verify against firmware soft limits)
+G21              ; millimeters — must match Carvera controller settings
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Operation: Inverse Time Enabled
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis rotary)
+; Spindle on (Grbl — confirm S value matches your bit and material)
+M3 S12000
+; --- Inverse-time feed mode (G93) for continuous rotary axis motion ---
+; F-word = 1/time (inverse minutes). Each G1 block must carry its own F value.
+; G94 is restored after the toolpath to return to normal feed-per-minute mode.
+; NOTE: Not all Grbl builds support G93. Verify your firmware supports it.
+G93              ; inverse-time feed mode ON
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+G94              ; restore feed-per-minute mode
+; Spindle off
+M5
+; Retract Z to machine max clearance and park
+; (Toolpath already returns A to 0° and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
+M30
+"
+`;
+
+exports[`Snapshot — inverse time feed mode > inverse time feed on Carvera 4-axis 1`] = `
+"; Makera Carvera — 4-Axis Rotary G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Carvera Inverse Time
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Rotary attachment secured to table
+; [2] Stock centered in chuck, tailstock engaged
+; [3] Stock diameter matches CAM setup (Y dimension)
+; [4] Z=0 is at stock CENTER (rotation axis), NOT surface
+; [5] A=0 set via controller or G28.3 A0
+; [6] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: continuous (verify against firmware soft limits)
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; Safe retract, center on rotary axis, and spindle start
+G0 Z100 ; safe Z retract
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis)
+M3 S12000
+G4 P2            ; dwell 2s for spindle to reach speed
+; --- Inverse-time feed mode (G93) for continuous rotary axis motion ---
+G93              ; inverse-time feed mode ON
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+G94              ; restore feed-per-minute mode
+; --- End ---
+M5
+G0 Z100 ; retract Z
+G0 A0            ; return A to zero
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — inverse time feed mode > inverse time feed on Fanuc 4-axis 1`] = `
+"(Comprehensive Snapshot Mill — snapshot-comprehensive)
+(4-AXIS A-ROTARY G-CODE — FANUC DIALECT)
+(---------------------------------------------------------------------------)
+(UNVERIFIED G-CODE — VERIFY EVERY LINE AGAINST YOUR FANUC CONTROLLER MANUAL)
+(BEFORE RUNNING ON A MACHINE. OUTPUT IS NOT GUARANTEED SAFE FOR ANY MACHINE.)
+(---------------------------------------------------------------------------)
+(CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:)
+(1 — CONFIRM THE ROTARY TABLE OR CHUCK IS FIRMLY CLAMPED TO THE MACHINE TABLE.)
+(2 — CONFIRM THE WORKPIECE IS CENTRED ON THE ROTARY AXIS — OFF-CENTRE)
+(    STOCK CAUSES GOUGING AND CRASHES.)
+(3 — CONFIRM CYLINDER DIAMETER MATCHES THE VALUE USED TO GENERATE TOOLPATHS.)
+(4 — SET A-AXIS WCS ZERO — USUALLY THE LEFT FACE OF THE CYLINDER AT A=0 DEG.)
+(5 — AIR-CUT WITH SPINDLE OFF AT 10 PCT FEED OVERRIDE BEFORE A REAL CUT.)
+(6 — CONFIRM YOUR FANUC CONTROL SUPPORTS A-AXIS COMMANDS AND THAT THE)
+(    ROTARY AXIS IS PROPERLY CONFIGURED IN PARAMETERS.)
+(---------------------------------------------------------------------------)
+(RETRACT ORDER: LIFT Z TO SAFE CLEARANCE BEFORE COMMANDING LARGE A MOVES.)
+(BEFORE PRODUCTION: DRY RUN — SPINDLE OFF, Z HIGH, FEED REDUCED.)
+(SEE DOCS/MACHINES.MD — SAFE Z, WCS, UNITS, SPINDLE M-CODES.)
+(---------------------------------------------------------------------------)
+(WORK AREA MM: 300 X 200 X 100)
+(A-AXIS RANGE: 360 DEG — VERIFY AGAINST MACHINE TRAVEL LIMITS)
+G21              (METRIC — MUST MATCH CONTROLLER SETTING)
+G90                    (ABSOLUTE DISTANCE MODE — X Y Z A ALL ABSOLUTE)
+G17                    (XY PLANE FOR G2/G3 ARCS)
+G40 G49 G80           (CANCEL CUTTER COMP, TOOL LENGTH COMP, CANNED CYCLES)
+(OPERATION: Fanuc Inverse Time)
+(SAFE RETRACT — LIFT Z BEFORE ANY A-AXIS ROTATION TO AVOID COLLISIONS)
+G0 Z100
+(SPINDLE ON — CONFIRM S VALUE MATCHES YOUR TOOL AND MATERIAL)
+M3 S10000
+(--- INVERSE-TIME FEED MODE G93 FOR CONTINUOUS ROTARY AXIS MOTION ---)
+(F-WORD = 1/TIME — INVERSE MINUTES. EACH G1 BLOCK MUST CARRY ITS OWN F VALUE.)
+(G94 IS RESTORED AFTER THE TOOLPATH TO RETURN TO NORMAL FEED-PER-MINUTE MODE.)
+G93                    (INVERSE-TIME FEED MODE ON)
+(--- 4-AXIS TOOLPATH MOVES BEGIN — X Y Z A WORDS ---)
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+(--- END TOOLPATH ---)
+G94                    (RESTORE FEED-PER-MINUTE MODE)
+(SPINDLE OFF)
+M5
+(SAFE RETRACT AND RETURN TO REFERENCE POSITION)
+G91 G28 Z0            (RETURN Z TO REFERENCE POINT — INCREMENTAL MODE)
+G91 G28 X0 Y0         (RETURN X Y TO HOME POSITION)
+G90                    (RESTORE ABSOLUTE MODE)
+G0 A0                 (RETURN A-AXIS TO ZERO)
+M30                   (PROGRAM END AND REWIND)
+"
+`;
+
+exports[`Snapshot — line numbering > line numbering DISABLED: no N-words in output 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Line Numbering Off
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — line numbering > line numbering ENABLED: N-words prepended (N10, N20, N30...) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N20 G90              ; absolute distance mode
+N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Line Numbering On
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N40 M3 S12000
+N50 G0 X0 Y0 Z10
+N60 G0 X5 Y5 Z5
+N70 G1 Z-1.000 F300
+N80 G1 X15 Y5 F800
+N90 G1 X15 Y15 F800
+N100 G1 X5 Y15 F800
+N110 G1 X5 Y5 F800
+N120 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N130 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N140 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N150 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N160 M30
+"
+`;
+
+exports[`Snapshot — line numbering > line numbering with Fanuc dialect 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N20 G90              ; absolute distance mode
+N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Fanuc Line Numbering
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N40 M3 S10000
+N50 G0 X0 Y0 Z10
+N60 G0 X5 Y5 Z5
+N70 G1 Z-1.000 F300
+N80 G1 X15 Y5 F800
+N90 G1 X15 Y15 F800
+N100 G1 X5 Y15 F800
+N110 G1 X5 Y5 F800
+N120 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N130 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N140 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N150 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N160 M30
+"
+`;
+
+exports[`Snapshot — line numbering > line numbering with custom start and increment (N100, N105, N110...) 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+N100 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+N105 G90              ; absolute distance mode
+N110 G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Custom Line Numbers
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+N115 M3 S12000
+N120 G0 X0 Y0 Z10
+N125 G0 X5 Y5 Z5
+N130 G1 Z-1.000 F300
+N135 G1 X15 Y5 F800
+N140 G1 X15 Y15 F800
+N145 G1 X5 Y15 F800
+N150 G1 X5 Y5 F800
+N155 G0 Z10
+; Spindle off (dialect snippet — usually M5)
+N160 M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+N165 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N175 M30
+"
+`;
+
+exports[`Snapshot — spindle RPM clamping > RPM below min is clamped 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: RPM Clamped Min
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S6000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — spindle RPM clamping > RPM exceeding max is clamped 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: RPM Clamped Max
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S15000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — spindle RPM clamping > custom RPM within range 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: RPM 10000
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S10000
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — subroutine detection > subroutines DISABLED: repeated blocks emitted verbatim 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Subroutines Disabled
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S12000
+G0 X0 Y0 Z10
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+"
+`;
+
+exports[`Snapshot — subroutine detection > subroutines Fanuc dialect: M98/M99 call/return 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Subroutines Fanuc
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S10000
+G0 X0 Y0 Z10
+; --- Subroutine call (4x repeat) ---
+M98 P1000 L4
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+
+; --- SUBROUTINE DEFINITIONS ---
+O1000 (SUBROUTINE 1000)
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+M99
+"
+`;
+
+exports[`Snapshot — subroutine detection > subroutines Mach3 dialect: M98/sub/endsub 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Subroutines Mach3
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3
+G0 X0 Y0 Z10
+; --- Subroutine call (4x repeat) ---
+M98 P1000 L4
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+
+; --- SUBROUTINE DEFINITIONS ---
+O1000 sub
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+O1000 endsub
+"
+`;
+
+exports[`Snapshot — subroutine detection > subroutines Siemens dialect: CALL L<n> REP / RET 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your controller before
+; running on a machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Before production: (1) air cut / dry run — spindle off, Z high, reduced feed
+; (2) single-axis jog tests if you changed WCS or macros (3) shallow first cut
+; in soft stock (4) compare a short program to a known-good file for this control
+; See docs/MACHINES.md — safe Z, WCS, units (G20/G21), spindle M-codes, arc support.
+; ---------------------------------------------------------------------------
+; Spindle/coolant: profile dialect inserts snippets below — Grbl, Mach3, and others
+; differ on M3/M4/M5, S-word RPM, and coolant (M7/M8/M9). Confirm on your control.
+; ---------------------------------------------------------------------------
+; Tool change: this template does not emit M6, ATC macros, or tool-length comp.
+; It assumes a single-tool program unless you add tool-change blocks yourself.
+; Verify the full sequence (spindle stop, safe Z, M6/T/H if used) on your control
+; before running multi-tool jobs.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+; Operation: Subroutines Siemens
+; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
+M3 S10000
+G0 X0 Y0 Z10
+; --- Subroutine call (4x repeat) ---
+CALL L1000 REP 4
+G0 Z10
+; Spindle off (dialect snippet — usually M5)
+M5
+; Retract Z to safe clearance and park (adjust to your machine's preferred home)
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+M30
+
+; --- SUBROUTINE DEFINITIONS ---
+; Subroutine L1000
+L1000:
+G0 Z5
+G1 Z-1.000 F300
+G1 X10 Y0 F800
+RET
+"
+`;
+
+exports[`Snapshot — tool changes (Carvera ATC) > default tool T1 when toolNumber not specified 1`] = `
+"; Makera Carvera — 3-Axis G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Default Tool T1
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T1            ; select tool 1 and execute tool change (auto-probes length)
+G43 H1           ; apply tool length compensation for tool 1
+
+; Safe retract and spindle start
+G0 Z100 ; safe Z retract
+M3 S12000
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; --- end toolpath ---
+
+; --- End ---
+M5
+G49              ; cancel tool length compensation
+G0 Z100 ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — tool changes (Carvera ATC) > tool T3 with G43 H3 tool length compensation 1`] = `
+"; Makera Carvera — 3-Axis G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Tool T3
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T3            ; select tool 3 and execute tool change (auto-probes length)
+G43 H3           ; apply tool length compensation for tool 3
+
+; Safe retract and spindle start
+G0 Z100 ; safe Z retract
+M3 S12000
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; --- end toolpath ---
+
+; --- End ---
+M5
+G49              ; cancel tool length compensation
+G0 Z100 ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — tool changes (Carvera ATC) > tool T6 (max ATC slot) 1`] = `
+"; Makera Carvera — 3-Axis G-code
+; Machine: Carvera Snapshot — carvera-snapshot
+; Operation: Tool T6
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; Spindle range: 6000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T6            ; select tool 6 and execute tool change (auto-probes length)
+G43 H6           ; apply tool length compensation for tool 6
+
+; Safe retract and spindle start
+G0 Z100 ; safe Z retract
+M3 S12000
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+G0 X0 Y0 Z10
+G0 X5 Y5 Z5
+G1 Z-1.000 F300
+G1 X15 Y5 F800
+G1 X15 Y15 F800
+G1 X5 Y15 F800
+G1 X5 Y5 F800
+G0 Z10
+; --- end toolpath ---
+
+; --- End ---
+M5
+G49              ; cancel tool length compensation
+G0 Z100 ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;
+
+exports[`Snapshot — tool changes (Heidenhain) > tool T2 M6 + G43 H2 1`] = `
+"; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — Heidenhain TNC (DIN/ISO mode)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Heidenhain TNC manual
+; before running on a machine. Output is not guaranteed safe for any machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Switch the TNC to DIN/ISO mode (not Klartext). This program uses
+;     standard G-code, not Heidenhain conversational format.
+; (2) Confirm the rotary table or chuck is firmly clamped and the A-axis
+;     motor is enabled in machine parameters (MP).
+; (3) Confirm the workpiece is centred on the rotary axis — off-centre
+;     stock causes gouging and crashes.
+; (4) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (5) Set A-axis datum — use the TNC Datum Setup screen to zero the A axis
+;     at your reference position.
+; (6) Air-cut with spindle off at 10% feed override before a real cut.
+; (7) Confirm your TNC machine parameters for the A-axis are correct:
+;     axis limits, acceleration, max RPM. Check MP7420 (axis assignment)
+;     and MP1000 (rotary axis configuration).
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to safe clearance before commanding large A moves.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: 360 deg — verify against TNC MP axis limits
+; --- Safety header ---
+G21              ; millimeters — must match TNC setting
+G90                    ; absolute distance mode (X Y Z A all absolute)
+G17                    ; XY plane for G2/G3 arcs
+G40                    ; cancel cutter radius compensation
+G49                    ; cancel tool length compensation
+G80                    ; cancel canned cycles
+; Operation: Heidenhain Tool T2
+; --- Tool call (Heidenhain DIN/ISO mode — verify tool in TNC tool table) ---
+T2 M6                  ; select tool 2 and execute tool change
+G43 H2                 ; apply tool length compensation from TNC tool table
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100   ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (Heidenhain — confirm S value and M3/M4 match your spindle config)
+M3 S10000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Safe retract and park
+G0 Z100   ; full retract for unload
+G0 A0                  ; return A-axis to zero
+G0 X0 Y0              ; park X Y — adjust to your preferred park position
+M30                    ; program end
+"
+`;
+
+exports[`Snapshot — tool changes (LinuxCNC) > default tool T1 M6 + G43 H1 1`] = `
+"%
+; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — linuxcnc_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your LinuxCNC INI/HAL
+; configuration and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table and the
+;     A-axis motor/driver is enabled in your LinuxCNC INI file ([AXIS_A] section).
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0).
+;     Use LinuxCNC AXIS GUI or GMOCCAPY DRO to zero the A axis at your
+;     reference position.
+; (5) Air-cut with spindle off at 10% feed override before a real cut.
+; (6) Confirm your LinuxCNC INI has [AXIS_A] properly configured:
+;     MAX_VELOCITY, MAX_ACCELERATION, MIN_LIMIT, MAX_LIMIT must match
+;     your rotary table capabilities and stepper/servo tuning.
+; (7) Confirm HOME_SEQUENCE and homing parameters for the A axis are set
+;     if your rotary table has a home switch.
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from your CAM package.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: +/-360 deg (verify against INI [AXIS_A] MIN_LIMIT / MAX_LIMIT)
+; --- Safety header ---
+G21              ; millimeters — must match LinuxCNC INI [TRAJ] LINEAR_UNITS = mm
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; switch to G18 (XZ) if needed for 4-axis arcs
+G40              ; cancel cutter radius compensation
+G49              ; cancel tool length compensation
+G80              ; cancel canned cycles
+; Operation: LinuxCNC Default Tool
+; --- Tool call (LinuxCNC supports M6 tool change with T-word) ---
+; Verify tool number, length offset, and diameter in LinuxCNC tool table.
+T1 M6            ; select tool 1 and execute tool change
+G43 H1           ; apply tool length compensation from tool table entry 1
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (LinuxCNC — confirm S value and M3/M4 match your spindle HAL config)
+M3 S12000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance before parking
+; (Toolpath already returns A to 0 deg and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 A0            ; return A-axis to zero
+G0 X0 Y0         ; park X Y — adjust to your preferred home position
+M2               ; program end — LinuxCNC convention (M2 preferred over M30)
+%
+"
+`;
+
+exports[`Snapshot — tool changes (LinuxCNC) > tool T4 M6 + G43 H4 1`] = `
+"%
+; Comprehensive Snapshot Mill — snapshot-comprehensive
+; 4-AXIS (A-ROTARY) G-CODE — linuxcnc_4axis dialect
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your LinuxCNC INI/HAL
+; configuration and your rotary attachment manual before running on the machine.
+; ---------------------------------------------------------------------------
+; CRITICAL 4TH AXIS CHECKS BEFORE RUNNING:
+; (1) Confirm the rotary attachment is firmly clamped to the table and the
+;     A-axis motor/driver is enabled in your LinuxCNC INI file ([AXIS_A] section).
+; (2) Confirm the workpiece is centred on the rotary chuck — off-centre
+;     stock causes gouging and crashes.
+; (3) Confirm cylinder diameter matches the value used to generate toolpaths.
+; (4) Set A-axis WCS zero (usually the left face of the cylinder, A=0).
+;     Use LinuxCNC AXIS GUI or GMOCCAPY DRO to zero the A axis at your
+;     reference position.
+; (5) Air-cut with spindle off at 10% feed override before a real cut.
+; (6) Confirm your LinuxCNC INI has [AXIS_A] properly configured:
+;     MAX_VELOCITY, MAX_ACCELERATION, MIN_LIMIT, MAX_LIMIT must match
+;     your rotary table capabilities and stepper/servo tuning.
+; (7) Confirm HOME_SEQUENCE and homing parameters for the A axis are set
+;     if your rotary table has a home switch.
+; ---------------------------------------------------------------------------
+; Retract order: lift Z to a safe radial clearance before commanding large A moves
+; (toolpath lines already use clearance Z between passes; header retract is machine max Z).
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from your CAM package.
+; See docs/MACHINES.MD — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): 300 x 200 x 100
+; A-axis range: +/-360 deg (verify against INI [AXIS_A] MIN_LIMIT / MAX_LIMIT)
+; --- Safety header ---
+G21              ; millimeters — must match LinuxCNC INI [TRAJ] LINEAR_UNITS = mm
+G90              ; absolute distance mode (X Y Z A all absolute)
+G17              ; XY plane for G2/G3 arcs; switch to G18 (XZ) if needed for 4-axis arcs
+G40              ; cancel cutter radius compensation
+G49              ; cancel tool length compensation
+G80              ; cancel canned cycles
+; Operation: LinuxCNC Tool T4
+; --- Tool call (LinuxCNC supports M6 tool change with T-word) ---
+; Verify tool number, length offset, and diameter in LinuxCNC tool table.
+T4 M6            ; select tool 4 and execute tool change
+G43 H4           ; apply tool length compensation from tool table entry 4
+; Home / safe position — retract Z before rotating A to avoid collisions
+G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+; Spindle on (LinuxCNC — confirm S value and M3/M4 match your spindle HAL config)
+M3 S12000
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+G0 X0 Y0 Z20 A0
+G1 X10 Z-2.000 A0 F600
+G1 X10 Z-2.000 A90 F400
+G1 X10 Z-2.000 A180 F400
+G1 X10 Z-2.000 A270 F400
+G0 Z20 A0
+; --- end toolpath ---
+; Spindle off
+M5
+; Retract Z to machine max clearance before parking
+; (Toolpath already returns A to 0 deg and retracts Z to clearance;
+;  this final retract ensures the tool is at machine-max Z for unload.)
+G0 Z100 ; full retract for unload
+G0 A0            ; return A-axis to zero
+G0 X0 Y0         ; park X Y — adjust to your preferred home position
+M2               ; program end — LinuxCNC convention (M2 preferred over M30)
+%
+"
+`;

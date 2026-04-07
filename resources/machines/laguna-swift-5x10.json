@@ -1,0 +1,13 @@
+{
+  "id": "laguna-swift-5x10",
+  "name": "Laguna Swift 5×10",
+  "kind": "cnc",
+  "workAreaMm": { "x": 1524, "y": 3048, "z": 203 },
+  "maxFeedMmMin": 12000,
+  "postTemplate": "cnc_generic_mm.hbs",
+  "dialect": "mach3",
+  "meta": {
+    "manufacturer": "Laguna",
+    "model": "Swift 5×10 — controller varies (Mach3/4, Masso, Buildbotics, etc.); match dialect/M-codes to your manual before running; see docs/MACHINES.md"
+  }
+}

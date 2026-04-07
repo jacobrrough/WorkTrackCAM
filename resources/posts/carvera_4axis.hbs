@@ -1,0 +1,67 @@
+{{!--
+  Maintainer notes (not emitted in G-code):
+  - Carvera 4-axis (A-rotary) post — Smoothieware-based firmware.
+  - A axis is the rotary axis (rotation around X, Carvera 4th Axis HD attachment).
+  - CRITICAL: Uses M2 for program end, NOT M30 — M30 on Smoothieware may delete
+    the file from the SD card.
+  - Carvera ATC is NOT used in 4-axis mode (rotary attachment occupies the table).
+  - Spindle range: 6000–15000 RPM. S value comes from dialect snippet.
+  - G4 P2 dwell after spindle start lets the spindle reach commanded RPM.
+  - M9 at end turns off coolant/vacuum.
+  - Z=0 for rotary work is at the stock CENTER (rotation axis), NOT the surface.
+  - Lines starting with ";" are operator-visible comments in output.
+  - Template context keys: resources/posts/README.md (PostContext / renderPost).
+  - Additional context for 4-axis: axisCount, aAxisRangeDeg, aAxisOrientation.
+--}}
+; Makera Carvera — 4-Axis Rotary G-code
+; Machine: {{machine.name}} — {{machine.id}}
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Rotary attachment secured to table
+; [2] Stock centered in chuck, tailstock engaged
+; [3] Stock diameter matches CAM setup (Y dimension)
+; [4] Z=0 is at stock CENTER (rotation axis), NOT surface
+; [5] A=0 set via controller or G28.3 A0
+; [6] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; and your rotary attachment manual before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{#if machine.aAxisRangeDeg}}; A-axis range: continuous (verify against firmware soft limits)
+{{/if}}; Spindle range: {{machine.minSpindleRpm}}–{{machine.maxSpindleRpm}} RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}
+; Safe retract, center on rotary axis, and spindle start
+G0 Z{{machine.workAreaMm.z}} ; safe Z retract
+G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis)
+{{spindleOn}}
+G4 P2            ; dwell 2s for spindle to reach speed
+{{#if inverseTimeFeed}}
+; --- Inverse-time feed mode (G93) for continuous rotary axis motion ---
+G93              ; inverse-time feed mode ON
+{{/if}}
+; --- 4-axis toolpath moves begin (X Y Z A words) ---
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; --- end toolpath ---
+{{#if inverseTimeFeed}}
+G94              ; restore feed-per-minute mode
+{{/if}}
+; --- End ---
+{{spindleOff}}
+G0 Z{{machine.workAreaMm.z}} ; retract Z
+G0 A0            ; return A to zero
+G0 X0 Y0        ; park X, re-center Y on rotation axis
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)

@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "materials": [
+    {
+      "id": "softwood",
+      "name": "Softwood (Pine / Cedar)",
+      "category": "softwood",
+      "source": "bundled",
+      "notes": "General softwood: pine, spruce, cedar. Use sharp upcut or downcut spiral.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 200, "chiploadMm": 0.05, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.35 },
+        "endmill": { "surfaceSpeedMMin": 200, "chiploadMm": 0.05, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.35 },
+        "ball":    { "surfaceSpeedMMin": 180, "chiploadMm": 0.04, "docFactor": 0.4, "stepoverFactor": 0.15, "plungeFactor": 0.3 },
+        "vbit":    { "surfaceSpeedMMin": 150, "chiploadMm": 0.03, "docFactor": 0.3, "stepoverFactor": 0.25, "plungeFactor": 0.25 },
+        "drill":   { "surfaceSpeedMMin": 100, "chiploadMm": 0.08, "docFactor": 1.5, "stepoverFactor": 0.5, "plungeFactor": 0.5 }
+      }
+    },
+    {
+      "id": "hardwood",
+      "name": "Hardwood (Oak / Maple / Walnut)",
+      "category": "hardwood",
+      "source": "bundled",
+      "notes": "Dense hardwood. Keep sharp tooling, reduce DOC vs softwood.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 150, "chiploadMm": 0.04, "docFactor": 0.4, "stepoverFactor": 0.4, "plungeFactor": 0.3 },
+        "endmill": { "surfaceSpeedMMin": 150, "chiploadMm": 0.04, "docFactor": 0.4, "stepoverFactor": 0.4, "plungeFactor": 0.3 },
+        "ball":    { "surfaceSpeedMMin": 130, "chiploadMm": 0.03, "docFactor": 0.35, "stepoverFactor": 0.12, "plungeFactor": 0.25 },
+        "vbit":    { "surfaceSpeedMMin": 120, "chiploadMm": 0.025,"docFactor": 0.25, "stepoverFactor": 0.2,  "plungeFactor": 0.2 },
+        "drill":   { "surfaceSpeedMMin":  80, "chiploadMm": 0.06, "docFactor": 1.2, "stepoverFactor": 0.5,  "plungeFactor": 0.4 }
+      }
+    },
+    {
+      "id": "mdf",
+      "name": "MDF",
+      "category": "mdf",
+      "source": "bundled",
+      "notes": "MDF cuts cleanly but dulls tools quickly. Use compression bit when possible.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 180, "chiploadMm": 0.045, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.35 },
+        "endmill": { "surfaceSpeedMMin": 180, "chiploadMm": 0.045, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.35 },
+        "ball":    { "surfaceSpeedMMin": 160, "chiploadMm": 0.035, "docFactor": 0.4, "stepoverFactor": 0.12, "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "plywood",
+      "name": "Plywood",
+      "category": "plywood",
+      "source": "bundled",
+      "notes": "Varies with ply grade. Compression/downcut bits reduce tearout.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 170, "chiploadMm": 0.04, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.3 },
+        "endmill": { "surfaceSpeedMMin": 170, "chiploadMm": 0.04, "docFactor": 0.5, "stepoverFactor": 0.45, "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "aluminum_6061",
+      "name": "Aluminum 6061",
+      "category": "aluminum_6061",
+      "source": "bundled",
+      "notes": "Most common machining aluminum. Use 2-3 flute carbide, WD-40 or Kool Mist for lubrication.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 120, "chiploadMm": 0.025, "docFactor": 0.3, "stepoverFactor": 0.35, "plungeFactor": 0.25 },
+        "endmill": { "surfaceSpeedMMin": 120, "chiploadMm": 0.025, "docFactor": 0.3, "stepoverFactor": 0.35, "plungeFactor": 0.25 },
+        "ball":    { "surfaceSpeedMMin": 100, "chiploadMm": 0.018, "docFactor": 0.2, "stepoverFactor": 0.08, "plungeFactor": 0.2 },
+        "drill":   { "surfaceSpeedMMin":  60, "chiploadMm": 0.04,  "docFactor": 2.0, "stepoverFactor": 0.5,  "plungeFactor": 0.4 }
+      }
+    },
+    {
+      "id": "aluminum_cast",
+      "name": "Aluminum (Cast)",
+      "category": "aluminum_cast",
+      "source": "bundled",
+      "notes": "Cast aluminum is more abrasive. Reduce feed ~20% vs 6061.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 95,  "chiploadMm": 0.02,  "docFactor": 0.25, "stepoverFactor": 0.3, "plungeFactor": 0.22 },
+        "endmill": { "surfaceSpeedMMin": 95,  "chiploadMm": 0.02,  "docFactor": 0.25, "stepoverFactor": 0.3, "plungeFactor": 0.22 },
+        "ball":    { "surfaceSpeedMMin": 80,  "chiploadMm": 0.015, "docFactor": 0.18, "stepoverFactor": 0.07,"plungeFactor": 0.18 }
+      }
+    },
+    {
+      "id": "steel_mild",
+      "name": "Mild Steel (A36 / 1018)",
+      "category": "steel_mild",
+      "source": "bundled",
+      "notes": "Mild steel requires flood coolant or mist. 4-flute carbide recommended.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 30,  "chiploadMm": 0.015, "docFactor": 0.15, "stepoverFactor": 0.25, "plungeFactor": 0.2 },
+        "endmill": { "surfaceSpeedMMin": 30,  "chiploadMm": 0.015, "docFactor": 0.15, "stepoverFactor": 0.25, "plungeFactor": 0.2 },
+        "ball":    { "surfaceSpeedMMin": 25,  "chiploadMm": 0.01,  "docFactor": 0.1,  "stepoverFactor": 0.06, "plungeFactor": 0.15 },
+        "drill":   { "surfaceSpeedMMin": 20,  "chiploadMm": 0.025, "docFactor": 2.0,  "stepoverFactor": 0.5,  "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "stainless",
+      "name": "Stainless Steel (304 / 316)",
+      "category": "stainless",
+      "source": "bundled",
+      "notes": "Work-hardens rapidly. Keep chip load up and never dwell. Flood coolant essential.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 18,  "chiploadMm": 0.012, "docFactor": 0.12, "stepoverFactor": 0.2, "plungeFactor": 0.18 },
+        "endmill": { "surfaceSpeedMMin": 18,  "chiploadMm": 0.012, "docFactor": 0.12, "stepoverFactor": 0.2, "plungeFactor": 0.18 }
+      }
+    },
+    {
+      "id": "brass",
+      "name": "Brass (360 Free-Machining)",
+      "category": "brass",
+      "source": "bundled",
+      "notes": "Excellent machinability. Single-flute or 2-flute carbide. No coolant needed.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 90,  "chiploadMm": 0.022, "docFactor": 0.28, "stepoverFactor": 0.35, "plungeFactor": 0.25 },
+        "endmill": { "surfaceSpeedMMin": 90,  "chiploadMm": 0.022, "docFactor": 0.28, "stepoverFactor": 0.35, "plungeFactor": 0.25 },
+        "ball":    { "surfaceSpeedMMin": 75,  "chiploadMm": 0.016, "docFactor": 0.2,  "stepoverFactor": 0.08, "plungeFactor": 0.2 }
+      }
+    },
+    {
+      "id": "acrylic",
+      "name": "Acrylic (PMMA / Plexiglass)",
+      "category": "acrylic",
+      "source": "bundled",
+      "notes": "Single-flute O-flute bit gives cleanest edge. Keep chips evacuating to avoid melting.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 160, "chiploadMm": 0.06, "docFactor": 0.5, "stepoverFactor": 0.4, "plungeFactor": 0.3 },
+        "endmill": { "surfaceSpeedMMin": 160, "chiploadMm": 0.06, "docFactor": 0.5, "stepoverFactor": 0.4, "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "hdpe",
+      "name": "HDPE",
+      "category": "hdpe",
+      "source": "bundled",
+      "notes": "Similar to acrylic. O-flute bits. Keep RPM moderate to prevent melting.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 140, "chiploadMm": 0.07, "docFactor": 0.55, "stepoverFactor": 0.45, "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "delrin",
+      "name": "Delrin / POM / Acetal",
+      "category": "delrin",
+      "source": "bundled",
+      "notes": "Very machinable. Low friction. Sharp tooling, moderate chip load.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 150, "chiploadMm": 0.055, "docFactor": 0.5, "stepoverFactor": 0.4, "plungeFactor": 0.3 }
+      }
+    },
+    {
+      "id": "foam",
+      "name": "Foam / Tooling Board",
+      "category": "foam",
+      "source": "bundled",
+      "notes": "Very low cutting forces. High feed rate, moderate RPM.",
+      "cutParams": {
+        "default": { "surfaceSpeedMMin": 300, "chiploadMm": 0.12, "docFactor": 1.0, "stepoverFactor": 0.5, "plungeFactor": 0.5 }
+      }
+    }
+  ]
+}

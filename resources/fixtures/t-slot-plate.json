@@ -1,0 +1,71 @@
+{
+  "id": "t-slot-plate",
+  "name": "T-Slot Fixture Plate",
+  "type": "plate",
+  "description": "Cast iron T-slot fixture plate for flexible workholding with clamps, stops, and jigs.",
+
+  "boundingBox": {
+    "xMm": 400,
+    "yMm": 300,
+    "zMm": 25
+  },
+
+  "slots": [
+    {
+      "label": "Slot 1",
+      "axis": "x",
+      "centerYMm": 50,
+      "startXMm": 20,
+      "endXMm": 380,
+      "slotWidthMm": 14,
+      "slotDepthMm": 12
+    },
+    {
+      "label": "Slot 2",
+      "axis": "x",
+      "centerYMm": 150,
+      "startXMm": 20,
+      "endXMm": 380,
+      "slotWidthMm": 14,
+      "slotDepthMm": 12
+    },
+    {
+      "label": "Slot 3",
+      "axis": "x",
+      "centerYMm": 250,
+      "startXMm": 20,
+      "endXMm": 380,
+      "slotWidthMm": 14,
+      "slotDepthMm": 12
+    }
+  ],
+
+  "clampingZones": [
+    {
+      "label": "Full plate top surface",
+      "minMm": { "x": 0, "y": 0, "z": 0 },
+      "maxMm": { "x": 400, "y": 300, "z": 25 }
+    }
+  ],
+
+  "safeZones": [
+    {
+      "label": "Above plate surface",
+      "minMm": { "x": 0, "y": 0, "z": 25 },
+      "maxMm": { "x": 400, "y": 300, "z": 999 }
+    }
+  ],
+
+  "mounting": {
+    "type": "bolt-down",
+    "boltPattern": [
+      { "xMm": 20, "yMm": 20 },
+      { "xMm": 380, "yMm": 20 },
+      { "xMm": 20, "yMm": 280 },
+      { "xMm": 380, "yMm": 280 }
+    ],
+    "boltSizeMm": 12
+  },
+
+  "notes": "14 mm T-slots spaced 100 mm apart. Use M12 T-nuts and clamps. Surface ground flat within 0.02 mm."
+}

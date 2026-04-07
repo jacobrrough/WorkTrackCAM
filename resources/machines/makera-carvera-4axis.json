@@ -1,0 +1,21 @@
+{
+  "id": "makera-carvera-4axis",
+  "name": "Makera Carvera (4th Axis HD)",
+  "kind": "cnc",
+  "workAreaMm": { "x": 240, "y": 92, "z": 46 },
+  "maxFeedMmMin": 2400,
+  "postTemplate": "carvera_4axis.hbs",
+  "dialect": "grbl_4axis",
+  "axisCount": 4,
+  "aAxisRangeDeg": 99999,
+  "aAxisOrientation": "x",
+  "maxRotaryRpm": 6,
+  "maxSpindleRpm": 15000,
+  "minSpindleRpm": 6000,
+  "meta": {
+    "manufacturer": "Makera",
+    "model": "Carvera",
+    "source": "bundled",
+    "cncProfile": "3d"
+  }
+}

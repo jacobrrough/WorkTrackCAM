@@ -1,0 +1,13 @@
+{
+  "id": "creality-k2-plus",
+  "name": "Creality K2 Plus",
+  "kind": "fdm",
+  "workAreaMm": { "x": 500, "y": 500, "z": 500 },
+  "maxFeedMmMin": 300,
+  "postTemplate": "cnc_generic_mm.hbs",
+  "dialect": "generic_mm",
+  "meta": {
+    "manufacturer": "Creality",
+    "model": "K2 Plus — FDM; slicing via Cura defs under resources/slicer; verify purge, mesh, Z offset in start G-code vs firmware. If you use Manufacture CAM G-code on this profile, the same post still emits CNC-style spindle header/footer — verify or use a CNC profile (docs/MACHINES.md)"
+  }
+}

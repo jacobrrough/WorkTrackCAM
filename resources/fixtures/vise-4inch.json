@@ -1,0 +1,57 @@
+{
+  "id": "vise-4inch",
+  "name": "4\" Machinist Vise",
+  "type": "vise",
+  "description": "Standard 4-inch precision machinist vise for light milling and drilling operations.",
+
+  "boundingBox": {
+    "xMm": 200,
+    "yMm": 110,
+    "zMm": 80
+  },
+
+  "jawWidth": 100,
+  "jawHeightMm": 30,
+  "maxOpeningMm": 105,
+  "jawPositions": {
+    "fixedJawYMm": 0,
+    "movableJawYMm": 105
+  },
+
+  "clampingZones": [
+    {
+      "label": "Fixed jaw face",
+      "minMm": { "x": 50, "y": 0, "z": 50 },
+      "maxMm": { "x": 150, "y": 5, "z": 80 }
+    },
+    {
+      "label": "Movable jaw face",
+      "minMm": { "x": 50, "y": 100, "z": 50 },
+      "maxMm": { "x": 150, "y": 105, "z": 80 }
+    }
+  ],
+
+  "safeZones": [
+    {
+      "label": "Above jaws",
+      "minMm": { "x": 0, "y": 0, "z": 80 },
+      "maxMm": { "x": 200, "y": 110, "z": 999 }
+    },
+    {
+      "label": "Open area between jaws (top)",
+      "minMm": { "x": 50, "y": 5, "z": 50 },
+      "maxMm": { "x": 150, "y": 100, "z": 999 }
+    }
+  ],
+
+  "mounting": {
+    "type": "bolt-down",
+    "boltPattern": [
+      { "xMm": 25, "yMm": 55 },
+      { "xMm": 175, "yMm": 55 }
+    ],
+    "boltSizeMm": 12
+  },
+
+  "notes": "Suitable for parts up to ~100 mm wide. Jaw step height 30 mm. Mount with M12 T-slot bolts."
+}

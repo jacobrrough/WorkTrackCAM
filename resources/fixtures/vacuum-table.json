@@ -1,0 +1,62 @@
+{
+  "id": "vacuum-table",
+  "name": "Vacuum Hold-Down Table",
+  "type": "vacuum",
+  "description": "Vacuum fixture table for thin sheets, panels, and non-ferromagnetic flat stock.",
+
+  "boundingBox": {
+    "xMm": 350,
+    "yMm": 250,
+    "zMm": 20
+  },
+
+  "vacuumZones": [
+    {
+      "label": "Zone A (left half)",
+      "minMm": { "x": 10, "y": 10, "z": 20 },
+      "maxMm": { "x": 170, "y": 240, "z": 20 },
+      "channelSpacingMm": 25,
+      "channelWidthMm": 3
+    },
+    {
+      "label": "Zone B (right half)",
+      "minMm": { "x": 180, "y": 10, "z": 20 },
+      "maxMm": { "x": 340, "y": 240, "z": 20 },
+      "channelSpacingMm": 25,
+      "channelWidthMm": 3
+    }
+  ],
+
+  "clampingZones": [
+    {
+      "label": "Full vacuum surface (stock sits here)",
+      "minMm": { "x": 10, "y": 10, "z": 20 },
+      "maxMm": { "x": 340, "y": 240, "z": 20 }
+    }
+  ],
+
+  "safeZones": [
+    {
+      "label": "Above table surface",
+      "minMm": { "x": 0, "y": 0, "z": 20 },
+      "maxMm": { "x": 350, "y": 250, "z": 999 }
+    }
+  ],
+
+  "mounting": {
+    "type": "bolt-down",
+    "boltPattern": [
+      { "xMm": 5, "yMm": 5 },
+      { "xMm": 345, "yMm": 5 },
+      { "xMm": 5, "yMm": 245 },
+      { "xMm": 345, "yMm": 245 }
+    ],
+    "boltSizeMm": 10
+  },
+
+  "maxVacuumKpa": 85,
+  "minPartThicknessMm": 1.5,
+  "sealMethod": "gasket-perimeter",
+
+  "notes": "Two independently controlled vacuum zones. Requires spoilboard on top for seal. Do not cut through stock into the table surface. Minimum part thickness 1.5 mm for adequate hold."
+}
