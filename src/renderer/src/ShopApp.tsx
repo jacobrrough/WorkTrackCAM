@@ -53,7 +53,7 @@ import { HelpPanel } from './HelpPanel'
 import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
 
 // ── Context providers ────────────────────────────────────────────────────────
-import { AppProviders, useToast, useUI } from '../contexts'
+import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
 
 // Lazy-loaded: LibraryView & SettingsView only render when their tab is active,
 // so they benefit from code-splitting to reduce initial bundle size.
@@ -593,20 +593,24 @@ export default function ShopApp(): React.ReactElement {
 }
 
 function ShopAppInner(): React.ReactElement {
-  const [phase, setPhase] = useState<'splash' | 'app'>('splash')
-  const [sessionMachine, setSessionMachine] = useState<MachineProfile | null>(null)
+  const {
+    phase, setPhase,
+    sessionMachine, setSessionMachine,
+    machines,
+    materials,
+    machineTools,
+    lastMachineId, setLastMachineId,
+    reloadMachines,
+    loadToolsForMachine,
+  } = useMachineSession()
   const [jobs, setJobs] = useState<Job[]>([])
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const [machines, setMachines] = useState<MachineProfile[]>([])
-  const [materials, setMaterials] = useState<MaterialRecord[]>([])
-  const [machineTools, setMachineTools] = useState<ToolRecord[]>([])
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState<string[]>([])
   const [gcodeViewerPath, setGcodeViewerPath] = useState<string | null>(null)
   const [gcodeViewerText, setGcodeViewerText] = useState('')
   const [gcodeViewerLoading, setGcodeViewerLoading] = useState(false)
   const [modelSize, setModelSize] = useState<{ x: number; y: number; z: number } | null>(null)
-  const [lastMachineId, setLastMachineId] = useState<string | null>(null)
   const [splashLibOpen, setSplashLibOpen] = useState(false)
   const { pushToast } = useToast()
   const {
@@ -669,17 +673,11 @@ function ShopAppInner(): React.ReactElement {
     if (jobs.length > 0) localStorage.setItem(JOBS_KEY, JSON.stringify(jobs))
   }, [jobs])
 
+  // Load tools whenever the active job's machine or session machine changes.
+  // (Initial machine/material/settings load is handled by MachineSessionProvider.)
   useEffect(() => {
-    fab().machinesList().then(setMachines).catch(e => { console.error(e); pushToast('err', 'Failed to load machines') })
-    fab().materialsList().then(setMaterials).catch(e => { console.error(e); pushToast('err', 'Failed to load materials') })
-    fab().settingsGet().then(s => { if (s.lastMachineId) setLastMachineId(String(s.lastMachineId)) }).catch(e => { console.error(e); pushToast('err', 'Failed to load settings') })
-  }, [view])
-
-  useEffect(() => {
-    const mid = activeJob?.machineId ?? sessionMachine?.id
-    if (mid) fab().machineToolsRead(mid).then(lib => setMachineTools(lib.tools ?? [])).catch(e => { console.error(e); pushToast('err', 'Failed to load machine tools') })
-    else setMachineTools([])
-  }, [activeJob?.machineId, sessionMachine?.id, view])
+    void loadToolsForMachine(activeJob?.machineId ?? sessionMachine?.id ?? null)
+  }, [activeJob?.machineId, sessionMachine?.id, loadToolsForMachine])
 
   useEffect(() => {
     const h = (e: KeyboardEvent): void => {
@@ -1266,13 +1264,13 @@ function ShopAppInner(): React.ReactElement {
               <span className="machine-lib-overlay__title">Machine Library</span>
               <div className="flex-spacer" />
               <button className="btn btn-ghost btn-sm" onClick={async () => {
-                setMachines(await fab().machinesList())
+                await reloadMachines()
                 setSplashLibOpen(false)
               }}>{'\u2190'} Back to machine picker</button>
             </div>
             <div className="machine-lib-overlay__body">
               <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
-                <LibraryView onToast={pushToast} onMachinesChanged={async () => setMachines(await fab().machinesList())} />
+                <LibraryView onToast={pushToast} onMachinesChanged={reloadMachines} />
               </Suspense>
             </div>
           </div>
@@ -1442,7 +1440,7 @@ function ShopAppInner(): React.ReactElement {
         <div className="shop-full-view">
           <ErrorBoundary label="Library" severity="panel">
             <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
-              <LibraryView onToast={pushToast} onMachinesChanged={async () => setMachines(await fab().machinesList())} />
+              <LibraryView onToast={pushToast} onMachinesChanged={reloadMachines} />
             </Suspense>
           </ErrorBoundary>
         </div>

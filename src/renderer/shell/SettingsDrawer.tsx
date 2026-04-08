@@ -43,7 +43,16 @@ export function SettingsDrawer({ open, onClose, onToast }: Props): ReactElement 
           </button>
         </div>
         <div className="drawer__body">
-          <Suspense fallback={<div className="text-muted p-16">Loading settings{'\u2026'}</div>}>
+          <Suspense fallback={
+            <div className="p-16" aria-live="polite" aria-busy="true">
+              <div className="skeleton skeleton--title" />
+              <div className="skeleton skeleton--row" />
+              <div className="skeleton skeleton--row" />
+              <div className="skeleton skeleton--row" />
+              <div className="skeleton skeleton--card" />
+              <span className="sr-only">Loading settings</span>
+            </div>
+          }>
             <SettingsView onToast={onToast} />
           </Suspense>
         </div>

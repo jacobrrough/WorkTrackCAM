@@ -2202,18 +2202,69 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
 /* ── Viewport empty / drag states ── */
 .vp-empty-content {
   text-align: center;
-  opacity: 0.4;
+  opacity: 0.55;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-4);
+  animation: vp-empty-fade var(--duration-slow) var(--ease-out-expo);
 }
-.vp-empty-icon   { font-size: 56px; margin-bottom: 16px; }
-.vp-empty-title  { font-size: 16px; margin-bottom: 8px; }
-.vp-empty-hint   { font-size: 12px; margin-bottom: 16px; }
+@keyframes vp-empty-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 0.55; transform: translateY(0); }
+}
+.vp-empty-icon   {
+  font-size: 64px;
+  margin-bottom: var(--sp-4);
+  filter: grayscale(0.4);
+  animation: vp-icon-float 4s ease-in-out infinite;
+}
+@keyframes vp-icon-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+.vp-empty-title  {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--sp-2);
+  color: var(--txt0);
+}
+.vp-empty-hint   {
+  font-size: var(--text-base);
+  margin-bottom: var(--sp-6);
+  color: var(--txt1);
+}
 .vp-drag-overlay {
-  background: rgba(61, 126, 255, 0.12);
+  background: rgba(61, 126, 255, 0.18);
   z-index: 5;
+  animation: vp-drag-pulse var(--duration-fast) var(--ease-out-expo);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  margin: var(--sp-8);
+  inset: var(--sp-8);
 }
-.vp-drag-content { text-align: center; }
-.vp-drag-icon    { font-size: 48px; margin-bottom: 12px; }
-.vp-drag-title   { font-size: 18px; font-weight: var(--weight-semibold); }
+@keyframes vp-drag-pulse {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.vp-drag-content {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.vp-drag-icon    {
+  font-size: 56px;
+  margin-bottom: var(--sp-4);
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--accent-dim);
+}
+.vp-drag-title   {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  color: var(--txt0);
+}
 .vp-fit-btn {
   padding: 2px 7px;
   font-size: var(--text-xs);

@@ -46,11 +46,15 @@ textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-si
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              border-color var(--duration-fast) var(--ease-out-expo),
+              transform var(--duration-fast) var(--ease-out-expo),
+              opacity var(--duration-fast) var(--ease-out-expo);
   white-space: nowrap;
   font-family: var(--font);
 }
 .btn:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
+.btn:active:not(:disabled) { transform: scale(0.97); }
 
 /* Focus-visible (WCAG AA keyboard navigation) */
 .btn:focus-visible,
@@ -94,12 +98,15 @@ textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-si
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.12s;
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              box-shadow var(--duration-fast) var(--ease-out-expo),
+              transform var(--duration-fast) var(--ease-out-expo);
   white-space: nowrap;
   flex-shrink: 0;
   font-family: var(--font);
 }
-.btn-generate:hover:not(:disabled) { background: var(--accent-hi); }
+.btn-generate:hover:not(:disabled) { background: var(--accent-hi); box-shadow: 0 0 0 3px var(--accent-dim); }
+.btn-generate:active:not(:disabled) { transform: scale(0.97); }
 .btn-generate:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
 
 .btn-send {
@@ -114,12 +121,15 @@ textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-si
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.12s;
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              box-shadow var(--duration-fast) var(--ease-out-expo),
+              transform var(--duration-fast) var(--ease-out-expo);
   white-space: nowrap;
   flex-shrink: 0;
   font-family: var(--font);
 }
-.btn-send:hover:not(:disabled) { background: rgba(34,197,94,0.22); }
+.btn-send:hover:not(:disabled) { background: rgba(34,197,94,0.22); box-shadow: 0 0 0 3px rgba(34,197,94,0.1); }
+.btn-send:active:not(:disabled) { transform: scale(0.97); }
 .btn-send:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
 
 .btn-xs {
@@ -266,6 +276,36 @@ button.secondary:disabled {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
+
+/* ── Skeleton loader ────────────────────────────────────────────── */
+.skeleton {
+  display: block;
+  position: relative;
+  background: var(--bg2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  min-height: 1em;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--surface-overlay) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.skeleton--text  { height: 1em; margin: var(--sp-2) 0; }
+.skeleton--title { height: 1.4em; width: 60%; margin: var(--sp-3) 0; }
+.skeleton--card  { height: 80px; margin: var(--sp-4) 0; }
+.skeleton--row   { height: 32px; margin: var(--sp-2) 0; }
 
 /* ── Kbd (keyboard shortcut display) ────────────────────────────── */
 .shell-kbd {

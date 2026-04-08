@@ -47,7 +47,17 @@ export function LibraryDrawer({ open, onClose, onToast, onMachinesChanged }: Pro
           </button>
         </div>
         <div className="drawer__body">
-          <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
+          <Suspense fallback={
+            <div className="p-16" aria-live="polite" aria-busy="true">
+              <div className="skeleton skeleton--title" />
+              <div className="skeleton skeleton--text" style={{ width: '80%' }} />
+              <div className="skeleton skeleton--card" />
+              <div className="skeleton skeleton--row" />
+              <div className="skeleton skeleton--row" />
+              <div className="skeleton skeleton--row" />
+              <span className="sr-only">Loading library</span>
+            </div>
+          }>
             <LibraryView onToast={onToast} onMachinesChanged={onMachinesChanged} />
           </Suspense>
         </div>

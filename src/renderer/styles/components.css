@@ -61,6 +61,11 @@
   align-items: center;
   justify-content: center;
   background: var(--overlay-bg);
+  animation: modal-overlay-in var(--duration-fast) ease;
+}
+@keyframes modal-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .modal-dialog {
   background: var(--bg1);
@@ -68,7 +73,12 @@
   border-radius: var(--radius-lg);
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elevation-4);
+  animation: modal-dialog-in var(--duration-normal) var(--ease-out-back);
+}
+@keyframes modal-dialog-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 .modal-dialog--sm { width: 400px; }
 .modal-dialog--md { width: 480px; }
@@ -106,7 +116,7 @@
   z-index: 9999;
 }
 @keyframes toast-in {
-  from { transform: translateX(20px); opacity: 0; }
+  from { transform: translateX(40px); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }
 }
 @keyframes toast-out {
@@ -115,12 +125,14 @@
 }
 .toast-item {
   color: #fff;
-  padding: 8px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  padding: var(--sp-5) var(--sp-8);
+  border-radius: var(--radius);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--elevation-3);
   max-width: 360px;
-  animation: toast-in 0.2s ease;
+  animation: toast-in var(--duration-normal) var(--ease-out-back);
+  border-left: 3px solid rgba(255,255,255,0.4);
 }
 .toast-item--ok  { background: #166534; }
 .toast-item--err { background: #7f1d1d; }
@@ -611,4 +623,35 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* ── Tooltip primitive (portal-based, fixed positioning) ──── */
+/* Scoped to body > .tb-tooltip to only style portaled instances,
+   leaving the legacy in-button .tb-btn .tb-tooltip variant intact. */
+body > .tb-tooltip {
+  background: var(--bg3);
+  color: var(--txt0);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hi);
+  box-shadow: var(--elevation-2);
+  pointer-events: none;
+  z-index: 10000;
+  animation: tooltip-fade var(--duration-fast) var(--ease-out-expo);
+}
+body > .tb-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--border-hi);
+}
+@keyframes tooltip-fade {
+  from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
+  to   { opacity: 1; transform: translate(-50%, -100%); }
 }
