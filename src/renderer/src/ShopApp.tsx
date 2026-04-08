@@ -51,14 +51,15 @@ import { MachineSplash } from './MachineSplash'
 import { LeftPanel } from './LeftPanel'
 import { HelpPanel } from './HelpPanel'
 import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
+import { LibraryDrawer } from '../shell/LibraryDrawer'
+import { SettingsDrawer } from '../shell/SettingsDrawer'
 
 // ── Context providers ────────────────────────────────────────────────────────
 import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
 
-// Lazy-loaded: LibraryView & SettingsView only render when their tab is active,
-// so they benefit from code-splitting to reduce initial bundle size.
+// Lazy-loaded: LibraryView is used by the machine-splash overlay; SettingsView
+// is loaded directly by the SettingsDrawer.
 const LibraryView = lazy(() => import('./LibraryView').then(m => ({ default: m.LibraryView })))
-const SettingsView = lazy(() => import('./SettingsView').then(m => ({ default: m.SettingsView })))
 
 // ── Shared types & utilities ──────────────────────────────────────────────────
 import type { Toast, Job, PostConfig } from './shop-types'
@@ -612,6 +613,9 @@ function ShopAppInner(): React.ReactElement {
   const [gcodeViewerLoading, setGcodeViewerLoading] = useState(false)
   const [modelSize, setModelSize] = useState<{ x: number; y: number; z: number } | null>(null)
   const [splashLibOpen, setSplashLibOpen] = useState(false)
+  // New slide-over drawers (replace the old library/settings tab views)
+  const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false)
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false)
   const { pushToast } = useToast()
   const {
     view, setView,
@@ -1282,6 +1286,63 @@ function ShopAppInner(): React.ReactElement {
   // ── Main app ──
   return (
     <div className="shop-shell">
+      {/* Brand header bar (top-most strip) */}
+      <header className="shop-brand-bar" role="banner">
+        <div className="shop-brand-bar__left">
+          <span className="shop-brand-bar__logo" aria-hidden="true">{'\u25C6'}</span>
+          <span className="shop-brand-bar__title">WorkTrackCAM</span>
+          <span className="shop-brand-bar__sub">Professional CAM &amp; FDM</span>
+        </div>
+        <div className="shop-brand-bar__center">
+          <button
+            type="button"
+            className={`workspace-pill${view === 'jobs' ? ' workspace-pill--active' : ''}`}
+            onClick={() => setView('jobs')}
+            aria-current={view === 'jobs' ? 'page' : undefined}
+          >
+            {'\u{1F527}'} Manufacture
+          </button>
+        </div>
+        <div className="shop-brand-bar__right">
+          <button
+            type="button"
+            className="tb-btn"
+            title="Tool & material library"
+            aria-label="Open library"
+            onClick={() => setLibraryDrawerOpen(true)}
+          >
+            {'\u{1F4DA}'}
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            title="Settings"
+            aria-label="Open settings"
+            onClick={() => setSettingsDrawerOpen(true)}
+          >
+            {'\u2699'}
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            title="Command palette (Ctrl+K)"
+            aria-label="Command palette"
+            onClick={() => setCmdOpen(true)}
+          >
+            {'\u2318'}
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            title="Keyboard shortcuts (Ctrl+Shift+?)"
+            aria-label="Keyboard shortcuts"
+            onClick={() => setShowShortcuts((x) => !x)}
+          >
+            ?
+          </button>
+        </div>
+      </header>
+
       <div className="shop-toolbar" role="toolbar" aria-label="Main toolbar">
         <button className={`tb-machine-badge tb-machine-badge--${mode}`}
           title={`Current machine: ${sessionMachine?.name ?? 'None'} \u2014 Click to change`}
@@ -1289,10 +1350,6 @@ function ShopAppInner(): React.ReactElement {
           {MODE_ICONS[mode]} {sessionMachine?.name ?? 'No machine'}
         </button>
 
-        <div className="tb-sep" />
-        <button className={`btn btn-ghost btn-sm${view === 'jobs' ? ' tb-btn--active' : ''}`} title="Jobs workspace \u2014 create and manage machining jobs" aria-current={view === 'jobs' ? 'page' : undefined} onClick={() => setView('jobs')}>Jobs</button>
-        <button className={`btn btn-ghost btn-sm${view === 'library' ? ' tb-btn--active' : ''}`} title="Library \u2014 manage machines, tools, and materials" aria-current={view === 'library' ? 'page' : undefined} onClick={() => setView('library')}>Library</button>
-        <button className={`btn btn-ghost btn-sm${view === 'settings' ? ' tb-btn--active' : ''}`} title="Settings \u2014 configure paths and preferences" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')}>Settings</button>
         <div className="tb-sep" />
 
         {view === 'jobs' && (
@@ -1386,8 +1443,6 @@ function ShopAppInner(): React.ReactElement {
         <button className={`tb-btn${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
           {savedIndicator ? '\u2713' : '\u{1F4BE}'}
         </button>
-        <button className="tb-btn" title="Command palette \u2014 search all commands (Ctrl+K)" aria-label="Command palette" onClick={() => setCmdOpen(true)}>{'\u2318'}</button>
-        <button className="tb-btn" title="Keyboard shortcuts reference (Ctrl+Shift+?)" aria-label="Keyboard shortcuts" onClick={() => setShowShortcuts(x => !x)}>?</button>
         <button className={`tb-btn${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}</button>
       </div>
 
@@ -1436,23 +1491,20 @@ function ShopAppInner(): React.ReactElement {
             />
           </ErrorBoundary>
         </div>
-      ) : view === 'library' ? (
-        <div className="shop-full-view">
-          <ErrorBoundary label="Library" severity="panel">
-            <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
-              <LibraryView onToast={pushToast} onMachinesChanged={reloadMachines} />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      ) : (
-        <div className="shop-full-view shop-full-view--scroll">
-          <ErrorBoundary label="Settings" severity="panel">
-            <Suspense fallback={<div className="text-muted p-16">Loading settings{'\u2026'}</div>}>
-              <SettingsView onToast={pushToast} />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      )}
+      ) : null}
+
+      {/* Slide-over drawers (replace the old library/settings tab views) */}
+      <LibraryDrawer
+        open={libraryDrawerOpen}
+        onClose={() => setLibraryDrawerOpen(false)}
+        onToast={pushToast}
+        onMachinesChanged={reloadMachines}
+      />
+      <SettingsDrawer
+        open={settingsDrawerOpen}
+        onClose={() => setSettingsDrawerOpen(false)}
+        onToast={pushToast}
+      />
 
       {gcodeViewerOpen && (
         <div
