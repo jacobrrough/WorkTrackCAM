@@ -5,13 +5,6 @@ import type {
   CommandShellWorkspace
 } from '../../shared/fusion-style-command-catalog'
 
-/** Mirrors `AppShell` `UtilityTab` — kept here to avoid importing UI components into memory helpers. */
-export type PersistedUtilityTab = 'project' | 'settings'
-
-const VALID_UTIL: ReadonlySet<PersistedUtilityTab> = new Set(['project', 'settings'])
-
-const UTILITY_TAB_KEY = 'ufs_utility_tab'
-
 /**
  * Manufacture workspace sub-tabs.
  * - plan: operation list / job editor (Makera-style functions panel)
@@ -78,24 +71,6 @@ export function readPersistedComboViewTab(fallback: PersistedComboViewTab): Pers
 export function writePersistedComboViewTab(t: PersistedComboViewTab): void {
   try {
     localStorage.setItem(COMBO_VIEW_TAB_KEY, t)
-  } catch {
-    /* ignore */
-  }
-}
-
-export function readPersistedUtilityTab(fallback: PersistedUtilityTab): PersistedUtilityTab {
-  try {
-    const raw = localStorage.getItem(UTILITY_TAB_KEY)
-    if (raw && VALID_UTIL.has(raw as PersistedUtilityTab)) return raw as PersistedUtilityTab
-  } catch {
-    /* ignore */
-  }
-  return fallback
-}
-
-export function writePersistedUtilityTab(t: PersistedUtilityTab): void {
-  try {
-    localStorage.setItem(UTILITY_TAB_KEY, t)
   } catch {
     /* ignore */
   }

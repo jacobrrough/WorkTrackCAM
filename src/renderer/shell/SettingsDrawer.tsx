@@ -25,7 +25,7 @@ export function SettingsDrawer({ open, onClose, onToast }: Props): ReactElement 
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <aside
-        className="drawer drawer--right drawer--open"
+        className="drawer drawer--right"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

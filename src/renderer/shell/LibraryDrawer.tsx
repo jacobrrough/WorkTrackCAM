@@ -29,7 +29,7 @@ export function LibraryDrawer({ open, onClose, onToast, onMachinesChanged }: Pro
     <div className="drawer-overlay" onClick={onClose}>
       <aside
         ref={ref}
-        className="drawer drawer--right drawer--open"
+        className="drawer drawer--right"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

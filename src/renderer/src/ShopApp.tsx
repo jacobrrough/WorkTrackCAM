@@ -24,7 +24,7 @@ import { friendlyError } from '../../shared/file-parse-errors'
 import { ShopModelViewer, defaultTransform } from './ShopModelViewer'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ConfirmDialog } from './ConfirmDialog'
-import type { ModelTransform, StockDimensions, GizmoMode } from './ShopModelViewer'
+import type { ModelTransform, GizmoMode } from './ShopModelViewer'
 import {
   type MachineUIMode,
   fitModelToStock,
@@ -62,7 +62,7 @@ import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
 const LibraryView = lazy(() => import('./LibraryView').then(m => ({ default: m.LibraryView })))
 
 // ── Shared types & utilities ──────────────────────────────────────────────────
-import type { Toast, Job, PostConfig } from './shop-types'
+import type { Toast, Job } from './shop-types'
 import { fab, getMachineMode, MODE_LABELS, MODE_ICONS, OPS_BY_MODE, KIND_LABELS } from './shop-types'
 
 // ── Material apply helper ─────────────────────────────────────────────────────
@@ -1236,9 +1236,8 @@ function ShopAppInner(): React.ReactElement {
     }
     machines.forEach(m => c.push({ id: `set_machine_${m.id}`, group: 'Machines', label: `Set machine: ${m.name}`, icon: '\u{1F5A5}', action: () => { if (activeJob) updateJob(activeJob.id, { machineId: m.id }) } }))
     materials.forEach(m => c.push({ id: `set_mat_${m.id}`, group: 'Materials', label: `Set material: ${m.name}`, icon: '\u{1F9F1}', action: () => { if (activeJob) updateJob(activeJob.id, { materialId: m.id }) } }))
-    c.push({ id: 'library', group: 'Navigate', label: 'Go to Library', icon: '\u{1F4E6}', action: () => setView('library') })
-    c.push({ id: 'settings', group: 'Navigate', label: 'Go to Settings', icon: '\u2699', action: () => setView('settings') })
-    c.push({ id: 'jobs', group: 'Navigate', label: 'Go to Jobs', icon: '\u{1F527}', action: () => setView('jobs') })
+    c.push({ id: 'library', group: 'Navigate', label: 'Open Library', icon: '\u{1F4E6}', action: () => setLibraryDrawerOpen(true) })
+    c.push({ id: 'settings', group: 'Navigate', label: 'Open Settings', icon: '\u2699', action: () => setSettingsDrawerOpen(true) })
     return c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeJob, machines, materials, jobs.length, mode, isFdm])
