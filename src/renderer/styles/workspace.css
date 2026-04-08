@@ -960,6 +960,218 @@
 .splash-start-hint { font-size: 12px; color: var(--txt2); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   ENVIRONMENT SPLASH (3 cards: VCarve Pro / Creality Print / Makera CAM)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.env-splash {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--bg0);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  overflow-y: auto; padding: 48px 24px 56px;
+}
+.env-splash__header {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; margin-bottom: 36px;
+}
+.env-splash__logo {
+  font-size: 36px; opacity: 0.85; margin-bottom: 6px;
+}
+.env-splash__title {
+  font-size: 28px; font-weight: 800; letter-spacing: -0.5px; color: var(--txt0);
+}
+.env-splash__subtitle {
+  font-size: 14px; color: var(--txt1);
+}
+
+.env-splash__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+  width: 100%; max-width: 960px;
+  margin-bottom: 32px;
+}
+.env-splash__card {
+  display: flex; flex-direction: column;
+  align-items: flex-start; text-align: left;
+  gap: 8px;
+  padding: 22px 20px 20px;
+  background: var(--bg2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--transition-base), background var(--transition-base), transform var(--transition-base);
+  color: var(--txt0);
+  min-height: 220px;
+  position: relative;
+}
+.env-splash__card:hover:not(:disabled) {
+  border-color: var(--border-hi);
+  background: var(--bg3);
+  transform: translateY(-1px);
+}
+.env-splash__card--active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent), var(--elevation-2);
+}
+.env-splash__card--unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.env-splash__card-icon {
+  font-size: 32px; line-height: 1;
+  color: var(--accent-hi);
+  margin-bottom: 4px;
+}
+.env-splash__card-name {
+  font-size: 18px; font-weight: 700;
+  color: var(--txt0);
+}
+.env-splash__card-tagline {
+  font-size: 12px;
+  color: var(--txt1);
+  line-height: 1.45;
+  min-height: 32px;
+}
+.env-splash__card-machines {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 10px;
+  width: 100%;
+  border-top: 1px dashed var(--border);
+}
+.env-splash__card-machine {
+  font-size: 11px;
+  color: var(--txt2);
+  line-height: 1.4;
+}
+.env-splash__card-empty {
+  font-size: 11px;
+  color: var(--warn);
+  font-style: italic;
+}
+.env-splash__card-variant-picker {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; width: 100%;
+}
+.env-splash__variant-btn {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt1);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-base), color var(--transition-base);
+}
+.env-splash__variant-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+.env-splash__variant-btn--selected {
+  border-color: var(--accent);
+  background: var(--accent-12);
+  color: var(--accent-hi);
+}
+
+.env-splash__cta {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 12px;
+}
+.env-splash__enter-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 12px 36px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition-base), transform var(--transition-fast);
+  letter-spacing: 0.3px;
+  min-width: 280px;
+}
+.env-splash__enter-btn:hover:not(:disabled) {
+  background: var(--accent-hi);
+  transform: translateY(-1px);
+}
+.env-splash__enter-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+.env-splash__add-machine-btn {
+  background: transparent;
+  color: var(--txt2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 18px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-base), color var(--transition-base);
+}
+.env-splash__add-machine-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ENVIRONMENT ACTION STRIP (top of LeftPanel — env-specific quick controls)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.env-action-strip {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+}
+.env-action-strip__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+}
+.env-action-strip__chips {
+  display: flex; flex-wrap: wrap;
+  gap: 4px;
+}
+.env-action-strip__empty {
+  font-size: 11px;
+  color: var(--txt2);
+  font-style: italic;
+}
+.env-action-chip {
+  padding: 4px 10px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt1);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-base), color var(--transition-base), background var(--transition-base);
+}
+.env-action-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+.env-action-chip:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+.env-action-chip--active {
+  border-color: var(--accent);
+  background: var(--accent-12);
+  color: var(--accent-hi);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    MACHINE LIBRARY OVERLAY
    ═══════════════════════════════════════════════════════════════════════════ */
 

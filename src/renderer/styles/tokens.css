@@ -121,6 +121,45 @@
   --shell-resize-w: 5px;
 }
 
+/* ── Per-environment accent overrides ──
+   Set on the shell root via [data-environment="…"] in EnvironmentSplash and
+   the main app shell. Each environment gets a distinct accent color that
+   cascades through every component using --accent / --accent-hi / --accent-dim.
+*/
+[data-environment='vcarve_pro'] {
+  --accent: #c47a2c;
+  --accent-hi: #e08e3a;
+  --accent-dim: rgba(196, 122, 44, 0.15);
+  --accent-8:  rgba(196, 122, 44, 0.08);
+  --accent-10: rgba(196, 122, 44, 0.10);
+  --accent-12: rgba(196, 122, 44, 0.12);
+  --accent-16: rgba(196, 122, 44, 0.16);
+  --accent-20: rgba(196, 122, 44, 0.20);
+  --accent-28: rgba(196, 122, 44, 0.28);
+}
+[data-environment='creality_print'] {
+  --accent: #ff6a3d;
+  --accent-hi: #ff8557;
+  --accent-dim: rgba(255, 106, 61, 0.15);
+  --accent-8:  rgba(255, 106, 61, 0.08);
+  --accent-10: rgba(255, 106, 61, 0.10);
+  --accent-12: rgba(255, 106, 61, 0.12);
+  --accent-16: rgba(255, 106, 61, 0.16);
+  --accent-20: rgba(255, 106, 61, 0.20);
+  --accent-28: rgba(255, 106, 61, 0.28);
+}
+[data-environment='makera_cam'] {
+  --accent: #5cb3ff;
+  --accent-hi: #7dc4ff;
+  --accent-dim: rgba(92, 179, 255, 0.15);
+  --accent-8:  rgba(92, 179, 255, 0.08);
+  --accent-10: rgba(92, 179, 255, 0.10);
+  --accent-12: rgba(92, 179, 255, 0.12);
+  --accent-16: rgba(92, 179, 255, 0.16);
+  --accent-20: rgba(92, 179, 255, 0.20);
+  --accent-28: rgba(92, 179, 255, 0.28);
+}
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

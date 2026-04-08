@@ -38,9 +38,22 @@ describe('machine-post-template-hints', () => {
     expect(unique.size).toBe(COMMON_POST_TEMPLATE_FILENAMES.length)
   })
 
-  it('all entries match expected naming pattern cnc_*axis_*.hbs or cnc_generic_*.hbs', () => {
+  it('all entries match expected naming pattern (cnc_*, carvera_*, vcarve_*, fdm_*)', () => {
     for (const filename of COMMON_POST_TEMPLATE_FILENAMES) {
-      expect(filename).toMatch(/^cnc_/)
+      expect(filename).toMatch(/^(cnc_|carvera_|vcarve_|fdm_)/)
     }
+  })
+
+  it('includes the VCarve Pro environment post', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('vcarve_mach3.hbs')
+  })
+
+  it('includes the Creality Print passthrough post', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('fdm_passthrough.hbs')
+  })
+
+  it('includes both Carvera (Makera CAM) post templates', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('carvera_3axis.hbs')
+    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('carvera_4axis.hbs')
   })
 })

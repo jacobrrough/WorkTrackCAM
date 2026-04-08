@@ -14,6 +14,7 @@ import type { CpsImportSummary } from '../../main/machine-cps-import'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import type { MaterialAuditResult } from '../../shared/material-audit'
+import type { EnvironmentId } from './environments/registry'
 
 // ── Re-exports for convenience ───────────────────────────────────────────────
 export type { MachineUIMode } from './shop-stock-bounds'
@@ -189,4 +190,16 @@ export interface Job {
   clampOffsetMm: number
   gcodeOut: string | null; status: 'idle' | 'running' | 'done' | 'error'
   lastLog: string; printerUrl: string
+  /**
+   * Shop environment that owns this job. Optional for backward compatibility
+   * with legacy single-bucket projects — the env-jobs storage migration
+   * stamps it on first load. Drives per-environment job-list scoping.
+   */
+  environmentId?: EnvironmentId
+  /**
+   * Optional probe G-code prepended to the next generated job.
+   * Used by the Makera CAM environment's probe-macro buttons (edge / corner
+   * / surface) to inject Smoothieware G38.2 sequences into the next post-run.
+   */
+  probePreamble?: string | null
 }

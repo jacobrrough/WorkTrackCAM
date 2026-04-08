@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react'
 import type { ManufactureOperation, ManufactureOperationKind, MachineUIMode, StockDimensions, ToolRecord, MaterialRecord, Job } from './shop-types'
 import { OPS_BY_MODE, KIND_LABELS, MODE_LABELS, MODE_ICONS } from './shop-types'
+import type { ShopEnvironment } from './environments/registry'
 import type { PostConfig } from './shop-types'
 import { ContextMenu } from './ContextMenu'
 import type { ContextMenuEntry } from './ContextMenu'
@@ -222,6 +223,18 @@ export interface LeftPanelProps {
   deleteJob: (id: string) => void
   activeJob: Job | null
   mode: MachineUIMode
+  /**
+   * Active shop environment, when one is selected. When provided, the
+   * Add Operation menu is intersected with `env.availableOpKinds` so the
+   * user only sees op kinds that are meaningful for this environment.
+   */
+  activeEnv?: ShopEnvironment | null
+  /**
+   * Optional slot rendered above the Jobs section. ShopApp uses this to inject
+   * env-specific controls (wood quick-pick / axis toggle / filament hint) via
+   * `EnvActionStrip` without entangling the env logic with the panel.
+   */
+  envHeaderSlot?: React.ReactNode
   onUpdateJob: (id: string, patch: Partial<Job>) => void
   onAddOp: (kind: ManufactureOperationKind) => void
   onRemoveOp?: (opId: string) => void
@@ -234,7 +247,7 @@ export interface LeftPanelProps {
 
 export const LeftPanel = React.memo(function LeftPanel({
   jobs, activeJobId, setActiveJobId, createJob, deleteJob,
-  activeJob, mode, onUpdateJob, onAddOp, onRemoveOp, onUpdateOpParams,
+  activeJob, mode, activeEnv, envHeaderSlot, onUpdateJob, onAddOp, onRemoveOp, onUpdateOpParams,
   onImportModel, onRemoveModel, machineTools, materials
 }: LeftPanelProps): React.ReactElement {
   const [jobsOpen,    setJobsOpen]    = useState(true)
@@ -248,7 +261,14 @@ export const LeftPanel = React.memo(function LeftPanel({
   const [editingLabelValue, setEditingLabelValue] = useState('')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: ContextMenuEntry[] } | null>(null)
 
-  const { primary, secondary } = OPS_BY_MODE[mode]
+  const { primary: modePrimary, secondary: modeSecondary } = OPS_BY_MODE[mode]
+  // When an environment is active, intersect the mode-based op lists with
+  // the env's allowed op kinds so the user only sees relevant operations.
+  // Falls back to the full mode lists when no environment is bound (defensive
+  // path — splash routing always sets one before reaching the main shell).
+  const envAllowedOps = activeEnv ? new Set<ManufactureOperationKind>(activeEnv.availableOpKinds) : null
+  const primary = envAllowedOps ? modePrimary.filter((k) => envAllowedOps.has(k)) : modePrimary
+  const secondary = envAllowedOps ? modeSecondary.filter((k) => envAllowedOps.has(k)) : modeSecondary
 
   const updateOp = (opId: string, params: Record<string, unknown>): void => {
     if (!activeJob) return
@@ -345,6 +365,7 @@ export const LeftPanel = React.memo(function LeftPanel({
   return (
     <>
     <nav className="shop-left" aria-label="Job and operations panel">
+      {envHeaderSlot}
       {/* Jobs */}
       <div className="panel-section">
         <div className="panel-section-header"
@@ -698,7 +719,10 @@ export const LeftPanel = React.memo(function LeftPanel({
         {addOpOpen && activeJob && (
           <div className="add-op-menu">
             <div className="add-op-section-label--static">
-              {MODE_ICONS[mode]} {MODE_LABELS[mode]} {'\u2014'} primary
+              {activeEnv ? activeEnv.iconGlyph : MODE_ICONS[mode]}
+              {' '}
+              {activeEnv ? activeEnv.name : MODE_LABELS[mode]}
+              {' \u2014 primary'}
             </div>
             {primary.map(k => (
               <div key={k} className="op-item op-item--indent"

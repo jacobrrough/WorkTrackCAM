@@ -1,0 +1,55 @@
+{{!--
+  VCarve Pro post — wood routing on Mach3-class controllers (Laguna Swift, etc.)
+
+  Tuned for the **VCarve Pro environment** in WorkTrackCAM:
+  - Wood-routing-friendly spindle warmup (G4 dwell after M3)
+  - Conservative safe Z (uses machine.workAreaMm.z)
+  - Mach3-style program tape markers (% on first/last lines)
+  - Dust-collection M-code commented out — uncomment if your control wires it
+  - No peck cycles by default; drill ops emit explicit Z moves
+  - Single-tool program by default — extend if you wire ATC into your Laguna
+
+  Lines starting with ";" are operator-visible comments in the output file.
+  Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+%
+; VCarve Pro post — {{machine.name}} ({{machine.id}})
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (uncomment M7/M8 line below if your post wires it)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+{{#if machine.maxSpindleRpm}}; Spindle max: {{machine.maxSpindleRpm}} RPM
+{{/if}}{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; ---------------------------------------------------------------------------
+{{units}}        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+{{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
+{{wcsLine}}
+{{/if}}; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+{{spindleOn}}
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — uncomment if your control uses M7 for dust
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — uncomment if you turned them on above
+; Spindle off (dialect snippet — usually M5)
+{{spindleOff}}
+G0 Z{{machine.workAreaMm.z}} ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%

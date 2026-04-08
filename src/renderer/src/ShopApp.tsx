@@ -1,14 +1,20 @@
 /**
- * ShopApp -- Unified Fab Studio
+ * ShopApp -- WorkTrackCAM
  *
- * Machine-first workflow:
- *   1. MachineSplash   -- full-screen picker on every launch
- *   2. Main UI         -- toolbar + left panel + viewport, all adapted to the
- *                         selected machine's UI mode (fdm | cnc_2d | cnc_3d |
- *                         cnc_4axis | cnc_5axis)
+ * Environment-first workflow:
+ *   1. EnvironmentSplash -- three-card picker (VCarve Pro / Creality Print /
+ *                           Makera CAM) shown on every launch
+ *   2. Main UI           -- toolbar + left panel + viewport, themed via the
+ *                           active environment's `data-environment` accent
+ *                           and gated by the env's available op kinds
  *
- * Decomposed: MachineSplash, LeftPanel, FeedsCalcModal, LibraryView, SettingsView
- * are extracted into their own files. ShopApp owns state management + composition.
+ * Per-environment job lists are persisted under env-scoped localStorage keys
+ * via `environments/env-jobs-storage.ts` (legacy `fab-jobs-v1` is migrated on
+ * first load and removed once every env has claimed its share).
+ *
+ * Decomposed: EnvironmentSplash, LeftPanel, FeedsCalcModal, LibraryView,
+ * SettingsView are extracted into their own files. ShopApp owns state
+ * management + composition.
  */
 import React, {
   useCallback, useEffect, useMemo, useRef, useState, Fragment, lazy, Suspense
@@ -47,7 +53,14 @@ import { PropertyEditCommand, AddItemCommand, DeleteItemCommand } from './undo-m
 import { formatErrorForToast } from './error-messages'
 
 // ── Extracted components ──────────────────────────────────────────────────────
-import { MachineSplash } from './MachineSplash'
+import { EnvironmentSplash } from './environments/EnvironmentSplash'
+import { EnvActionStrip } from './environments/EnvActionStrip'
+import { getEnvironmentForMachine } from './environments/env-routing'
+import {
+  finalizeLegacyJobsMigration,
+  loadEnvJobs,
+  saveEnvJobs
+} from './environments/env-jobs-storage'
 import { LeftPanel } from './LeftPanel'
 import { HelpPanel } from './HelpPanel'
 import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
@@ -641,41 +654,59 @@ function ShopAppInner(): React.ReactElement {
   const mode: MachineUIMode = sessionMachine ? getMachineMode(sessionMachine) : 'cnc_2d'
   const isFdm = mode === 'fdm'
 
-  const JOBS_KEY = 'fab-jobs-v1'
+  /** The environment that owns the active session machine, or null at the splash phase. */
+  const activeEnv = useMemo(
+    () => getEnvironmentForMachine(sessionMachine?.id ?? null),
+    [sessionMachine?.id]
+  )
 
+  // ── Per-environment jobs storage ──────────────────────────────────────────
+  // Load jobs whenever the environment changes (which happens on machine pick).
+  // Migrates from the legacy `fab-jobs-v1` bucket on first load and stamps
+  // every restored job with `environmentId`.
+  const lastLoadedEnvIdRef = useRef<string | null>(null)
   useEffect(() => {
+    if (!activeEnv) return
+    if (lastLoadedEnvIdRef.current === activeEnv.id) return
+    lastLoadedEnvIdRef.current = activeEnv.id
     try {
-      const raw = localStorage.getItem(JOBS_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw) as Job[]
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const migrated = parsed.map(j => ({
-            ...newJob(j.name ?? 'Job', j.machineId ?? undefined),
-            ...j,
-            transform: j.transform ?? defaultTransform(),
-            stock: j.stock ?? { x: 100, y: 100, z: 20 },
-            operations: Array.isArray(j.operations) ? j.operations : [],
-            posts: j.posts
-              ? { count: j.posts.count ?? 1, diameterMm: j.posts.diameterMm ?? 6, offsetRadiusMm: j.posts.offsetRadiusMm ?? 0 }
-              : null,
-            chuckDepthMm: (j.chuckDepthMm === 10 ? 10 : 5) as 5 | 10,
-            clampOffsetMm: typeof j.clampOffsetMm === 'number' ? j.clampOffsetMm : 0,
-            gcodeOut: j.gcodeOut ?? null,
-            status: j.status ?? 'idle',
-            lastLog: j.lastLog ?? '',
-            printerUrl: j.printerUrl ?? '',
-          }))
-          setJobs(migrated)
-          setActiveJobId(migrated[0].id)
-        }
+      const result = loadEnvJobs(activeEnv, localStorage)
+      if (result.jobs.length === 0) {
+        setJobs([])
+        setActiveJobId(null)
+        return
       }
-    } catch { /* corrupt storage -- ignore */ }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+      const migrated: Job[] = result.jobs.map((j) => ({
+        ...newJob(j.name ?? 'Job', j.machineId ?? undefined),
+        ...j,
+        transform: j.transform ?? defaultTransform(),
+        stock: j.stock ?? { x: 100, y: 100, z: 20 },
+        operations: Array.isArray(j.operations) ? j.operations : [],
+        posts: j.posts
+          ? { count: j.posts.count ?? 1, diameterMm: j.posts.diameterMm ?? 6, offsetRadiusMm: j.posts.offsetRadiusMm ?? 0 }
+          : null,
+        chuckDepthMm: (j.chuckDepthMm === 10 ? 10 : 5) as 5 | 10,
+        clampOffsetMm: typeof j.clampOffsetMm === 'number' ? j.clampOffsetMm : 0,
+        gcodeOut: j.gcodeOut ?? null,
+        status: j.status ?? 'idle',
+        lastLog: j.lastLog ?? '',
+        printerUrl: j.printerUrl ?? '',
+        environmentId: activeEnv.id
+      }))
+      setJobs(migrated)
+      setActiveJobId(migrated[0]?.id ?? null)
+      // Once every env has had a chance to migrate, clean up the legacy bucket.
+      finalizeLegacyJobsMigration(localStorage)
+    } catch {
+      /* corrupt storage — ignore, fall through to empty list */
+    }
+  }, [activeEnv])
 
+  // Persist jobs to the per-environment scoped key whenever they change.
   useEffect(() => {
-    if (jobs.length > 0) localStorage.setItem(JOBS_KEY, JSON.stringify(jobs))
-  }, [jobs])
+    if (!activeEnv) return
+    try { saveEnvJobs(activeEnv, jobs, localStorage) } catch { /* */ }
+  }, [jobs, activeEnv])
 
   // Load tools whenever the active job's machine or session machine changes.
   // (Initial machine/material/settings load is handled by MachineSessionProvider.)
@@ -906,9 +937,11 @@ function ShopAppInner(): React.ReactElement {
     setGcodeViewerPath(null)
     setGcodeViewerText('')
     setProjectDirty(false)
-    localStorage.removeItem(JOBS_KEY)
+    if (activeEnv) {
+      try { saveEnvJobs(activeEnv, [], localStorage) } catch { /* */ }
+    }
     pushToast('ok', 'New project started')
-  }, [pushToast])
+  }, [pushToast, activeEnv])
 
   const newProject = useCallback((): void => {
     if (projectDirty && jobs.length > 0) {
@@ -1254,10 +1287,10 @@ function ShopAppInner(): React.ReactElement {
     return (
       <>
         {!splashLibOpen && (
-          <MachineSplash
+          <EnvironmentSplash
             machines={machines}
             lastMachineId={lastMachineId}
-            onSelect={handleMachineSelect}
+            onSelect={(_env, machine) => { void handleMachineSelect(machine) }}
             onAddMachine={() => setSplashLibOpen(true)}
           />
         )}
@@ -1269,7 +1302,7 @@ function ShopAppInner(): React.ReactElement {
               <button className="btn btn-ghost btn-sm" onClick={async () => {
                 await reloadMachines()
                 setSplashLibOpen(false)
-              }}>{'\u2190'} Back to machine picker</button>
+              }}>{'\u2190'} Back to environment picker</button>
             </div>
             <div className="machine-lib-overlay__body">
               <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
@@ -1284,13 +1317,19 @@ function ShopAppInner(): React.ReactElement {
 
   // ── Main app ──
   return (
-    <div className="shop-shell">
+    <div className="shop-shell" data-environment={activeEnv?.id ?? undefined}>
       {/* Brand header bar (top-most strip) */}
       <header className="shop-brand-bar" role="banner">
         <div className="shop-brand-bar__left">
-          <span className="shop-brand-bar__logo" aria-hidden="true">{'\u25C6'}</span>
-          <span className="shop-brand-bar__title">WorkTrackCAM</span>
-          <span className="shop-brand-bar__sub">Professional CAM &amp; FDM</span>
+          <span className="shop-brand-bar__logo" aria-hidden="true">
+            {activeEnv?.iconGlyph ?? '\u25C6'}
+          </span>
+          <span className="shop-brand-bar__title">
+            {activeEnv?.name ?? 'WorkTrackCAM'}
+          </span>
+          <span className="shop-brand-bar__sub">
+            {activeEnv ? `WorkTrackCAM \u00B7 ${activeEnv.tagline}` : 'Professional CAM & FDM'}
+          </span>
         </div>
         <div className="shop-brand-bar__center">
           <button
@@ -1452,6 +1491,24 @@ function ShopAppInner(): React.ReactElement {
               jobs={jobs} activeJobId={activeJobId} setActiveJobId={setActiveJobId}
               createJob={createJob} deleteJob={deleteJob}
               activeJob={activeJob} mode={mode}
+              activeEnv={activeEnv}
+              envHeaderSlot={
+                activeEnv ? (
+                  <EnvActionStrip
+                    env={activeEnv}
+                    machines={machines}
+                    sessionMachine={sessionMachine}
+                    onSwitchMachine={(m) => {
+                      setSessionMachine(m)
+                      setLastMachineId(m.id)
+                      void fab().settingsSet({ lastMachineId: m.id }).catch(() => { /* */ })
+                    }}
+                    materials={materials}
+                    activeJob={activeJob}
+                    onUpdateJob={updateJob}
+                  />
+                ) : undefined
+              }
               onUpdateJob={updateJob} onAddOp={addOp}
               onRemoveOp={removeOp}
               onUpdateOpParams={updateOpParams}

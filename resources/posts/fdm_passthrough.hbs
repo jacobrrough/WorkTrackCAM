@@ -1,0 +1,29 @@
+{{!--
+  FDM passthrough post — for the **Creality Print environment**.
+
+  WorkTrackCAM delegates real slicing to CuraEngine via src/main/slicer.ts;
+  this post is invoked only when the CAM/Manufacture pipeline runs against
+  an FDM machine (e.g., dry-runs, custom utility ops). It is intentionally
+  minimal — it just emits the toolpath lines verbatim with a small header,
+  so no CNC spindle/coolant macros leak into FDM output.
+
+  Lines starting with ";" are operator-visible comments. Marlin/Klipper firmware
+  treats ";" as a line comment.
+
+  Template context keys: resources/posts/README.md (PostContext / renderPost).
+--}}
+; ---------------------------------------------------------------------------
+; WorkTrackCAM — Creality Print passthrough post
+; Machine: {{machine.name}} ({{machine.id}})
+{{#if operationLabel}}; Operation: {{operationLabel}}
+{{/if}}; Work volume (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
+; ---------------------------------------------------------------------------
+; This is a passthrough — slicing is performed by CuraEngine and the resulting
+; G-code is the source of truth. Verify start/end macros, bed/nozzle temps,
+; and home/park sequences match your Creality firmware before printing.
+; ---------------------------------------------------------------------------
+{{#each toolpathLines}}
+{{this}}
+{{/each}}
+; ---------------------------------------------------------------------------
+; End of WorkTrackCAM passthrough output

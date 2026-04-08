@@ -4,10 +4,14 @@
   "kind": "cnc",
   "workAreaMm": { "x": 1524, "y": 3048, "z": 203 },
   "maxFeedMmMin": 12000,
-  "postTemplate": "cnc_generic_mm.hbs",
+  "postTemplate": "vcarve_mach3.hbs",
   "dialect": "mach3",
+  "maxSpindleRpm": 18000,
+  "minSpindleRpm": 8000,
   "meta": {
     "manufacturer": "Laguna",
-    "model": "Swift 5×10 — controller varies (Mach3/4, Masso, Buildbotics, etc.); match dialect/M-codes to your manual before running; see docs/MACHINES.md"
+    "model": "Swift 5×10",
+    "source": "bundled",
+    "cncProfile": "2d"
   }
 }
