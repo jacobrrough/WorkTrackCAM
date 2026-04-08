@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import { COMMON_POST_TEMPLATE_FILENAMES } from '../../shared/machine-post-template-hints'
+import { ConfirmDialog } from '../src/ConfirmDialog'
 
 function machineSourceLabel(m: MachineProfile): string {
   if (m.meta?.importedFromCps) return 'From .cps'
@@ -80,18 +81,23 @@ export function MachineManagerPanel(): ReactNode {
     })
   }, [machineDraft])
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   const onDelete = useCallback(() => {
     if (!machineDraft || !user) return
-    if (!window.confirm(`Delete user machine “${machineDraft.name}” (${machineDraft.id})? This cannot be undone.`)) {
-      return
-    }
+    setShowDeleteConfirm(true)
+  }, [machineDraft, user])
+
+  const doDelete = useCallback(() => {
+    if (!machineDraft) return
+    setShowDeleteConfirm(false)
     setMachineStatus('')
     void (async () => {
       await window.fab.machinesDeleteUser(machineDraft.id)
       await reloadCatalog()
       setMachineStatus('Deleted user machine profile.')
     })()
-  }, [machineDraft, user, reloadCatalog])
+  }, [machineDraft, reloadCatalog])
 
   const onImportFile = useCallback(async () => {
     setMachineStatus('')
@@ -512,6 +518,16 @@ export function MachineManagerPanel(): ReactNode {
           </ul>
         </details>
       ) : null}
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Delete Machine"
+        message={`Delete user machine "${machineDraft?.name ?? ''}"?\n\nThis cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={doDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   )
 }

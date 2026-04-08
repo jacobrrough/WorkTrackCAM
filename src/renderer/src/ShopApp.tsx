@@ -23,6 +23,7 @@ import { shopJobStockAsCamSetup } from '../../shared/cam-setup-defaults'
 import { friendlyError } from '../../shared/file-parse-errors'
 import { ShopModelViewer, defaultTransform } from './ShopModelViewer'
 import { ErrorBoundary } from './ErrorBoundary'
+import { ConfirmDialog } from './ConfirmDialog'
 import type { ModelTransform, StockDimensions, GizmoMode } from './ShopModelViewer'
 import {
   type MachineUIMode,
@@ -845,19 +846,24 @@ export default function ShopApp(): React.ReactElement {
   }, [activeJobMaterialId, activeJobIdStable, materials, machineTools])
 
   // ── Remove model from the active job ─────────────────────────────────────────
-  const removeModel = useCallback((): void => {
+  const [showRemoveModelConfirm, setShowRemoveModelConfirm] = useState(false)
+
+  const doRemoveModel = useCallback((): void => {
     if (!activeJob) return
-    const hasOps = activeJob.operations.length > 0
-    if (hasOps) {
-      const ok = globalThis.confirm(
-        `This job has ${activeJob.operations.length} operation(s) that reference the model.\n\nRemove the model anyway?`
-      )
-      if (!ok) return
-    }
+    setShowRemoveModelConfirm(false)
     updateJob(activeJob.id, { stlPath: null, gcodeOut: null, status: 'idle' })
     setModelSize(null)
     pushToast('ok', 'Model removed from job')
   }, [activeJob, updateJob, pushToast, setModelSize])
+
+  const removeModel = useCallback((): void => {
+    if (!activeJob) return
+    if (activeJob.operations.length > 0) {
+      setShowRemoveModelConfirm(true)
+      return
+    }
+    doRemoveModel()
+  }, [activeJob, doRemoveModel])
 
   // ── Import model into the active job ─────────────────────────────────────────
   const importModel = useCallback(async (): Promise<void> => {
@@ -905,15 +911,11 @@ export default function ShopApp(): React.ReactElement {
     if (jobs.length > 0) setProjectDirty(true)
   }, [jobs])
 
-  const newProject = useCallback(async (): Promise<void> => {
-    if (projectDirty && jobs.length > 0) {
-      const save = globalThis.confirm(
-        'Current project has unsaved changes.\n\nDo you want to save before starting a new project?'
-      )
-      if (save) {
-        await saveProjectFile()
-      }
-    }
+  const [showNewProjectConfirm, setShowNewProjectConfirm] = useState(false)
+
+  const doNewProject = useCallback(async (saveBefore: boolean): Promise<void> => {
+    setShowNewProjectConfirm(false)
+    if (saveBefore) await saveProjectFile()
     setJobs([])
     setActiveJobId(null)
     setModelSize(null)
@@ -924,7 +926,15 @@ export default function ShopApp(): React.ReactElement {
     setProjectDirty(false)
     localStorage.removeItem(JOBS_KEY)
     pushToast('ok', 'New project started')
-  }, [projectDirty, jobs.length, pushToast])
+  }, [pushToast])
+
+  const newProject = useCallback((): void => {
+    if (projectDirty && jobs.length > 0) {
+      setShowNewProjectConfirm(true)
+      return
+    }
+    void doNewProject(false)
+  }, [projectDirty, jobs.length, doNewProject])
 
   const loadProjectFile = async (): Promise<void> => {
     const p = await fab().dialogOpenFile(
@@ -1594,6 +1604,27 @@ export default function ShopApp(): React.ReactElement {
             : 'F1 Help \u00B7 Ctrl+Shift+? Shortcuts \u00B7 Ctrl+K Commands'}
         </span>
       </div>
+
+      {/* ── Confirm dialogs ────────────────────────────────────── */}
+      <ConfirmDialog
+        open={showRemoveModelConfirm}
+        title="Remove Model"
+        message={`This job has ${activeJob?.operations.length ?? 0} operation(s) that reference the model.\n\nRemove the model anyway?`}
+        confirmLabel="Remove"
+        danger
+        onConfirm={doRemoveModel}
+        onCancel={() => setShowRemoveModelConfirm(false)}
+      />
+      <ConfirmDialog
+        open={showNewProjectConfirm}
+        title="Unsaved Changes"
+        message="Current project has unsaved changes."
+        confirmLabel="Save & Continue"
+        secondaryLabel="Don't Save"
+        onSecondary={() => void doNewProject(false)}
+        onConfirm={() => void doNewProject(true)}
+        onCancel={() => setShowNewProjectConfirm(false)}
+      />
     </div>
   )
 }

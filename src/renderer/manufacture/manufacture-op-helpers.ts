@@ -112,28 +112,31 @@ export function contourDriftState(
 
 export type OpReadinessLabel = 'ready' | 'missing geometry' | 'stale geometry' | 'suppressed' | 'non-cam'
 
+/** CSS class variant for status chip background. */
+export type OpReadinessVariant = 'ok' | 'error' | 'warn' | 'suppressed' | 'neutral'
+
 /** Compute the CAM readiness status for an operation. */
 export function opReadiness(
   op: ManufactureOperation,
   contourCandidates: DerivedContourCandidate[]
-): { label: OpReadinessLabel; bg: string } {
-  if (op.suppressed) return { label: 'suppressed', bg: '#334155' }
+): { label: OpReadinessLabel; bg: string; variant: OpReadinessVariant } {
+  if (op.suppressed) return { label: 'suppressed', bg: '#334155', variant: 'suppressed' }
   if (isManufactureKindBlockedFromCam(op.kind)) {
-    return { label: 'non-cam', bg: '#475569' }
+    return { label: 'non-cam', bg: '#475569', variant: 'neutral' }
   }
   if (op.kind === 'cnc_contour' || op.kind === 'cnc_pocket') {
     const contour = op.params?.['contourPoints']
-    if (!Array.isArray(contour) || contour.length < 3) return { label: 'missing geometry', bg: '#7f1d1d' }
+    if (!Array.isArray(contour) || contour.length < 3) return { label: 'missing geometry', bg: '#7f1d1d', variant: 'error' }
     const drift = contourDriftState(op, contourCandidates)
-    if (drift === 'changed' || drift === 'missing') return { label: 'stale geometry', bg: '#92400e' }
-    return { label: 'ready', bg: '#14532d' }
+    if (drift === 'changed' || drift === 'missing') return { label: 'stale geometry', bg: '#92400e', variant: 'warn' }
+    return { label: 'ready', bg: '#14532d', variant: 'ok' }
   }
   if (op.kind === 'cnc_drill') {
     const drill = op.params?.['drillPoints']
-    if (!Array.isArray(drill) || drill.length < 1) return { label: 'missing geometry', bg: '#7f1d1d' }
-    return { label: 'ready', bg: '#14532d' }
+    if (!Array.isArray(drill) || drill.length < 1) return { label: 'missing geometry', bg: '#7f1d1d', variant: 'error' }
+    return { label: 'ready', bg: '#14532d', variant: 'ok' }
   }
-  return { label: 'ready', bg: '#14532d' }
+  return { label: 'ready', bg: '#14532d', variant: 'ok' }
 }
 
 /** Panel-facing status mapping from opReadiness. */

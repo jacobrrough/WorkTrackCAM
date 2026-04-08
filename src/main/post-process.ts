@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fitArcsToLinearPath } from '../shared/arc-fitting'
 import type { GCodeSegment, Point3D } from '../shared/arc-fitting'
 import type { MachineProfile } from '../shared/machine-schema'
+import { validateDialectCompliance } from '../shared/gcode-dialect-compliance'
 
 /** Configuration for G-code line numbering (N-words). */
 export type LineNumberingConfig = {
@@ -705,5 +706,10 @@ export async function renderPost(
     gcode = applyLineNumbering(gcode, opts.lineNumbering)
   }
 
-  return { gcode, warnings: spindleWarning ? [spindleWarning] : [] }
+  const warnings: string[] = spindleWarning ? [spindleWarning] : []
+  const compliance = validateDialectCompliance(gcode, machine.dialect)
+  for (const issue of compliance) {
+    warnings.push(`[${issue.code}] ${issue.message} (line ${issue.line})`)
+  }
+  return { gcode, warnings }
 }
