@@ -4,11 +4,8 @@ import { ShellResizeHandle } from './ShellResizeHandle'
 import { ShellStatusFooter } from './ShellStatusFooter'
 import { useShellResizableColumns } from './useShellResizableColumns'
 import { WorkspaceBar, type Workspace } from './WorkspaceBar'
-import { WorkbenchSelector } from './WorkbenchSelector'
-import type { UiShellLayout } from './workspaceMemory'
 
 export type { Workspace }
-export type { UiShellLayout } from './workspaceMemory'
 
 export type UtilityTab = 'project' | 'settings'
 
@@ -30,11 +27,6 @@ type Props = {
   onToggleProperties?: () => void
   statusText?: string
   children: ReactNode
-  /** `freecad` = menu bar + workbench dropdown; `fusion` = pill workspace bar only. */
-  uiShell?: UiShellLayout
-  /** Rendered above the main header when `uiShell` is `freecad` (e.g. `AppMenuBar`). */
-  menuBar?: ReactNode
-  onUiShellChange?: (s: UiShellLayout) => void
   /** e.g. WorkTrackCAM G-code safety reminder (non-dismissible; rendered below header). */
   complianceBanner?: ReactNode
 }
@@ -64,9 +56,6 @@ export function AppShell({
   onToggleProperties,
   statusText,
   children,
-  uiShell = 'freecad',
-  menuBar = null,
-  onUiShellChange,
   complianceBanner = null
 }: Props) {
   const {
@@ -111,13 +100,8 @@ export function AppShell({
     [onUtilityTabChange]
   )
 
-  const browserAsideLabel = uiShell === 'freecad' ? 'Combo view' : 'Model browser'
-
   return (
-    <div className="app-shell" data-workspace={workspace} data-ui-shell={uiShell}>
-      {uiShell === 'freecad' && menuBar != null ? (
-        <div className="app-shell-menubar-outer">{menuBar}</div>
-      ) : null}
+    <div className="app-shell" data-workspace={workspace}>
       <header className="app-shell-header">
         <div className="app-shell-header-brand">
           <div className="app-shell-doc-block">
@@ -126,28 +110,7 @@ export function AppShell({
             </span>
             <span className="app-title-sub">{appSubtitle}</span>
           </div>
-          {uiShell === 'freecad' ? (
-            <WorkbenchSelector
-              id="workbench-selector"
-              workspace={workspace}
-              onChange={onWorkspaceChange}
-              allowedWorkspaces={allowedWorkspaces}
-            />
-          ) : (
-            <>
-              {onUiShellChange ? (
-                <button
-                  type="button"
-                  className="secondary app-shell-layout-switch"
-                  title="Restore menu bar and combo view layout"
-                  onClick={() => onUiShellChange('freecad')}
-                >
-                  Menu bar layout
-                </button>
-              ) : null}
-              <WorkspaceBar workspace={workspace} onChange={onWorkspaceChange} allowedWorkspaces={allowedWorkspaces} />
-            </>
-          )}
+          <WorkspaceBar workspace={workspace} onChange={onWorkspaceChange} allowedWorkspaces={allowedWorkspaces} />
         </div>
         <div className="app-shell-header-right">
           {headerActions}
@@ -206,7 +169,7 @@ export function AppShell({
       )}
 
       <div className="app-shell-body">
-        <aside className="app-browser" aria-label={browserAsideLabel} style={{ width: browserPx }}>
+        <aside className="app-browser" aria-label="Model browser" style={{ width: browserPx }}>
           {browser}
         </aside>
         <ShellResizeHandle ariaLabel="Resize browser column" onPointerDown={onBrowserResizePointerDown} />

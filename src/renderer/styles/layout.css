@@ -1,0 +1,397 @@
+/* WorkTrackCAM — Shell Layout Styles */
+
+/* ── App Shell ────────────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg0);
+  color: var(--txt0);
+  font-family: var(--font);
+}
+.app-shell-menubar-outer { flex-shrink: 0; }
+
+/* ── Header ───────────────────────────────────────────────────── */
+.app-shell-header {
+  flex-shrink: 0;
+  height: var(--shell-header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 12px;
+  gap: 8px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+  overflow: hidden;
+}
+.app-shell-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.app-shell-doc-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.app-doc-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--txt0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.app-doc-name--primary { color: var(--txt0); }
+.app-title-sub {
+  font-size: 10px;
+  color: var(--txt2);
+  white-space: nowrap;
+}
+.app-shell-layout-switch {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.app-shell-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.properties-toggle {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.properties-toggle.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: rgba(61,126,255,0.4);
+}
+
+/* ── Info Banner ──────────────────────────────────────────────── */
+.app-shell-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: var(--shell-banner-h);
+  background: rgba(245,158,11,0.08);
+  border-bottom: 1px solid rgba(245,158,11,0.2);
+  font-size: 12px;
+  color: var(--warn);
+}
+.app-shell-banner__text { flex: 1; margin: 0; }
+.app-shell-banner__dismiss {
+  background: transparent;
+  border: none;
+  color: var(--txt2);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color var(--transition-fast);
+}
+.app-shell-banner__dismiss:hover { color: var(--txt0); }
+
+/* ── Utility Strip ────────────────────────────────────────────── */
+.utility-strip-outer {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.utility-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--bg1);
+  height: 36px;
+  overflow-x: auto;
+}
+.utility-strip::-webkit-scrollbar { height: 0; }
+.utility-strip button {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--txt2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  font-family: var(--font);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.utility-strip button:hover { color: var(--txt0); }
+.utility-strip button.active,
+.utility-strip button[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.utility-strip-hint {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--txt2);
+}
+
+/* ── Shell Body / Panels / Resize ─────────────────────────────── */
+.app-shell-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.app-browser {
+  flex-shrink: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.app-content-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.app-content-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.app-timeline {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg1);
+}
+.app-properties {
+  flex-shrink: 0;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.shell-resize-handle {
+  flex-shrink: 0;
+  width: var(--shell-resize-w);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
+  padding: 0;
+  transition: background var(--transition-fast);
+  z-index: 5;
+}
+.shell-resize-handle:hover,
+.shell-resize-handle:active {
+  background: var(--accent-dim);
+}
+
+/* ── Status Bar ───────────────────────────────────────────────── */
+.app-status-bar {
+  grid-row: 3;
+  min-height: var(--shell-status-h);
+  background: var(--bg1);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--txt2);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+.app-status-bar--split { justify-content: space-between; }
+.app-status-live { flex: 1; }
+.app-status-text { color: var(--txt2); }
+.status-warn { color: var(--warn); }
+.status-err  { color: var(--err); }
+.status-ok   { color: var(--ok); }
+
+/* ── Discoverability Hint ─────────────────────────────────────── */
+.shell-discoverability-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  font-size: 11px;
+  color: var(--txt2);
+}
+.shell-discoverability-dismiss {
+  font-size: 11px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+
+/* ── Workspace Bar & Workbench Selector ───────────────────────── */
+.workbench-selector {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.workbench-selector__label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--txt2);
+  white-space: nowrap;
+}
+.workbench-selector__select {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 3px 22px 3px 8px;
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235e6480' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  transition: border-color var(--transition-fast);
+  width: auto;
+}
+.workbench-selector__select:hover,
+.workbench-selector__select:focus { border-color: var(--accent); }
+
+.workspace-bar { display: flex; align-items: center; gap: 2px; }
+.workspace-bar--fusion { gap: 0; }
+.workspace-bar--fusion button {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--txt2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  font-family: var(--font);
+  white-space: nowrap;
+}
+.workspace-bar--fusion button:hover { color: var(--txt0); background: var(--bg2); }
+.workspace-bar--fusion button.active,
+.workspace-bar--fusion button[aria-current="page"] {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* ── App Menubar (FreeCAD Mode) ───────────────────────────────── */
+.app-menubar {
+  display: flex;
+  align-items: center;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  height: 26px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.app-menubar__top {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.app-menubar__item {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 10px;
+  cursor: pointer;
+  color: var(--txt1);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  position: relative;
+}
+.app-menubar__item:hover {
+  background: var(--bg3);
+  color: var(--txt0);
+}
+.app-menubar__sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border-hi);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+.app-menubar__cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.app-menubar__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 500;
+  padding: 4px 0;
+}
+.app-menubar__dropdown .menuitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--txt0);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.app-menubar__dropdown .menuitem:hover { background: var(--bg3); }
+.app-menubar__dropdown .separator {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+}
+
+/* ── Ribbon ───────────────────────────────────────────────────── */
+.ribbon-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.ribbon-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+}
+.ribbon-group:last-child { border-right: none; }
+.ribbon-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--txt2);
+  margin-bottom: 2px;
+  white-space: nowrap;
+}

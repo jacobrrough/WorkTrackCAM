@@ -1,0 +1,300 @@
+/* WorkTrackCAM — Primitive Component Styles */
+
+/* ── Form Controls ──────────────────────────────────────────────── */
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-row   { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--txt1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 6px 10px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.12s;
+  -webkit-appearance: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+select option { background: var(--bg3); }
+textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12px; }
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  white-space: nowrap;
+  font-family: var(--font);
+}
+.btn:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
+
+/* Focus-visible (WCAG AA keyboard navigation) */
+.btn:focus-visible,
+.tb-btn:focus-visible,
+.btn-generate:focus-visible,
+.btn-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+[role="button"]:focus-visible,
+[role="option"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
+}
+
+.btn-primary   { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover:not(:disabled)   { background: var(--accent-hi); border-color: var(--accent-hi); }
+.btn-secondary { background: var(--bg3); color: var(--txt0); border-color: var(--border-hi); }
+.btn-secondary:hover:not(:disabled) { background: var(--bg4); }
+.btn-ghost     { background: transparent; color: var(--txt1); border-color: transparent; }
+.btn-ghost:hover:not(:disabled)     { background: var(--bg3); color: var(--txt0); }
+.btn-danger    { background: transparent; color: var(--err); border-color: var(--err); }
+.btn-danger:hover:not(:disabled)    { background: rgba(248,113,113,0.12); }
+.btn-ok        { background: rgba(34,197,94,0.15); color: var(--ok); border-color: rgba(34,197,94,0.4); }
+.btn-ok:hover:not(:disabled)        { background: rgba(34,197,94,0.25); }
+.btn-sm  { padding: 4px 10px; font-size: 11px; }
+.btn-icon { padding: 6px; min-width: 30px; }
+
+/* Generate / Send prominent toolbar buttons */
+.btn-generate {
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: var(--font);
+}
+.btn-generate:hover:not(:disabled) { background: var(--accent-hi); }
+.btn-generate:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
+
+.btn-send {
+  background: rgba(34,197,94,0.12);
+  color: var(--ok);
+  border: 1px solid rgba(34,197,94,0.35);
+  border-radius: var(--radius-sm);
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: var(--font);
+}
+.btn-send:hover:not(:disabled) { background: rgba(34,197,94,0.22); }
+.btn-send:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
+
+.btn-xs {
+  font-size: var(--text-sm);
+  padding: 1px 6px;
+}
+
+/* Global button classes (shell components use bare className="primary"/"secondary") */
+button.primary, a.primary, .primary-btn,
+button[class="primary"], button[class~="primary"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font);
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  white-space: nowrap;
+  text-decoration: none;
+}
+button.primary:hover:not(:disabled), a.primary:hover {
+  background: var(--accent-hi);
+  border-color: var(--accent-hi);
+}
+button.primary:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+button.secondary, a.secondary, .secondary-btn,
+button[class="secondary"], button[class~="secondary"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font);
+  background: var(--bg3);
+  color: var(--txt0);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+  text-decoration: none;
+}
+button.secondary:hover:not(:disabled), a.secondary:hover {
+  background: var(--bg4);
+}
+button.secondary:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* Ghost active states */
+.btn-ghost--active {
+  background: var(--accent-dim) !important;
+  color: var(--accent) !important;
+}
+
+.btn-icon--danger { color: var(--danger, #ef4444); opacity: 0.6; }
+.btn-icon--danger:hover { opacity: 1; }
+.btn-inline { display: inline; padding: 0; text-decoration: underline; }
+.btn--force-visible {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg1);
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+.tab-btn {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--txt2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+  font-family: var(--font);
+}
+.tab-btn:hover { color: var(--txt0); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Spinner ────────────────────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-hi);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+.spinner--sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+.spinner--lg {
+  width: 32px;
+  height: 32px;
+  border-width: 3px;
+}
+
+/* ── Progress Bar ───────────────────────────────────────────────── */
+.progress-bar {
+  height: 3px;
+  background: var(--bg3);
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+}
+.progress-bar__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.progress-bar--indeterminate .progress-bar__fill {
+  width: 30%;
+  animation: progress-slide 1.5s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* ── Kbd (keyboard shortcut display) ────────────────────────────── */
+.shell-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: var(--mono);
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  border-radius: 3px;
+  color: var(--txt1);
+}
+.shortcuts-kbd {
+  display: inline-block;
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ── Input Row Helper ───────────────────────────────────────────── */
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.input-row input { flex: 1; }

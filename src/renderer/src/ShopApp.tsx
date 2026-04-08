@@ -32,7 +32,7 @@ import {
 } from './shop-stock-bounds'
 import { generateSetupSheet, parseGcodeStats } from './setup-sheet'
 import type { SetupSheetJob } from './setup-sheet'
-import { loadWindowState, saveWindowState } from './window-state'
+// window-state is now handled by UIContext
 import {
   APP_KEYBOARD_SHORTCUT_GROUPS,
   isTypableKeyboardTarget,
@@ -52,26 +52,17 @@ import { LeftPanel } from './LeftPanel'
 import { HelpPanel } from './HelpPanel'
 import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
 
+// ── Context providers ────────────────────────────────────────────────────────
+import { AppProviders, useToast, useUI } from '../contexts'
+
 // Lazy-loaded: LibraryView & SettingsView only render when their tab is active,
 // so they benefit from code-splitting to reduce initial bundle size.
 const LibraryView = lazy(() => import('./LibraryView').then(m => ({ default: m.LibraryView })))
 const SettingsView = lazy(() => import('./SettingsView').then(m => ({ default: m.SettingsView })))
 
 // ── Shared types & utilities ──────────────────────────────────────────────────
-import type { Toast, Job, PostConfig, ViewKind } from './shop-types'
+import type { Toast, Job, PostConfig } from './shop-types'
 import { fab, getMachineMode, MODE_LABELS, MODE_ICONS, OPS_BY_MODE, KIND_LABELS } from './shop-types'
-
-// ── Toast hook ────────────────────────────────────────────────────────────────
-let toastSeq = 0
-function useToasts(): [Toast[], (kind: Toast['kind'], msg: string) => void] {
-  const [toasts, setToasts] = useState<Toast[]>([])
-  const push = useCallback((kind: Toast['kind'], msg: string) => {
-    const id = ++toastSeq
-    setToasts(t => [...t, { id, kind, msg }])
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000)
-  }, [])
-  return [toasts, push]
-}
 
 // ── Material apply helper ─────────────────────────────────────────────────────
 type MaterialApplyResult = {
@@ -594,13 +585,16 @@ function KeyboardShortcutsDialog({ onClose }: { onClose: () => void }): React.Re
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function ShopApp(): React.ReactElement {
+  return (
+    <AppProviders>
+      <ShopAppInner />
+    </AppProviders>
+  )
+}
+
+function ShopAppInner(): React.ReactElement {
   const [phase, setPhase] = useState<'splash' | 'app'>('splash')
   const [sessionMachine, setSessionMachine] = useState<MachineProfile | null>(null)
-  const _ws = loadWindowState()
-  const VIEW_KINDS: ViewKind[] = ['jobs', 'library', 'settings']
-  const restoredView: ViewKind = VIEW_KINDS.includes(_ws.view as ViewKind) ? (_ws.view as ViewKind) : 'jobs'
-  const [view, setViewRaw] = useState<ViewKind>(restoredView)
-  const setView = useCallback((v: ViewKind) => { setViewRaw(v); saveWindowState({ view: v }) }, [])
   const [jobs, setJobs] = useState<Job[]>([])
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [machines, setMachines] = useState<MachineProfile[]>([])
@@ -608,46 +602,32 @@ export default function ShopApp(): React.ReactElement {
   const [machineTools, setMachineTools] = useState<ToolRecord[]>([])
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState<string[]>([])
-  const [logOpen, setLogOpenRaw] = useState(_ws.logOpen ?? false)
-  const setLogOpen: React.Dispatch<React.SetStateAction<boolean>> = useCallback(
-    (v: boolean | ((prev: boolean) => boolean)) => {
-      setLogOpenRaw(prev => {
-        const next = typeof v === 'function' ? v(prev) : v
-        saveWindowState({ logOpen: next })
-        return next
-      })
-    }, [])
-  const [gcodeViewerOpen, setGcodeViewerOpen] = useState(false)
   const [gcodeViewerPath, setGcodeViewerPath] = useState<string | null>(null)
   const [gcodeViewerText, setGcodeViewerText] = useState('')
   const [gcodeViewerLoading, setGcodeViewerLoading] = useState(false)
-  const [cmdOpen, setCmdOpen] = useState(false)
   const [modelSize, setModelSize] = useState<{ x: number; y: number; z: number } | null>(null)
   const [lastMachineId, setLastMachineId] = useState<string | null>(null)
   const [splashLibOpen, setSplashLibOpen] = useState(false)
-  const [toasts, pushToast] = useToasts()
-  const [savedIndicator, setSavedIndicator] = useState(false)
+  const { pushToast } = useToast()
+  const {
+    view, setView,
+    cmdOpen, setCmdOpen,
+    showShortcuts, setShowShortcuts,
+    helpOpen, setHelpOpen,
+    showOnboarding, setShowOnboarding,
+    logOpen, setLogOpen,
+    gcodeViewerOpen, setGcodeViewerOpen,
+    leftPanelWidth, setLeftPanelWidth,
+    savedIndicator, setSavedIndicator,
+  } = useUI()
   const [gcodeGeneration, setGcodeGeneration] = useState(0)
   const [lastGenMs, setLastGenMs] = useState<number | null>(null)
-  const [showShortcuts, setShowShortcuts] = useState(false)
-  const [helpOpen, setHelpOpen] = useState(false)
-  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding)
-  const LEFT_PANEL_DEFAULT = 264
-  const LEFT_PANEL_MIN = 180
-  const LEFT_PANEL_MAX = 500
-  const [leftPanelWidth, setLeftPanelWidthRaw] = useState(
-    typeof _ws.leftPanelWidth === 'number' && _ws.leftPanelWidth >= LEFT_PANEL_MIN && _ws.leftPanelWidth <= LEFT_PANEL_MAX
-      ? _ws.leftPanelWidth
-      : LEFT_PANEL_DEFAULT
-  )
-  const setLeftPanelWidth = useCallback((w: number) => {
-    const clamped = Math.max(LEFT_PANEL_MIN, Math.min(LEFT_PANEL_MAX, Math.round(w)))
-    setLeftPanelWidthRaw(clamped)
-    saveWindowState({ leftPanelWidth: clamped })
-  }, [])
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const { execute: undoExec } = useUndo()
+
+  // Set onboarding on first mount
+  useEffect(() => { if (shouldShowOnboarding()) setShowOnboarding(true) }, [])
 
   const activeJob = useMemo(() => jobs.find(j => j.id === activeJobId) ?? null, [jobs, activeJobId])
   const mode: MachineUIMode = sessionMachine ? getMachineMode(sessionMachine) : 'cnc_2d'
@@ -1297,13 +1277,6 @@ export default function ShopApp(): React.ReactElement {
             </div>
           </div>
         )}
-        <div className="toast-stack" role="status" aria-live="polite" aria-atomic="true">
-          {toasts.map(t => (
-            <div key={t.id} className={`toast-item toast-item--${t.kind}`}>
-              {t.kind === 'ok' ? '\u2713' : t.kind === 'err' ? '\u2715' : '\u26A0'} {t.msg}
-            </div>
-          ))}
-        </div>
       </>
     )
   }
@@ -1573,14 +1546,6 @@ export default function ShopApp(): React.ReactElement {
       {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
       {showOnboarding && <OnboardingOverlay onDismiss={() => setShowOnboarding(false)} />}
-
-      <div className="toast-stack" role="status" aria-live="polite" aria-atomic="true">
-        {toasts.map(t => (
-          <div key={t.id} className={`toast-item toast-item--${t.kind}`}>
-            {t.kind === 'ok' ? '\u2713' : t.kind === 'err' ? '\u2715' : '\u26A0'} {t.msg}
-          </div>
-        ))}
-      </div>
 
       <div className="app-status-bar app-status-bar--split" role="status" aria-live="polite">
         <span className="app-status-text">

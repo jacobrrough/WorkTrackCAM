@@ -34,13 +34,6 @@ const VALID_COMBO_TAB: ReadonlySet<PersistedComboViewTab> = new Set(['model', 't
 
 const COMBO_VIEW_TAB_KEY = 'ufs_combo_view_tab'
 
-/** Application chrome: menu bar + workbench dropdown vs classic pill workspace bar. */
-export type UiShellLayout = 'freecad' | 'fusion'
-
-const VALID_UI_SHELL: ReadonlySet<UiShellLayout> = new Set(['freecad', 'fusion'])
-
-const UI_SHELL_KEY = 'ufs_ui_shell'
-
 const LAST_WORKSPACE_KEY = 'ufs_last_workspace'
 const MFG_OP_FILTER_KEY = 'ufs_mfg_op_filter'
 const MFG_ACTIONABLE_ONLY_KEY = 'ufs_mfg_actionable_only'
@@ -85,24 +78,6 @@ export function readPersistedComboViewTab(fallback: PersistedComboViewTab): Pers
 export function writePersistedComboViewTab(t: PersistedComboViewTab): void {
   try {
     localStorage.setItem(COMBO_VIEW_TAB_KEY, t)
-  } catch {
-    /* ignore */
-  }
-}
-
-export function readPersistedUiShell(fallback: UiShellLayout): UiShellLayout {
-  try {
-    const raw = localStorage.getItem(UI_SHELL_KEY)
-    if (raw && VALID_UI_SHELL.has(raw as UiShellLayout)) return raw as UiShellLayout
-  } catch {
-    /* ignore */
-  }
-  return fallback
-}
-
-export function writePersistedUiShell(s: UiShellLayout): void {
-  try {
-    localStorage.setItem(UI_SHELL_KEY, s)
   } catch {
     /* ignore */
   }

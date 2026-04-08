@@ -1,0 +1,14 @@
+/* ============================================================
+   Reset & base styles
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  background: var(--bg0);
+  color: var(--txt0);
+  -webkit-font-smoothing: antialiased;
+}
