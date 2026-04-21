@@ -18,7 +18,7 @@ export function describeCamOperationKind(kind: string | undefined): {
     return {
       runnable: true,
       hint:
-        '**Generate CAM** uses the built-in **parallel finish** from STL mesh bounds (no OpenCAMLib requirement for this op). G-code stays **unverified** until post/machine checks (docs/MACHINES.md).'
+        '**Generate CAM** uses the built-in **parallel finish** from STL mesh bounds (no OpenCAMLib requirement for this op). If you overwrite the STL in `assets/`, regenerate G-code — Manufacture compares mesh file mtime to `output/cam.nc` and warns when the file on disk is newer. G-code stays **unverified** until post/machine checks (docs/MACHINES.md).'
     }
   }
   if (kind === 'cnc_adaptive') {

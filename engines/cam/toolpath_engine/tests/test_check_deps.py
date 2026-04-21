@@ -88,6 +88,13 @@ class TestCheckAll:
         # name contains "opencamlib" (may include parenthetical)
         assert any("opencamlib" in n.lower() for n in names)
 
+    def test_trimesh_cadquery_ocp_in_optional(self):
+        report = check_all()
+        names = [d["name"] for d in report["optional"]]
+        assert "trimesh" in names
+        assert "cadquery" in names
+        assert "OCP" in names
+
     def test_missing_required_is_list(self):
         report = check_all()
         assert isinstance(report["missing_required"], list)

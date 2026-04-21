@@ -886,68 +886,13 @@ class TestScallopFinish:
         assert len(result.chains) > 0
 
 
-# ── 4-Axis Continuous ─────────────────────────────────────────────────
-
-class TestAxis4Continuous:
-    def _cylinder_mesh(self):
-        """Cylinder mesh for rotary machining tests."""
-        import math as _math
-        radius, length, segments = 10.0, 20.0, 12
-        tris = []
-        for i in range(segments):
-            t0 = 2 * _math.pi * i / segments
-            t1 = 2 * _math.pi * (i + 1) / segments
-            p00 = (0, radius * _math.cos(t0), radius * _math.sin(t0))
-            p10 = (length, radius * _math.cos(t0), radius * _math.sin(t0))
-            p01 = (0, radius * _math.cos(t1), radius * _math.sin(t1))
-            p11 = (length, radius * _math.cos(t1), radius * _math.sin(t1))
-            n = (0, _math.cos(t0), _math.sin(t0))
-            tris.append((n, p00, p10, p01))
-            tris.append((n, p10, p11, p01))
-        return _make_mesh(tris)
-
-    def _4axis_job(self) -> "ToolpathJob":
-        from ..models import MachineKinematics
-        machine = MachineKinematics(has_4th_axis=True)
-        job = _make_job(Strategy.AXIS4_CONTINUOUS, tool=Tool(diameter_mm=6.0, shape=ToolShape.FLAT))
-        job.machine = machine
-        job.cylinder_diameter_mm = 20.0
-        job.stock.x_min = 0
-        job.stock.x_max = 20
-        job.stock.y_min = -12
-        job.stock.y_max = 12
-        job.stock.z_min = -12
-        job.stock.z_max = 12
-        return job
-
-    def test_cylinder_produces_chains(self):
-        """4-axis continuous should generate chains for a cylindrical workpiece."""
-        mesh = self._cylinder_mesh()
-        job = self._4axis_job()
-        result = run_strategy(job, mesh)
-        assert result.strategy == "4axis_continuous"
-        assert len(result.chains) > 0
-
-    def test_requires_4th_axis(self):
-        """Without has_4th_axis the strategy should warn and return empty/warning."""
-        from ..models import MachineKinematics
-        mesh = self._cylinder_mesh()
-        job = self._4axis_job()
-        job.machine = MachineKinematics(has_4th_axis=False)
-        result = run_strategy(job, mesh)
-        # Should either be empty or contain a warning about missing 4th axis
-        assert result.strategy == "4axis_continuous"
-        if len(result.chains) == 0:
-            assert any("4th" in w or "axis" in w.lower() for w in result.warnings)
-
-    def test_has_cutting_moves(self):
-        """At least one 4-axis continuous chain must have cutting (non-rapid) segments."""
-        mesh = self._cylinder_mesh()
-        job = self._4axis_job()
-        result = run_strategy(job, mesh)
-        feed_count = sum(1 for c in result.chains for s in c.segments if not s.is_rapid)
-        assert feed_count > 0, "4-axis continuous produced no cutting moves"
-
+# ── 4-Axis Continuous (REMOVED April 2026) ────────────────────────────
+#
+# The Python AXIS4_CONTINUOUS strategy and its TestAxis4Continuous class
+# were removed in the April 2026 4-axis subsystem rewrite. All 4-axis
+# toolpath generation now lives in the TypeScript engine at
+# `src/main/cam-axis4/`, with tests under
+# `src/main/cam-axis4/__tests__/`.
 
 # ── 5-Axis Strategies ─────────────────────────────────────────────────
 

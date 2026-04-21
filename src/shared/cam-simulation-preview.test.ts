@@ -35,6 +35,8 @@ describe('buildCamSimulationPreview', () => {
     expect(preview.xyBounds).toBeNull()
     expect(preview.zRange).toBeNull()
     expect(preview.cues).toHaveLength(0)
+    expect(preview.heuristicMotionMinutes).toBeNull()
+    expect(preview.heuristicMotionPathMm).toBeNull()
   })
 
   it('strips semicolon comments from totalLines count', () => {
@@ -49,6 +51,20 @@ describe('buildCamSimulationPreview', () => {
     const preview = buildCamSimulationPreview('G0 Z5')
     expect(preview.disclaimer).toBeTruthy()
     expect(preview.disclaimer.length).toBeGreaterThan(20)
+  })
+
+  it('computes heuristic motion path and minutes for G0/G1 with F', () => {
+    const gcode = ['G0 X0 Y0 Z5', 'G1 X10 Y0 Z-1 F600', 'G1 X10 Y10 F600', 'G0 Z5'].join('\n')
+    const preview = buildCamSimulationPreview(gcode)
+    expect(preview.heuristicMotionPathMm).toBeGreaterThan(20)
+    expect(preview.heuristicMotionMinutes).toBeGreaterThan(0)
+    expect(preview.heuristicMotionNote.length).toBeGreaterThan(40)
+  })
+
+  it('uses default feed when G1 line has no F', () => {
+    const gcode = ['G0 X0 Y0 Z5', 'G1 X100 Y0 Z-1'].join('\n')
+    const preview = buildCamSimulationPreview(gcode)
+    expect(preview.heuristicMotionMinutes).toBeGreaterThan(0)
   })
 
   it('produces exactly one cue when cueCount=1', () => {
@@ -113,6 +129,7 @@ describe('buildCamSimulationPreview', () => {
     expect(preview.zRange).toBeNull()
     // totalLines is also 0 because comments are stripped
     expect(preview.totalLines).toBe(0)
+    expect(preview.heuristicMotionMinutes).toBeNull()
   })
 
   it('XY bounds reflect modal state tracking (X and Y on separate lines)', () => {

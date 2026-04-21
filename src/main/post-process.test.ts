@@ -215,377 +215,10 @@ describe('renderPost — cnc_4axis_grbl.hbs safety structure', () => {
   })
 })
 
-// ─── 4-axis Fanuc template (cnc_4axis_fanuc.hbs) ─────────────────────────────
-describe('renderPost — cnc_4axis_fanuc.hbs safety structure', () => {
-  const machine4axFanuc: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_4axis_fanuc.hbs',
-    dialect: 'fanuc_4axis',
-    axisCount: 4
-  }
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('M30')
-  })
-
-  it('emits G40 G49 G80 safety reset in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('G40')
-    expect(g).toContain('G49')
-    expect(g).toContain('G80')
-  })
-
-  it('emits 4-AXIS and FANUC identifiers in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('4-AXIS')
-    expect(g).toContain('FANUC')
-  })
-
-  it('uses Fanuc parentheses comment format, not semicolons', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    // Fanuc uses (COMMENT) format
-    expect(g).toContain('(UNVERIFIED G-CODE')
-    // Should not have semicolon-style comments in the template itself
-    expect(g).not.toMatch(/^;/m)
-  })
-
-  it('emits spindle on (fanuc_4axis M3 S10000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('M3 S10000')
-    expect(g).toContain('M5')
-  })
-
-  it('emits G91 G28 Z0 return to Z reference before M30', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('G91 G28 Z0')
-    const g28Idx = g.indexOf('G91 G28 Z0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(g28Idx).toBeLessThan(m30Idx)
-  })
-
-  it('returns A-axis to zero before program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain('A0')
-    const a0Idx = g.lastIndexOf('A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(a0Idx).toBeLessThan(m30Idx)
-  })
-
-  it('emits safe Z retract before toolpath begins', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [])
-    expect(g).toContain(`G0 Z${machine4axFanuc.workAreaMm.z}`)
-  })
-
-  it('toolpath lines appear after spindle on and before M30', async () => {
-    const lines = ['G0 X10 Y0 A0', 'G1 X10 Y10 A45 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, lines)
-    const spindleOnIdx = g.indexOf('M3 S10000')
-    const line1Idx = g.indexOf('G0 X10 Y0 A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(spindleOnIdx).toBeGreaterThan(-1)
-    expect(line1Idx).toBeGreaterThan(spindleOnIdx)
-    expect(m30Idx).toBeGreaterThan(line1Idx)
-  })
-
-  it('injects WCS offset line when workCoordinateIndex is set', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [], { workCoordinateIndex: 2 })
-    expect(g).toContain('G55')
-  })
-
-  it('injects operation label in Fanuc parentheses format', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, [], { operationLabel: 'Rotary Roughing' })
-    expect(g).toContain('(OPERATION: Rotary Roughing)')
-  })
-
-  it('emits aAxisRangeDeg in header when provided', async () => {
-    const m4r: MachineProfile = { ...machine4axFanuc, aAxisRangeDeg: 360 }
-    const { gcode: g } = await renderPost(resourcesRoot, m4r, [])
-    expect(g).toContain('360')
-  })
-})
-
-// ─── 4-axis Mach3 template (cnc_4axis_mach3.hbs) ─────────────────────────────
-describe('renderPost — cnc_4axis_mach3.hbs safety structure', () => {
-  const machine4axMach3: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_4axis_mach3.hbs',
-    dialect: 'mach3_4axis',
-    axisCount: 4
-  }
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('M30')
-  })
-
-  it('starts and ends with % tape markers', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    const lines = g.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-    expect(lines[0]).toBe('%')
-    expect(lines[lines.length - 1]).toBe('%')
-  })
-
-  it('emits G40 and G80 safety cancellations', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('G40')
-    expect(g).toContain('G80')
-  })
-
-  it('emits T1 M6 tool change', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('T1 M6')
-  })
-
-  it('emits 4-AXIS and mach3_4axis identifiers in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('4-AXIS')
-    expect(g).toContain('mach3_4axis')
-  })
-
-  it('emits spindle on (mach3_4axis M3 S12000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('M3 S12000')
-    expect(g).toContain('M5')
-  })
-
-  it('emits safe Z retract using machine workAreaMm.z', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain(`G0 Z${machine4axMach3.workAreaMm.z}`)
-  })
-
-  it('emits park XY before M30', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [])
-    expect(g).toContain('G0 X0 Y0')
-    const parkIdx = g.indexOf('G0 X0 Y0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(parkIdx).toBeLessThan(m30Idx)
-  })
-
-  it('toolpath lines appear after spindle on and before M30', async () => {
-    const lines = ['G0 X10 Y0 A0', 'G1 X10 Y10 A45 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, lines)
-    const spindleOnIdx = g.indexOf('M3 S12000')
-    const line1Idx = g.indexOf('G0 X10 Y0 A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(spindleOnIdx).toBeGreaterThan(-1)
-    expect(line1Idx).toBeGreaterThan(spindleOnIdx)
-    expect(m30Idx).toBeGreaterThan(line1Idx)
-  })
-
-  it('injects WCS offset line when workCoordinateIndex is set', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [], { workCoordinateIndex: 4 })
-    expect(g).toContain('G57')
-  })
-
-  it('injects operation label as semicolon comment', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, [], { operationLabel: 'Rotary Finish' })
-    expect(g).toContain('; Operation: Rotary Finish')
-  })
-
-  it('emits aAxisRangeDeg in header when provided', async () => {
-    const m4r: MachineProfile = { ...machine4axMach3, aAxisRangeDeg: 360 }
-    const { gcode: g } = await renderPost(resourcesRoot, m4r, [])
-    expect(g).toContain('360')
-  })
-})
-
-// ─── 4-axis dialect snippets ─────────────────────────────────────────────────
-describe('renderPost — 4-axis dialect snippets', () => {
-  it('fanuc_4axis dialect emits M3 S10000 spindle on', async () => {
-    const mF4: MachineProfile = { ...machine, dialect: 'fanuc_4axis' }
-    const { gcode: g } = await renderPost(resourcesRoot, mF4, [])
-    expect(g).toContain('M3 S10000')
-  })
-
-  it('mach3_4axis dialect emits M3 S12000 spindle on', async () => {
-    const mM4: MachineProfile = { ...machine, dialect: 'mach3_4axis' }
-    const { gcode: g } = await renderPost(resourcesRoot, mM4, [])
-    expect(g).toContain('M3 S12000')
-  })
-
-  it('siemens_4axis dialect emits M3 S10000 spindle on', async () => {
-    const mS4: MachineProfile = { ...machine, dialect: 'siemens_4axis' }
-    const { gcode: g } = await renderPost(resourcesRoot, mS4, [])
-    expect(g).toContain('M3 S10000')
-  })
-
-  it('heidenhain_4axis dialect emits M3 S10000 spindle on', async () => {
-    const mH4: MachineProfile = { ...machine, dialect: 'heidenhain_4axis' }
-    const { gcode: g } = await renderPost(resourcesRoot, mH4, [])
-    expect(g).toContain('M3 S10000')
-  })
-})
-
-// ─── 4-axis Siemens template (cnc_4axis_siemens.hbs) ─────────────────────────
-describe('renderPost — cnc_4axis_siemens.hbs safety structure', () => {
-  const machine4axSiemens: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_4axis_siemens.hbs',
-    dialect: 'siemens_4axis',
-    axisCount: 4
-  }
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('M30')
-  })
-
-  it('emits G40 G49 G80 safety cancellations', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('G40')
-    expect(g).toContain('G49')
-    expect(g).toContain('G80')
-  })
-
-  it('emits 4-AXIS and Siemens Sinumerik identifiers in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('4-AXIS')
-    expect(g).toContain('Siemens Sinumerik')
-  })
-
-  it('uses semicolon comment format', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('; UNVERIFIED G-CODE')
-  })
-
-  it('emits T1 D1 tool call and M6 tool change', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('T1 D1')
-    expect(g).toContain('M6')
-  })
-
-  it('emits spindle on (siemens_4axis M3 S10000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('M3 S10000')
-    expect(g).toContain('M5')
-  })
-
-  it('emits safe Z retract using machine workAreaMm.z', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain(`G0 Z${machine4axSiemens.workAreaMm.z}`)
-  })
-
-  it('returns A-axis to zero before M30', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [])
-    expect(g).toContain('A0')
-    const a0Idx = g.lastIndexOf('A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(a0Idx).toBeLessThan(m30Idx)
-  })
-
-  it('toolpath lines appear after spindle on and before M30', async () => {
-    const lines = ['G0 X10 Y0 A0', 'G1 X10 Y10 A45 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, lines)
-    const spindleOnIdx = g.indexOf('M3 S10000')
-    const line1Idx = g.indexOf('G0 X10 Y0 A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(spindleOnIdx).toBeGreaterThan(-1)
-    expect(line1Idx).toBeGreaterThan(spindleOnIdx)
-    expect(m30Idx).toBeGreaterThan(line1Idx)
-  })
-
-  it('injects WCS offset line when workCoordinateIndex is set', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [], { workCoordinateIndex: 5 })
-    expect(g).toContain('G58')
-  })
-
-  it('injects operation label as semicolon comment', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, [], { operationLabel: 'Rotary Rough' })
-    expect(g).toContain('; Operation: Rotary Rough')
-  })
-
-  it('emits aAxisRangeDeg in header when provided', async () => {
-    const m4r: MachineProfile = { ...machine4axSiemens, aAxisRangeDeg: 360 }
-    const { gcode: g } = await renderPost(resourcesRoot, m4r, [])
-    expect(g).toContain('360')
-  })
-})
-
-// ─── 4-axis Heidenhain template (cnc_4axis_heidenhain.hbs) ───────────────────
-describe('renderPost — cnc_4axis_heidenhain.hbs safety structure', () => {
-  const machine4axHeid: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_4axis_heidenhain.hbs',
-    dialect: 'heidenhain_4axis',
-    axisCount: 4
-  }
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('M30')
-  })
-
-  it('emits G40 G49 G80 safety cancellations', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('G40')
-    expect(g).toContain('G49')
-    expect(g).toContain('G80')
-  })
-
-  it('emits 4-AXIS and Heidenhain TNC identifiers in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('4-AXIS')
-    expect(g).toContain('Heidenhain TNC')
-  })
-
-  it('mentions DIN/ISO mode in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('DIN/ISO')
-  })
-
-  it('emits T1 M6 tool change and G43 H1 tool length comp', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('T1 M6')
-    expect(g).toContain('G43 H1')
-  })
-
-  it('emits spindle on (heidenhain_4axis M3 S10000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('M3 S10000')
-    expect(g).toContain('M5')
-  })
-
-  it('emits safe Z retract using machine workAreaMm.z', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain(`G0 Z${machine4axHeid.workAreaMm.z}`)
-  })
-
-  it('returns A-axis to zero before M30', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [])
-    expect(g).toContain('A0')
-    const a0Idx = g.lastIndexOf('A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(a0Idx).toBeLessThan(m30Idx)
-  })
-
-  it('toolpath lines appear after spindle on and before M30', async () => {
-    const lines = ['G0 X10 Y0 A0', 'G1 X10 Y10 A45 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, lines)
-    const spindleOnIdx = g.indexOf('M3 S10000')
-    const line1Idx = g.indexOf('G0 X10 Y0 A0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(spindleOnIdx).toBeGreaterThan(-1)
-    expect(line1Idx).toBeGreaterThan(spindleOnIdx)
-    expect(m30Idx).toBeGreaterThan(line1Idx)
-  })
-
-  it('injects WCS offset line when workCoordinateIndex is set', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [], { workCoordinateIndex: 1 })
-    expect(g).toContain('G54')
-  })
-
-  it('injects operation label as semicolon comment', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, [], { operationLabel: 'Rotary Contour' })
-    expect(g).toContain('; Operation: Rotary Contour')
-  })
-
-  it('emits aAxisRangeDeg in header when provided', async () => {
-    const m4r: MachineProfile = { ...machine4axHeid, aAxisRangeDeg: 360 }
-    const { gcode: g } = await renderPost(resourcesRoot, m4r, [])
-    expect(g).toContain('360')
-  })
-})
+// Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis safety/structure
+// describe blocks were removed in the April 2026 4-axis subsystem rewrite —
+// only `cnc_4axis_grbl.hbs` is exercised. CPS imports for those dialects now
+// repoint at GRBL.
 
 // ─── 5-axis Fanuc template (cnc_5axis_fanuc.hbs) ──────────────────────────────
 describe('renderPost — cnc_5axis_fanuc.hbs safety structure', () => {
@@ -746,39 +379,9 @@ describe('renderPost — toolNumber (ATC tool slot)', () => {
     expect(g).toContain('G43 H6')
   })
 
-  it('Mach3 4-axis: defaults to T1 when toolNumber not provided', async () => {
-    const mach3Machine: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_mach3.hbs', dialect: 'mach3_4axis', axisCount: 4 }
-    const { gcode: g } = await renderPost(resourcesRoot, mach3Machine, [])
-    expect(g).toContain('T1 M6')
-  })
-
-  it('Mach3 4-axis: emits correct T number when toolNumber provided', async () => {
-    const mach3Machine: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_mach3.hbs', dialect: 'mach3_4axis', axisCount: 4 }
-    const { gcode: g } = await renderPost(resourcesRoot, mach3Machine, [], { toolNumber: 4 })
-    expect(g).toContain('T4 M6')
-    expect(g).not.toContain('T1 M6')
-  })
-
-  it('LinuxCNC 4-axis: emits correct T and H numbers when toolNumber provided', async () => {
-    const lcncMachine: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_linuxcnc.hbs', dialect: 'linuxcnc_4axis', axisCount: 4 }
-    const { gcode: g } = await renderPost(resourcesRoot, lcncMachine, [], { toolNumber: 2 })
-    expect(g).toContain('T2 M6')
-    expect(g).toContain('G43 H2')
-  })
-
-  it('Heidenhain 4-axis: emits correct T and H numbers when toolNumber provided', async () => {
-    const heidMachine: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_heidenhain.hbs', dialect: 'heidenhain_4axis', axisCount: 4 }
-    const { gcode: g } = await renderPost(resourcesRoot, heidMachine, [], { toolNumber: 5 })
-    expect(g).toContain('T5 M6')
-    expect(g).toContain('G43 H5')
-  })
-
-  it('Siemens 4-axis: emits correct T number when toolNumber provided', async () => {
-    const siemensMachine: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_siemens.hbs', dialect: 'siemens_4axis', axisCount: 4 }
-    const { gcode: g } = await renderPost(resourcesRoot, siemensMachine, [], { toolNumber: 3 })
-    expect(g).toContain('T3 D1')
-    expect(g).not.toContain('T1 D1')
-  })
+  // Note: the Mach3/LinuxCNC/Heidenhain/Siemens 4-axis toolNumber tests were
+  // removed in the April 2026 4-axis subsystem rewrite — only the GRBL/Carvera
+  // templates remain for 4-axis output.
 
   it('5-axis Fanuc: emits correct H number in G43.4 when toolNumber provided', async () => {
     const fanuc5Machine: MachineProfile = { ...machine, postTemplate: 'cnc_5axis_fanuc.hbs', dialect: 'fanuc', axisCount: 5, fiveAxisType: 'table-head' }
@@ -798,97 +401,47 @@ describe('renderPost — toolNumber (ATC tool slot)', () => {
 
 // ─── G93 inverse-time feed mode ──────────────────────────────────────────────
 describe('renderPost — G93 inverse-time feed mode', () => {
-  const machine4axSiemens: MachineProfile = {
+  // The April 2026 4-axis subsystem rewrite removed the non-GRBL 4-axis
+  // templates, so the inverse-time feed coverage now lives entirely on the
+  // GRBL 4-axis post.
+  const machine4axGrbl: MachineProfile = {
     ...machine,
-    postTemplate: 'cnc_4axis_siemens.hbs',
-    dialect: 'siemens_4axis',
+    postTemplate: 'cnc_4axis_grbl.hbs',
+    dialect: 'grbl_4axis',
     axisCount: 4
   }
 
-  it('Siemens 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
+  it('GRBL 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
     const lines = ['G1 X10 Y0 Z-1 A45 F2.5']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, lines, { inverseTimeFeed: true })
+    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, lines, { inverseTimeFeed: true })
     const g93Idx = g.indexOf('G93')
     const lineIdx = g.indexOf('G1 X10 Y0 Z-1 A45 F2.5')
     expect(g93Idx).toBeGreaterThan(-1)
     expect(g93Idx).toBeLessThan(lineIdx)
   })
 
-  it('Siemens 4-axis: emits G94 after toolpath when inverseTimeFeed=true', async () => {
+  it('GRBL 4-axis: emits G94 after toolpath when inverseTimeFeed=true', async () => {
     const lines = ['G1 X10 Y0 Z-1 A45 F2.5']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, lines, { inverseTimeFeed: true })
+    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, lines, { inverseTimeFeed: true })
     const lineIdx = g.indexOf('G1 X10 Y0 Z-1 A45 F2.5')
     const g94Idx = g.indexOf('G94', lineIdx)
     expect(g94Idx).toBeGreaterThan(lineIdx)
   })
 
-  it('Siemens 4-axis: does NOT emit G93 when inverseTimeFeed is absent', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, ['G1 X10 F800'])
+  it('GRBL 4-axis: does NOT emit G93 when inverseTimeFeed is absent', async () => {
+    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, ['G1 X10 F800'])
     expect(g).not.toContain('G93')
     expect(g).not.toContain('inverse-time')
   })
 
-  it('Siemens 4-axis: does NOT emit G94 restore when inverseTimeFeed is absent', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, ['G1 X10 F800'])
+  it('GRBL 4-axis: does NOT emit G94 restore when inverseTimeFeed is absent', async () => {
+    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, ['G1 X10 F800'])
     expect(g).not.toContain('G94')
-  })
-
-  it('Fanuc 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
-    const machine4axFanuc: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_fanuc.hbs', dialect: 'fanuc_4axis', axisCount: 4 }
-    const lines = ['G1 X10 Y0 A90 F1.8']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, lines, { inverseTimeFeed: true })
-    const g93Idx = g.indexOf('G93')
-    const lineIdx = g.indexOf('G1 X10 Y0 A90 F1.8')
-    expect(g93Idx).toBeGreaterThan(-1)
-    expect(g93Idx).toBeLessThan(lineIdx)
-  })
-
-  it('Fanuc 4-axis: emits G94 after toolpath when inverseTimeFeed=true', async () => {
-    const machine4axFanuc: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_fanuc.hbs', dialect: 'fanuc_4axis', axisCount: 4 }
-    const lines = ['G1 X10 Y0 A90 F1.8']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axFanuc, lines, { inverseTimeFeed: true })
-    const lineIdx = g.indexOf('G1 X10 Y0 A90 F1.8')
-    const g94Idx = g.indexOf('G94', lineIdx)
-    expect(g94Idx).toBeGreaterThan(lineIdx)
-  })
-
-  it('Heidenhain 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
-    const machine4axHeid: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_heidenhain.hbs', dialect: 'heidenhain_4axis', axisCount: 4 }
-    const lines = ['G1 X5 A180 F3.0']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axHeid, lines, { inverseTimeFeed: true })
-    expect(g).toContain('G93')
-    const g93Idx = g.indexOf('G93')
-    const lineIdx = g.indexOf('G1 X5 A180 F3.0')
-    expect(g93Idx).toBeLessThan(lineIdx)
-  })
-
-  it('LinuxCNC 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
-    const machine4axLcnc: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_linuxcnc.hbs', dialect: 'linuxcnc_4axis', axisCount: 4 }
-    const lines = ['G1 X5 A270 F2.0']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axLcnc, lines, { inverseTimeFeed: true })
-    expect(g).toContain('G93')
-    const g93Idx = g.indexOf('G93')
-    const lineIdx = g.indexOf('G1 X5 A270 F2.0')
-    expect(g93Idx).toBeLessThan(lineIdx)
-  })
-
-  it('Mach3 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
-    const machine4axMach3: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_mach3.hbs', dialect: 'mach3_4axis', axisCount: 4 }
-    const lines = ['G1 X5 A45 F1.5']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axMach3, lines, { inverseTimeFeed: true })
-    expect(g).toContain('G93')
-  })
-
-  it('GRBL 4-axis: emits G93 before toolpath when inverseTimeFeed=true', async () => {
-    const machine4axGrbl: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_grbl.hbs', dialect: 'grbl_4axis', axisCount: 4 }
-    const lines = ['G1 X5 A45 F1.5']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, lines, { inverseTimeFeed: true })
-    expect(g).toContain('G93')
   })
 
   it('G93 comment mentions inverse-time feed mode', async () => {
     const lines = ['G1 X10 A45 F2.5']
-    const { gcode: g } = await renderPost(resourcesRoot, machine4axSiemens, lines, { inverseTimeFeed: true })
+    const { gcode: g } = await renderPost(resourcesRoot, machine4axGrbl, lines, { inverseTimeFeed: true })
     expect(g.toLowerCase()).toContain('inverse-time')
   })
 })
@@ -974,6 +527,20 @@ describe('sequenceMultiToolJob', () => {
       { toolSlot: 2, gcode: 'OP2' }
     ], 50, '( ')
     expect(result).toContain('( --- TOOL CHANGE')
+  })
+
+  it('omits M6 when tool changes are disabled (manual-change workflow)', () => {
+    const result = sequenceMultiToolJob(
+      [
+        { toolSlot: 1, gcode: 'OP1' },
+        { toolSlot: 2, gcode: 'OP2' }
+      ],
+      50,
+      '; ',
+      { supportsToolChange: false }
+    )
+    expect(result).not.toContain('M6')
+    expect(result).toContain('Manual tool change required')
   })
 })
 

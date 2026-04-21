@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildDepCheckWarning, type PythonDepCheckOutcome } from './python-dep-check'
+import {
+  buildDepCheckWarning,
+  buildOptionalPythonDepsHint,
+  buildPythonDepsUserMessage,
+  type PythonDepCheckOutcome
+} from './python-dep-check'
 
 describe('buildDepCheckWarning', () => {
   it('returns null when outcome is checked and ok', () => {
@@ -96,5 +101,87 @@ describe('buildDepCheckWarning', () => {
       }
     }
     expect(buildDepCheckWarning(outcome)).toBeNull()
+  })
+})
+
+describe('buildOptionalPythonDepsHint', () => {
+  it('suggests trimesh and STEP deps when optional imports are missing', () => {
+    const outcome: PythonDepCheckOutcome = {
+      checked: true,
+      result: {
+        ok: true,
+        pythonOk: true,
+        pythonVersion: '3.11.4',
+        pythonMin: '3.9',
+        required: [{ name: 'numpy', available: true, version: '1.26.0', note: '' }],
+        optional: [
+          { name: 'trimesh', available: false, version: null, note: '' },
+          { name: 'cadquery', available: false, version: null, note: '' },
+          { name: 'OCP', available: false, version: null, note: '' }
+        ],
+        missingRequired: []
+      }
+    }
+    const msg = buildOptionalPythonDepsHint(outcome)
+    expect(msg).toMatch(/trimesh/)
+    expect(msg).toMatch(/cadquery/)
+    expect(msg).toMatch(/OCP/)
+  })
+
+  it('returns null when trimesh and STEP-related optionals are present', () => {
+    const outcome: PythonDepCheckOutcome = {
+      checked: true,
+      result: {
+        ok: true,
+        pythonOk: true,
+        pythonVersion: '3.11.4',
+        pythonMin: '3.9',
+        required: [{ name: 'numpy', available: true, version: '1.26.0', note: '' }],
+        optional: [
+          { name: 'trimesh', available: true, version: '4.0.0', note: '' },
+          { name: 'cadquery', available: true, version: '2.0.0', note: '' },
+          { name: 'OCP', available: true, version: 'installed', note: '' }
+        ],
+        missingRequired: []
+      }
+    }
+    expect(buildOptionalPythonDepsHint(outcome)).toBeNull()
+  })
+})
+
+describe('buildPythonDepsUserMessage', () => {
+  it('returns only critical warning when required deps are missing', () => {
+    const outcome: PythonDepCheckOutcome = {
+      checked: true,
+      result: {
+        ok: false,
+        pythonOk: true,
+        pythonVersion: '3.11.4',
+        pythonMin: '3.9',
+        required: [{ name: 'numpy', available: false, version: null, note: '' }],
+        optional: [{ name: 'trimesh', available: false, version: null, note: '' }],
+        missingRequired: ['numpy']
+      }
+    }
+    const msg = buildPythonDepsUserMessage(outcome)
+    expect(msg).toContain('numpy')
+    expect(msg).not.toMatch(/Mesh import/)
+  })
+
+  it('returns optional hints alone when core deps are OK', () => {
+    const outcome: PythonDepCheckOutcome = {
+      checked: true,
+      result: {
+        ok: true,
+        pythonOk: true,
+        pythonVersion: '3.11.4',
+        pythonMin: '3.9',
+        required: [{ name: 'numpy', available: true, version: '1.26.0', note: '' }],
+        optional: [{ name: 'trimesh', available: false, version: null, note: '' }],
+        missingRequired: []
+      }
+    }
+    const msg = buildPythonDepsUserMessage(outcome)
+    expect(msg).toMatch(/trimesh/)
   })
 })

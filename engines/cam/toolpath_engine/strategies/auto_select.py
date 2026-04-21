@@ -251,16 +251,10 @@ def _select_strategy(analysis: GeometryAnalysis, job: ToolpathJob) -> None:
         scores[Strategy.FIVEAXIS_SWARF] = swarf_score
         reasons[Strategy.FIVEAXIS_SWARF] = "steep walls benefit from 5-axis swarf cutting"
 
-    # 4-axis: only if machine has 4th axis
-    if job.machine.has_4th_axis:
-        # Check if the part has rotational characteristics
-        axis4_score = 0.0
-        if analysis.aspect_ratio_xy > 3.0:
-            axis4_score = 0.4  # Long parts often benefit from 4-axis
-        if analysis.depth_to_width_ratio > 0.5:
-            axis4_score += 0.2
-        scores[Strategy.AXIS4_CONTINUOUS] = axis4_score
-        reasons[Strategy.AXIS4_CONTINUOUS] = "elongated part geometry suits 4-axis rotary machining"
+    # 4-axis dispatch was removed in the April 2026 4-axis subsystem rewrite.
+    # All 4-axis strategy generation now lives in the TypeScript engine at
+    # `src/main/cam-axis4/`; the Python auto-selector only ranks the 3-axis
+    # and 5-axis strategies it can actually run.
 
     # Select highest-scoring strategy
     best = max(scores, key=lambda s: scores[s])

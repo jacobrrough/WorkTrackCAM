@@ -65,6 +65,16 @@ export declare const window: Window & {
       stockBoxYMm?: number
       priorPostedGcode?: string
       useMeshMachinableXClamp?: boolean
+      /**
+       * Three.js viewer-space gizmo placement (rotation in degrees) sent for
+       * 4-axis ops. The new cam-axis4 facade applies this to the raw STL
+       * itself instead of relying on the renderer-baked `.cam-aligned.stl`.
+       */
+      placement?: {
+        position: { x: number; y: number; z: number }
+        rotation: { x: number; y: number; z: number }
+        scale: { x: number; y: number; z: number }
+      }
     }) => Promise<{ ok: boolean; gcode?: string; error?: string; hint?: string; usedEngine?: string; warnings?: string[] }>
     readTextFile: (filePath: string) => Promise<string>
     sliceCura: (payload: {

@@ -7,10 +7,13 @@ import { renderPost } from './post-process'
  * End-to-end 4-axis post validation tests.
  *
  * These tests feed realistic 4-axis toolpath lines (with X/Y/Z/A/F words)
- * through each of the 6 supported 4-axis post templates and validate:
+ * through the supported 4-axis post template and validate:
  * - Common safety structure (header, footer, spindle, retract)
  * - Toolpath ordering and completeness
- * - Dialect-specific conventions
+ * - GRBL/Carvera-specific conventions
+ *
+ * The non-GRBL 4-axis post templates were removed in the April 2026 4-axis
+ * subsystem rewrite — only `cnc_4axis_grbl.hbs` is exercised here now.
  */
 
 const resourcesRoot = join(process.cwd(), 'resources')
@@ -68,12 +71,7 @@ type DialectConfig = {
 }
 
 const DIALECTS: DialectConfig[] = [
-  { dialect: 'grbl_4axis', postTemplate: 'cnc_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' },
-  { dialect: 'fanuc_4axis', postTemplate: 'cnc_4axis_fanuc.hbs', label: 'Fanuc 4-axis', spindleOn: 'M3 S10000', commentStyle: 'parentheses', programEnd: 'M30' },
-  { dialect: 'mach3_4axis', postTemplate: 'cnc_4axis_mach3.hbs', label: 'Mach3 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' },
-  { dialect: 'linuxcnc_4axis', postTemplate: 'cnc_4axis_linuxcnc.hbs', label: 'LinuxCNC 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M2' },
-  { dialect: 'siemens_4axis', postTemplate: 'cnc_4axis_siemens.hbs', label: 'Siemens 4-axis', spindleOn: 'M3 S10000', commentStyle: 'semicolon', programEnd: 'M30' },
-  { dialect: 'heidenhain_4axis', postTemplate: 'cnc_4axis_heidenhain.hbs', label: 'Heidenhain 4-axis', spindleOn: 'M3 S10000', commentStyle: 'semicolon', programEnd: 'M30' }
+  { dialect: 'grbl_4axis', postTemplate: 'cnc_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' }
 ]
 
 // ─── Common safety structure tests (all 6 dialects) ──────────────────────────
@@ -180,100 +178,6 @@ describe('4-axis post-process integration — common safety structure', () => {
 // ─── Dialect-specific convention tests ───────────────────────────────────────
 
 describe('4-axis post-process integration — dialect-specific conventions', () => {
-  it('Fanuc uses parentheses comment format', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'fanuc_4axis', postTemplate: 'cnc_4axis_fanuc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('(UNVERIFIED G-CODE')
-    // Fanuc template should not have semicolon-style comments (except in toolpath lines)
-    const headerLines = g.split('\n').slice(0, 5)
-    for (const line of headerLines) {
-      if (line.trim().length > 0) {
-        expect(line.trim().startsWith(';')).toBe(false)
-      }
-    }
-  })
-
-  it('Fanuc emits G91 G28 Z0 return-to-reference', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'fanuc_4axis', postTemplate: 'cnc_4axis_fanuc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('G91 G28 Z0')
-  })
-
-  it('Fanuc emits G40 G49 G80 safety cancels', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'fanuc_4axis', postTemplate: 'cnc_4axis_fanuc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('G40')
-    expect(g).toContain('G49')
-    expect(g).toContain('G80')
-  })
-
-  it('Mach3 wraps output in % tape markers', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'mach3_4axis', postTemplate: 'cnc_4axis_mach3.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    const lines = g.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-    expect(lines[0]).toBe('%')
-    expect(lines[lines.length - 1]).toBe('%')
-  })
-
-  it('Mach3 emits T1 M6 tool change', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'mach3_4axis', postTemplate: 'cnc_4axis_mach3.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('T1 M6')
-  })
-
-  it('LinuxCNC wraps output in % tape markers', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'linuxcnc_4axis', postTemplate: 'cnc_4axis_linuxcnc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    const lines = g.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-    expect(lines[0]).toBe('%')
-    expect(lines[lines.length - 1]).toBe('%')
-  })
-
-  it('LinuxCNC emits G43 H1 tool length compensation', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'linuxcnc_4axis', postTemplate: 'cnc_4axis_linuxcnc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('G43 H1')
-  })
-
-  it('LinuxCNC uses M2 program end (not M30)', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'linuxcnc_4axis', postTemplate: 'cnc_4axis_linuxcnc.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('M2')
-  })
-
-  it('Siemens emits T1 D1 + M6 tool call (Sinumerik convention)', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'siemens_4axis', postTemplate: 'cnc_4axis_siemens.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('T1 D1')
-    expect(g).toContain('M6')
-  })
-
-  it('Siemens references Sinumerik machine data in safety notes', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'siemens_4axis', postTemplate: 'cnc_4axis_siemens.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('Sinumerik')
-    expect(g).toContain('MD30300')
-  })
-
-  it('Heidenhain mentions DIN/ISO mode', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'heidenhain_4axis', postTemplate: 'cnc_4axis_heidenhain.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('DIN/ISO')
-  })
-
-  it('Heidenhain emits G43 H1 tool length comp', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'heidenhain_4axis', postTemplate: 'cnc_4axis_heidenhain.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('G43 H1')
-  })
-
-  it('Heidenhain references TNC machine parameters in safety notes', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'heidenhain_4axis', postTemplate: 'cnc_4axis_heidenhain.hbs' }
-    const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
-    expect(g).toContain('TNC')
-    expect(g).toContain('MP7420')
-  })
-
   it('GRBL does not emit tool change (no M6 support)', async () => {
     const machine: MachineProfile = { ...baseMachine, dialect: 'grbl_4axis', postTemplate: 'cnc_4axis_grbl.hbs' }
     const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)

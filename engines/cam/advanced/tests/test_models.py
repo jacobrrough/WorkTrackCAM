@@ -168,11 +168,15 @@ class TestJobFromConfig:
             "toolDiameterMm": 3.175,
             "feedMmMin": 800,
             "stepoverMm": 0.5,
+            "stockAllowanceMm": 0.35,
+            "maxEngagementDeg": 95,
         }
         job = job_from_config(cfg)
         assert job.tool.diameter_mm == 3.175
         assert job.cuts.feed_mm_min == 800
         assert job.cuts.stepover_mm == 0.5
+        assert job.stock_allowance_mm == pytest.approx(0.35)
+        assert job.max_engagement_deg == pytest.approx(95)
 
     def test_null_values_use_defaults(self):
         cfg = {
@@ -184,3 +188,9 @@ class TestJobFromConfig:
         job = job_from_config(cfg)
         assert job.tool.diameter_mm == 6.0
         assert job.strategy == Strategy.RASTER
+
+    def test_validate_rejects_negative_stock_allowance(self):
+        job = ToolpathJob()
+        job.stock_allowance_mm = -0.1
+        errors = job.validate()
+        assert any("stock_allowance_mm" in e for e in errors)

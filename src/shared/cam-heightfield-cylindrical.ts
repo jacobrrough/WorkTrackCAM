@@ -5,7 +5,8 @@
  * rotation axis.  Tool footprints are stamped along 4-axis cutting segments to
  * produce a stock-removal preview that wraps around the cylinder.
  *
- * Coordinate convention (matches cam-axis4-cylindrical-raster.ts):
+ * Coordinate convention (matches `src/main/cam-axis4/frame.ts` — the single
+ * source of truth for the 4-axis machine frame):
  *   X = axial position along rotation axis
  *   Z = radial distance from rotation center (G-code Z)
  *   A = rotation angle in degrees (0-360, wraps)
@@ -184,15 +185,28 @@ export function buildCylindricalHeightFieldFromSegments(
   )
   if (cutting.length === 0) return null
 
-  // Determine axial bounds from cutting segments
-  let minX = opts.stockXMin
-  let maxX = opts.stockXMax
+  // Determine axial bounds from cutting segments only.
+  //
+  // Header/footer rapids in posted G-code (e.g. `G0 X0 Y0` park moves) often
+  // travel far beyond the actual cut region.  If callers compute stockXMin/Max
+  // from *all* G-code segments (rapids + cuts) and pass that range here, the
+  // grid would be sized to include vast empty regions outside the part — they
+  // render as a phantom "uncarved" duplicate of the cut area in the preview.
+  //
+  // To stay robust regardless of how callers compute stockXMin/Max, derive the
+  // grid extent from cutting segments only.  Clamp to the caller's stock range
+  // so the field never extends outside the physical stock.
+  let minX = Infinity
+  let maxX = -Infinity
   for (const s of cutting) {
-    minX = Math.min(minX, s.x0, s.x1)
-    maxX = Math.max(maxX, s.x0, s.x1)
+    if (s.x0 < minX) minX = s.x0
+    if (s.x1 < minX) minX = s.x1
+    if (s.x0 > maxX) maxX = s.x0
+    if (s.x1 > maxX) maxX = s.x1
   }
-  minX -= marginMm
-  maxX += marginMm
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return null
+  minX = Math.max(opts.stockXMin, minX - marginMm)
+  maxX = Math.min(opts.stockXMax, maxX + marginMm)
 
   const spanX = maxX - minX
   if (!(spanX > 1e-6)) return null

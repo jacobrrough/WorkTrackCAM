@@ -15,10 +15,18 @@
 import { unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MachineProfile } from '../shared/machine-schema'
 import { runCamPipeline, validate2dOperationGeometry } from './cam-runner'
 import type { CamJobConfig } from './cam-runner'
+
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getEnginesRoot: () => process.cwd()
+  }
+})
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -143,6 +151,46 @@ describe('Full CAM pipeline integration — cnc_parallel', () => {
       expect(spindleOffIdx).toBeGreaterThan(spindleOnIdx)
       expect(retractIdx).toBeGreaterThan(spindleOffIdx)
       expect(m30Idx).toBeGreaterThan(retractIdx)
+    } finally {
+      await unlink(stlPath).catch(() => {})
+      await unlink(outPath).catch(() => {})
+    }
+  })
+})
+
+describe('Full CAM pipeline integration — cnc_adaptive (GRBL)', () => {
+  it('produces posted G-code and preserves adaptive tuning params', async () => {
+    const stlPath = join(tmpdir(), 'integration-adaptive.stl')
+    const outPath = join(tmpdir(), 'integration-adaptive.nc')
+    await writeFile(stlPath, buildOneTriangleBinaryStl())
+    try {
+      const result = await runCamPipeline({
+        stlPath,
+        outputGcodePath: outPath,
+        machine: testMill,
+        resourcesRoot,
+        appRoot: process.cwd(),
+        zPassMm: -1.5,
+        stepoverMm: 2,
+        feedMmMin: 900,
+        plungeMmMin: 300,
+        safeZMm: 10,
+        pythonPath: 'python',
+        operationKind: 'cnc_adaptive',
+        operationParams: {
+          maxEngagementDeg: 110,
+          retractZMm: 4,
+          stockAllowanceMm: 0.25
+        }
+      })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(['advanced', 'ocl', 'builtin']).toContain(result.usedEngine)
+      expect(result.gcode).toContain('G21')
+      expect(result.gcode).toContain('G90')
+      expect(result.gcode).toContain('M3')
+      expect(result.gcode).toContain('M5')
+      expect(result.gcode).toContain('M30')
     } finally {
       await unlink(stlPath).catch(() => {})
       await unlink(outPath).catch(() => {})

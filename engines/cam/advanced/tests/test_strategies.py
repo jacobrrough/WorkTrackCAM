@@ -142,6 +142,16 @@ class TestAdaptiveClear:
         assert result.cut_distance_mm > 0
         assert result.total_distance_mm > 0
 
+    def test_stock_allowance_reduces_cut_distance(self):
+        mesh = _make_mesh(_box_triangles(10, 10, 5))
+        base_job = _make_job(Strategy.ADAPTIVE_CLEAR)
+        base_job.stock_allowance_mm = 0.0
+        stock_job = _make_job(Strategy.ADAPTIVE_CLEAR)
+        stock_job.stock_allowance_mm = 1.0
+        base_result = run_strategy(base_job, mesh)
+        stock_result = run_strategy(stock_job, mesh)
+        assert stock_result.cut_distance_mm < base_result.cut_distance_mm
+
 
 class TestWaterline:
     def test_box_produces_chains(self):

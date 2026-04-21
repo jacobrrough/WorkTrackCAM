@@ -1,7 +1,7 @@
 import { spawnBounded } from '../subprocess-bounded'
 import { copyFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getEnginesRoot } from '../paths'
+import { getEnginesBundleDiagnostics, getEnginesRoot } from '../paths'
 import { resolveUniqueFilenameInDir } from '../unique-asset-filename'
 
 export type StepImportResult =
@@ -18,6 +18,14 @@ export async function importStepToProjectStl(params: {
   appRoot: string
 }): Promise<StepImportResult> {
   await mkdir(params.projectAssetsDir, { recursive: true })
+  const bundle = await getEnginesBundleDiagnostics()
+  if (!bundle.occtStepScriptPresent) {
+    return {
+      ok: false,
+      error: 'engines_occt_script_missing',
+      detail: `Expected ${join(bundle.enginesRoot, 'occt', 'step_to_stl.py')}. Reinstall the app or add engines/occt to your checkout.`
+    }
+  }
   const base = params.stepPath.split(/[/\\]/).pop()?.replace(/\.(step|stp|iges|igs)$/i, '') ?? 'import'
   const outStl = await resolveUniqueFilenameInDir(params.projectAssetsDir, `${base}.stl`)
   const script = join(getEnginesRoot(), 'occt', 'step_to_stl.py')

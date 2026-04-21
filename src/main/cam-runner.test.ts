@@ -1,8 +1,9 @@
 import { unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MachineProfile } from '../shared/machine-schema'
+import * as pathsMod from './paths'
 import {
   builtinOclFailureHint,
   drillOperationHints,
@@ -166,7 +167,47 @@ describe('resolveOclFallbackReason', () => {
 })
 
 describe('runCamPipeline', () => {
-  it('returns builtin hint for cnc_parallel (STL bounds, unverified copy)', async () => {
+  it('returns cam_engines_bundle_missing when Python engine files are absent', async () => {
+    const spy = vi.spyOn(pathsMod, 'getEnginesBundleDiagnostics').mockResolvedValue({
+      enginesRoot: '/no/engines',
+      directoryReadable: false,
+      camBundleComplete: false,
+      missingCamSentinels: ['cam/ocl_toolpath.py'],
+      meshScriptPresent: false,
+      occtStepScriptPresent: false
+    })
+    const p = join(tmpdir(), 'ufs-cam-bundle-miss.stl')
+    const out = join(tmpdir(), 'ufs-cam-bundle-miss.nc')
+    await writeFile(p, buildOneTriangleBinaryStl())
+    try {
+      const resourcesRoot = join(process.cwd(), 'resources')
+      const r = await runCamPipeline({
+        stlPath: p,
+        outputGcodePath: out,
+        machine: testMill,
+        resourcesRoot,
+        appRoot: process.cwd(),
+        zPassMm: 1,
+        stepoverMm: 2,
+        feedMmMin: 500,
+        plungeMmMin: 300,
+        safeZMm: 5,
+        pythonPath: 'python',
+        operationKind: 'cnc_parallel'
+      })
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error).toBe('cam_engines_bundle_missing')
+        expect(r.hint).toMatch(/cam\/ocl_toolpath\.py|engines/i)
+      }
+    } finally {
+      spy.mockRestore()
+      await unlink(p).catch(() => {})
+      await unlink(out).catch(() => {})
+    }
+  })
+
+  it('returns builtin hint for cnc_parallel (mesh height-field raster, unverified copy)', async () => {
     const p = join(tmpdir(), 'ufs-cam-parallel-hint.stl')
     const out = join(tmpdir(), 'ufs-cam-parallel-hint.nc')
     await writeFile(p, buildOneTriangleBinaryStl())
@@ -192,7 +233,10 @@ describe('runCamPipeline', () => {
         expect(r.engine.requestedEngine).toBe('builtin')
         expect(r.engine.usedEngine).toBe('builtin')
         expect(r.engine.fallbackApplied).toBe(false)
-        expect(r.hint).toMatch(/parallel finish.*STL bounding box/i)
+        // The builtin fallback now tries mesh height-field first (follows model
+        // geometry); only fall back to orthogonal bounds zigzag when the mesh
+        // has no XY samples (the one-triangle fixture may produce either path).
+        expect(r.hint).toMatch(/mesh height-field|orthogonal bounds zigzag/i)
         expect(r.hint).toMatch(/unverified|MACHINES\.md/i)
       }
     } finally {

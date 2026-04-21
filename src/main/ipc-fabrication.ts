@@ -1,9 +1,10 @@
 import { app, dialog, ipcMain } from 'electron'
+import { statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
-import { isPythonPathSafe } from './path-security'
+import { isPathSafe, isPythonPathSafe } from './path-security'
 import { describeCamOperationKind } from './cam-operation-policy'
-import { runCamPipeline } from './cam-runner'
+import { runCamDomain } from './cam-domain'
 import type { CamProgressEvent } from '../shared/cam-progress'
 import { listAllPosts, saveUserPost, readPostContent } from './posts-manager'
 import {
@@ -61,6 +62,8 @@ import { checkFixtureCollision, type ToolpathPoint } from '../shared/fixture-col
 import type { FixtureRecord } from '../shared/fixture-schema'
 import { autoAssignWcsOffsets, validateSetupSequence, suggestFlipSetup } from '../shared/multi-setup-utils'
 import { generateProbeCycle, type ProbeCycleType, type ProbeBaseParams } from '../shared/probing-cycles'
+import { camRunPayloadSchema } from '../shared/cam-ipc-contract'
+import { listStaleSourceMeshesVersusGcode, type CamSourceMeshMtime } from '../shared/cam-source-stale'
 
 export type { MainIpcWindowContext } from './ipc-context'
 
@@ -139,7 +142,10 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         throw new Error(transformed.detail ? `${transformed.error}: ${transformed.detail}` : transformed.error)
       }
       const ext = extname(payload.stlPath) || '.stl'
-      const stem = basename(payload.stlPath, ext)
+      // Strip any existing `.cam-aligned` segments so that re-running CAM on a
+      // previously-aligned file does not accumulate suffixes
+      // (e.g. `model.cam-aligned.cam-aligned.stl`).
+      const stem = basename(payload.stlPath, ext).replace(/(\.cam-aligned)+$/i, '')
       const outPath = join(dirname(payload.stlPath), `${stem}.cam-aligned${ext}`)
       await writeFile(outPath, transformed.buffer)
       return outPath
@@ -178,35 +184,16 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
 
   ipcMain.handle(
     'cam:run',
-    async (
-      _e,
-      payload: {
-        stlPath: string
-        outPath: string
-        machineId: string
-        zPassMm: number
-        stepoverMm: number
-        feedMmMin: number
-        plungeMmMin: number
-        safeZMm: number
-        pythonPath: string
-        operationKind?: string
-        workCoordinateIndex?: number
-        toolDiameterMm?: number
-        operationParams?: Record<string, unknown>
-        rotaryStockLengthMm?: number
-        rotaryStockDiameterMm?: number
-        rotaryChuckDepthMm?: number
-        rotaryClampOffsetMm?: number
-        stockBoxZMm?: number
-        stockBoxXMm?: number
-        stockBoxYMm?: number
-        priorPostedGcode?: string
-        useMeshMachinableXClamp?: boolean
-        /** ATC tool slot number (1–6) from the tool library. */
-        toolSlot?: number
+    async (_e, payload: unknown) => {
+      const parsedPayload = camRunPayloadSchema.safeParse(payload)
+      if (!parsedPayload.success) {
+        return {
+          ok: false as const,
+          error: 'invalid_cam_payload',
+          hint: parsedPayload.error.issues.map((issue) => issue.message).join('; ')
+        }
       }
-    ) => {
+      const camPayload = parsedPayload.data
       if (activeCamController !== null) {
         return {
           ok: false as const,
@@ -215,7 +202,7 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         }
       }
       // Validate python path before spawning subprocess
-      if (!isPythonPathSafe(payload.pythonPath)) {
+      if (!isPythonPathSafe(camPayload.pythonPath)) {
         return {
           ok: false as const,
           error: 'invalid_python_path',
@@ -225,7 +212,7 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       const controller = new AbortController()
       activeCamController = controller
       try {
-        const policy = describeCamOperationKind(payload.operationKind)
+        const policy = describeCamOperationKind(camPayload.operationKind)
         if (!policy.runnable) {
           return {
             ok: false as const,
@@ -233,7 +220,7 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
             ...(policy.hint ? { hint: policy.hint } : {})
           }
         }
-        const machine = await getMachineById(payload.machineId)
+        const machine = await getMachineById(camPayload.machineId)
         if (!machine || machine.kind !== 'cnc') {
           return {
             ok: false as const,
@@ -243,32 +230,34 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         }
         const resourcesRoot = getResourcesRoot()
         const appRoot = app.getAppPath()
-        const result = await runCamPipeline({
-          stlPath: payload.stlPath,
-          outputGcodePath: payload.outPath,
+        const result = await runCamDomain({
+          stlPath: camPayload.stlPath,
+          outputGcodePath: camPayload.outPath,
           machine,
           resourcesRoot,
           appRoot,
-          zPassMm: payload.zPassMm,
-          stepoverMm: payload.stepoverMm,
-          feedMmMin: payload.feedMmMin,
-          plungeMmMin: payload.plungeMmMin,
-          safeZMm: payload.safeZMm,
-          pythonPath: payload.pythonPath,
-          operationKind: payload.operationKind,
-          workCoordinateIndex: payload.workCoordinateIndex,
-          toolDiameterMm: payload.toolDiameterMm,
-          operationParams: payload.operationParams,
-          rotaryStockLengthMm: payload.rotaryStockLengthMm,
-          rotaryStockDiameterMm: payload.rotaryStockDiameterMm,
-          rotaryChuckDepthMm: payload.rotaryChuckDepthMm,
-          rotaryClampOffsetMm: payload.rotaryClampOffsetMm,
-          stockBoxZMm: payload.stockBoxZMm,
-          stockBoxXMm: payload.stockBoxXMm,
-          stockBoxYMm: payload.stockBoxYMm,
-          priorPostedGcode: payload.priorPostedGcode,
-          useMeshMachinableXClamp: payload.useMeshMachinableXClamp,
-          toolSlot: payload.toolSlot,
+          zPassMm: camPayload.zPassMm,
+          stepoverMm: camPayload.stepoverMm,
+          feedMmMin: camPayload.feedMmMin,
+          plungeMmMin: camPayload.plungeMmMin,
+          safeZMm: camPayload.safeZMm,
+          pythonPath: camPayload.pythonPath,
+          operationKind: camPayload.operationKind,
+          operationLabel: camPayload.operationLabel,
+          workCoordinateIndex: camPayload.workCoordinateIndex,
+          toolDiameterMm: camPayload.toolDiameterMm,
+          operationParams: camPayload.operationParams,
+          rotaryStockLengthMm: camPayload.rotaryStockLengthMm,
+          rotaryStockDiameterMm: camPayload.rotaryStockDiameterMm,
+          rotaryChuckDepthMm: camPayload.rotaryChuckDepthMm,
+          rotaryClampOffsetMm: camPayload.rotaryClampOffsetMm,
+          stockBoxZMm: camPayload.stockBoxZMm,
+          stockBoxXMm: camPayload.stockBoxXMm,
+          stockBoxYMm: camPayload.stockBoxYMm,
+          priorPostedGcode: camPayload.priorPostedGcode,
+          useMeshMachinableXClamp: camPayload.useMeshMachinableXClamp,
+          toolSlot: camPayload.toolSlot,
+          placement: camPayload.placement,
           signal: controller.signal,
           onProgress: (event: CamProgressEvent) => {
             const win = ctx.getMainWindow()
@@ -472,6 +461,54 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       throw e instanceof Error ? e : new Error(String(e))
     }
   })
+
+  /**
+   * Compare mtimes of project `output/cam.nc` (or `gcodeRelativePath`) vs manufacture source meshes.
+   * Used for “regenerate G-code” hints — not a full associativity graph.
+   */
+  ipcMain.handle(
+    'fabrication:camSourceStaleVersusOutput',
+    async (_e, projectDir: string, meshRelPaths: unknown, gcodeRel?: unknown) => {
+      if (typeof projectDir !== 'string' || !projectDir.trim()) {
+        return { ok: false as const, error: 'project_dir_required' }
+      }
+      const relOut =
+        typeof gcodeRel === 'string' && gcodeRel.trim()
+          ? gcodeRel.trim().replace(/^[\\/]+/, '')
+          : 'output/cam.nc'
+      const gPath = isPathSafe(relOut, projectDir)
+      if (!gPath) return { ok: false as const, error: 'gcode_path_unsafe' }
+      let gcodeMtimeMs: number | null = null
+      try {
+        gcodeMtimeMs = statSync(gPath).mtimeMs
+      } catch {
+        gcodeMtimeMs = null
+      }
+      const rawPaths = Array.isArray(meshRelPaths) ? meshRelPaths : []
+      const meshes: CamSourceMeshMtime[] = []
+      for (const item of rawPaths) {
+        if (typeof item !== 'string') continue
+        const rel = item.trim().replace(/^[\\/]+/, '')
+        if (!rel) continue
+        const abs = isPathSafe(rel, projectDir)
+        if (!abs) continue
+        try {
+          meshes.push({ relativePath: rel, mtimeMs: statSync(abs).mtimeMs })
+        } catch {
+          meshes.push({ relativePath: rel, mtimeMs: null })
+        }
+      }
+      const { staleRelativePaths, noGcode } = listStaleSourceMeshesVersusGcode(gcodeMtimeMs, meshes)
+      return {
+        ok: true as const,
+        gcodeMtimeMs,
+        gcodeRelativePath: relOut,
+        meshes,
+        staleRelativePaths,
+        noGcode
+      }
+    }
+  )
 
   // ── Post-processor management ─────────────────────────────────────────────
 

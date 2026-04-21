@@ -31,6 +31,16 @@ def _check_package(name: str) -> tuple[bool, str | None]:
         return False, None
 
 
+def _check_ocp_meta() -> tuple[bool, str | None]:
+    """OCP (OpenCascade Python) — used by step_to_stl.py when CadQuery is absent."""
+    import importlib.util
+
+    spec = importlib.util.find_spec("OCP")
+    if spec is None:
+        return False, None
+    return True, "installed"
+
+
 def check_all() -> dict[str, Any]:
     """
     Check all runtime dependencies and return a structured report dict.
@@ -90,6 +100,39 @@ def check_all() -> dict[str, Any]:
             "Required for ocl_toolpath.py (waterline/adaptive_waterline/raster "
             "using the OCL backend). The toolpath_engine uses its own pure-Python "
             "drop-cutter and does not require OpenCAMLib."
+        ),
+    })
+
+    trimesh_ok, trimesh_ver = _check_package("trimesh")
+    optional.append({
+        "name": "trimesh",
+        "available": trimesh_ok,
+        "version": trimesh_ver,
+        "note": (
+            "Mesh import (OBJ, PLY, GLB, GLTF, 3MF, OFF, DAE, FBX, …) via "
+            "engines/mesh/mesh_to_stl.py. Install: pip install trimesh"
+        ),
+    })
+
+    cq_ok, cq_ver = _check_package("cadquery")
+    optional.append({
+        "name": "cadquery",
+        "available": cq_ok,
+        "version": cq_ver,
+        "note": (
+            "STEP/IGES tessellation through engines/occt/step_to_stl.py (preferred path). "
+            "Install: pip install cadquery (or cadquery-ocp bundle)."
+        ),
+    })
+
+    ocp_ok, ocp_ver = _check_ocp_meta()
+    optional.append({
+        "name": "OCP",
+        "available": ocp_ok,
+        "version": ocp_ver,
+        "note": (
+            "OpenCascade Python bindings — fallback in step_to_stl.py when CadQuery "
+            "is not installed. Often provided with cadquery-ocp."
         ),
     })
 

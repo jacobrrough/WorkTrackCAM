@@ -186,6 +186,7 @@ class ToolpathJob:
     surface_finish_ra_um: float = 3.2  # target Ra in microns
     # Adaptive-specific
     max_engagement_deg: float = 90.0  # max radial engagement angle
+    stock_allowance_mm: float = 0.0
     # Rest machining
     prior_tool_diameter_mm: float = 0.0  # previous tool for rest detection
     # Raster-specific
@@ -208,6 +209,12 @@ class ToolpathJob:
             errors.append("stepover_mm should not exceed tool diameter")
         if self.cuts.z_step_mm <= 0:
             errors.append("z_step_mm must be > 0")
+        if self.cuts.retract_z_mm <= 0:
+            errors.append("retract_z_mm must be > 0")
+        if self.max_engagement_deg <= 0 or self.max_engagement_deg > 180:
+            errors.append("max_engagement_deg must be in (0, 180]")
+        if self.stock_allowance_mm < 0:
+            errors.append("stock_allowance_mm must be >= 0")
         return errors
 
 
@@ -330,7 +337,8 @@ def job_from_config(cfg: dict[str, Any]) -> ToolpathJob:
         stock=stock,
         post_dialect=post_dialect,
         tolerance_mm=_f("toleranceMm", 0.01),
-        max_engagement_deg=_f("maxEngagementDeg", 90.0),
+        max_engagement_deg=max(1.0, min(180.0, _f("maxEngagementDeg", 90.0))),
+        stock_allowance_mm=max(0.0, _f("stockAllowanceMm", 0.0)),
         prior_tool_diameter_mm=_f("priorToolDiameterMm", 0.0),
         raster_angle_deg=_f("rasterAngleDeg", 0.0),
         cylinder_diameter_mm=_f("cylinderDiameterMm", 50.0),

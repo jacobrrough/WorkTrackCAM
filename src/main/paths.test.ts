@@ -6,11 +6,17 @@ const electronApp = vi.hoisted(() => ({
   getAppPath: vi.fn(() => '/fake/app-path')
 }))
 
+const accessMock = vi.hoisted(() => vi.fn())
+
 vi.mock('electron', () => ({
   app: electronApp
 }))
 
-import { getEnginesRoot, getMainDir, getResourcesRoot } from './paths'
+vi.mock('node:fs/promises', () => ({
+  access: accessMock
+}))
+
+import { getEnginesRoot, getMainDir, getResourcesRoot, getRuntimeRootsDiagnostics } from './paths'
 
 describe('paths', () => {
   describe('getMainDir', () => {
@@ -24,6 +30,7 @@ describe('paths', () => {
     beforeEach(() => {
       electronApp.isPackaged = false
       electronApp.getAppPath.mockReturnValue('/fake/app-path')
+      accessMock.mockReset().mockResolvedValue(undefined)
       Reflect.deleteProperty(process, 'resourcesPath')
     })
 
@@ -42,6 +49,7 @@ describe('paths', () => {
     beforeEach(() => {
       electronApp.isPackaged = false
       electronApp.getAppPath.mockReturnValue('/fake/app-path')
+      accessMock.mockReset().mockResolvedValue(undefined)
       Reflect.deleteProperty(process, 'resourcesPath')
     })
 
@@ -53,6 +61,38 @@ describe('paths', () => {
       electronApp.isPackaged = true
       Object.assign(process, { resourcesPath: '/electron/Resources' })
       expect(getEnginesRoot()).toBe(join('/electron/Resources', 'engines'))
+    })
+  })
+
+  describe('getRuntimeRootsDiagnostics', () => {
+    beforeEach(() => {
+      electronApp.isPackaged = false
+      electronApp.getAppPath.mockReturnValue('/fake/app-path')
+      accessMock.mockReset().mockResolvedValue(undefined)
+      Reflect.deleteProperty(process, 'resourcesPath')
+    })
+
+    it('reports readable roots when both paths are accessible', async () => {
+      const result = await getRuntimeRootsDiagnostics()
+      expect(result.resourcesReadable).toBe(true)
+      expect(result.enginesReadable).toBe(true)
+      expect(result.resourcesRoot).toBe(join('/fake/app-path', 'resources'))
+      expect(result.enginesRoot).toBe(join('/fake/app-path', 'engines'))
+      expect(result.enginesBundle.enginesRoot).toBe(join('/fake/app-path', 'engines'))
+      expect(result.enginesBundle.directoryReadable).toBe(true)
+    })
+
+    it('reports unreadable roots when access checks fail', async () => {
+      let call = 0
+      accessMock.mockImplementation(() => {
+        call += 1
+        if (call === 1) return Promise.reject(new Error('no resources'))
+        if (call === 2) return Promise.reject(new Error('no engines'))
+        return Promise.resolve(undefined)
+      })
+      const result = await getRuntimeRootsDiagnostics()
+      expect(result.resourcesReadable).toBe(false)
+      expect(result.enginesReadable).toBe(false)
     })
   })
 })

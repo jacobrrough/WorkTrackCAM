@@ -51,6 +51,7 @@ import { useFocusTrap } from './useFocusTrap'
 import { useUndo } from './useUndo'
 import { PropertyEditCommand, AddItemCommand, DeleteItemCommand } from './undo-manager'
 import { formatErrorForToast } from './error-messages'
+import { assessGcodeForExportSafety } from './gcode-export-safety'
 
 // ── Extracted components ──────────────────────────────────────────────────────
 import { EnvironmentSplash } from './environments/EnvironmentSplash'
@@ -643,6 +644,7 @@ function ShopAppInner(): React.ReactElement {
   } = useUI()
   const [gcodeGeneration, setGcodeGeneration] = useState(0)
   const [lastGenMs, setLastGenMs] = useState<number | null>(null)
+  const [gcodeSafetyAckKey, setGcodeSafetyAckKey] = useState<string | null>(null)
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const { execute: undoExec } = useUndo()
@@ -735,6 +737,10 @@ function ShopAppInner(): React.ReactElement {
     return () => window.removeEventListener('keydown', h)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, activeJobId, view, running])
+
+  useEffect(() => {
+    setGcodeSafetyAckKey(null)
+  }, [gcodeGeneration, activeJob?.gcodeOut])
 
   const updateJob = useCallback((id: string, patch: Partial<Job>): void =>
     setJobs(js => js.map(j => j.id === id ? { ...j, ...patch } : j)), [])
@@ -968,8 +974,21 @@ function ShopAppInner(): React.ReactElement {
   }
 
   const generate = async (): Promise<void> => {
-    if (!activeJob?.stlPath || !activeJob.machineId || activeJob.operations.length === 0) {
-      pushToast('warn', 'Need a model, machine, and at least one operation'); return
+    if (!activeJob) {
+      pushToast('warn', 'Select or create a job first.')
+      return
+    }
+    if (!activeJob.stlPath?.trim()) {
+      pushToast('warn', 'Load a model (drop STL/DXF on the viewport or use Browse).')
+      return
+    }
+    if (!activeJob.machineId?.trim()) {
+      pushToast('warn', 'Choose a machine for this job (Library drawer or job settings).')
+      return
+    }
+    if (activeJob.operations.length === 0) {
+      pushToast('warn', 'Add at least one operation in the left panel (Operations → +).')
+      return
     }
     const jobId = activeJob.id
     const materialApplied = applyMaterialToOperations(
@@ -990,7 +1009,11 @@ function ShopAppInner(): React.ReactElement {
     try {
       const s = await fab().settingsGet()
       const pythonPath = String(s.pythonPath || 'python')
-      const outPath = activeJob.stlPath.replace(/\.stl$/i, '.gcode')
+      // Strip any accumulated `.cam-aligned` segments from the source stem so the
+      // gcode output doesn't inherit suffixes like `model.cam-aligned.cam-aligned.gcode`.
+      const outPath = activeJob.stlPath
+        .replace(/(\.cam-aligned)+(\.stl)$/i, '$2')
+        .replace(/\.stl$/i, '.gcode')
       let camStlPath = activeJob.stlPath
       try {
         camStlPath = await fab().stlTransformForCam({
@@ -1013,7 +1036,12 @@ function ShopAppInner(): React.ReactElement {
           typeof p.toolDiameterMm === 'number' && Number.isFinite(p.toolDiameterMm) && p.toolDiameterMm > 0
             ? p.toolDiameterMm
             : 6
-        const needs4axis = op.kind === 'cnc_4axis_roughing' || op.kind === 'cnc_4axis_finishing' || op.kind === 'cnc_4axis_contour' || op.kind === 'cnc_4axis_indexed'
+        const needs4axis = op.kind === 'cnc_4axis_roughing' || op.kind === 'cnc_4axis_finishing' || op.kind === 'cnc_4axis_contour' || op.kind === 'cnc_4axis_indexed' || op.kind === 'cnc_4axis_continuous'
+        // 4-axis ops use the new facade, which applies the user gizmo
+        // transform itself via `placement`. Send the raw STL path so the
+        // facade does not double-apply the renderer-baked transform. 3-axis
+        // ops keep using `camStlPath` (the baked `.cam-aligned.stl`).
+        const stlPathForCam = needs4axis ? activeJob.stlPath : camStlPath
         const materialTag = activeJob.materialId
           ? materials.find((m) => m.id === activeJob.materialId)?.name ?? activeJob.materialId
           : 'default'
@@ -1031,7 +1059,7 @@ function ShopAppInner(): React.ReactElement {
         }
         try {
           const r = await fab().camRun({
-            stlPath: camStlPath, outPath, machineId: activeJob.machineId!,
+            stlPath: stlPathForCam, outPath, machineId: activeJob.machineId!,
             zPassMm: cut.zPassMm,
             stepoverMm: cut.stepoverMm,
             feedMmMin: cut.feedMmMin,
@@ -1048,7 +1076,12 @@ function ShopAppInner(): React.ReactElement {
             stockBoxZMm: activeJob.stock.z,
             stockBoxXMm: activeJob.stock.x,
             stockBoxYMm: activeJob.stock.y,
-            ...(needs4axis ? { useMeshMachinableXClamp: p['useMeshMachinableXClamp'] === true } : {}),
+            ...(needs4axis
+              ? {
+                  useMeshMachinableXClamp: p['useMeshMachinableXClamp'] === true,
+                  placement: activeJob.transform
+                }
+              : {}),
             ...(priorPostedGcode?.trim() ? { priorPostedGcode } : {})
           })
           if (r.ok) {
@@ -1083,6 +1116,39 @@ function ShopAppInner(): React.ReactElement {
   const sendToPrinter = async (): Promise<void> => {
     if (!activeJob?.gcodeOut) { pushToast('warn', 'Generate G-code first'); return }
     if (!activeJob.printerUrl) { pushToast('warn', 'Enter printer URL'); return }
+    const ensureSafetyGate = async (actionLabel: string): Promise<boolean> => {
+      if (!activeJob?.gcodeOut) return false
+      const machine = sessionMachine ?? machines.find((m) => m.id === activeJob.machineId) ?? null
+      if (!machine) {
+        pushToast('warn', `${actionLabel} blocked: machine profile is unavailable`)
+        return false
+      }
+      try {
+        const text = await fab().readTextFile(activeJob.gcodeOut)
+        const safety = assessGcodeForExportSafety({
+          gcode: text,
+          dialect: machine.dialect,
+          safeRetractZMm: machine.workAreaMm.z
+        })
+        if (safety.blockingErrors.length > 0) {
+          pushToast('err', `${actionLabel} blocked: ${safety.blockingErrors[0]}`)
+          return false
+        }
+        if (safety.warnings.length > 0) {
+          const ackKey = `${activeJob.gcodeOut}|${machine.dialect}`
+          if (gcodeSafetyAckKey !== ackKey) {
+            setGcodeSafetyAckKey(ackKey)
+            pushToast('warn', `${actionLabel}: ${safety.warnings[0]} Run the action again to acknowledge.`)
+            return false
+          }
+        }
+      } catch (e) {
+        pushToast('err', formatErrorForToast(e instanceof Error ? e.message : String(e), `${actionLabel} safety check failed`))
+        return false
+      }
+      return true
+    }
+    if (!(await ensureSafetyGate('Send to printer'))) return
     try {
       const r = await fab().moonrakerPush({ gcodePath: activeJob.gcodeOut, printerUrl: activeJob.printerUrl, startAfterUpload: true })
       r.ok ? pushToast('ok', `Sent: ${r.filename}`) : pushToast('err', formatErrorForToast(r.error ?? 'Send failed', 'Send to printer'))
@@ -1113,8 +1179,30 @@ function ShopAppInner(): React.ReactElement {
       pushToast('warn', 'Generate G-code first')
       return
     }
+    const machine = sessionMachine ?? machines.find((m) => m.id === activeJob.machineId) ?? null
+    if (!machine) {
+      pushToast('warn', 'Export blocked: machine profile is unavailable')
+      return
+    }
     try {
       const text = await fab().readTextFile(activeJob.gcodeOut)
+      const safety = assessGcodeForExportSafety({
+        gcode: text,
+        dialect: machine.dialect,
+        safeRetractZMm: machine.workAreaMm.z
+      })
+      if (safety.blockingErrors.length > 0) {
+        pushToast('err', `Export blocked: ${safety.blockingErrors[0]}`)
+        return
+      }
+      if (safety.warnings.length > 0) {
+        const ackKey = `${activeJob.gcodeOut}|${machine.dialect}`
+        if (gcodeSafetyAckKey !== ackKey) {
+          setGcodeSafetyAckKey(ackKey)
+          pushToast('warn', `Export warning: ${safety.warnings[0]} Run Export again to acknowledge.`)
+          return
+        }
+      }
       const base = activeJob.gcodeOut.replace(/^.*[/\\]/, '') || 'output.gcode'
       const savePath = await fab().dialogSaveFile(
         [
@@ -1137,7 +1225,30 @@ function ShopAppInner(): React.ReactElement {
       pushToast('warn', 'Generate G-code first')
       return
     }
+    const machine = sessionMachine ?? machines.find((m) => m.id === activeJob.machineId) ?? null
+    if (!machine) {
+      pushToast('warn', 'Open file blocked: machine profile is unavailable')
+      return
+    }
     try {
+      const text = await fab().readTextFile(activeJob.gcodeOut)
+      const safety = assessGcodeForExportSafety({
+        gcode: text,
+        dialect: machine.dialect,
+        safeRetractZMm: machine.workAreaMm.z
+      })
+      if (safety.blockingErrors.length > 0) {
+        pushToast('err', `Open file blocked: ${safety.blockingErrors[0]}`)
+        return
+      }
+      if (safety.warnings.length > 0) {
+        const ackKey = `${activeJob.gcodeOut}|${machine.dialect}`
+        if (gcodeSafetyAckKey !== ackKey) {
+          setGcodeSafetyAckKey(ackKey)
+          pushToast('warn', `Open file warning: ${safety.warnings[0]} Run Open file again to acknowledge.`)
+          return
+        }
+      }
       await fab().shellOpenPath(activeJob.gcodeOut)
     } catch (e) {
       pushToast('err', formatErrorForToast(e instanceof Error ? e.message : String(e), 'Open file failed'))

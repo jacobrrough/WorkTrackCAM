@@ -225,20 +225,38 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
 
   const spindleRpm = extractSpindleRpm(cpsText)
 
-  // Pick post template by dialect
+  // Pick post template by dialect.
+  //
+  // The 4-axis subsystem rewrite (April 2026) collapsed all 4-axis post output
+  // to the GRBL/Carvera dialect. The non-GRBL 4-axis templates were deleted but
+  // the dialect enum is preserved so existing user machine profiles in
+  // %APPDATA%/WorkTrackCAM/machines/ continue to load. Imported CPS files for
+  // those dialects now point at `cnc_4axis_grbl.hbs` instead.
   const postTemplateMap: Record<MachineProfile['dialect'], string> = {
     grbl:            'cnc_generic_mm.hbs',
     grbl_4axis:      'cnc_4axis_grbl.hbs',
-    fanuc_4axis:     'cnc_4axis_fanuc.hbs',
-    mach3_4axis:     'cnc_4axis_mach3.hbs',
-    linuxcnc_4axis:  'cnc_4axis_linuxcnc.hbs',
-    siemens_4axis:   'cnc_4axis_siemens.hbs',
-    heidenhain_4axis: 'cnc_4axis_heidenhain.hbs',
+    fanuc_4axis:     'cnc_4axis_grbl.hbs',
+    mach3_4axis:     'cnc_4axis_grbl.hbs',
+    linuxcnc_4axis:  'cnc_4axis_grbl.hbs',
+    siemens_4axis:   'cnc_4axis_grbl.hbs',
+    heidenhain_4axis: 'cnc_4axis_grbl.hbs',
     mach3:           'cnc_generic_mm.hbs',
     generic_mm:      'cnc_generic_mm.hbs',
     fanuc:           'cnc_5axis_fanuc.hbs',
     siemens:         'cnc_5axis_siemens.hbs',
     heidenhain:      'cnc_generic_mm.hbs'
+  }
+  if (
+    dialect === 'fanuc_4axis' ||
+    dialect === 'mach3_4axis' ||
+    dialect === 'linuxcnc_4axis' ||
+    dialect === 'siemens_4axis' ||
+    dialect === 'heidenhain_4axis'
+  ) {
+    console.warn(
+      `[machine-cps-import] dialect "${dialect}" no longer has a dedicated post template; ` +
+      `falling back to cnc_4axis_grbl.hbs. Output is GRBL/Carvera-compatible only.`
+    )
   }
 
   const candidate: Omit<MachineProfile, 'meta'> & { meta: NonNullable<MachineProfile['meta']> } = {

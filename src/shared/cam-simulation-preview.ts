@@ -11,6 +11,14 @@ export type CamSimulationPreview = {
   zRange: { topZ: number; bottomZ: number } | null
   cues: CamSimulationCue[]
   disclaimer: string
+  /**
+   * Naive motion-time lower bound from G0/G1 polyline length ÷ F (or defaults).
+   * Not cycle time — see `heuristicMotionNote`.
+   */
+  heuristicMotionMinutes: number | null
+  /** Sum of 3D segment lengths for G0+G1 (mm). */
+  heuristicMotionPathMm: number | null
+  heuristicMotionNote: string
 }
 
 type AxisState = {
@@ -21,6 +29,20 @@ type AxisState = {
 
 const PREVIEW_DISCLAIMER =
   'Text-only G-code stats (not stock removal, collisions, or machine motion). Not safe-for-machine verification — confirm post, units, work offsets, and clearances before running hardware.'
+
+const HEURISTIC_MOTION_NOTE =
+  'Rough motion-time estimate from G0/G1 segment lengths and inline F words (1200 mm/min default when F is missing on a feed move). Uses 6000 mm/min for G0. Ignores acceleration, dwell, tool change, spindle, and rotary/sync axes. Not shop-floor cycle time.'
+
+const DEFAULT_HEURISTIC_FEED_MM_MIN = 1200
+const DEFAULT_HEURISTIC_RAPID_MM_MIN = 6000
+
+function readFeedF(line: string): number | null {
+  const clean = line.replace(/\([^)]*\)/g, '')
+  const m = clean.match(/\bF([+-]?\d+(?:\.\d+)?)\b/i)
+  if (!m) return null
+  const n = Number.parseFloat(m[1] ?? '')
+  return Number.isFinite(n) && n > 0 ? n : null
+}
 
 function readAxis(line: string, axis: 'X' | 'Y' | 'Z'): number | null {
   // Strip inline parenthetical comments before matching (same fix as cam-gcode-toolpath.ts)
@@ -49,17 +71,37 @@ export function buildCamSimulationPreview(gcode: string, cueCount = 5): CamSimul
   let topZ = Number.NEGATIVE_INFINITY
   let bottomZ = Number.POSITIVE_INFINITY
   const cuttingMoveIndices: number[] = []
+  let heuristicPathMm = 0
+  let heuristicTimeMin = 0
+  let lastFeedMmMin = DEFAULT_HEURISTIC_FEED_MM_MIN
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     if (!/^(G0|G1)\b/.test(line)) continue
     motionLines += 1
+    const fHere = readFeedF(line)
+    if (fHere != null) lastFeedMmMin = fHere
+    const prevX = state.x
+    const prevY = state.y
+    const prevZ = state.z
     const x = readAxis(line, 'X')
     const y = readAxis(line, 'Y')
     const z = readAxis(line, 'Z')
     if (x != null) state.x = x
     if (y != null) state.y = y
     if (z != null) state.z = z
+    const dx = state.x - prevX
+    const dy = state.y - prevY
+    const dz = state.z - prevZ
+    const dist = Math.hypot(dx, dy, dz)
+    if (dist > 0) {
+      heuristicPathMm += dist
+      const rapid = line.startsWith('G0')
+      const fUse = rapid ? DEFAULT_HEURISTIC_RAPID_MM_MIN : lastFeedMmMin
+      if (fUse > 0) {
+        heuristicTimeMin += dist / fUse
+      }
+    }
     minX = Math.min(minX, state.x)
     maxX = Math.max(maxX, state.x)
     minY = Math.min(minY, state.y)
@@ -98,6 +140,8 @@ export function buildCamSimulationPreview(gcode: string, cueCount = 5): CamSimul
     })
   }
 
+  const hasHeuristic = motionLines > 0 && heuristicPathMm > 0
+
   return {
     totalLines: lines.length,
     motionLines,
@@ -108,6 +152,9 @@ export function buildCamSimulationPreview(gcode: string, cueCount = 5): CamSimul
         : null,
     zRange: Number.isFinite(topZ) && Number.isFinite(bottomZ) ? { topZ, bottomZ } : null,
     cues,
-    disclaimer: PREVIEW_DISCLAIMER
+    disclaimer: PREVIEW_DISCLAIMER,
+    heuristicMotionMinutes: hasHeuristic ? heuristicTimeMin : null,
+    heuristicMotionPathMm: hasHeuristic ? heuristicPathMm : null,
+    heuristicMotionNote: HEURISTIC_MOTION_NOTE
   }
 }

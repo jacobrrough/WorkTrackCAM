@@ -12,14 +12,11 @@ export const COMMON_POST_TEMPLATE_FILENAMES = [
   'fdm_passthrough.hbs',
   'carvera_3axis.hbs',
   'carvera_4axis.hbs',
-  // Generic / fallback infrastructure (kept for CPS import + custom machines)
+  // Generic / fallback infrastructure (kept for CPS import + custom machines).
+  // The non-GRBL 4-axis templates were removed in the April 2026 4-axis rewrite;
+  // CPS imports for those dialects are repointed at `cnc_4axis_grbl.hbs`.
   'cnc_generic_mm.hbs',
   'cnc_4axis_grbl.hbs',
-  'cnc_4axis_fanuc.hbs',
-  'cnc_4axis_mach3.hbs',
-  'cnc_4axis_linuxcnc.hbs',
-  'cnc_4axis_siemens.hbs',
-  'cnc_4axis_heidenhain.hbs',
   'cnc_5axis_fanuc.hbs',
   'cnc_5axis_siemens.hbs'
 ] as const

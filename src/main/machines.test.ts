@@ -22,9 +22,13 @@ vi.mock('node:fs/promises', () => ({
   unlink: mockUnlink
 }))
 
-vi.mock('./paths', () => ({
-  getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
-}))
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
+  }
+})
 
 vi.mock('./machine-cps-import', () => ({
   machineProfileFromCpsContent: vi.fn()

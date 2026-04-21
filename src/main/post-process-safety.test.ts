@@ -158,81 +158,9 @@ const dialects: DialectConfig[] = [
     hasM6: false,
     hasM9: false,
   },
-  {
-    name: 'Fanuc 4-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_fanuc.hbs',
-      dialect: 'fanuc_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    },
-    lines: fourAxisLines,
-    programEnd: 'M30',
-    hasG43: false,
-    hasM6: false,
-    hasM9: false,
-  },
-  {
-    name: 'Mach3 4-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_mach3.hbs',
-      dialect: 'mach3_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    },
-    lines: fourAxisLines,
-    programEnd: 'M30',
-    hasG43: false,
-    hasM6: true,
-    hasM9: false,
-  },
-  {
-    name: 'LinuxCNC 4-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_linuxcnc.hbs',
-      dialect: 'linuxcnc_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    },
-    lines: fourAxisLines,
-    programEnd: 'M2',
-    hasG43: true,
-    hasM6: true,
-    hasM9: false,
-  },
-  {
-    name: 'Siemens 4-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_siemens.hbs',
-      dialect: 'siemens_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    },
-    lines: fourAxisLines,
-    programEnd: 'M30',
-    hasG43: false,
-    hasM6: true,
-    hasM9: false,
-  },
-  {
-    name: 'Heidenhain 4-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_heidenhain.hbs',
-      dialect: 'heidenhain_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    },
-    lines: fourAxisLines,
-    programEnd: 'M30',
-    hasG43: true,
-    hasM6: true,
-    hasM9: false,
-  },
+  // Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis safety entries
+  // were removed in the April 2026 4-axis subsystem rewrite — only the
+  // GRBL/Carvera 4-axis posts remain.
   {
     name: 'Carvera 4-axis',
     machine: {
@@ -907,32 +835,28 @@ describe('Safety: combined options do not break safety invariants', () => {
     expect(gcode).toContain('SUBROUTINE')
   })
 
-  it('inverse time feed + tool change on Heidenhain 4-axis: complete safety', async () => {
-    const heidenhain4ax: MachineProfile = {
+  it('inverse time feed + tool change on GRBL 4-axis: complete safety', async () => {
+    const grbl4ax: MachineProfile = {
       ...baseMachine,
-      postTemplate: 'cnc_4axis_heidenhain.hbs',
-      dialect: 'heidenhain_4axis',
+      postTemplate: 'cnc_4axis_grbl.hbs',
+      dialect: 'grbl_4axis',
       axisCount: 4,
       aAxisRangeDeg: 360,
     }
-    const { gcode } = await renderPost(resourcesRoot, heidenhain4ax, fourAxisLines, {
+    const { gcode } = await renderPost(resourcesRoot, grbl4ax, fourAxisLines, {
       inverseTimeFeed: true,
       toolNumber: 3,
     })
     // Init
     expect(gcode).toContain('G21')
     expect(gcode).toContain('G90')
-    expect(gcode).toContain('G17')
-    // Tool
-    expect(gcode).toContain('T3 M6')
-    expect(gcode).toContain('G43 H3')
     // Inverse time
     expect(gcode).toContain('G93')
     expect(gcode).toContain('G94')
     // Footer
     expect(gcode).toContain('M5')
     expect(gcode).toContain('M30')
-    expect(gcode).toContain(`G0 Z${heidenhain4ax.workAreaMm.z}`)
+    expect(gcode).toContain(`G0 Z${grbl4ax.workAreaMm.z}`)
   })
 })
 

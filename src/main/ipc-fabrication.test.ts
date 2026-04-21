@@ -25,12 +25,22 @@ vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined)
 }))
 
+vi.mock('node:fs', () => ({
+  statSync: vi.fn((p: string) => {
+    const s = String(p).replace(/\\/g, '/')
+    if (s.includes('output/cam.nc') || s.endsWith('cam.nc')) return { mtimeMs: 1000 }
+    if (s.includes('part-new.stl')) return { mtimeMs: 2000 }
+    if (s.includes('part-old.stl')) return { mtimeMs: 500 }
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+  })
+}))
+
 vi.mock('./cam-operation-policy', () => ({
   describeCamOperationKind: vi.fn().mockReturnValue({ runnable: true })
 }))
 
-vi.mock('./cam-runner', () => ({
-  runCamPipeline: vi.fn()
+vi.mock('./cam-domain', () => ({
+  runCamDomain: vi.fn()
 }))
 
 vi.mock('./posts-manager', () => ({
@@ -82,9 +92,13 @@ vi.mock('./machine-tool-library', () => ({
   saveMachineToolLibrary: vi.fn()
 }))
 
-vi.mock('./paths', () => ({
-  getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
-}))
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
+  }
+})
 
 vi.mock('./slicer', () => ({
   sliceWithCuraEngine: vi.fn(),
@@ -158,6 +172,11 @@ vi.mock('../shared/probing-cycles', () => ({
   generateProbeCycle: vi.fn().mockReturnValue('; probe cycle\nG38.2 Z-50 F100\nG10 L2 P1 Z0\nG43')
 }))
 
+vi.mock('./binary-stl-placement', () => ({
+  transformBinaryStlWithPlacement: vi.fn().mockReturnValue({ ok: true, buffer: Buffer.alloc(0) })
+}))
+
+import { writeFile } from 'node:fs/promises'
 import { registerFabricationIpc } from './ipc-fabrication'
 import type { MainIpcWindowContext } from './ipc-context'
 
@@ -200,6 +219,7 @@ describe('ipc-fabrication', () => {
       'machineTools:migrateFromProject',
       'manufacture:load',
       'manufacture:save',
+      'fabrication:camSourceStaleVersusOutput',
       'posts:list',
       'posts:save',
       'posts:read',
@@ -255,6 +275,16 @@ describe('ipc-fabrication', () => {
     const handler = handlers.get('cam:cancel')!
     const result = await handler()
     expect(result).toEqual({ cancelled: false })
+  })
+
+  it('cam:run rejects invalid payloads before running CAM', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('cam:run')!
+    const result = await handler({}, { machineId: 'missing-required-fields' })
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'invalid_cam_payload'
+    })
   })
 
   it('posts:list calls listAllPosts', async () => {
@@ -371,5 +401,72 @@ describe('ipc-fabrication', () => {
       expect(typeof result.gcode).toBe('string')
       expect(result.gcode.length).toBeGreaterThan(0)
     }
+  })
+
+  it('fabrication:camSourceStaleVersusOutput flags meshes newer than cam.nc', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('fabrication:camSourceStaleVersusOutput')!
+    const root = 'C:/mock/project'
+    const result = await handler({}, root, ['assets/part-new.stl', 'assets/part-old.stl'], 'output/cam.nc')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.noGcode).toBe(false)
+      expect(result.staleRelativePaths).toEqual(['assets/part-new.stl'])
+    }
+  })
+
+  describe('stl:transformForCam output path', () => {
+    // Pins the suffix-dedup regex in ipc-fabrication.ts's stl:transformForCam
+    // handler. The original bug appended `.cam-aligned` without checking for
+    // existing suffixes, producing `part.cam-aligned.cam-aligned.cam-aligned.stl`
+    // on repeated runs. The fix strips existing suffixes before re-appending.
+    const dummyTransform = {
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 }
+    }
+
+    function capturedOutPath(): string {
+      const calls = vi.mocked(writeFile).mock.calls
+      const last = calls[calls.length - 1]
+      return String(last[0]).replace(/\\/g, '/')
+    }
+
+    it('stl:transformForCam appends .cam-aligned once for a fresh .stl', async () => {
+      vi.mocked(writeFile).mockClear()
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('stl:transformForCam')!
+      await handler({}, { stlPath: '/p/part.stl', transform: dummyTransform })
+
+      expect(capturedOutPath()).toMatch(/\/p\/part\.cam-aligned\.stl$/)
+    })
+
+    it('stl:transformForCam collapses a single .cam-aligned suffix on re-run', async () => {
+      vi.mocked(writeFile).mockClear()
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('stl:transformForCam')!
+      await handler({}, { stlPath: '/p/part.cam-aligned.stl', transform: dummyTransform })
+
+      const out = capturedOutPath()
+      expect(out).toMatch(/\/p\/part\.cam-aligned\.stl$/)
+      expect(out).not.toMatch(/\.cam-aligned\.cam-aligned/)
+    })
+
+    it('stl:transformForCam collapses multiple .cam-aligned suffixes (regression)', async () => {
+      vi.mocked(writeFile).mockClear()
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('stl:transformForCam')!
+      await handler(
+        {},
+        {
+          stlPath: '/p/part.cam-aligned.cam-aligned.cam-aligned.stl',
+          transform: dummyTransform
+        }
+      )
+
+      const out = capturedOutPath()
+      expect(out).toMatch(/\/p\/part\.cam-aligned\.stl$/)
+      expect(out).not.toMatch(/\.cam-aligned\.cam-aligned/)
+    })
   })
 })

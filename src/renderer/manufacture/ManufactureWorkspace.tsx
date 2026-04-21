@@ -122,6 +122,17 @@ export function ManufactureWorkspace({
   const [camRunning, setCamRunning] = useState(false)
   const fab = window.fab
 
+  const meshRelPathsForStaleCheck = useMemo(() => {
+    const u = new Set<string>()
+    for (const op of mfg.operations) {
+      const sm = op.sourceMesh?.trim().replace(/^[\\/]+/, '')
+      if (sm) u.add(sm)
+    }
+    return [...u].sort()
+  }, [mfg.operations])
+
+  const [camStaleMeshRelativePaths, setCamStaleMeshRelativePaths] = useState<string[]>([])
+
   // ── Effects ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -167,6 +178,26 @@ export function ManufactureWorkspace({
   useEffect(() => {
     writePersistedManufactureActionableOnly(actionableOnly)
   }, [actionableOnly])
+
+  useEffect(() => {
+    if (!projectDir?.trim() || meshRelPathsForStaleCheck.length === 0) {
+      setCamStaleMeshRelativePaths([])
+      return
+    }
+    let cancelled = false
+    void fab
+      .camSourceStaleVersusOutput(projectDir, meshRelPathsForStaleCheck)
+      .then((r) => {
+        if (cancelled || r.ok !== true) return
+        setCamStaleMeshRelativePaths(r.staleRelativePaths)
+      })
+      .catch(() => {
+        if (!cancelled) setCamStaleMeshRelativePaths([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectDir, meshRelPathsForStaleCheck.join('\0'), camOut])
 
   // ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -751,7 +782,8 @@ export function ManufactureWorkspace({
     onGoSettings,
     onGoProject,
     onStatus,
-    onExportSetupSheet: exportManufactureSetupSheet
+    onExportSetupSheet: exportManufactureSetupSheet,
+    camStaleMeshRelativePaths
   }
 
   // ── Plan body (the main "Plan" sub-tab) ───────────────────────────────────────
@@ -809,6 +841,7 @@ export function ManufactureWorkspace({
             previewMeshRelativePath={mfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
             previewOperation={mfg.operations[selectedOpIndex] ?? null}
             camOut={camOut}
+            camStaleMeshRelativePaths={camStaleMeshRelativePaths}
           />
         </div>
         <aside
@@ -827,8 +860,11 @@ export function ManufactureWorkspace({
         />
       ) : null}
       <p className="msg">
-        <strong>Plan</strong> sidebar: machine, stock, operations. Use <strong>Slice</strong> / <strong>CAM</strong> tabs for
-        Cura and toolpath runs; meshes live under <code>assets/</code>.
+        <strong>Plan</strong> sidebar: machine, stock, operations. Use <strong>Slice</strong> / <strong>CAM</strong> tabs for Cura and toolpath runs; meshes live under{' '}
+        <code>assets/</code>. The <strong>Simulate</strong> tab shows tool motion and (when enabled) a simplified stock-removal preview — not holder collision or full machine kinematics.
+      </p>
+      <p className="msg msg--muted msg--xs">
+        Quick one-off jobs without a project folder can use the <strong>Shop</strong> environment from the launch screen; this Manufacture workspace is for saved projects and design-linked setups.
       </p>
       <p className="msg manufacture-gcode-safety">
         Any generated G-code is <strong>unverified</strong> until you check posts, units, and clearances for your machine (
@@ -880,6 +916,7 @@ export function ManufactureWorkspace({
         opFilter={opFilter}
         actionableOnly={actionableOnly}
         nowTickMs={nowTickMs}
+        camStaleMeshRelativePaths={camStaleMeshRelativePaths}
         onSelectOp={setSelectedOpIndex}
         onSetOpFilter={setOpFilter}
         onSetActionableOnly={setActionableOnly}
@@ -954,6 +991,7 @@ export function ManufactureWorkspace({
                   previewMeshRelativePath={mfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
                   previewOperation={mfg.operations[selectedOpIndex] ?? null}
                   camOut={camOut}
+                  camStaleMeshRelativePaths={camStaleMeshRelativePaths}
                 />
               ) : (
                 <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>CAM</strong> tab to visualize it here.</p>

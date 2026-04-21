@@ -24,6 +24,7 @@ import type { FixtureRecord } from '../shared/fixture-schema'
 import type { ManufactureSetup } from '../shared/manufacture-schema'
 import type { SetupSequenceValidation, FlipSetupSuggestion } from '../shared/multi-setup-utils'
 import type { ProbeCycleType, ProbeBaseParams } from '../shared/probing-cycles'
+import type { CamRunPayload, CamRunResultContract } from '../shared/cam-ipc-contract'
 
 export type Api = {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -88,20 +89,7 @@ export type Api = {
   >
 
   // ── CAM ──────────────────────────────────────────────────────────────────
-  camRun: (payload: {
-    stlPath: string; outPath: string; machineId: string
-    zPassMm: number; stepoverMm: number; feedMmMin: number
-    plungeMmMin: number; safeZMm: number; pythonPath: string
-    operationKind?: string; workCoordinateIndex?: number; toolDiameterMm?: number
-    operationParams?: Record<string, unknown>
-    rotaryStockLengthMm?: number; rotaryStockDiameterMm?: number
-    rotaryChuckDepthMm?: number; rotaryClampOffsetMm?: number
-    stockBoxZMm?: number; stockBoxXMm?: number; stockBoxYMm?: number
-    priorPostedGcode?: string; useMeshMachinableXClamp?: boolean
-  }) => Promise<
-    | { ok: true; gcode?: string; usedEngine: string; engine: { requestedEngine: string; usedEngine: string; fallbackApplied: boolean; fallbackReason?: string; fallbackDetail?: string }; hint?: string; warnings?: string[] }
-    | { ok: false; error: string; hint?: string }
-  >
+  camRun: (payload: CamRunPayload) => Promise<CamRunResultContract>
   /** Cancel any currently running cam:run operation. Returns `{ cancelled: true }` if a run was aborted, `{ cancelled: false }` if no run was active. */
   camCancel: () => Promise<{ cancelled: boolean }>
   /**
@@ -118,6 +106,22 @@ export type Api = {
   // ── Manufacture file ─────────────────────────────────────────────────────
   manufactureLoad: (projectDir: string) => Promise<ManufactureFile>
   manufactureSave: (projectDir: string, json: string) => Promise<void>
+  /** Mtime compare: source meshes vs posted `output/cam.nc` (or custom relative path). */
+  camSourceStaleVersusOutput: (
+    projectDir: string,
+    meshRelPaths: string[],
+    gcodeRelativePath?: string
+  ) => Promise<
+    | {
+        ok: true
+        gcodeMtimeMs: number | null
+        gcodeRelativePath: string
+        meshes: { relativePath: string; mtimeMs: number | null }[]
+        staleRelativePaths: string[]
+        noGcode: boolean
+      }
+    | { ok: false; error: string }
+  >
 
   // ── Tools ────────────────────────────────────────────────────────────────
   toolsRead: (projectDir: string) => Promise<ToolLibraryFile>
@@ -290,6 +294,8 @@ const api: Api = {
   // Manufacture file
   manufactureLoad: (projectDir) => ipcRenderer.invoke('manufacture:load', projectDir),
   manufactureSave: (projectDir, json) => ipcRenderer.invoke('manufacture:save', projectDir, json),
+  camSourceStaleVersusOutput: (projectDir, meshRelPaths, gcodeRelativePath) =>
+    ipcRenderer.invoke('fabrication:camSourceStaleVersusOutput', projectDir, meshRelPaths, gcodeRelativePath),
 
   // Tools
   toolsRead: (projectDir) => ipcRenderer.invoke('tools:read', projectDir),

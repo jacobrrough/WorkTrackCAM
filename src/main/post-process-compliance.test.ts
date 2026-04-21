@@ -20,14 +20,11 @@ const sampleToolpath = ['G0 X10 Y10', 'G1 Z-2.000 F200', 'G1 X50 Y30 F800', 'G0 
 // ── Each dialect + template combo produces compliant output ────────────────
 
 describe('renderPost dialect compliance — existing templates', () => {
+  // Note: the non-GRBL 4-axis templates were removed in the April 2026 4-axis
+  // subsystem rewrite. CPS imports for those dialects are repointed at GRBL.
   const dialectTemplates: Array<{ dialect: MachineProfile['dialect']; template: string; label: string }> = [
     { dialect: 'grbl', template: 'cnc_generic_mm.hbs', label: 'GRBL + generic_mm' },
     { dialect: 'grbl_4axis', template: 'cnc_4axis_grbl.hbs', label: 'GRBL 4-axis' },
-    { dialect: 'fanuc_4axis', template: 'cnc_4axis_fanuc.hbs', label: 'Fanuc 4-axis' },
-    { dialect: 'mach3_4axis', template: 'cnc_4axis_mach3.hbs', label: 'Mach3 4-axis' },
-    { dialect: 'linuxcnc_4axis', template: 'cnc_4axis_linuxcnc.hbs', label: 'LinuxCNC 4-axis' },
-    { dialect: 'siemens_4axis', template: 'cnc_4axis_siemens.hbs', label: 'Siemens 4-axis' },
-    { dialect: 'heidenhain_4axis', template: 'cnc_4axis_heidenhain.hbs', label: 'Heidenhain 4-axis' },
     { dialect: 'grbl', template: 'carvera_3axis.hbs', label: 'Carvera 3-axis (GRBL)' },
     { dialect: 'grbl_4axis', template: 'carvera_4axis.hbs', label: 'Carvera 4-axis (GRBL)' },
     { dialect: 'fanuc', template: 'cnc_generic_mm.hbs', label: 'Fanuc + generic_mm' },
@@ -60,29 +57,30 @@ describe('renderPost dialect compliance — existing templates', () => {
 // ── Cross-dialect contamination detection ──────────────────────────────────
 
 describe('renderPost dialect compliance — cross-dialect detection', () => {
-  it('Fanuc template validated as GRBL catches G28', async () => {
-    // Use Fanuc template with GRBL dialect — should catch G28
+  // The April 2026 4-axis subsystem rewrite removed the dedicated non-GRBL
+  // post templates that previously emitted `G91 G28 Z0`, so these tests now
+  // inject the offending word directly into the toolpath instead of relying
+  // on a template that contained it.
+  const toolpathWithG28 = [...sampleToolpath, 'G91 G28 Z0']
+
+  it('toolpath with G28 validated as GRBL produces GRBL_NO_G28 warning', async () => {
     const machine: MachineProfile = {
       ...baseMachine,
       dialect: 'grbl',
-      postTemplate: 'cnc_4axis_fanuc.hbs',
-      axisCount: 4,
-      aAxisRangeDeg: 360
+      postTemplate: 'cnc_generic_mm.hbs'
     }
-    const { warnings } = await renderPost(resourcesRoot, machine, sampleToolpath)
+    const { warnings } = await renderPost(resourcesRoot, machine, toolpathWithG28)
     const complianceWarnings = warnings.filter(w => /^\[GRBL_NO_G28\]/.test(w))
     expect(complianceWarnings.length).toBeGreaterThan(0)
   })
 
-  it('Fanuc template validated as Siemens catches G28', async () => {
+  it('toolpath with G28 validated as Siemens produces SIEMENS_NO_G28 warning', async () => {
     const machine: MachineProfile = {
       ...baseMachine,
       dialect: 'siemens',
-      postTemplate: 'cnc_4axis_fanuc.hbs',
-      axisCount: 4,
-      aAxisRangeDeg: 360
+      postTemplate: 'cnc_generic_mm.hbs'
     }
-    const { warnings } = await renderPost(resourcesRoot, machine, sampleToolpath)
+    const { warnings } = await renderPost(resourcesRoot, machine, toolpathWithG28)
     const complianceWarnings = warnings.filter(w => /^\[SIEMENS_NO_G28\]/.test(w))
     expect(complianceWarnings.length).toBeGreaterThan(0)
   })

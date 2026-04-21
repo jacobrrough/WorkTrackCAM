@@ -27,6 +27,7 @@ describe('describeCamOperationKind', () => {
     const r = describeCamOperationKind('cnc_parallel')
     expect(r.runnable).toBe(true)
     expect(r.hint).toMatch(/parallel finish|mesh bounds/i)
+    expect(r.hint).toMatch(/mtime|cam\.nc/i)
     expect(r.hint).toMatch(/MACHINES/i)
   })
 

@@ -12,6 +12,14 @@
 # numpy: vectorized STL loading, drop-cutter heightfields, surface analysis
 numpy>=1.21,<3
 
+# trimesh: OBJ/PLY/GLB/3MF/… → STL (engines/mesh/mesh_to_stl.py)
+trimesh>=4,<5
+
+# ── Optional (STEP/IGES — engines/occt/step_to_stl.py) ─────────────────
+# cadquery: preferred STEP/IGES import + tessellation
+# OCP: direct OpenCascade Python bindings (fallback when CadQuery absent)
+# Install one or both, e.g.: pip install cadquery-ocp  (bundles OCP)
+
 # ── Optional (enhanced developer experience) ──────────────────────────
 # structlog: structured JSON log output; engine falls back to stdlib logging
 structlog>=23.1,<26

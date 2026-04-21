@@ -1,10 +1,14 @@
 """Toolpath generation strategies.
 
-v4.0 — Full multi-axis strategy support with 14 strategies:
+v4.1 — 4-axis subsystem rewrite (April 2026): all 4-axis toolpath
+generation now lives in the TypeScript engine at `src/main/cam-axis4/`.
+The Python `axis4_continuous` strategy was removed; the dispatch entry
+below stays referenceable via the Strategy enum but no longer maps to a
+runtime strategy here.
+
   3-axis:  adaptive_clear, waterline, raster, pencil, rest,
            spiral_finish, morphing_finish, trochoidal_hsm,
-           steep_shallow, scallop
-  4-axis:  axis4_continuous, axis4_indexed, axis4_wrapping
+           steep_shallow, scallop, drill
   5-axis:  5axis_contour, 5axis_swarf, 5axis_flowline
 """
 from __future__ import annotations
@@ -57,11 +61,10 @@ def run_strategy(job: ToolpathJob, mesh) -> ToolpathResult:
     except ImportError:
         pass
 
-    try:
-        from .axis4_continuous import generate_axis4_continuous
-        dispatch[Strategy.AXIS4_CONTINUOUS] = generate_axis4_continuous
-    except ImportError:
-        pass
+    # Note: AXIS4_CONTINUOUS was removed in the April 2026 4-axis subsystem
+    # rewrite. All 4-axis generation lives in TypeScript at src/main/cam-axis4/.
+    # The enum value remains for backwards compatibility with serialized jobs
+    # but no longer dispatches to a Python strategy.
 
     func = dispatch.get(job.strategy)
     if func is None:

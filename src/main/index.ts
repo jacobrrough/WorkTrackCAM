@@ -5,7 +5,11 @@ import { registerCoreIpc } from './ipc-core'
 import { registerFabricationIpc } from './ipc-fabrication'
 import { registerModelingIpc } from './ipc-modeling'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
-import { checkPythonDeps, buildDepCheckWarning, type PythonDepCheckOutcome } from './python-dep-check'
+import {
+  checkPythonDeps,
+  buildPythonDepsUserMessage,
+  type PythonDepCheckOutcome
+} from './python-dep-check'
 import { initAutoUpdater } from './auto-updater'
 import { loadSettings } from './settings-store'
 
@@ -100,7 +104,7 @@ app.whenReady().then(async () => {
       const pythonPath = settings.pythonPath?.trim() || 'python'
       cachedDepCheck = await checkPythonDeps(pythonPath)
     }
-    return buildDepCheckWarning(cachedDepCheck)
+    return buildPythonDepsUserMessage(cachedDepCheck)
   })
 
   // ── Auto-updater (non-blocking, safe in dev) ─────────────────────────
@@ -114,7 +118,7 @@ app.whenReady().then(async () => {
       const settings = await loadSettings()
       const pythonPath = settings.pythonPath?.trim() || 'python'
       cachedDepCheck = await checkPythonDeps(pythonPath)
-      const warning = buildDepCheckWarning(cachedDepCheck)
+      const warning = buildPythonDepsUserMessage(cachedDepCheck)
       if (warning) {
         console.warn('[WorkTrackCAM] Python dependency warning:', warning)
       }

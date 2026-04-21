@@ -23,9 +23,13 @@ vi.mock('node:fs', () => ({
   existsSync: mockExistsSync
 }))
 
-vi.mock('./paths', () => ({
-  getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
-}))
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
+  }
+})
 
 // Provide a working materialLibrarySchema mock
 vi.mock('../shared/material-schema', () => {

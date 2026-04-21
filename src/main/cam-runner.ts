@@ -14,7 +14,12 @@ import {
   generatePocket2dLines,
   generateParallelFinishLines
 } from './cam-local'
-import { adjustFeedForEngagement, computeEngagementAngleDeg, resolvePencilStepoverMm } from '../shared/cam-cut-params'
+import {
+  adjustFeedForEngagement,
+  computeEngagementAngleDeg,
+  resolveAdaptiveCutTuning,
+  resolvePencilStepoverMm
+} from '../shared/cam-cut-params'
 import { parse4AxisParams } from '../shared/cam-4axis-params'
 import {
   rotaryMachinableXSpanMm,
@@ -26,9 +31,8 @@ import {
   formatMachineEnvelopeHintForPostedGcode,
   formatRotaryRadialHintForPostedGcode
 } from '../shared/cam-machine-envelope'
-import { check4AxisAngularVelocity, check4AxisTravelLimits, formatAngularVelocityHint, formatTravelLimitHint } from '../shared/cam-4axis-feed-check'
 import { resolve3dFinishStepoverMm } from '../shared/cam-scallop-stepover'
-import { getEnginesRoot } from './paths'
+import { getEnginesBundleDiagnostics, getEnginesRoot } from './paths'
 import { applyCamToolpathGuardrails, clampFeedAndPlungeToMachineMax, formatRapidBelowStockHintForPostedGcode, warnBallEndMillZPass, warnDocExceedsFluteLength } from './cam-toolpath-guardrails'
 import { renderPost, type SubroutineDialect, type LineNumberingConfig } from './post-process'
 import {
@@ -36,78 +40,20 @@ import {
   collectBinaryStlTriangles,
   isBinaryStlLayout,
   isLikelyAsciiStl,
-  parseBinaryStl
+  parseBinaryStl,
+  type StlBounds
 } from './stl'
 import { dispatch2dStrategy } from './cam-runner-2d'
+import { runAxis4, type Axis4JobConfig, type Placement } from './cam-axis4'
 import {
-  generateCylindricalMeshRasterLines,
-  generateContourWrappingLines,
-  generateIndexedPassLines,
-  generatePatternParallelLines,
-  surfaceStepoverDegFromMm
-} from './cam-axis4-cylindrical-raster'
+  extractPostProcessingOpts as extractPostProcessingOptsImpl,
+  manufactureKindUses4AxisEngine as manufactureKindUses4AxisEngineImpl
+} from './cam-axis4/runner-shims'
 
-/**
- * Extract post-processing options from the operation params record.
- * Returns the subset of `renderPost` opts that control arc fitting,
- * cutter compensation, subroutines, line numbering, and inverse-time feed.
- * All fields are optional — omitted when the user hasn't enabled them.
- */
-export function extractPostProcessingOpts(params: Record<string, unknown> | undefined): {
-  enableArcFitting?: boolean
-  arcTolerance?: number
-  cutterCompensation?: 'none' | 'left' | 'right'
-  cutterCompDRegister?: number
-  enableSubroutines?: boolean
-  subroutineDialect?: SubroutineDialect
-  lineNumbering?: LineNumberingConfig
-  inverseTimeFeed?: boolean
-} {
-  if (!params) return {}
-  const opts: ReturnType<typeof extractPostProcessingOpts> = {}
-
-  // Arc fitting
-  if (params['enableArcFitting'] === true) {
-    opts.enableArcFitting = true
-    if (typeof params['arcTolerance'] === 'number' && params['arcTolerance'] > 0) {
-      opts.arcTolerance = params['arcTolerance']
-    }
-  }
-
-  // Cutter compensation
-  const cc = params['cutterCompensation']
-  if (cc === 'left' || cc === 'right') {
-    opts.cutterCompensation = cc
-    if (typeof params['cutterCompDRegister'] === 'number' && params['cutterCompDRegister'] >= 1) {
-      opts.cutterCompDRegister = params['cutterCompDRegister']
-    }
-  }
-
-  // Subroutines
-  if (params['enableSubroutines'] === true) {
-    opts.enableSubroutines = true
-    const dialect = params['subroutineDialect']
-    if (dialect === 'fanuc' || dialect === 'siemens' || dialect === 'mach3') {
-      opts.subroutineDialect = dialect
-    } else {
-      opts.subroutineDialect = 'fanuc'
-    }
-  }
-
-  // Line numbering
-  if (params['lineNumberingEnabled'] === true) {
-    const start = typeof params['lineNumberingStart'] === 'number' ? params['lineNumberingStart'] : 10
-    const increment = typeof params['lineNumberingIncrement'] === 'number' ? params['lineNumberingIncrement'] : 10
-    opts.lineNumbering = { enabled: true, start, increment }
-  }
-
-  // Inverse-time feed
-  if (params['inverseTimeFeed'] === true) {
-    opts.inverseTimeFeed = true
-  }
-
-  return opts
-}
+// Re-export the shim helpers under their historical names so existing call
+// sites in this file (and external imports) keep working.
+export const extractPostProcessingOpts = extractPostProcessingOptsImpl
+export const manufactureKindUses4AxisEngine = manufactureKindUses4AxisEngineImpl
 
 function createCamDebugPhaseLogger(): (label: string) => void {
   const on = process.env.DEBUG_CAM === '1' || process.env.DEBUG_CAM === 'true'
@@ -180,6 +126,12 @@ export type CamJobConfig = {
    * forwards these to the renderer via `webContents.send('cam:progress', event)`.
    */
   onProgress?: (event: CamProgressEvent) => void
+  /**
+   * Optional Three.js viewer-space gizmo placement. When provided, the
+   * 4-axis engine applies this transform to the raw STL itself instead of
+   * relying on a renderer-baked `.cam-aligned.stl`. Other strategies ignore it.
+   */
+  placement?: Placement
 }
 
 export type CamRunResult =
@@ -758,6 +710,11 @@ async function tryAdvancedToolpath(
   const stockZMin = job.stockBoxZMm != null ? -(job.stockBoxZMm) : bounds.min[2]
   const stockZMax = 0 // WCS Z0 = stock top convention
   const advParams = job.operationParams ?? {}
+  const adaptiveCutTuning = resolveAdaptiveCutTuning({
+    operationKind: job.operationKind,
+    operationParams: advParams,
+    safeZMm: job.safeZMm
+  })
 
   await writeFile(
     cfgPath,
@@ -784,6 +741,9 @@ async function tryAdvancedToolpath(
       zTravelMm: job.machine.workAreaMm?.z ?? 100,
       maxFeedMmMin: job.machine.maxFeedMmMin ?? 5000,
       maxSpindleRpm: 24000,
+      maxEngagementDeg: adaptiveCutTuning.maxEngagementDeg,
+      retractZMm: adaptiveCutTuning.retractZMm,
+      stockAllowanceMm: adaptiveCutTuning.stockAllowanceMm,
       // Raster-specific — scanAngleDeg takes precedence over rasterAngleDeg
       rasterAngleDeg: numParam(advParams, 'rasterAngleDeg', 0),
       ...(advParams?.['scanAngleDeg'] != null ? { scanAngleDeg: numParam(advParams, 'scanAngleDeg', 0) } : {})
@@ -1069,6 +1029,77 @@ function toolpathHasXYCutMoves(lines: string[]): boolean {
   return lines.some((l) => /^G1 X-?[\d.]+ Y-?[\d.]+ Z-?[\d.]+ F\d/.test(l))
 }
 
+/**
+ * Built-in fallback toolpath for 3-axis CAM when the Python advanced engine,
+ * the Python toolpath_engine, and OpenCAMLib are all unavailable.
+ *
+ * The chain is:
+ *   1. Mesh height-field raster — ray-samples STL triangles at each (x,y) and
+ *      emits G1 moves with varying Z that follow the mesh upper envelope.
+ *      This is what "toolpath adheres to the model" actually requires.
+ *   2. If the mesh raster produces no XY cut moves (empty mesh, degenerate
+ *      triangles, off-stock), fall back to an orthogonal bounding-box zigzag
+ *      at fixed Z. This only runs when the mesh is unusable; it preserves the
+ *      legacy "something-is-better-than-nothing" behaviour.
+ *
+ * This helper is shared by the `cnc_parallel` default path and the OCL-failure
+ * fallback for `cnc_waterline` / `cnc_adaptive` / `cnc_pencil`. Previously both
+ * call sites used `generateParallelFinishLines` — a single-Z bounds-only raster
+ * — which produced flat rectangular sweeps that did not follow model geometry.
+ */
+function buildBuiltinFallbackLines(
+  job: CamJobConfig,
+  meshBuf: Buffer,
+  bounds: StlBounds,
+  stepoverMm: number
+): {
+  lines: string[]
+  usedMeshHeight: boolean
+  triangleCount: number
+  truncated: boolean
+} {
+  const mesh = collectBinaryStlTriangles(meshBuf)
+  const sampleStepMm = Math.max(0.2, Math.min(stepoverMm, 2))
+  const feedMmMin = chipThinningAdjustedFeedMmMin(job.feedMmMin, stepoverMm, job.toolDiameterMm)
+
+  let lines = generateMeshHeightRasterLines({
+    triangles: mesh.triangles,
+    minX: bounds.min[0],
+    maxX: bounds.max[0],
+    minY: bounds.min[1],
+    maxY: bounds.max[1],
+    stepoverMm,
+    sampleStepMm,
+    feedMmMin,
+    plungeMmMin: job.plungeMmMin,
+    safeZMm: job.safeZMm
+  })
+
+  if (toolpathHasXYCutMoves(lines)) {
+    return {
+      lines,
+      usedMeshHeight: true,
+      triangleCount: mesh.triangles.length,
+      truncated: mesh.truncated
+    }
+  }
+
+  lines = generateOrthoBoundsRasterLines({
+    bounds,
+    zPassMm: job.zPassMm,
+    stepoverMm,
+    feedMmMin,
+    plungeMmMin: job.plungeMmMin,
+    safeZMm: job.safeZMm
+  })
+  return {
+    lines,
+    usedMeshHeight: false,
+    triangleCount: mesh.triangles.length,
+    truncated: mesh.truncated
+  }
+}
+
 function point2d(v: unknown): [number, number] | null {
   if (!Array.isArray(v) || v.length < 2) return null
   const x = v[0]
@@ -1101,61 +1132,10 @@ export function normalizeAxis4RadialZPassMm(zPassMm: number): number {
   return -0.5
 }
 
-function iterAxis4ZDepthsMm(zPassMm: number, zStepMm: number): number[] {
-  const zp = zPassMm
-  const zs = Math.max(0, zStepMm)
-  if (zp >= -1e-9) return [zp]
-  if (zs <= 1e-6) return [zp]
-  const out: number[] = []
-  let d = -zs
-  while (d > zp + 1e-6) {
-    out.push(d)
-    d -= zs
-  }
-  out.push(zp)
-  return out
-}
-
-function computeAxis4ZDepthsMm(
-  zPassMm: number,
-  zStepMm: number,
-  cylinderRadiusMm: number,
-  useMeshRadial: boolean,
-  meshRadialMaxMm?: number
-): number[] {
-  const zp = zPassMm
-  const r = Math.max(1e-6, cylinderRadiusMm)
-  const mr = meshRadialMaxMm ?? 0
-  if (!useMeshRadial || !(mr > 0) || mr >= r - 1e-6) {
-    return iterAxis4ZDepthsMm(zp, zStepMm)
-  }
-  const zShallow = mr - r
-  if (zShallow <= zp + 1e-6) return iterAxis4ZDepthsMm(zp, zStepMm)
-  const zs = Math.max(0, zStepMm)
-  if (zs <= 1e-6) return [zp]
-  const out: number[] = []
-  let d = zShallow
-  while (d > zp + 1e-6) {
-    out.push(d)
-    d -= zs
-  }
-  out.push(zp)
-  return out
-}
-
-/**
- * Whether the operation kind routes to the 4-axis TS engine.
- * These ops require `axisCount >= 4` on the machine profile.
- */
-export function manufactureKindUses4AxisEngine(kind: string | undefined): boolean {
-  return kind === 'cnc_4axis_roughing' || kind === 'cnc_4axis_finishing' || kind === 'cnc_4axis_contour' || kind === 'cnc_4axis_indexed' || kind === 'cnc_4axis_continuous'
-}
-
 /**
  * CAM pipeline: for `cnc_waterline` / `cnc_adaptive` / `cnc_raster` / `cnc_pencil`, try OpenCAMLib → toolpath lines → post.
  * `cnc_pencil` uses the **raster** OCL strategy with a tighter stepover (`resolvePencilStepoverMm`).
- * `cnc_4axis_roughing` / `cnc_4axis_finishing` use TS cylindrical heightmap engine (pattern-parallel TS fallback).
- * `cnc_4axis_contour` / `cnc_4axis_indexed` use dedicated TS contour-wrapping / indexed-pass generators.
+ * 4-axis operations are dispatched to `runAxis4` from `./cam-axis4`.
  * Fallbacks: parallel finish (waterline/adaptive) or mesh / ortho raster (raster + pencil); other kinds use parallel finish.
  */
 export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunResult> {
@@ -1185,366 +1165,47 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
     : ''
 
   // ── 4-axis operations ──────────────────────────────────────────────────────
+  // Dispatched to the modular `cam-axis4` subsystem (frame → validation →
+  // strategy → post). The new engine is the single source of truth for the
+  // mesh→machine-frame transform; the renderer's `mapGcodeToThreeEndpoints`
+  // already expects G-code in this frame so no renderer changes are needed.
   if (manufactureKindUses4AxisEngine(job.operationKind)) {
-    const p = job.operationParams ?? {}
-    const ax4 = parse4AxisParams(p)
-    const axis4Strategy = job.operationKind === 'cnc_4axis_indexed' ? '4axis_indexed'
-      : job.operationKind === 'cnc_4axis_contour' ? '4axis_wrapping'
-      : '4axis_wrapping' // roughing & finishing both use wrapping strategy
-    const isFinishing = job.operationKind === 'cnc_4axis_finishing'
-    const isContour = job.operationKind === 'cnc_4axis_contour'
-
-    let contourClosureHint = ''
-    if (isContour) {
-      const cpts = ax4.contourPoints ?? []
-      if (cpts.length < 2) {
-        return {
-          ok: false,
-          error: '4-axis contour wrapping requires contourPoints (at least two [x, y] points in mm).',
-          hint: 'Add contourPoints to the operation or apply a sketch contour from the Manufacture plan. See docs/CAM_4TH_AXIS_REFERENCE.md.'
-        }
-      }
-      if (cpts.length >= 3) {
-        const [fx, fy] = cpts[0]!
-        const [lx, ly] = cpts[cpts.length - 1]!
-        const gap = Math.hypot(lx - fx, ly - fy)
-        if (gap > 0.5) {
-          contourClosureHint = ` Contour wrap: polyline is not closed (endpoints ${gap.toFixed(2)} mm apart) — close the loop in WCS for predictable unwrap.`
-        }
-      }
-    }
-
-    const axisCount = job.machine.axisCount ?? 3
-    if (axisCount < 4) {
-      return {
-        ok: false,
-        error: `Operation '${job.operationKind}' requires a machine with axisCount ≥ 4.`,
-        hint: `The selected machine profile '${job.machine.name}' is configured as a ${axisCount}-axis machine. Switch to the 'Makera Carvera (4th Axis)' profile or another profile with axisCount: 4.`
-      }
-    }
-
-    const stockL = job.rotaryStockLengthMm
-    const stockD = job.rotaryStockDiameterMm
-
-    let cylinderLengthMm = 100
-    if (stockL != null && Number.isFinite(stockL) && stockL > 0) cylinderLengthMm = stockL
-    else if (ax4.cylinderLengthMm != null) cylinderLengthMm = ax4.cylinderLengthMm
-
-    let cylD = 50
-    if (stockD != null && Number.isFinite(stockD) && stockD > 0) cylD = stockD
-    else if (ax4.cylinderDiameterMm != null) cylD = ax4.cylinderDiameterMm
-    const stepDegFromMm = (job.stepoverMm / (Math.PI * Math.max(cylD, 1e-6))) * 360
-    // `surfaceStepoverMm` converts a desired surface arc-length to degrees for the stock radius.
-    // Priority: explicit stepoverDeg > surfaceStepoverMm > derived from job.stepoverMm.
-    const stepDegFromSurface =
-      ax4.surfaceStepoverMm != null
-        ? surfaceStepoverDegFromMm(cylD / 2, ax4.surfaceStepoverMm)
-        : undefined
-    const stepoverDeg =
-      ax4.stepoverDeg != null
-        ? ax4.stepoverDeg
-        : stepDegFromSurface != null
-          ? stepDegFromSurface
-          : Math.max(1, Math.min(90, stepDegFromMm))
-
-    let zStepMm = ax4.zStepMm ?? 0
-    const normZPass = normalizeAxis4RadialZPassMm(job.zPassMm)
-    if (!(zStepMm > 0) && Math.abs(normZPass) > 0.3) {
-      zStepMm = Math.min(2, Math.max(0.25, Math.abs(normZPass) / 4))
-    }
-
-    const chuckDepthMm =
-      job.rotaryChuckDepthMm ?? (ax4.chuckDepthMm ?? 0)
-    const clampOffsetMm =
-      job.rotaryClampOffsetMm ?? (ax4.clampOffsetMm ?? 0)
-
-    const wrapAxRaw = ax4.wrapAxis?.toLowerCase() ?? ''
-    const machA = String(job.machine.aAxisOrientation ?? 'x').toLowerCase()
-    const aAxisOrientation = wrapAxRaw === 'x' || wrapAxRaw === 'y' ? wrapAxRaw : machA === 'y' ? 'y' : 'x'
-
-    const useMeshXClamp = job.useMeshMachinableXClamp !== false && ax4.useMeshMachinableXClamp !== false
-
-    let meshMachinableXMinMm: number | undefined
-    let meshMachinableXMaxMm: number | undefined
-    let meshRadialMaxMm: number | undefined
-    // The .cam-aligned.stl uses center_origin + user transform, so the mesh center
-    // in X depends on the user's position.  Map it to the stock-centered GRBL frame
-    // where X=0 is the chuck face: shift = stockCenter - meshCenter.
-    let viewerToMachineXShift = cylinderLengthMm / 2 // fallback if mesh can't be read
-    let _diagRawMeshBounds: { min: number[]; max: number[] } | null = null
-    try {
-      const stlBuf = await readFile(job.stlPath)
-      if (isBinaryStlLayout(stlBuf)) {
-        const mb = parseBinaryStl(stlBuf)
-        _diagRawMeshBounds = { min: [...mb.min], max: [...mb.max] }
-        // Compute shift to center mesh in stock: stockCenter - meshCenterX
-        const rawMeshCenterX = (mb.min[0] + mb.max[0]) / 2
-        viewerToMachineXShift = cylinderLengthMm / 2 - rawMeshCenterX
-        meshMachinableXMinMm = mb.min[0] + viewerToMachineXShift
-        meshMachinableXMaxMm = mb.max[0] + viewerToMachineXShift
-        // Auto-center Y-Z bounding box to rotation axis (matching the TS engine's
-        // centerTrianglesOnRotationAxis) before computing radial extent.
-        // Without this, off-center models report inflated radial extent.
-        const yCen = (mb.min[1] + mb.max[1]) / 2
-        const zCen = (mb.min[2] + mb.max[2]) / 2
-        const yzCorners: [number, number][] = [
-          [mb.min[1] - yCen, mb.min[2] - zCen],
-          [mb.min[1] - yCen, mb.max[2] - zCen],
-          [mb.max[1] - yCen, mb.min[2] - zCen],
-          [mb.max[1] - yCen, mb.max[2] - zCen]
-        ]
-        meshRadialMaxMm = Math.max(...yzCorners.map(([y, z]) => Math.hypot(y, z)))
-      }
-    } catch {
-      /* optional — pattern-only 4-axis if STL missing */
-    }
-
-    const cylR = cylD / 2
-
-    const toolD = job.toolDiameterMm ?? 3.175
-    let axialBandCount = 1
-    if (ax4.axialBandCount != null && ax4.axialBandCount >= 1) {
-      axialBandCount = Math.min(24, Math.max(1, Math.floor(ax4.axialBandCount)))
-    } else if (
-      useMeshXClamp &&
-      meshMachinableXMinMm != null &&
-      meshMachinableXMaxMm != null &&
-      meshMachinableXMaxMm > meshMachinableXMinMm + 1e-3
-    ) {
-      const span = meshMachinableXMaxMm - meshMachinableXMinMm
-      if (span > toolD * 2.5) {
-        axialBandCount = Math.min(10, Math.max(2, Math.round(span / Math.max(toolD * 4, 10))))
-      }
-    }
-
-    const stockLenForMach =
-      stockL != null && Number.isFinite(stockL) && stockL > 0 ? stockL : cylinderLengthMm
-    const spanMach = rotaryMachinableXSpanMm(stockLenForMach, chuckDepthMm, clampOffsetMm)
-    let mach_x_s = spanMach.machXStartMm
-    let mach_x_e = Math.min(cylinderLengthMm, spanMach.machXEndMm)
-    if (
-      useMeshXClamp &&
-      meshMachinableXMinMm != null &&
-      meshMachinableXMaxMm != null &&
-      meshMachinableXMaxMm > meshMachinableXMinMm + 1e-3
-    ) {
-      mach_x_s = Math.max(mach_x_s, meshMachinableXMinMm)
-      mach_x_e = Math.min(mach_x_e, meshMachinableXMaxMm)
-    }
-
-    let alignHint = ''
-    if (
-      meshMachinableXMinMm != null &&
-      meshMachinableXMaxMm != null &&
-      meshMachinableXMaxMm > meshMachinableXMinMm
-    ) {
-      const h = rotaryMeshStockAlignmentHint({
-        stockLengthMm: stockLenForMach,
-        meshMinX: meshMachinableXMinMm,
-        meshMaxX: meshMachinableXMaxMm
-      })
-      if (h) alignHint = ` ${h}`
-    }
-
-    const normAxis4ZPass = normalizeAxis4RadialZPassMm(job.zPassMm)
-    const zDepths = computeAxis4ZDepthsMm(
-      normAxis4ZPass,
-      zStepMm,
-      cylR,
-      ax4.useMeshRadialZBands === true &&
-        meshRadialMaxMm != null &&
-        Number.isFinite(meshRadialMaxMm) &&
-        meshRadialMaxMm > 0,
-      meshRadialMaxMm
-    )
-
-    const radialExtentHint =
-      meshRadialMaxMm != null &&
-      Number.isFinite(meshRadialMaxMm) &&
-      meshRadialMaxMm > cylR + 0.5
-        ? ` Rotary: STL extends ~${meshRadialMaxMm.toFixed(1)} mm from the X axis but job cylinder radius is ${cylR.toFixed(
-            1
-          )} mm (Ø${cylD.toFixed(1)}). Toolpaths only cut inside that cylinder — increase rotary stock Ø (≥ ~${(2 * meshRadialMaxMm).toFixed(1)} mm) or rescale/reorient the STL (docs/CAM_4TH_AXIS_REFERENCE.md).`
-        : ''
-
-    // ── Mesh-aware TS heightmap engine for roughing/finishing ──
-    // Contour mode uses explicit contour points (not mesh) → handled in TS fallback.
-    // Indexed mode uses discrete angles → handled in TS fallback.
-    // Roughing/finishing: try TS mesh-aware engine first, fall back to pattern parallel.
-
-    let axis4Lines: string[] | null = null
-    if (!isContour && job.operationKind !== 'cnc_4axis_indexed' && mach_x_e > mach_x_s + 0.05) {
-      try {
-        const stlBuf = await readFile(job.stlPath)
-        const { triangles, truncated } = isBinaryStlLayout(stlBuf)
-          ? collectBinaryStlTriangles(stlBuf, 500_000)
-          : isLikelyAsciiStl(stlBuf)
-            ? collectAsciiStlTriangles(stlBuf, 500_000)
-            : collectBinaryStlTriangles(stlBuf, 500_000)
-        // Shift triangle X from viewer-centered frame to machine frame
-        // (same offset applied to mesh bounds above).
-        for (const tri of triangles) {
-          for (const v of tri) (v as unknown as number[])[0] += viewerToMachineXShift
-        }
-        if (triangles.length > 0) {
-          const maxCells =
-            ax4.cylindricalRasterMaxCells != null
-              ? Math.min(500_000, Math.floor(ax4.cylindricalRasterMaxCells))
-              : 250_000
-          const finishAl =
-            ax4.rotaryFinishAllowanceMm != null
-              ? Math.max(0, ax4.rotaryFinishAllowanceMm)
-              : undefined
-          const overcutMm = ax4.overcutMm
-          // Finishing: finer stepover, single final depth, enable finish pass
-          // Roughing: normal stepover, all depth levels, no finish pass
-          const effectiveStepoverDeg = isFinishing
-            ? (ax4.finishStepoverDeg != null
-                ? ax4.finishStepoverDeg
-                : Math.max(0.5, stepoverDeg / 2))
-            : stepoverDeg
-          const effectiveZDepths = isFinishing
-            ? [zDepths[zDepths.length - 1]!]
-            : zDepths
-          const lines = generateCylindricalMeshRasterLines({
-            triangles,
-            cylinderDiameterMm: cylD,
-            machXStartMm: mach_x_s,
-            machXEndMm: mach_x_e,
-            stepoverDeg: effectiveStepoverDeg,
-            stepXMm: Math.max(0.25, job.stepoverMm),
-            zDepthsMm: effectiveZDepths,
-            feedMmMin: job.feedMmMin,
-            plungeMmMin: job.plungeMmMin,
-            safeZMm: job.safeZMm,
-            finishAllowanceMm: finishAl,
-            maxCells,
-            toolDiameterMm: toolD,
-            overcutMm,
-            enableFinishPass: isFinishing,
-            maxZMm: job.machine.workAreaMm?.z
-          })
-          // Validate output: must have both plunge moves (G1 ... Z) AND cutting moves (G1 ... X)
-          // Use \b word boundary to match X/Z anywhere on G1 lines (combined moves like G1 X10 A45 Z5)
-          const g1xCount = lines.filter((l) => /^G1\b/i.test(l) && /\bX[\d.-]/i.test(l)).length
-          const hasG1z = lines.some((l) => /^G1\b/i.test(l) && /\bZ[\d.-]/i.test(l))
-          if (hasG1z && g1xCount >= 4) {
-            axis4Lines = lines
-            if (truncated) {
-              alignHint +=
-                ' Cylindrical raster used a truncated STL triangle budget (500k limit) — simplify mesh or see docs/CAM_4TH_AXIS_REFERENCE.md.'
-            }
-          }
-        }
-      } catch (meshRasterErr) {
-        // Log but don't block — fall through to Python engine
-        dbg(`4axis:ts_mesh_raster_error: ${meshRasterErr instanceof Error ? meshRasterErr.message : String(meshRasterErr)}`)
-      }
-    }
-
-    // ── TS fallback: contour wrapping, indexed passes, or pattern parallel ──
-    if (axis4Lines == null) {
-      dbg('4axis:ts_fallback_start')
-      if (isContour) {
-        const cpts = ax4.contourPoints ?? []
-        if (cpts.length >= 2) {
-          axis4Lines = generateContourWrappingLines({
-            contourPoints: cpts,
-            cylinderDiameterMm: cylD,
-            machXStartMm: mach_x_s,
-            machXEndMm: mach_x_e,
-            zDepthsMm: zDepths,
-            feedMmMin: job.feedMmMin,
-            plungeMmMin: job.plungeMmMin,
-            safeZMm: job.safeZMm,
-            maxZMm: job.machine.workAreaMm?.z
-          })
-        }
-      } else if (job.operationKind === 'cnc_4axis_indexed') {
-        const angles = ax4.indexAnglesDeg ?? []
-        if (angles.length > 0) {
-          axis4Lines = generateIndexedPassLines({
-            indexAnglesDeg: angles,
-            cylinderDiameterMm: cylD,
-            machXStartMm: mach_x_s,
-            machXEndMm: mach_x_e,
-            zDepthsMm: zDepths,
-            feedMmMin: job.feedMmMin,
-            plungeMmMin: job.plungeMmMin,
-            safeZMm: job.safeZMm,
-            toolDiameterMm: toolD,
-            overcutMm: ax4.overcutMm,
-            maxZMm: job.machine.workAreaMm?.z
-          })
-        }
-      } else {
-        // Roughing/finishing without mesh data — simple pattern parallel
-        axis4Lines = generatePatternParallelLines({
-          cylinderDiameterMm: cylD,
-          machXStartMm: mach_x_s,
-          machXEndMm: mach_x_e,
-          zDepthsMm: zDepths,
-          stepoverDeg,
-          feedMmMin: job.feedMmMin,
-          plungeMmMin: job.plungeMmMin,
-          safeZMm: job.safeZMm,
-          toolDiameterMm: toolD,
-          overcutMm: ax4.overcutMm,
-          maxZMm: job.machine.workAreaMm?.z
-        })
-      }
-      dbg('4axis:ts_fallback_end')
-    }
-
-    if (axis4Lines == null || axis4Lines.length === 0) {
-      return {
-        ok: false,
-        error: '4-axis toolpath is empty.',
-        hint: 'Check cylinderDiameterMm, cylinderLengthMm, and zPassMm. For contour mode add contourPoints. For indexed mode ensure indexAnglesDeg is a non-empty array. If mesh raster found no hits, verify STL WCS vs stock or use Parallel mode.'
-      }
-    }
-
-    dbg('4axis:post_start')
-    const postResult = await renderPost(job.resourcesRoot, job.machine, axis4Lines, {
+    dbg('4axis:facade_start')
+    const ax4Job: Axis4JobConfig = {
+      stlPath: job.stlPath,
+      outputGcodePath: job.outputGcodePath,
+      machine: job.machine,
+      resourcesRoot: job.resourcesRoot,
+      zPassMm: job.zPassMm,
+      stepoverMm: job.stepoverMm,
+      feedMmMin: job.feedMmMin,
+      plungeMmMin: job.plungeMmMin,
+      safeZMm: job.safeZMm,
+      operationKind: job.operationKind!,
+      operationLabel: job.operationLabel,
+      operationParams: job.operationParams,
       workCoordinateIndex: job.workCoordinateIndex,
-      operationLabel: job.operationLabel ?? job.operationKind,
-      toolNumber: job.toolSlot,
-      ...extractPostProcessingOpts(job.operationParams)
-    })
-    const gcode = postResult.gcode
-    await writeFile(job.outputGcodePath, gcode, 'utf-8')
-    dbg('4axis:done')
-
-    // Check for excessive A-axis angular velocity in posted G-code
-    const angularVelocityWarnings = check4AxisAngularVelocity(
-      gcode.split(/\r?\n/),
-      {
-        maxRotaryRpm: job.machine.maxRotaryRpm,
-        stockDiameterMm: job.rotaryStockDiameterMm ?? cylD
-      }
-    )
-    const angularVelocityHint = formatAngularVelocityHint(angularVelocityWarnings)
-
-    // Check for A-axis positions exceeding machine travel limits
-    const travelLimitWarnings = check4AxisTravelLimits(
-      gcode.split(/\r?\n/),
-      { aAxisRangeDeg: job.machine.aAxisRangeDeg }
-    )
-    const travelLimitHint = formatTravelLimitHint(travelLimitWarnings)
-
+      toolDiameterMm: job.toolDiameterMm,
+      toolSlot: job.toolSlot,
+      rotaryStockLengthMm: job.rotaryStockLengthMm,
+      rotaryStockDiameterMm: job.rotaryStockDiameterMm,
+      rotaryChuckDepthMm: job.rotaryChuckDepthMm,
+      rotaryClampOffsetMm: job.rotaryClampOffsetMm,
+      placement: job.placement
+    }
+    const result = await runAxis4(ax4Job)
+    dbg('4axis:facade_done')
+    if (result.ok === false) return result
+    const guardSuffix = guardHint
     return {
       ok: true,
-      gcode,
+      gcode: result.gcode,
       usedEngine: 'builtin',
-      engine: { requestedEngine: 'builtin', usedEngine: 'builtin', fallbackApplied: false },
-      ...(postResult.warnings.length ? { warnings: postResult.warnings } : {}),
-      hint: `4-axis toolpath (${job.operationKind}) posted. ${UNVERIFIED} Run an air cut with spindle OFF before any real cut. Confirm cylinder diameter and A WCS home (docs/MACHINES.md).${postedGcodeEnvelopeHint(job.machine, gcode, job.rotaryStockDiameterMm ?? cylD)}${rotaryTravelHintForPostedGcode(job.operationKind, gcode)}${angularVelocityHint}${travelLimitHint}${guardHint}${alignHint}${contourClosureHint}${radialExtentHint}` +
-        (_diagRawMeshBounds
-          ? ` [DIAG] raw .cam-aligned mesh: X=[${_diagRawMeshBounds.min[0]?.toFixed(1)}..${_diagRawMeshBounds.max[0]?.toFixed(1)}] Y=[${_diagRawMeshBounds.min[1]?.toFixed(1)}..${_diagRawMeshBounds.max[1]?.toFixed(1)}] Z=[${_diagRawMeshBounds.min[2]?.toFixed(1)}..${_diagRawMeshBounds.max[2]?.toFixed(1)}]; xShift=${viewerToMachineXShift.toFixed(1)}; stock Ø${cylD.toFixed(1)}×${cylinderLengthMm.toFixed(1)}; machX=[${mach_x_s.toFixed(1)}..${mach_x_e.toFixed(1)}]`
-          : '')
+      engine: result.engine,
+      ...(result.warnings && result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+      hint: result.hint + guardSuffix
     }
   }
-
   if (
     job.operationKind === 'cnc_contour' ||
     job.operationKind === 'cnc_pocket' ||
@@ -1749,6 +1410,20 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
   }
 
   dbg('stl:read_start')
+  const engBundle = await getEnginesBundleDiagnostics()
+  if (!engBundle.camBundleComplete) {
+    const miss =
+      engBundle.missingCamSentinels.length > 0
+        ? engBundle.missingCamSentinels.join(', ')
+        : !engBundle.directoryReadable
+          ? 'engines directory unreadable or missing'
+          : 'unknown'
+    return {
+      ok: false,
+      error: 'cam_engines_bundle_missing',
+      hint: `CAM engine files are missing under ${engBundle.enginesRoot}. Reinstall the app or run from a project checkout that includes the engines/ folder (Python scripts such as cam/ocl_toolpath.py). Missing: ${miss}.`
+    }
+  }
   const stlLoad = await readStlBufferForCam(job.stlPath)
   dbg('stl:read_done')
   if (!stlLoad.ok) return stlLoad
@@ -1996,17 +1671,16 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
       }
     }
 
-    dbg('fallback:parallel_finish_start')
-    const lines = generateParallelFinishLines({
-      bounds,
-      zPassMm: job.zPassMm,
-      stepoverMm: job.stepoverMm,
-      feedMmMin: chipThinningAdjustedFeedMmMin(job.feedMmMin, job.stepoverMm, job.toolDiameterMm),
-      plungeMmMin: job.plungeMmMin,
-      safeZMm: job.safeZMm
-    })
-    dbg('fallback:parallel_finish_end')
-    const postResultParFb = await renderPost(job.resourcesRoot, job.machine, lines, {
+    dbg('fallback:mesh_height_start')
+    const genericFallback = buildBuiltinFallbackLines(job, meshBuf, bounds, job.stepoverMm)
+    dbg('fallback:mesh_height_end')
+    const fallbackDetail = genericFallback.usedMeshHeight
+      ? 'Built-in 2.5D mesh height-field raster (upper envelope; no cutter-radius compensation or undercut handling).'
+      : 'Mesh height-field produced no XY cuts; using orthogonal bounds zigzag at fixed Z.'
+    const truncatedSuffix = genericFallback.truncated
+      ? ` STL sampled with first ${genericFallback.triangleCount} triangles only (cap).`
+      : ''
+    const postResultParFb = await renderPost(job.resourcesRoot, job.machine, genericFallback.lines, {
       workCoordinateIndex: job.workCoordinateIndex,
       operationLabel: job.operationLabel ?? job.operationKind,
       toolNumber: job.toolSlot,
@@ -2014,7 +1688,7 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
     })
     const gcode = postResultParFb.gcode
     await writeFile(job.outputGcodePath, gcode, 'utf-8')
-    dbg('fallback:parallel_done')
+    dbg('fallback:mesh_height_done')
     return {
       ok: true,
       gcode,
@@ -2023,25 +1697,19 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
         requestedEngine: 'ocl',
         usedEngine: 'builtin',
         fallbackApplied: true,
-        fallbackReason
+        fallbackReason,
+        fallbackDetail: fallbackDetail + truncatedSuffix
       },
       ...(postResultParFb.warnings.length ? { warnings: postResultParFb.warnings } : {}),
-      hint: [hint, UNVERIFIED].filter(Boolean).join(' ') + postedGcodeEnvelopeHint(job.machine, gcode) + guardHint
+      hint: [hint, fallbackDetail + truncatedSuffix, UNVERIFIED].filter(Boolean).join(' ') + postedGcodeEnvelopeHint(job.machine, gcode) + guardHint
     }
   }
 
   dbg('builtin_parallel:start')
   const bounds = boundsEarly
-  const lines = generateParallelFinishLines({
-    bounds,
-    zPassMm: job.zPassMm,
-    stepoverMm: job.stepoverMm,
-    feedMmMin: chipThinningAdjustedFeedMmMin(job.feedMmMin, job.stepoverMm, job.toolDiameterMm),
-    plungeMmMin: job.plungeMmMin,
-    safeZMm: job.safeZMm
-  })
+  const fallback = buildBuiltinFallbackLines(job, meshBuf, bounds, job.stepoverMm)
   dbg('builtin_parallel:post_start')
-  const postResultBuiltin = await renderPost(job.resourcesRoot, job.machine, lines, {
+  const postResultBuiltin = await renderPost(job.resourcesRoot, job.machine, fallback.lines, {
     workCoordinateIndex: job.workCoordinateIndex,
     toolNumber: job.toolSlot,
     ...extractPostProcessingOpts(job.operationParams)
@@ -2049,6 +1717,12 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
   const gcode = postResultBuiltin.gcode
   await writeFile(job.outputGcodePath, gcode, 'utf-8')
   dbg('builtin_parallel:done')
+  const builtinBase = fallback.usedMeshHeight
+    ? 'Built-in 2.5D mesh height-field raster — toolpath follows the STL upper envelope (no cutter-radius compensation or undercut handling; install Python for adaptive/waterline/pencil strategies).'
+    : 'Mesh height-field produced no XY cuts (empty mesh, ASCII STL, or samples off-surface); using orthogonal bounds zigzag at fixed Z.'
+  const truncatedSuffix = fallback.truncated
+    ? ` STL sampled with first ${fallback.triangleCount} triangles only (cap).`
+    : ''
   return {
     ok: true,
     gcode,
@@ -2059,6 +1733,6 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
       fallbackApplied: false
     },
     ...(postResultBuiltin.warnings.length ? { warnings: postResultBuiltin.warnings } : {}),
-    hint: `Built-in parallel finish from STL bounding box (no OpenCAMLib). ${UNVERIFIED}${postedGcodeEnvelopeHint(job.machine, gcode)}${guardHint}`
+    hint: `${builtinBase}${truncatedSuffix} ${UNVERIFIED}${postedGcodeEnvelopeHint(job.machine, gcode)}${guardHint}`
   }
 }

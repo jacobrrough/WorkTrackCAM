@@ -46,6 +46,7 @@ def generate_adaptive_clear(job: ToolpathJob, mesh: Mesh) -> ToolpathResult:
     feed = job.cuts.feed_mm_min
     plunge = job.cuts.plunge_mm_min
     ramp_angle = job.cuts.ramp_angle_deg
+    stock_allowance = max(0.0, job.stock_allowance_mm)
 
     # Compute effective max stepover from engagement angle
     # Engagement angle θ: stepover = r * (1 - cos(θ/2)) approximately
@@ -98,17 +99,20 @@ def generate_adaptive_clear(job: ToolpathJob, mesh: Mesh) -> ToolpathResult:
         # If no mesh intersection at this level, use full stock area
         if not mesh_loops:
             # Machine the entire stock area at this level
+            link_retract_z = min(safe_z, max(job.stock.z_max + job.cuts.retract_z_mm, z_level + 0.5))
             chains = _clear_full_stock(
                 stock_contour, z_level, tool_r, effective_stepover,
-                safe_z, feed, plunge, ramp_angle, hf,
+                safe_z, link_retract_z, feed, plunge, ramp_angle, hf,
                 is_first_level=(z_idx == 0),
                 max_passes=proportional_max_passes,
             )
         else:
             # Generate offset contours between stock boundary and mesh
+            link_retract_z = min(safe_z, max(job.stock.z_max + job.cuts.retract_z_mm, z_level + 0.5))
             chains = _clear_around_mesh(
                 stock_contour, mesh_loops, z_level, tool_r,
-                effective_stepover, safe_z, feed, plunge, ramp_angle, hf,
+                effective_stepover, safe_z, link_retract_z, feed, plunge, ramp_angle, hf,
+                stock_allowance,
                 is_first_level=(z_idx == 0),
                 max_passes=proportional_max_passes,
             )
@@ -151,6 +155,7 @@ def _clear_full_stock(
     tool_r: float,
     stepover: float,
     safe_z: float,
+    link_retract_z: float,
     feed: float,
     plunge: float,
     ramp_angle: float,
@@ -181,7 +186,7 @@ def _clear_full_stock(
             _add_ramp_entry(chain, current, z_level, safe_z, feed, plunge, ramp_angle)
         else:
             # Link from previous pass at same Z — short retract
-            _add_link_move(chain, current[0], z_level, safe_z, feed, plunge)
+            _add_link_move(chain, current[0], z_level, link_retract_z, plunge)
 
         # Cut the contour
         _add_contour_cut(chain, current, z_level, feed, hf)
@@ -206,10 +211,12 @@ def _clear_around_mesh(
     tool_r: float,
     stepover: float,
     safe_z: float,
+    link_retract_z: float,
     feed: float,
     plunge: float,
     ramp_angle: float,
     hf: Heightfield,
+    stock_allowance: float,
     is_first_level: bool,
     max_passes: int = 500,
 ) -> list[ToolpathChain]:
@@ -224,8 +231,8 @@ def _clear_around_mesh(
     # Build mesh boundary offset (tool radius clearance)
     mesh_boundaries: list[list[tuple[float, float]]] = []
     for loop in mesh_loops:
-        # Offset mesh outward by tool radius for clearance
-        offset_loop = offset_contour(loop, tool_r)
+        # Offset mesh outward by tool radius + stock allowance so roughing leaves material.
+        offset_loop = offset_contour(loop, tool_r + stock_allowance)
         if len(offset_loop) >= 3:
             mesh_boundaries.append(offset_loop)
 
@@ -250,7 +257,7 @@ def _clear_around_mesh(
         if pass_num == 0:
             _add_ramp_entry(chain, current, z_level, safe_z, feed, plunge, ramp_angle)
         else:
-            _add_link_move(chain, current[0], z_level, safe_z, feed, plunge)
+            _add_link_move(chain, current[0], z_level, link_retract_z, plunge)
 
         _add_contour_cut(chain, current, z_level, feed, hf)
         chains.append(chain)
@@ -325,12 +332,10 @@ def _add_link_move(
     chain: ToolpathChain,
     target: tuple[float, float],
     z_level: float,
-    safe_z: float,
-    feed: float,
+    retract_z: float,
     plunge: float,
 ) -> None:
     """Add a clearance-height link move to a new contour start."""
-    retract_z = z_level + 2.0  # small clearance retract
     chain.append_rapid(chain.segments[-1].x if chain.segments else target[0],
                        chain.segments[-1].y if chain.segments else target[1],
                        retract_z)

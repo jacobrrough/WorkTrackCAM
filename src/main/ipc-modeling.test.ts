@@ -58,9 +58,21 @@ vi.mock('./mesh-import-registry', () => ({
   importMeshViaRegistry: vi.fn()
 }))
 
-vi.mock('./paths', () => ({
-  getEnginesRoot: vi.fn().mockReturnValue('/mock/engines')
-}))
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getEnginesRoot: vi.fn().mockReturnValue('/mock/engines'),
+    getEnginesBundleDiagnostics: vi.fn().mockResolvedValue({
+      enginesRoot: '/mock/engines',
+      directoryReadable: true,
+      camBundleComplete: true,
+      missingCamSentinels: [] as string[],
+      meshScriptPresent: true,
+      occtStepScriptPresent: true
+    })
+  }
+})
 
 vi.mock('./stl', () => ({
   isLikelyAsciiStl: vi.fn().mockReturnValue(false),

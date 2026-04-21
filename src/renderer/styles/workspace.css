@@ -376,6 +376,22 @@
   flex-direction: column;
   overflow: hidden;
 }
+.panel-section--compact {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+}
+.shop-cam-workflow-hint code {
+  font-size: 0.85em;
+}
+.shop-cam-workflow-hint__p {
+  margin: 0;
+}
+.util-cam-last-hint--engine {
+  border-left: 3px solid var(--accent, #9333ea);
+  padding-left: 10px;
+}
 .panel-pad   { padding: 8px 12px 10px; }
 .panel-pad--sm { padding: 6px 10px 10px; }
 .panel-footer-compact {

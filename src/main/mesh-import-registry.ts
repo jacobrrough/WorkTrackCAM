@@ -5,7 +5,7 @@ import { MESH_IMPORT_FILE_EXTENSIONS, MESH_PYTHON_EXTENSIONS, STEP_IGES_EXTENSIO
 import type { MeshImportPlacement, MeshImportTransform, MeshImportUpAxis } from '../shared/mesh-import-placement'
 import type { ImportHistoryEntry } from '../shared/project-schema'
 import { importStepToProjectStl, importStlToProjectAssets, runPythonJson } from './cad/occt-import'
-import { getEnginesRoot } from './paths'
+import { getEnginesBundleDiagnostics, getEnginesRoot } from './paths'
 import { resolveUniqueFilenameInDir } from './unique-asset-filename'
 
 export type MeshImportRoute = 'stl' | 'step' | 'mesh_python' | 'dxf'
@@ -144,6 +144,15 @@ export async function importMeshViaRegistry(params: {
       warnings: ['STEP tessellated to STL; parametric history is not preserved in UFS.']
     })
     return finalizeImportedStlWithPlacement(params.projectDir, r.stlPath, report, params.placementOpts)
+  }
+
+  const bundle = await getEnginesBundleDiagnostics()
+  if (!bundle.meshScriptPresent) {
+    return {
+      ok: false,
+      error: 'engines_mesh_script_missing',
+      detail: `Expected ${join(bundle.enginesRoot, 'mesh', 'mesh_to_stl.py')}. Reinstall the app or add engines/mesh to your checkout.`
+    }
   }
 
   const base = basename(params.sourcePath).replace(/\.[^.]+$/, '') || 'import'

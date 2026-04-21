@@ -19,6 +19,7 @@ import {
   opReadiness,
   filterButtonClass
 } from './manufacture-op-helpers'
+import { isOperationSourceMeshStale } from '../../shared/cam-source-stale'
 
 type Props = {
   operations: ManufactureOperation[]
@@ -32,6 +33,8 @@ type Props = {
   opFilter: ManufactureOpFilter
   actionableOnly: boolean
   nowTickMs: number
+  /** Source meshes newer than posted `output/cam.nc` (project-relative paths). */
+  camStaleMeshRelativePaths?: string[]
   onSelectOp: (i: number) => void
   onSetOpFilter: (f: ManufactureOpFilter) => void
   onSetActionableOnly: (v: boolean | ((prev: boolean) => boolean)) => void
@@ -58,6 +61,7 @@ export function ManufactureOperationList({
   opFilter,
   actionableOnly,
   nowTickMs,
+  camStaleMeshRelativePaths = [],
   onSelectOp,
   onSetOpFilter,
   onSetActionableOnly,
@@ -186,6 +190,14 @@ export function ManufactureOperationList({
               >
                 {opReadiness(op, contourCandidates).label === 'non-cam' ? 'Not CAM' : opReadiness(op, contourCandidates).label}
               </span>
+              {cncOp(op.kind) && isOperationSourceMeshStale(op.sourceMesh, camStaleMeshRelativePaths) ? (
+                <span
+                  className="status-chip status-chip--warn"
+                  title="STL on disk is newer than output/cam.nc — run Generate toolpath again"
+                >
+                  Mesh &gt; G-code
+                </span>
+              ) : null}
               {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
                 <span
                   className={`status-chip status-chip--${

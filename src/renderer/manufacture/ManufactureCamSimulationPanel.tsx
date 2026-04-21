@@ -582,6 +582,8 @@ type Props = {
   camOut?: string
   /** When `workspace`, the 3D canvas is shown first and uses a taller viewport. */
   layout?: 'compact' | 'workspace'
+  /** Meshes on disk newer than `output/cam.nc` (from main mtime check). */
+  camStaleMeshRelativePaths?: string[]
 }
 
 const VOXEL_QUALITY_STORAGE_KEY = 'ufs.manufacture.camSim.voxelQuality'
@@ -630,7 +632,8 @@ export function ManufactureCamSimulationPanel({
   previewMeshRelativePath = null,
   previewOperation = null,
   camOut = '',
-  layout = 'compact'
+  layout = 'compact',
+  camStaleMeshRelativePaths = []
 }: Props): ReactNode {
   const [gcode, setGcode] = useState<string>(() => camOut ?? '')
   const [loadNote, setLoadNote] = useState<string | null>(null)
@@ -1236,6 +1239,16 @@ export function ManufactureCamSimulationPanel({
   const metaBlock = (
     <>
       <h3 className="subh">Fabrication 3D workspace — path, stock, part mesh</h3>
+      {camStaleMeshRelativePaths.length > 0 && (camOut ?? '').trim() ? (
+        <p className="msg msg--warn msg--xs" role="status">
+          <strong>Mesh newer than G-code:</strong> {camStaleMeshRelativePaths.join(', ')} — regenerate from the{' '}
+          <strong>CAM</strong> tab so <code>output/cam.nc</code> matches disk.
+        </p>
+      ) : null}
+      <p className="msg msg--muted msg--xs">
+        <strong>Utilities → CAM</strong> &quot;Preview G-code analysis&quot; is <strong>Tier 0</strong> (text-only stats). This
+        workspace adds <strong>Tier 1–3</strong> visuals as described below.
+      </p>
       <p className="msg msg--muted">
         <strong>Part mesh</strong> uses the same CNC→Three mapping as G-code (X→X, CNC Z→Three Y, CNC Y→Three Z).{' '}
         <strong>Tier 1:</strong> rendered tubes vs lines. <strong>Tier 2:</strong> fixed ~88×88 2.5D height field from feed

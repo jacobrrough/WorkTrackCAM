@@ -214,6 +214,33 @@ export function resolveRasterScanAngleDeg(operationParams?: Record<string, unkno
   return 0
 }
 
+export type AdaptiveCutTuningResolved = {
+  maxEngagementDeg: number
+  retractZMm: number
+  stockAllowanceMm: number
+}
+
+/**
+ * Resolve adaptive-clearing-specific tuning params from operation settings.
+ * Keeps TS/Python defaults aligned for engagement, retract policy, and roughing allowance.
+ */
+export function resolveAdaptiveCutTuning(input: {
+  operationKind: string | undefined
+  operationParams?: Record<string, unknown>
+  safeZMm: number
+}): AdaptiveCutTuningResolved {
+  const p = input.operationParams ?? {}
+  const maxEngagementRaw = finitePositiveNumber(p['maxEngagementDeg']) ?? 90
+  const retractRaw = finitePositiveNumber(p['retractZMm']) ?? 5
+  const allowanceDefault = input.operationKind === 'cnc_3d_rough' ? 0.5 : 0
+  const allowanceRaw = finitePositiveNumber(p['stockAllowanceMm']) ?? allowanceDefault
+  return {
+    maxEngagementDeg: Math.min(180, Math.max(30, maxEngagementRaw)),
+    retractZMm: Math.min(Math.max(0.1, retractRaw), Math.max(0.1, input.safeZMm)),
+    stockAllowanceMm: Math.max(0, allowanceRaw)
+  }
+}
+
 /**
  * Per-pass adaptive feed rate: compute adjusted feed based on local engagement.
  *

@@ -141,20 +141,8 @@ describe('Snapshot — arc fitting', () => {
     expect(gcode).toMatchSnapshot()
   })
 
-  it('arc fitting on Fanuc 4-axis template', async () => {
-    const fanuc4ax: MachineProfile = {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_fanuc.hbs',
-      dialect: 'fanuc_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    }
-    const { gcode } = await renderPost(resourcesRoot, fanuc4ax, arcCandidateToolpath, {
-      enableArcFitting: true,
-      operationLabel: 'Arc Fitting Fanuc 4-Axis',
-    })
-    expect(gcode).toMatchSnapshot()
-  })
+  // Note: the Fanuc 4-axis arc-fitting case was removed in the April 2026
+  // 4-axis subsystem rewrite — only the GRBL 4-axis post template remains.
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -378,54 +366,9 @@ describe('Snapshot — tool changes (Carvera ATC)', () => {
   })
 })
 
-describe('Snapshot — tool changes (LinuxCNC)', () => {
-  const linuxcnc4ax: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_4axis_linuxcnc.hbs',
-    dialect: 'linuxcnc_4axis',
-    axisCount: 4,
-    aAxisRangeDeg: 360,
-  }
-
-  it('default tool T1 M6 + G43 H1', async () => {
-    const { gcode } = await renderPost(resourcesRoot, linuxcnc4ax, fourAxisToolpath, {
-      operationLabel: 'LinuxCNC Default Tool',
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('T1 M6')
-    expect(gcode).toContain('G43 H1')
-  })
-
-  it('tool T4 M6 + G43 H4', async () => {
-    const { gcode } = await renderPost(resourcesRoot, linuxcnc4ax, fourAxisToolpath, {
-      toolNumber: 4,
-      operationLabel: 'LinuxCNC Tool T4',
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('T4 M6')
-    expect(gcode).toContain('G43 H4')
-  })
-})
-
-describe('Snapshot — tool changes (Heidenhain)', () => {
-  const heidenhain4ax: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_4axis_heidenhain.hbs',
-    dialect: 'heidenhain_4axis',
-    axisCount: 4,
-    aAxisRangeDeg: 360,
-  }
-
-  it('tool T2 M6 + G43 H2', async () => {
-    const { gcode } = await renderPost(resourcesRoot, heidenhain4ax, fourAxisToolpath, {
-      toolNumber: 2,
-      operationLabel: 'Heidenhain Tool T2',
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('T2 M6')
-    expect(gcode).toContain('G43 H2')
-  })
-})
+// Note: the LinuxCNC and Heidenhain 4-axis tool-change snapshot suites were
+// removed in the April 2026 4-axis subsystem rewrite — only the GRBL/Carvera
+// 4-axis posts remain for tool-change coverage.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // INVERSE TIME FEED MODE (G93/G94)
@@ -468,22 +411,8 @@ describe('Snapshot — inverse time feed mode', () => {
     expect(g94Idx).toBeGreaterThan(lastTp)
   })
 
-  it('inverse time feed on Fanuc 4-axis', async () => {
-    const fanuc4ax: MachineProfile = {
-      ...baseMachine,
-      postTemplate: 'cnc_4axis_fanuc.hbs',
-      dialect: 'fanuc_4axis',
-      axisCount: 4,
-      aAxisRangeDeg: 360,
-    }
-    const { gcode } = await renderPost(resourcesRoot, fanuc4ax, fourAxisToolpath, {
-      inverseTimeFeed: true,
-      operationLabel: 'Fanuc Inverse Time',
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('G93')
-    expect(gcode).toContain('G94')
-  })
+  // Note: the Fanuc 4-axis inverse-time-feed snapshot was removed in the April
+  // 2026 4-axis subsystem rewrite — only GRBL/Carvera 4-axis posts remain.
 
   it('inverse time feed on Carvera 4-axis', async () => {
     const carvera4ax: MachineProfile = {
@@ -759,61 +688,6 @@ describe('Snapshot — every dialect with tool change and WCS', () => {
       lines: fourAxisToolpath,
     },
     {
-      name: 'Fanuc 4-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_4axis_fanuc.hbs',
-        dialect: 'fanuc_4axis' as const,
-        axisCount: 4,
-        aAxisRangeDeg: 360,
-      },
-      lines: fourAxisToolpath,
-    },
-    {
-      name: 'Mach3 4-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_4axis_mach3.hbs',
-        dialect: 'mach3_4axis' as const,
-        axisCount: 4,
-        aAxisRangeDeg: 360,
-      },
-      lines: fourAxisToolpath,
-    },
-    {
-      name: 'Siemens 4-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_4axis_siemens.hbs',
-        dialect: 'siemens_4axis' as const,
-        axisCount: 4,
-        aAxisRangeDeg: 360,
-      },
-      lines: fourAxisToolpath,
-    },
-    {
-      name: 'Heidenhain 4-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_4axis_heidenhain.hbs',
-        dialect: 'heidenhain_4axis' as const,
-        axisCount: 4,
-        aAxisRangeDeg: 360,
-      },
-      lines: fourAxisToolpath,
-    },
-    {
-      name: 'LinuxCNC 4-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_4axis_linuxcnc.hbs',
-        dialect: 'linuxcnc_4axis' as const,
-        axisCount: 4,
-        aAxisRangeDeg: 360,
-      },
-      lines: fourAxisToolpath,
-    },
-    {
       name: 'Carvera 4-axis',
       machine: {
         ...carveraMachine,
@@ -823,6 +697,8 @@ describe('Snapshot — every dialect with tool change and WCS', () => {
       },
       lines: fourAxisToolpath,
     },
+    // Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis baseline
+    // snapshot entries were removed in the April 2026 4-axis subsystem rewrite.
     {
       name: 'Fanuc 5-axis',
       machine: {

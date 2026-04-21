@@ -8,6 +8,7 @@
  *  • Full-size: fills parent via position:absolute + ResizeObserver
  *  • 4-axis mode: Makera Carvera 4th-axis rig visualization
  *  • G-code toolpath preview overlay (colored rapid/cutting/plunge lines)
+ *  • 3-axis: with G-code present, prefers `*.cam-aligned.stl` (same bake as CAM) so toolpath matches the mesh
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
@@ -40,6 +41,43 @@ const AX_COLOR = { x: 0xe74c3c, y: 0x2ecc71, z: 0x3d7eff } as const
 const AX_HOVER  = 0xffff00
 // Three.js Y = model Z (up), Three.js Z = model Y (depth)
 const THREEJS_TO_MODEL = { x: 'x', y: 'z', z: 'y' } as const
+
+/**
+ * Sibling path written by main-process `stl:transformForCam` (see ipc-fabrication).
+ * Preserves directory and `.stl` extension casing.
+ *
+ * Strips any existing `.cam-aligned` segments from the stem so that re-running
+ * CAM on a previously-aligned file does not accumulate suffixes
+ * (e.g. `model.cam-aligned.cam-aligned.stl`).
+ */
+export function siblingCamAlignedStlPath(rawStlPath: string): string {
+  const m = rawStlPath.match(/\.stl$/i)
+  if (!m) {
+    const cleaned = rawStlPath.replace(/(\.cam-aligned)+$/i, '')
+    return `${cleaned}.cam-aligned.stl`
+  }
+  const ext = m[0]
+  const stem = rawStlPath.slice(0, -ext.length).replace(/(\.cam-aligned)+$/i, '')
+  return `${stem}.cam-aligned${ext}`
+}
+
+/** Match 3-axis toolpath mapping in `gcode-toolpath-parse` (G-code Y,Z → Three.js Z,Y). */
+function permuteStlGeometryModelCamToThreeView(geo: THREE.BufferGeometry): void {
+  const attr = geo.getAttribute('position') as THREE.BufferAttribute | undefined
+  if (!attr) return
+  const a = attr.array as Float32Array
+  for (let i = 0; i < a.length; i += 3) {
+    const x = a[i]
+    const y = a[i + 1]
+    const z = a[i + 2]
+    a[i] = x
+    a[i + 1] = z
+    a[i + 2] = y
+  }
+  attr.needsUpdate = true
+  geo.deleteAttribute('normal')
+  geo.computeVertexNormals()
+}
 
 // ── STL parsers ───────────────────────────────────────────────────────────────
 function parseStlBuffer(buf: ArrayBuffer): THREE.BufferGeometry {
@@ -595,8 +633,16 @@ export function ShopModelViewer({
   const [showToolpath,   setShowToolpath]   = useState(false)
   const [toolpathStats,  setToolpathStats]  = useState<{ rapids: number; cuts: number; plunges: number } | null>(null)
   const [toolpathLoading, setToolpathLoading] = useState(false)
+  /** When true, mesh vertices are CAM-baked + axis-mapped; gizmo transform is not applied until reload. */
+  const [meshUsesCamAligned, setMeshUsesCamAligned] = useState(false)
 
   const is4Axis = mode === 'cnc_4axis' || mode === 'cnc_5axis'
+
+  /** Same bake as `fab().stlTransformForCam` (3-axis preview only). Rotary keeps raw mesh + transform. */
+  const preferCamAlignedMesh =
+    Boolean(stlPath && gcodeOut?.trim() && /\.stl$/i.test(stlPath)) &&
+    !is4Axis &&
+    mode !== 'fdm'
 
   // ── Load / clear toolpath ─────────────────────────────────────────────────
   const loadToolpath = useCallback(async (path: string) => {
@@ -953,14 +999,14 @@ export function ShopModelViewer({
     // Remove old gizmo
     if (s.gizmo) { s.scene.remove(s.gizmo); s.gizmo = null }
     s.gizmoMode = transformMode
-    if (!transformMode) return
+    if (!transformMode || meshUsesCamAligned) return
     const g = transformMode === 'translate' ? buildTranslateGizmo()
              : transformMode === 'rotate'    ? buildRotateGizmo()
              :                                 buildScaleGizmo()
     if (s.mesh) g.position.copy(s.mesh.position)
     s.scene.add(g)
     s.gizmo = g
-  }, [transformMode])
+  }, [transformMode, meshUsesCamAligned])
 
   // ── Rebuild stock box or 4-axis rig ───────────────────────────────────────────
   useEffect(() => {
@@ -1007,48 +1053,95 @@ export function ShopModelViewer({
     const s = stateRef.current
     if (!s) return
     if (s.mesh) { s.scene.remove(s.mesh); s.mesh.geometry.dispose(); (s.mesh.material as THREE.Material).dispose(); s.mesh = null }
-    if (!stlPath) { setModelSize(''); return }
+    if (!stlPath) {
+      setModelSize('')
+      setMeshUsesCamAligned(false)
+      return
+    }
+    const fab = (window as Window & { fab: { fsReadBase64: (p: string) => Promise<string> } }).fab
+    const pathsToTry = preferCamAlignedMesh ? [siblingCamAlignedStlPath(stlPath), stlPath] : [stlPath]
+
     setLoading(true); setError(null)
+    setMeshUsesCamAligned(false)
     ;(async () => {
-      try {
-        const b64 = await (window as Window & { fab: { fsReadBase64:(p:string)=>Promise<string> } }).fab.fsReadBase64(stlPath)
-        const bin = atob(b64); const bytes = new Uint8Array(bin.length)
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-        const geo = parseStlBuffer(bytes.buffer)
-        geo.computeBoundingBox()
-        const bb = geo.boundingBox!
-        const c = new THREE.Vector3(); bb.getCenter(c); geo.translate(-c.x, -c.y, -c.z)
-        // Model is centered at origin — in 4-axis mode, the stock cylinder,
-        // toolpath, and removal mesh are also centered at origin so they align.
-        const sz = new THREE.Vector3(); bb.getSize(sz)
-        setModelSize(`${sz.x.toFixed(1)} × ${sz.y.toFixed(1)} × ${sz.z.toFixed(1)} mm`)
-        onModelLoaded?.(sz.x, sz.y, sz.z)
-        const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
-          color: 0x3d7eff, emissive: 0x0a1840, specular: 0x224488, shininess: 40, side: THREE.DoubleSide
-        }))
-        applyTransform(mesh, transform)
-        s.scene.add(mesh); s.mesh = mesh
-        const md = Math.max(sz.x, sz.y, sz.z)
-        s.radius = md * 2.2; s.phi = Math.PI / 3; s.theta = Math.PI / 4
-        if (is4Axis) {
-          // Camera looks at the origin (rotation axis center)
-          s.target.set(0, 0, 0)
-          s.radius = Math.max(s.radius, md * 2.5)
-        } else {
-          s.target.set(transform.position.x, transform.position.z * 0.5, transform.position.y)
+      let lastErr: unknown = null
+      for (let pi = 0; pi < pathsToTry.length; pi++) {
+        const path = pathsToTry[pi]
+        const isCamAlignedMesh = preferCamAlignedMesh && pi === 0
+        try {
+          const b64 = await fab.fsReadBase64(path)
+          const bin = atob(b64); const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          const geo = parseStlBuffer(bytes.buffer)
+
+          if (isCamAlignedMesh) {
+            permuteStlGeometryModelCamToThreeView(geo)
+            geo.computeBoundingBox()
+          } else {
+            geo.computeBoundingBox()
+            const bb0 = geo.boundingBox!
+            const c = new THREE.Vector3(); bb0.getCenter(c); geo.translate(-c.x, -c.y, -c.z)
+          }
+
+          const bb = geo.boundingBox!
+          const sz = new THREE.Vector3(); bb.getSize(sz)
+          setModelSize(`${sz.x.toFixed(1)} × ${sz.y.toFixed(1)} × ${sz.z.toFixed(1)} mm`)
+          onModelLoaded?.(sz.x, sz.y, sz.z)
+          const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+            color: 0x3d7eff, emissive: 0x0a1840, specular: 0x224488, shininess: 40, side: THREE.DoubleSide
+          }))
+          if (isCamAlignedMesh) {
+            mesh.position.set(0, 0, 0)
+            mesh.rotation.set(0, 0, 0)
+            mesh.scale.set(1, 1, 1)
+            setMeshUsesCamAligned(true)
+          } else {
+            setMeshUsesCamAligned(false)
+            applyTransform(mesh, transform)
+          }
+          s.scene.add(mesh); s.mesh = mesh
+          const md = Math.max(sz.x, sz.y, sz.z)
+          s.radius = md * 2.2; s.phi = Math.PI / 3; s.theta = Math.PI / 4
+          if (is4Axis) {
+            s.target.set(0, 0, 0)
+            s.radius = Math.max(s.radius, md * 2.5)
+          } else {
+            const tc = new THREE.Vector3(); bb.getCenter(tc)
+            if (isCamAlignedMesh) {
+              s.target.copy(tc)
+            } else {
+              s.target.set(transform.position.x, transform.position.z * 0.5, transform.position.y)
+            }
+          }
+          setLoading(false)
+          setError(null)
+          return
+        } catch (e) {
+          lastErr = e
         }
-        setLoading(false)
-      } catch (e) { setLoading(false); setError(e instanceof Error ? e.message : String(e)) }
+      }
+      setLoading(false)
+      setMeshUsesCamAligned(false)
+      setError(lastErr instanceof Error ? lastErr.message : String(lastErr))
     })()
+  // Only tie G-code to STL reload when we read *.cam-aligned.stl (3-axis). Otherwise rotary would reload
+  // and reset the camera on every generation without changing mesh source.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stlPath])
+  }, [
+    stlPath,
+    is4Axis,
+    mode,
+    preferCamAlignedMesh,
+    preferCamAlignedMesh ? (gcodeOut ?? '') : '',
+    preferCamAlignedMesh ? gcodeGeneration : 0
+  ])
 
   // ── Apply transform live ──────────────────────────────────────────────────────
   useEffect(() => {
     const s = stateRef.current
-    if (!s?.mesh) return
+    if (!s?.mesh || meshUsesCamAligned) return
     applyTransform(s.mesh, transform)
-  }, [transform.position.x, transform.position.y, transform.position.z,
+  }, [meshUsesCamAligned, transform.position.x, transform.position.y, transform.position.z,
       transform.rotation.x, transform.rotation.y, transform.rotation.z,
       transform.scale.x, transform.scale.y, transform.scale.z])
 
@@ -1072,6 +1165,12 @@ export function ShopModelViewer({
       {modelSize && !loading && !error && (
         <div role="status" aria-label="Model dimensions" className="viewer-badge viewer-badge--bl">
           Model: {modelSize}
+          {meshUsesCamAligned && (
+            <span title="Mesh matches the CAM bake and G-code. Adjust placement and regenerate toolpaths to change orientation.">
+              {' '}
+              · G-code aligned
+            </span>
+          )}
         </div>
       )}
       {!loading && !error && (

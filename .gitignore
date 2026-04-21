@@ -31,10 +31,15 @@ build/
 # Pytest cache
 .pytest_cache/
 
-# Claude Code
-.claude/
+# Claude Code — ignore everything except the shared workflow files.
+.claude/*
+!.claude/improvement-log.md
+!.claude/commands/
+.claude/commands/*
+!.claude/commands/*.md
 
 # Temp / log files
 *.log
 *.tmp
 npm-debug.log*
+engines/cam/_tmp_*.json

@@ -44,6 +44,28 @@ python engines/cam/smoke_ocl_toolpath.py
 
 Exercises config/JSON error paths, `config_not_utf8`, and `invalid_numeric_params` (including zero/negative tool diameter, stepover, plunge, feed; non-finite values including NaN/Infinity; bad waterline `zPassMm`) using a generated minimal ASCII STL — **does not** require OpenCAMLib.
 
+## Advanced engine (`engines/cam/advanced/`)
+
+Invoked via `python -m engines.cam.advanced <config.json>`. Supports strategies beyond the basic OCL set:
+
+| Strategy | Description |
+|---|---|
+| `adaptive_clear` | Adaptive roughing with engagement-angle control |
+| `waterline` | Z-level waterline (extended stock/machine params) |
+| `raster` | XY raster with stock bounds awareness |
+| `pencil` | Rest-machining pencil finishing |
+| `spiral_finish` | Spiral-path surface finish |
+| `morphing_finish` | Morphing-offset surface finish |
+| `trochoidal_hsm` | Trochoidal high-speed milling |
+| `steep_shallow` | Combined steep/shallow finishing |
+| `scallop` | Scallop-height-controlled finish |
+
+Config extends the OCL fields with stock bounds (`stockXMin/Max`, `stockYMin/Max`, `stockZMin/Max`), machine limits (`xTravelMm`, `yTravelMm`, `zTravelMm`, `maxFeedMmMin`, `maxSpindleRpm`), and adaptive tuning (`maxEngagementDeg`, `retractZMm`, `stockAllowanceMm`). Output JSON uses the same `{ok, toolpathLines, strategy}` shape.
+
+## Toolpath engine (`engines/cam/toolpath_engine/`)
+
+Invoked via `python -m engines.cam.toolpath_engine <config.json>`. The newest engine with full tool geometry (`toolShape`, `cornerRadiusMm`, `fluteLengthMm`, `fluteCount`, `holderDiameterMm`), adaptive feed, material awareness, and 4/5-axis capability flags. Timeout is 120 s (vs 60 s for OCL/advanced). Output adds optional `warnings` and `stats` fields alongside `{ok, toolpathLines, strategy}`.
+
 ## Legacy
 
 `parallel_finish.py` was removed; all OCL entry is through `ocl_toolpath.py`.

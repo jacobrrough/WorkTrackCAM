@@ -5,8 +5,9 @@
  * environment decides which op kinds appear in the UI, but `getMachineMode()`
  * + `OPS_BY_MODE` continue to drive the CAM runner / strategy validation.
  *
- * Phase 2: data only — no React component refs. Sidebar/WorkflowPanel
- * components are wired in Phase 3/4 via wrapper components in env subfolders.
+ * Pure data only — no React component refs. The sidebar uses
+ * `availableOpKinds` (intersected with `OPS_BY_MODE[mode]` in `LeftPanel.tsx`)
+ * and `EnvActionStrip.tsx` renders environment-specific quick controls.
  */
 import type { ManufactureOperationKind } from '../../../shared/manufacture-schema'
 
@@ -45,7 +46,8 @@ export interface ShopEnvironment {
 }
 
 // ── Per-environment op kinds ────────────────────────────────────────────────
-// Inlined here for Phase 2; sidebars in Phase 4 import from this module.
+// `LeftPanel.tsx` intersects these with `OPS_BY_MODE[mode]` so each
+// environment surfaces only the relevant subset of the global op catalog.
 
 /** Wood-routing & 2D/2.5D toolpaths for the Laguna Swift 5×10. */
 export const VCARVE_PRO_OPS: readonly ManufactureOperationKind[] = [

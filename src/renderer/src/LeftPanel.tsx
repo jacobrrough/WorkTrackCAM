@@ -366,6 +366,23 @@ export const LeftPanel = React.memo(function LeftPanel({
     <>
     <nav className="shop-left" aria-label="Job and operations panel">
       {envHeaderSlot}
+      {mode !== 'fdm' ? (
+        <div className="panel-section panel-section--compact shop-cam-workflow-hint" role="note">
+          <p className="text-muted text-sm lh-snug shop-cam-workflow-hint__p">
+            <strong>Shop</strong> is for quick jobs: model → operations → <strong>Generate</strong>. The run log shows which engine ran (
+            <strong>OpenCAMLib</strong>, Python advanced engine, or <strong>built-in</strong> fallback). For best 3D finish paths, set{' '}
+            <strong>Python</strong> under File → Settings and install <code>opencamlib</code> where docs recommend. Full project workflows
+            (design-linked setups, simulate tab) use <strong>File → Open Project</strong> → Manufacture when that workspace is available in your build.
+          </p>
+        </div>
+      ) : (
+        <div className="panel-section panel-section--compact shop-cam-workflow-hint" role="note">
+          <p className="text-muted text-sm lh-snug shop-cam-workflow-hint__p">
+            <strong>Shop</strong>: pick filament/machine, place the model, then <strong>Slice</strong>. For CuraEngine paths and logs, use{' '}
+            <strong>File → Settings → External tool paths</strong> if the bundled profile is not enough.
+          </p>
+        </div>
+      )}
       {/* Jobs */}
       <div className="panel-section">
         <div className="panel-section-header"

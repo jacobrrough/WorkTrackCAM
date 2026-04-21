@@ -25,9 +25,13 @@ vi.mock('node:fs', () => ({
   existsSync: mockExistsSync
 }))
 
-vi.mock('./paths', () => ({
-  getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
-}))
+vi.mock('./paths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./paths')>()
+  return {
+    ...actual,
+    getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
+  }
+})
 
 import { listAllPosts, saveUserPost, readPostContent } from './posts-manager'
 

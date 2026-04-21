@@ -48,6 +48,8 @@ export type ManufactureAuxPanelsProps = {
   onStatus?: (msg: string) => void
   /** Optional: export HTML setup sheet from current manufacture plan + output/cam.nc. */
   onExportSetupSheet?: () => void | Promise<void>
+  /** Project-relative mesh paths newer than `output/cam.nc` (mtime) — from main process. */
+  camStaleMeshRelativePaths?: string[]
 }
 
 export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
@@ -232,9 +234,13 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
     <section className="panel workspace-util-panel" aria-labelledby="mfg-cam-heading">
       <h2 id="mfg-cam-heading">CNC CAM (Laguna / Makera)</h2>
       <p className="msg util-panel-intro">
-        Builds G-code from the project mesh. OpenCAMLib is optional; without it, a built-in parallel finish path uses STL
-        bounds (set <strong>Python</strong> under File → Settings for OCL). Last run output reports which engine ran and why any
-        fallback happened.
+        <strong>Two entry points:</strong> this <strong>Manufacture → CAM</strong> tab runs the project plan in <code>manufacture.json</code>; the
+        environment <strong>Shop</strong> screen is for fast single-job sessions. Both call the same <code>cam:run</code> pipeline.
+      </p>
+      <p className="msg util-panel-intro">
+        <strong>Engines (in order when applicable):</strong> OpenCAMLib waterline/raster when Python + <code>opencamlib</code> succeed; some ops use the
+        Python <code>toolpath_engine</code> strategies; otherwise built-in TypeScript paths (parallel finish / mesh raster). Set <strong>Python</strong> under
+        File → Settings. After each run, <strong>Last run</strong> below the G-code states <code>usedEngine</code> and any fallback reason.
       </p>
       <p className="msg">
         G-code is <strong>not verified</strong> for any CNC until you confirm post, units, work offset, and clearances —{' '}
@@ -247,6 +253,12 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
       <h3 className="subh util-section-heading" id="mfg-cam-run-heading">
         Generate toolpath
       </h3>
+      {p.camStaleMeshRelativePaths && p.camStaleMeshRelativePaths.length > 0 && p.camOut?.trim() ? (
+        <p className="msg msg--warn manufacture-cam-stale-banner" role="status">
+          <strong>Source mesh newer than posted G-code:</strong> {p.camStaleMeshRelativePaths.join(', ')} — run{' '}
+          <strong>Generate toolpath…</strong> again so <code>output/cam.nc</code> matches the assets on disk.
+        </p>
+      ) : null}
       <div
         className="row util-cam-actions"
         role="group"
@@ -347,7 +359,9 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
       ) : null}
       {!p.camOut?.trim() ? (
         <p className="msg util-output-placeholder" role="status">
-          No G-code yet. Add a mesh on the <strong>File → Project</strong> tab, then run <strong>Generate toolpath…</strong>.
+          No G-code yet. On the <strong>Plan</strong> tab, bind an STL from <code>assets/</code> to each operation, then return here and run{' '}
+          <strong>Generate toolpath…</strong>. Use <strong>Simulate</strong> for a 3D backplot (optional stock-removal preview); this tab’s{' '}
+          <strong>Preview G-code analysis</strong> is text-only motion stats.
         </p>
       ) : null}
       {camPreviewTick > 0 ? (
@@ -355,9 +369,16 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           <h3 className="subh util-section-heading mfg-cam-preview-h3" id="mfg-cam-preview-heading">
             G-code analysis
           </h3>
-          <strong>Text-only summary</strong> (not machine simulation): {camPreview.disclaimer}
+          <strong>Text-only summary</strong> (Tier 0 — not machine simulation): {camPreview.disclaimer}
           <br />
           Lines: {camPreview.totalLines}, motion: {camPreview.motionLines}, cutting moves: {camPreview.cuttingMoves}
+          {camPreview.heuristicMotionMinutes != null && camPreview.heuristicMotionPathMm != null ? (
+            <>
+              <br />
+              Heuristic motion time (see note): ~{camPreview.heuristicMotionMinutes.toFixed(2)} min over{' '}
+              {camPreview.heuristicMotionPathMm.toFixed(1)} mm of G0/G1 length — {camPreview.heuristicMotionNote}
+            </>
+          ) : null}
           {camPreview.xyBounds ? (
             <>
               <br />

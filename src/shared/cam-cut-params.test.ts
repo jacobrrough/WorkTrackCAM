@@ -8,6 +8,7 @@ import {
   applyMaterialToNewOpParams,
   computeAdaptiveFeed,
   computeEngagementAngleDeg,
+  resolveAdaptiveCutTuning,
   resolveCamCutParams,
   resolveCamCutParamsWithMaterial,
   resolveManufactureSetupForCam,
@@ -633,5 +634,39 @@ describe('computeAdaptiveFeed', () => {
     const feed = computeAdaptiveFeed(1000, 0, -0.5, 3, 1, 1, 90)
     expect(feed).toBeGreaterThan(0)
     expect(feed).toBeLessThanOrEqual(1500)
+  })
+})
+
+describe('resolveAdaptiveCutTuning', () => {
+  it('uses 3d rough default stock allowance and clamps engagement', () => {
+    const resolved = resolveAdaptiveCutTuning({
+      operationKind: 'cnc_3d_rough',
+      operationParams: { maxEngagementDeg: 999 },
+      safeZMm: 12
+    })
+    expect(resolved.maxEngagementDeg).toBe(180)
+    expect(resolved.stockAllowanceMm).toBe(0.5)
+    expect(resolved.retractZMm).toBe(5)
+  })
+
+  it('uses adaptive defaults when params are omitted', () => {
+    const resolved = resolveAdaptiveCutTuning({
+      operationKind: 'cnc_adaptive',
+      operationParams: {},
+      safeZMm: 6
+    })
+    expect(resolved.maxEngagementDeg).toBe(90)
+    expect(resolved.stockAllowanceMm).toBe(0)
+    expect(resolved.retractZMm).toBe(5)
+  })
+
+  it('clamps retract and stock allowance to safe ranges', () => {
+    const resolved = resolveAdaptiveCutTuning({
+      operationKind: 'cnc_3d_rough',
+      operationParams: { retractZMm: 500, stockAllowanceMm: -1 },
+      safeZMm: 9
+    })
+    expect(resolved.retractZMm).toBe(9)
+    expect(resolved.stockAllowanceMm).toBe(0.5)
   })
 })

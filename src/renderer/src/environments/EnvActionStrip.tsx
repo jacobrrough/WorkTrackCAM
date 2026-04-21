@@ -4,7 +4,7 @@
  * controls without lifting the entire shell:
  *
  *   • VCarve Pro:    wood material quick-pick (Hardwood / Plywood / MDF / Softwood)
- *   • Creality Print: filament + slice preset hint (placeholder until SliceTray lands)
+ *   • Creality Print: filament quick-pick (matched by name keyword — PLA / PETG / ABS / TPU / Nylon / …)
  *   • Makera CAM:    3-axis ↔ 4-axis HD toggle (swaps sessionMachine in place)
  *
  * All callbacks are wired by the ShopApp so this component stays presentation-only.
@@ -12,6 +12,13 @@
 import React from 'react'
 import type { Job, MachineProfile, MaterialRecord } from '../shop-types'
 import type { ShopEnvironment } from './registry'
+import {
+  buildQuickPickMaterials,
+  isFilamentMaterial,
+  isFourAxisCarvera,
+  isWoodMaterial,
+  resolveMakeraVariants
+} from './env-action-strip-helpers'
 
 export interface EnvActionStripProps {
   env: ShopEnvironment
@@ -39,18 +46,9 @@ export function EnvActionStrip(props: EnvActionStripProps): React.ReactElement |
 
 // ── VCarve Pro: wood material quick-pick ────────────────────────────────────
 
-const WOOD_KEYWORDS = ['wood', 'plywood', 'mdf', 'oak', 'pine', 'maple', 'birch', 'walnut', 'softwood', 'hardwood']
-
 function VCarveStrip({ materials, activeJob, onUpdateJob }: EnvActionStripProps): React.ReactElement {
-  // Filter materials whose name/category looks wood-related. Falls back to
-  // showing every material if nothing matches (so the picker is never empty).
-  const woods = materials.filter((m) => {
-    const name = (m.name ?? '').toLowerCase()
-    const category = ((m as { category?: string }).category ?? '').toLowerCase()
-    return WOOD_KEYWORDS.some((kw) => name.includes(kw) || category.includes(kw))
-  })
-  const visible = woods.length > 0 ? woods : materials
   const selectedId = activeJob?.materialId ?? null
+  const visible = buildQuickPickMaterials(materials, selectedId, isWoodMaterial, 6)
 
   return (
     <div className="env-action-strip" data-environment="vcarve_pro">
@@ -59,7 +57,7 @@ function VCarveStrip({ materials, activeJob, onUpdateJob }: EnvActionStripProps)
         {visible.length === 0 && (
           <span className="env-action-strip__empty">No materials installed</span>
         )}
-        {visible.slice(0, 6).map((m) => {
+        {visible.map((m) => {
           const active = m.id === selectedId
           return (
             <button
@@ -87,10 +85,7 @@ function MakeraStrip({
   sessionMachine,
   onSwitchMachine
 }: EnvActionStripProps): React.ReactElement {
-  // Resolve the two Carvera variants in declared order.
-  const variants = env.machineIds
-    .map((id) => machines.find((m) => m.id === id))
-    .filter((m): m is MachineProfile => Boolean(m))
+  const variants = resolveMakeraVariants(env, machines)
 
   return (
     <div className="env-action-strip" data-environment="makera_cam">
@@ -102,8 +97,7 @@ function MakeraStrip({
         {variants.map((m) => {
           const active = m.id === sessionMachine?.id
           // Friendly short label: "3-Axis" or "4-Axis HD"
-          const isFourAxis = (m.axisCount ?? 3) >= 4 || m.dialect.includes('4axis')
-          const shortLabel = isFourAxis ? '4-Axis HD' : '3-Axis'
+          const shortLabel = isFourAxisCarvera(m) ? '4-Axis HD' : '3-Axis'
           return (
             <button
               key={m.id}
@@ -123,21 +117,19 @@ function MakeraStrip({
   )
 }
 
-// ── Creality Print: filament hint placeholder ───────────────────────────────
+// ── Creality Print: filament quick-pick ─────────────────────────────────────
 
 function CrealityStrip({ materials, activeJob, onUpdateJob }: EnvActionStripProps): React.ReactElement {
-  // Filaments are not yet a discriminated material kind (Phase 4 follow-up
-  // bundles `filaments.json`). Until then, show every material so the user
-  // still has a quick way to pick a print profile from this strip.
   const selectedId = activeJob?.materialId ?? null
+  const filaments = buildQuickPickMaterials(materials, selectedId, isFilamentMaterial, 6)
   return (
     <div className="env-action-strip" data-environment="creality_print">
       <div className="env-action-strip__label">Filament</div>
       <div className="env-action-strip__chips">
-        {materials.length === 0 && (
+        {filaments.length === 0 && (
           <span className="env-action-strip__empty">No filament profiles installed</span>
         )}
-        {materials.slice(0, 6).map((m) => {
+        {filaments.map((m) => {
           const active = m.id === selectedId
           return (
             <button

@@ -139,3 +139,27 @@ export function buildDepCheckWarning(outcome: PythonDepCheckOutcome): string | n
 
   return parts.join(' ') || null
 }
+
+/** Optional packages for mesh import and STEP/IGES — shown when core CAM deps are OK. */
+export function buildOptionalPythonDepsHint(outcome: PythonDepCheckOutcome): string | null {
+  if (!outcome.checked || !outcome.result.ok || !outcome.result.pythonOk) return null
+  const hints: string[] = []
+  for (const o of outcome.result.optional) {
+    if (o.available) continue
+    if (o.name === 'trimesh') {
+      hints.push('Mesh import (OBJ/PLY/GLB/…): install trimesh — pip install trimesh')
+    } else if (o.name === 'cadquery') {
+      hints.push('STEP/IGES import: install cadquery (or cadquery-ocp) for engines/occt/step_to_stl.py')
+    } else if (o.name === 'OCP') {
+      hints.push('STEP/IGES fallback (OCP): often bundled with cadquery-ocp if CadQuery alone is not used')
+    }
+  }
+  return hints.length ? hints.join(' ') : null
+}
+
+/** Critical dep warnings plus optional mesh/STEP hints for Settings / startup banner. */
+export function buildPythonDepsUserMessage(outcome: PythonDepCheckOutcome): string | null {
+  if (!outcome.checked) return outcome.error
+  const parts = [buildDepCheckWarning(outcome), buildOptionalPythonDepsHint(outcome)].filter(Boolean)
+  return parts.length ? parts.join(' ') : null
+}

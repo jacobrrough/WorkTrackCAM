@@ -5,6 +5,7 @@ import { fitArcsToLinearPath } from '../shared/arc-fitting'
 import type { GCodeSegment, Point3D } from '../shared/arc-fitting'
 import type { MachineProfile } from '../shared/machine-schema'
 import { validateDialectCompliance } from '../shared/gcode-dialect-compliance'
+import { resolveDialectSnippets, resolveWorkOffsetLine } from './post-process-dialects'
 
 /** Configuration for G-code line numbering (N-words). */
 export type LineNumberingConfig = {
@@ -95,42 +96,6 @@ export type PostContext = {
   cutterCompDRegister?: number
 }
 
-function dialectSnippets(dialect: MachineProfile['dialect']): { on: string; off: string; units: 'G21' | 'G20' } {
-  switch (dialect) {
-    case 'grbl':
-      return { on: 'M3 S12000', off: 'M5', units: 'G21' }
-    case 'grbl_4axis':
-      // Carvera: 6000-15000 RPM range
-      return { on: 'M3 S12000', off: 'M5', units: 'G21' }
-    case 'fanuc_4axis':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    case 'mach3_4axis':
-      return { on: 'M3 S12000', off: 'M5', units: 'G21' }
-    case 'linuxcnc_4axis':
-      return { on: 'M3 S12000', off: 'M5', units: 'G21' }
-    case 'siemens_4axis':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    case 'heidenhain_4axis':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    case 'mach3':
-      return { on: 'M3', off: 'M5', units: 'G21' }
-    case 'fanuc':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    case 'siemens':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    case 'heidenhain':
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-    default:
-      return { on: 'M3 S10000', off: 'M5', units: 'G21' }
-  }
-}
-
-function workOffsetLine(index: number | undefined): string | undefined {
-  if (index == null) return undefined
-  if (!Number.isInteger(index) || index < 1 || index > 6) return undefined
-  return `G${53 + index}`
-}
-
 /**
  * Clamp a spindle RPM to the machine's min/max limits.
  * Returns the (possibly clamped) RPM and an optional warning string
@@ -205,13 +170,15 @@ export type ToolOperationBlock = {
 export function sequenceMultiToolJob(
   blocks: ToolOperationBlock[],
   safeZMm: number,
-  commentPrefix = '; '
+  commentPrefix = '; ',
+  opts?: { supportsToolChange?: boolean }
 ): string {
   if (blocks.length === 0) return ''
   if (blocks.length === 1) return blocks[0]!.gcode
 
   const parts: string[] = []
   let lastToolSlot: number | undefined
+  const supportsToolChange = opts?.supportsToolChange !== false
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!
@@ -221,7 +188,11 @@ export function sequenceMultiToolJob(
       parts.push(`${commentPrefix}--- TOOL CHANGE: T${block.toolSlot}${block.label ? ` — ${block.label}` : ''} ---`)
       parts.push('M5')
       parts.push(`G0 Z${safeZMm}`)
-      parts.push(`T${block.toolSlot} M6`)
+      if (supportsToolChange) {
+        parts.push(`T${block.toolSlot} M6`)
+      } else {
+        parts.push(`${commentPrefix}Manual tool change required: load T${block.toolSlot} before continuing`)
+      }
       parts.push('')
     } else if (i > 0) {
       // Same tool, just add a separator comment
@@ -643,8 +614,8 @@ export async function renderPost(
 ): Promise<RenderPostResult> {
   const tplPath = join(resourcesRoot, 'posts', machine.postTemplate)
   const source = await readFile(tplPath, 'utf-8')
-  const { on, off, units } = dialectSnippets(machine.dialect)
-  const wcsLine = workOffsetLine(opts?.workCoordinateIndex)
+  const { on, off, units } = resolveDialectSnippets(machine.dialect)
+  const wcsLine = resolveWorkOffsetLine(opts?.workCoordinateIndex)
 
   let spindleOn = on
   let spindleWarning: string | undefined

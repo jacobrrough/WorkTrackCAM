@@ -238,6 +238,73 @@ describe('buildCylindricalHeightFieldFromSegments', () => {
     expect(result).toBeNull()
   })
 
+  it('grid extent ignores rapid header/footer X positions (regression: phantom cyan bands)', () => {
+    // Regression for the bug where the toolpath preview showed two cylindrical
+    // cyan regions: one over the actual part, and one phantom region floating
+    // beyond it.  Root cause: callers computed stockXMin/Max from *all* G-code
+    // segments (rapids + cuts), so a footer `G0 X0 Y0` park move pulled the
+    // grid extent out to X=0 even when cuts were nowhere near it.  The grid
+    // then included a wide empty band that visually duplicated the cut region.
+    //
+    // After the fix, the grid X extent is derived from cutting segments only,
+    // clamped to the caller's stock range — so passing rapids that span the
+    // whole stock no longer inflates the grid.
+    const cuttingZone = { xMin: 10, xMax: 30 }
+    const segs: ToolpathSegment4[] = [
+      // Header rapid: travels from origin out to a safe Z (no cuts)
+      { kind: 'rapid', x0: 0, y0: 0, z0: 50, x1: 0, y1: 0, z1: 50, a0: 0, a1: 0, b0: 0, b1: 0 },
+      // Real cutting feeds in [10, 30]
+      feed4(cuttingZone.xMin, 0, 7, cuttingZone.xMax, 90, 7),
+      feed4(cuttingZone.xMin, 90, 7, cuttingZone.xMax, 180, 7),
+      // Footer rapid: park move back to X=0 (the smoking gun)
+      { kind: 'rapid', x0: cuttingZone.xMax, y0: 0, z0: 50, x1: 0, y1: 0, z1: 50, a0: 0, a1: 0, b0: 0, b1: 0 },
+    ]
+
+    const field = buildCylindricalHeightFieldFromSegments(segs, {
+      toolRadiusMm: 1,
+      cylinderDiameterMm: 20,
+      // Caller computed bounds from all segments → stockXMin pulled to 0
+      stockXMin: 0,
+      stockXMax: 80,
+      maxCols: 96,
+      maxRows: 60,
+    })
+    expect(field).not.toBeNull()
+    if (!field) return
+
+    // Grid must hug the actual cut region (margin = toolRadius + 1 = 2 mm),
+    // not the inflated [0, 80] passed in by the caller.
+    const marginMm = 2
+    const expectedMin = cuttingZone.xMin - marginMm // 8
+    const expectedMax = cuttingZone.xMax + marginMm // 32
+    expect(field.originX).toBeCloseTo(expectedMin, 1)
+    const fieldMaxX = field.originX + field.cols * field.cellMm
+    expect(fieldMaxX).toBeLessThanOrEqual(expectedMax + 0.1)
+    // Sanity: the grid must NOT span the inflated rapid range
+    expect(fieldMaxX - field.originX).toBeLessThan(40)
+  })
+
+  it('grid extent is clamped to stockXMin/Max (cuts cannot push grid outside physical stock)', () => {
+    // If a cutting segment somehow extends slightly beyond the stock bounds
+    // (e.g. tool radius overshoot at the edge), the grid must still clamp to
+    // the caller-provided physical stock range — never extending into thin air.
+    const segs: ToolpathSegment4[] = [
+      feed4(-5, 0, 7, 45, 90, 7), // cuts span [-5, 45], stock is [0, 40]
+    ]
+    const field = buildCylindricalHeightFieldFromSegments(segs, {
+      toolRadiusMm: 1,
+      cylinderDiameterMm: 20,
+      stockXMin: 0,
+      stockXMax: 40,
+      maxCols: 96,
+      maxRows: 60,
+    })
+    expect(field).not.toBeNull()
+    if (!field) return
+    expect(field.originX).toBeGreaterThanOrEqual(0)
+    expect(field.originX + field.cols * field.cellMm).toBeLessThanOrEqual(40 + 0.1)
+  })
+
   it('tiny cylinder (diameter ≤ 0.02mm) falls back to circumAtStock=1 and still builds', () => {
     // stockRadius = 0.01 → field.stockRadius ≤ 0.01 → `circumAtStock = 1` fallback.
     // The field should still build without NaN or Infinity in the radii array.

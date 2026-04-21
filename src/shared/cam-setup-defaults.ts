@@ -52,7 +52,8 @@ export function rotaryDimsFromSetupStock(stock: SetupStockLike | undefined): {
 
 /**
  * Machinable axial interval [start, end] mm along X from the stock left face (WCS).
- * Matches `cam-axis4-cylindrical-raster.ts` machinable X span and Shop rig coloring.
+ * Matches the 4-axis engine's machinable X span (`src/main/cam-axis4/`) and
+ * Shop rig coloring.
  */
 export function rotaryMachinableXSpanMm(
   stockLengthMm: number,

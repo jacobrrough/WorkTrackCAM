@@ -317,7 +317,7 @@ export const manufactureOperationSchema = z.object({
      * 4-axis continuous — simultaneous 4-axis machining with cylindrical heightmap.
      * Tool addresses workpiece radially with helical ramp entries and zigzag axial sweeps.
      * Both roughing and finishing in one pass. Requires `axisCount >= 4`.
-     * Routes to toolpath_engine `axis4_continuous` strategy.
+     * Routes to the TypeScript 4-axis engine at `src/main/cam-axis4/` (continuous strategy).
      * Params: `toolDiameterMm`, `stepoverMm`, `feedMmMin`, `plungeMmMin`, `safeZMm`,
      *   `cylinderDiameterMm`, `cylinderLengthMm`.
      */

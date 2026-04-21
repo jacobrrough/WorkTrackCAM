@@ -10,7 +10,7 @@ import { runDrawingExport, type DrawingExportPayload } from './drawing-export-se
 import { loadDrawingFile, saveDrawingFile } from './drawing-file-store'
 import type { MainIpcWindowContext } from './ipc-context'
 import { importMeshViaRegistry } from './mesh-import-registry'
-import { getEnginesRoot } from './paths'
+import { getEnginesBundleDiagnostics, getEnginesRoot } from './paths'
 import { isLikelyAsciiStl, parseBinaryStl } from './stl'
 import {
   assemblyFileSchema,
@@ -129,6 +129,14 @@ export function registerModelingIpc(ctx: MainIpcWindowContext): void {
         if (!r.ok) return { ok: false as const, error: r.error, detail: r.detail }
         const buf = await readFile(r.stlPath)
         return { ok: true as const, base64: buf.toString('base64') }
+      }
+      const eng = await getEnginesBundleDiagnostics()
+      if (!eng.meshScriptPresent) {
+        return {
+          ok: false as const,
+          error: 'engines_mesh_script_missing',
+          detail: `Expected ${join(eng.enginesRoot, 'mesh', 'mesh_to_stl.py')}.`
+        }
       }
       const outStl = join(tmpRoot, 'preview.stl')
       const script = join(getEnginesRoot(), 'mesh', 'mesh_to_stl.py')

@@ -7,7 +7,8 @@
  * legacy jobs into their owning environment by `machineId`.
  *
  * Pure functions over a structural `Storage`-like interface so tests run in
- * Node without a DOM. The Phase 3 React hook will pass `localStorage`.
+ * Node without a DOM. `ShopApp.tsx` calls these directly with `localStorage`
+ * from the env-bound load/save effects.
  */
 import type { Job } from '../shop-types'
 import { ENVIRONMENT_LIST, type EnvironmentId, type ShopEnvironment } from './registry'
