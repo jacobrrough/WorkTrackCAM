@@ -5,8 +5,10 @@
   "workAreaMm": { "x": 360, "y": 240, "z": 140 },
   "maxFeedMmMin": 2400,
   "postTemplate": "carvera_3axis.hbs",
-  "dialect": "grbl",
+  "dialect": "smoothieware",
   "axisCount": 3,
+  "atcSlotCount": 6,
+  "atcProbeSlot": 0,
   "maxSpindleRpm": 15000,
   "minSpindleRpm": 6000,
   "meta": {

@@ -83,7 +83,7 @@ export function FeedsCalcModal({
         <div className="modal-header">
           <span className="modal-header-title">{'\u2699'} Feeds & Speeds Calculator</span>
           <div className="flex-spacer" />
-          <button className="btn btn-ghost btn-sm btn-icon" onClick={onClose}>{'\u2715'}</button>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}>{'\u2715'}</button>
         </div>
 
         <div className="modal-body">
@@ -204,12 +204,12 @@ export function FeedsCalcModal({
 
           {/* Action row */}
           <div className="modal-footer p-0">
-            <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
-            <button className="btn btn-secondary btn-sm" disabled={!paramsFromCalc}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={!paramsFromCalc}
               onClick={() => { if (paramsFromCalc) { onApplyToAll(paramsFromCalc); onClose() } }}>
               Apply to All Ops
             </button>
-            <button className="btn btn-primary btn-sm" disabled={!paramsFromCalc}
+            <button type="button" className="btn btn-primary btn-sm" disabled={!paramsFromCalc}
               onClick={() => { if (paramsFromCalc) { onApplyToOp(paramsFromCalc); onClose() } }}>
               Apply to Selected Op
             </button>

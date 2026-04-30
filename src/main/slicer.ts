@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path'
 import {
   CURA_SLICE_CLI_DEFAULTS,
   curaCliParamsToEngineSettingsMap,
+  mergeFdmCapabilitiesUnder,
   resolveCuraSliceParams,
-  type CuraSliceCliParams
+  type CuraSliceCliParams,
+  type FdmCapabilityFields
 } from '../shared/cura-slice-defaults'
 import { getResourcesRoot } from './paths'
 
@@ -20,10 +22,19 @@ export type SliceRequest = {
   /** Named Cura `-s` bundle; see `cura-slice-defaults.ts` */
   slicePreset?: string | null
   /**
-   * Full merged Cura `-s` map (Cura setting id → value). When non-empty, used instead of
+   * Full merged Cura `-s` map (Cura setting id -> value). When non-empty, used instead of
    * rebuilding from `slicePreset` alone.
    */
   curaEngineSettings?: Record<string, string>
+  /**
+   * Optional FDM capability subset of the active `MachineProfile`.
+   * When supplied, the K2 Plus hard ceilings (maxNozzleTempC /
+   * maxBedTempC / chamberTempC) are merged UNDER the preset/profile
+   * settings so explicit job-level overrides always win. See
+   * `fdmCapabilitiesToEngineSettings` in `cura-slice-defaults.ts`.
+   * Roadmap: [ID-0068] (follow-up to [ID-0012]).
+   */
+  machineCapabilities?: FdmCapabilityFields
 }
 
 const CURA_OUTPUT_MAX_BYTES = 12 * 1024 * 1024
@@ -71,6 +82,30 @@ export function buildCuraSliceArgs(
 }
 
 /**
+ * Pure helper that walks the full settings-merge pipeline end-to-end for
+ * the `sliceWithCuraEngine` entrypoint. Kept exported so tests can assert
+ * the exact `-s` argv without spawning a process. Roadmap: [ID-0068].
+ *
+ * Precedence (lowest first): machine FDM capability ceilings < preset /
+ * `curaEngineSettings`. Explicit `curaEngineSettings` entries always win
+ * over the profile ceilings so a hot-spring filament test that pushes
+ * `machine_nozzle_temp_max=380` is never silently clamped back to the
+ * profile's `maxNozzleTempC=350`. Callers that want the opposite
+ * precedence can build their own map.
+ */
+export function resolveCuraSliceArgv(
+  resourcesRoot: string,
+  req: SliceRequest
+): string[] {
+  const base =
+    req.curaEngineSettings && Object.keys(req.curaEngineSettings).length > 0
+      ? new Map(Object.entries(req.curaEngineSettings))
+      : curaCliParamsToEngineSettingsMap(resolveCuraSliceParams(req.slicePreset))
+  const merged = mergeFdmCapabilitiesUnder(req.machineCapabilities ?? null, base)
+  return buildCuraSliceArgsFromSettingsMap(resourcesRoot, req, merged)
+}
+
+/**
  * Slice STL using CuraEngine CLI. Requires a valid Ultimaker-style definition chain on your machine
  * or the bundled minimal definition (may need tuning for your CuraEngine version).
  */
@@ -78,11 +113,7 @@ export async function sliceWithCuraEngine(req: SliceRequest): Promise<{ ok: bool
   const resources = getResourcesRoot()
   await mkdir(dirname(req.outputGcodePath), { recursive: true })
 
-  const merged =
-    req.curaEngineSettings && Object.keys(req.curaEngineSettings).length > 0
-      ? new Map(Object.entries(req.curaEngineSettings))
-      : curaCliParamsToEngineSettingsMap(resolveCuraSliceParams(req.slicePreset))
-  const args = buildCuraSliceArgsFromSettingsMap(resources, req, merged)
+  const args = resolveCuraSliceArgv(resources, req)
 
   const extraEnv: NodeJS.ProcessEnv = {}
   if (req.curaDefinitionsPath) {
@@ -95,7 +126,7 @@ export async function sliceWithCuraEngine(req: SliceRequest): Promise<{ ok: bool
   return { ok: true, stdout }
 }
 
-/** Copy STL into project assets and return path — helper for UI. */
+/** Copy STL into project assets and return path - helper for UI. */
 export async function stageStlForProject(projectDir: string, sourceStlPath: string): Promise<string> {
   const assets = join(projectDir, 'assets')
   await mkdir(assets, { recursive: true })

@@ -1298,6 +1298,74 @@ export function ManufactureOperationList({
                       </label>
                     </div>
                   ) : null}
+                  {/* [ID-0064] Dust collection -- per-job opt-in for posts that wire M7/M9 */}
+                  {/* (Laguna Swift 5x10 vcarve_mach3.hbs today: emits M7 after spindle warm-up */}
+                  {/* and M9 before spindle-off when set; otherwise commented reminders only). */}
+                  <div className="post-processing-options__row">
+                    <label
+                      className="chk"
+                      title="Emit M7 (dust collection ON) after spindle warm-up and M9 (OFF) before spindle-off. Currently honored by the Laguna Swift 5x10 RichAuto post (vcarve_mach3.hbs); other posts ignore the flag and emit commented reminders only."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={op.params?.['dustCollection'] === true}
+                        onChange={(e) => {
+                          const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                          if (e.target.checked) base.dustCollection = true
+                          else delete base.dustCollection
+                          onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                        }}
+                      />
+                      Dust collection (M7/M9)
+                    </label>
+                  </div>
+                  {/* [ID-0013-integration] Manual tool change -- ATC opt-out for the */}
+                  {/* Makera Carvera 3-axis post. Default off (ATC mode); checking the box */}
+                  {/* sets manualToolChange=true which suppresses M6 + G43 emission and */}
+                  {/* emits a manual-change reminder block instead. No-op on non-Carvera-3 posts. */}
+                  {!op.kind.includes('4axis') && !op.kind.includes('5axis') ? (
+                    <div className="post-processing-options__row">
+                      <label
+                        className="chk"
+                        title="Suppress automatic tool change (M6 T<n> + G43 H<n>) on Carvera 3-axis. Use for diagnostic / single-tool jobs where the tool is already loaded. Default off (ATC enabled)."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={op.params?.['manualToolChange'] === true}
+                          onChange={(e) => {
+                            const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                            if (e.target.checked) base.manualToolChange = true
+                            else delete base.manualToolChange
+                            onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                          }}
+                        />
+                        Manual tool change (suppress ATC M6/G43)
+                      </label>
+                    </div>
+                  ) : null}
+                  {/* [ID-0015] Simultaneous 4-axis -- UNVERIFIED community-firmware opt-in */}
+                  {/* for cnc_4axis_continuous. Default off; checking adds a prominent */}
+                  {/* warning header to the emitted G-code acknowledging the opt-in. */}
+                  {op.kind === 'cnc_4axis_continuous' ? (
+                    <div className="post-processing-options__row">
+                      <label
+                        className="chk"
+                        title="Acknowledge that simultaneous 4-axis moves (XYZ + A blended in a single G1 block) require community firmware on the Carvera. Adds a prominent UNVERIFIED warning block to the G-code header. Default off."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={op.params?.['enableSimultaneous4Axis'] === true}
+                          onChange={(e) => {
+                            const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                            if (e.target.checked) base.enableSimultaneous4Axis = true
+                            else delete base.enableSimultaneous4Axis
+                            onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                          }}
+                        />
+                        Simultaneous 4-axis (UNVERIFIED -- community firmware required)
+                      </label>
+                    </div>
+                  ) : null}
                 </div>
               </details>
             ) : null}

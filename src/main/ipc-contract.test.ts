@@ -2,10 +2,22 @@
  * IPC contract: preload is the source of truth for which channels the renderer uses.
  * Every `ipcRenderer.invoke('…')` in `src/preload/index.ts` must have exactly one
  * matching `ipcMain.handle('…')` in a non-test file under `src/main/` (recursive).
+ *
+ * Perf history:
+ *   [ID-0181] -- Cycle 94 (perf): hoisted the recursive `listMainProductionTsFiles
+ *   + readFileSync + extractMainHandleChannels` sweep AND the `src/preload/index.ts`
+ *   invoke-channel extraction into a single module-level `beforeAll`. Pre-hoist the
+ *   two tests each ran the full sweep independently, costing a 3-run-median 104.7 ms /
+ *   2 tests / ~52 ms-per-test (top-10 src/main perf hotspot in the cycle 94 inventory).
+ *   The cached `cachedMainHandles: MainFileSnapshot[]` preserves the original
+ *   `(filePath, rel, channels[])` shape both tests need; the cached
+ *   `cachedPreloadInvokeChannels: Set<string>` replaces the per-test preload read.
+ *   Same pattern as Cycle 86 [ID-0169] (carvera-pipeline.test.ts machine profile
+ *   read+parse hoist).
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 /** Channels used by preload `ipcRenderer.invoke(...)`. */
 function extractPreloadInvokeChannels(src: string): Set<string> {
@@ -43,33 +55,51 @@ function listMainProductionTsFiles(mainDir: string): string[] {
   return out
 }
 
+interface MainFileSnapshot {
+  filePath: string
+  /** Forward-slashed path relative to project root, used in diagnostic messages. */
+  rel: string
+  channels: string[]
+}
+
+// Module-level perf caches; populated once in `beforeAll` per [ID-0181].
+let cachedPreloadInvokeChannels!: Set<string>
+let cachedMainHandles!: readonly MainFileSnapshot[]
+
+beforeAll(() => {
+  const root = process.cwd()
+  const preloadSrc = readFileSync(join(root, 'src/preload/index.ts'), 'utf-8')
+  cachedPreloadInvokeChannels = extractPreloadInvokeChannels(preloadSrc)
+
+  const mainDir = join(root, 'src/main')
+  const snapshots: MainFileSnapshot[] = []
+  for (const filePath of listMainProductionTsFiles(mainDir)) {
+    const src = readFileSync(filePath, 'utf-8')
+    snapshots.push({
+      filePath,
+      rel: filePath.slice(root.length + 1).replace(/\\/g, '/'),
+      channels: extractMainHandleChannels(src)
+    })
+  }
+  cachedMainHandles = snapshots
+})
+
 describe('IPC contract (preload → main)', () => {
   it('every preload invoke has a matching ipcMain.handle channel', () => {
-    const root = process.cwd()
-    const preloadSrc = readFileSync(join(root, 'src/preload/index.ts'), 'utf-8')
-    const mainDir = join(root, 'src/main')
-    const fromPreload = extractPreloadInvokeChannels(preloadSrc)
     const fromMain = new Set<string>()
-    for (const filePath of listMainProductionTsFiles(mainDir)) {
-      const src = readFileSync(filePath, 'utf-8')
-      for (const ch of extractMainHandleChannels(src)) {
-        fromMain.add(ch)
-      }
+    for (const snap of cachedMainHandles) {
+      for (const ch of snap.channels) fromMain.add(ch)
     }
-    const missing = [...fromPreload].filter((ch) => !fromMain.has(ch))
+    const missing = [...cachedPreloadInvokeChannels].filter((ch) => !fromMain.has(ch))
     expect(missing, `Missing ipcMain.handle for: ${missing.join(', ')}`).toEqual([])
   })
 
   it('no duplicate ipcMain.handle channel names across src/main', () => {
-    const root = process.cwd()
-    const mainDir = join(root, 'src/main')
     const channelToFiles = new Map<string, string[]>()
-    for (const filePath of listMainProductionTsFiles(mainDir)) {
-      const src = readFileSync(filePath, 'utf-8')
-      const rel = filePath.slice(root.length + 1).replace(/\\/g, '/')
-      for (const ch of extractMainHandleChannels(src)) {
+    for (const snap of cachedMainHandles) {
+      for (const ch of snap.channels) {
         const arr = channelToFiles.get(ch) ?? []
-        arr.push(rel)
+        arr.push(snap.rel)
         channelToFiles.set(ch, arr)
       }
     }

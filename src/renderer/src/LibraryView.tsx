@@ -26,13 +26,13 @@ function MachineEditor({ machine, onChange, onSave, onCancel }: {
           {MODE_ICONS[mmode]} {MODE_LABELS[mmode]}
         </span>
         <div className="flex-spacer" />
-        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-sm btn-generate" onClick={onSave}>Save</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-generate" onClick={onSave}>Save</button>
       </div>
       <div className="card-body section-gap">
         <div className="form-row-3">
           <div className="form-group"><label>Name</label>
-            <input value={machine.name} onChange={e => set('name', e.target.value)} />
+            <input type="text" value={machine.name} onChange={e => set('name', e.target.value)} />
           </div>
           <div className="form-group"><label>Kind</label>
             <select value={machine.kind} onChange={e => set('kind', e.target.value as MachineProfile['kind'])}>
@@ -69,7 +69,7 @@ function MachineEditor({ machine, onChange, onSave, onCancel }: {
             </select>
           </div>
           <div className="form-group"><label>Post Template</label>
-            <input value={machine.postTemplate ?? ''} onChange={e => set('postTemplate', e.target.value)} />
+            <input type="text" value={machine.postTemplate ?? ''} onChange={e => set('postTemplate', e.target.value)} />
           </div>
           <div className="form-group"><label>Max Feed (mm/min)</label>
             <input type="number" value={machine.maxFeedMmMin ?? ''} onChange={e => set('maxFeedMmMin', +e.target.value)} />
@@ -101,13 +101,13 @@ function MaterialEditor({ material, onChange, onSave, onCancel }: {
       <div className="card-header">
         <span className="card-title">Edit Material</span>
         <div className="flex-spacer" />
-        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-sm btn-generate" onClick={onSave}>Save</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-generate" onClick={onSave}>Save</button>
       </div>
       <div className="card-body section-gap">
         <div className="form-row-3">
           <div className="form-group"><label>Name</label>
-            <input value={material.name} onChange={e => onChange({ ...material, name: e.target.value })} />
+            <input type="text" value={material.name} onChange={e => onChange({ ...material, name: e.target.value })} />
           </div>
           <div className="form-group"><label>Category</label>
             <select value={cat} onChange={e => { const v = e.target.value as MaterialCategory; setCat(v); onChange({ ...material, category: v }) }}>
@@ -115,7 +115,7 @@ function MaterialEditor({ material, onChange, onSave, onCancel }: {
             </select>
           </div>
           <div className="form-group"><label>Notes</label>
-            <input value={material.notes ?? ''} onChange={e => onChange({ ...material, notes: e.target.value })} />
+            <input type="text" value={material.notes ?? ''} onChange={e => onChange({ ...material, notes: e.target.value })} />
           </div>
         </div>
         <div className="label-upper">Default Cut Params</div>
@@ -295,7 +295,7 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
     <div className="lib-tabs">
       <div className="lib-tab-bar">
         {TABS.map(t => (
-          <button key={t.id}
+          <button type="button" key={t.id}
             className={`btn btn-ghost lib-tab-btn${tab === t.id ? ' btn-ghost--active lib-tab-btn--active' : ''}`}
             onClick={() => setTab(t.id)}>{t.label}</button>
         ))}
@@ -305,8 +305,8 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
         {tab === 'machines' && (
           <div className="lib-scroll">
             <div className="flex gap-8 mb-12">
-              <button className="btn btn-ghost btn-sm" onClick={importCps}>Import .cps{'\u2026'}</button>
-              <button className="btn btn-ghost btn-sm" onClick={async () => {
+              <button type="button" className="btn btn-ghost btn-sm" onClick={importCps}>Import .cps{'\u2026'}</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
                 const p = await fab().dialogOpenFile([{ name: 'Machine JSON', extensions: ['json'] }])
                 if (!p) return
                 try { await fab().machinesImportFile(p); await refreshMachines(); onToast('ok', 'Machine imported') }
@@ -334,9 +334,9 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
                       {m.dialect} {'\u00B7'} {m.workAreaMm.x}{'\u00D7'}{m.workAreaMm.y}{'\u00D7'}{m.workAreaMm.z}mm
                     </div>
                   </div>
-                  <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditingMachine({ ...m })}>{'\u270F'}</button>
+                  <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditingMachine({ ...m })}>{'\u270F'}</button>
                   {m.meta?.source === 'user' && (
-                    <button className="btn btn-ghost btn-sm btn-icon text-danger"
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon text-danger"
                       onClick={async () => { await fab().machinesDeleteUser(m.id); await refreshMachines(); onToast('ok', 'Deleted') }}>{'\u{1F5D1}'}</button>
                   )}
                 </div>
@@ -348,7 +348,7 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
         {tab === 'tools' && (
           <div className="lib-scroll">
             <div className="flex items-center gap-8 mb-8 lib-tool-import-bar">
-              <button className="btn btn-generate btn-sm" onClick={importTools}>{'\u2191'} Import Tool Library{'\u2026'}</button>
+              <button type="button" className="btn btn-generate btn-sm" onClick={importTools}>{'\u2191'} Import Tool Library{'\u2026'}</button>
               <select className="tb-select lib-machine-select" value={selectedMachineId ?? ''}
                 onChange={e => setSelectedMachineId(e.target.value || null)}>
                 <option value="">{'\u2014'} import into global library {'\u2014'}</option>
@@ -403,11 +403,11 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
         {tab === 'materials' && (
           <div className="lib-scroll">
             <div className="flex gap-8 mb-12">
-              <button className="btn btn-ghost btn-sm" onClick={() => setEditingMaterial({
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingMaterial({
                 id: `mat_${Date.now()}`, name: '', category: 'other', source: 'user',
                 cutParams: { default: { surfaceSpeedMMin: 200, chiploadMm: 0.05, docFactor: 0.5, stepoverFactor: 0.45, plungeFactor: 0.3 } }
               })}>+ New Material</button>
-              <button className="btn btn-ghost btn-sm" onClick={async () => {
+              <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
                 const r = await fab().materialsPickAndImport()
                 if (!r) return
                 setMaterials(await fab().materialsList())
@@ -431,9 +431,9 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
                     </div>
                     <div className="text-muted text-sm">{MATERIAL_CATEGORY_LABELS[m.category] ?? m.category}{m.source === 'bundled' ? ' \u00B7 bundled' : ''}</div>
                   </div>
-                  <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditingMaterial({ ...m })}>{'\u270F'}</button>
+                  <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditingMaterial({ ...m })}>{'\u270F'}</button>
                   {m.source !== 'bundled' && (
-                    <button className="btn btn-ghost btn-sm btn-icon text-danger"
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon text-danger"
                       onClick={async () => { await fab().materialsDelete(m.id); setMaterials(await fab().materialsList()); onToast('ok', 'Deleted') }}>{'\u{1F5D1}'}</button>
                   )}
                 </div>
@@ -445,7 +445,7 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
         {tab === 'posts' && (
           <div className="post-editor-layout">
             <div className="post-editor-sidebar">
-              <button className="btn btn-ghost btn-sm w-full mb-8"
+              <button type="button" className="btn btn-ghost btn-sm w-full mb-8"
                 onClick={async () => { const r = await fab().postsPickAndUpload(); if (r) { setPosts(await fab().postsList()); onToast('ok', `Imported ${r.filename}`) } }}>
                 Import .hbs{'\u2026'}
               </button>
@@ -466,7 +466,7 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
                   <div className="flex items-center gap-8 mb-8">
                     <span className="fw-600">{editingPostFilename}</span>
                     <div className="flex-spacer" />
-                    <button className="btn btn-sm btn-generate" onClick={async () => {
+                    <button type="button" className="btn btn-sm btn-generate" onClick={async () => {
                       await fab().postsSave(editingPostFilename, postContent)
                       setPosts(await fab().postsList()); onToast('ok', 'Saved')
                     }}>Save</button>

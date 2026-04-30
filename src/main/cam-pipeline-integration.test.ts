@@ -20,11 +20,26 @@ import type { MachineProfile } from '../shared/machine-schema'
 import { runCamPipeline, validate2dOperationGeometry } from './cam-runner'
 import type { CamJobConfig } from './cam-runner'
 
+// Hoisted above imports so the `vi.mock` factory below can close over
+// `scratchDir`. Cycle-4 Task-4.2 redirects `cam-runner`'s scratch
+// `_tmp_*.json` writes out of the repo root (where `process.cwd()` points
+// during `npm test`) and into a per-file tmpdir. See the twin comment in
+// `cam-axis4/__tests__/integration.test.ts`.
+const { scratchDir } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodeFs = require('node:fs') as typeof import('node:fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodePath = require('node:path') as typeof import('node:path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodeOs = require('node:os') as typeof import('node:os')
+  return { scratchDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'cam-pipe-')) }
+})
+
 vi.mock('./paths', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./paths')>()
   return {
     ...actual,
-    getEnginesRoot: () => process.cwd()
+    getEnginesRoot: () => scratchDir
   }
 })
 

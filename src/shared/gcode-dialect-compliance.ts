@@ -265,11 +265,83 @@ function checkHeidenhain(lines: string[]): ComplianceIssue[] {
   return []
 }
 
+/**
+ * Smoothieware-family controllers (Makera Carvera 3-axis, BeagleBone Smoothie).
+ * GRBL-flavored but extends GRBL by supporting tool-length compensation
+ * (G43/G49) and canned cycles. The Carvera 3-axis post legitimately emits
+ * `M6 T<n>` + `G43 H<n>` for ATC tool changes followed by `G49` at end-of-
+ * program — that block must NOT trigger a GRBL_NO_TLC warning. All other
+ * GRBL-style guards (G28/G30 flag, line-length, parenthetical comments) stay
+ * in place because Smoothieware's tape-buffer + comment-parser semantics are
+ * still GRBL-flavored: see `.claude/skills/gcode-safety/references/
+ * carvera-3axis.md` for the dialect-mislabel architectural note that motivated
+ * this split (Cycle 67 [ID-0155] discovered the false-positive; Cycle 68
+ * [ID-0160] fixes it).
+ */
+function checkSmoothieware(lines: string[]): ComplianceIssue[] {
+  const issues: ComplianceIssue[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const lineNum = i + 1
+    const stripped = stripComments(line)
+    if (!stripped) continue
+
+    const gCodes = extractGCodes(stripped)
+
+    // G28/G30 — Smoothieware can be configured to home, but the conservative
+    // play is to flag these as warnings (not errors): the user may be relying
+    // on a homing macro that isn't yet wired up in their firmware config.
+    // This is INTENTIONALLY softer than the GRBL 'error' level — Smoothieware
+    // genuinely supports G28 when home_position is configured.
+    for (const g of gCodes) {
+      if (g === 'G28' || g === 'G30') {
+        issues.push({
+          level: 'warning',
+          line: lineNum,
+          code: 'SMOOTHIEWARE_G28_CHECK',
+          message: `${g} (reference return) is supported by Smoothieware only when home_position is configured — verify the firmware config emits the expected motion`,
+          content: line
+        })
+      }
+      // NOTE: NO GRBL_NO_TLC equivalent — Smoothieware DOES support G43/G49.
+    }
+
+    // Parenthetical comments — Smoothieware tolerates them but the bundled
+    // Carvera posts use `;` comments by convention. Flag at warning level
+    // for consistency with GRBL (defensive — keeps `;` comments standard
+    // across the post template family).
+    const codePortion = line.indexOf(';') >= 0 ? line.substring(0, line.indexOf(';')) : line
+    if (hasParenComment(codePortion) && !isCommentLine(line)) {
+      issues.push({
+        level: 'warning',
+        line: lineNum,
+        code: 'SMOOTHIEWARE_PAREN_COMMENT',
+        message: 'Parenthetical comments are tolerated by Smoothieware but the bundled Carvera posts use ; comments — prefer ; for consistency',
+        content: line
+      })
+    }
+
+    // Smoothieware uses a similar receive-buffer architecture to GRBL with
+    // ~256-char effective line length. Keep the same length guard.
+    if (line.length > GRBL_MAX_LINE_LENGTH) {
+      issues.push({
+        level: 'warning',
+        line: lineNum,
+        code: 'SMOOTHIEWARE_LINE_LENGTH',
+        message: `Line exceeds Smoothieware-safe maximum length of ${GRBL_MAX_LINE_LENGTH} characters (${line.length} chars)`,
+        content: line
+      })
+    }
+  }
+  return issues
+}
+
 // ── Main validator ─────────────────────────────────────────────────────────
 
 /** Base dialect family for rule selection. */
 function dialectFamily(dialect: Dialect): string {
   if (dialect === 'grbl' || dialect === 'grbl_4axis') return 'grbl'
+  if (dialect === 'smoothieware') return 'smoothieware'
   if (dialect === 'fanuc' || dialect === 'fanuc_4axis') return 'fanuc'
   if (dialect === 'mach3' || dialect === 'mach3_4axis') return 'mach3'
   if (dialect === 'linuxcnc_4axis') return 'linuxcnc'
@@ -294,6 +366,7 @@ export function validateDialectCompliance(gcode: string, dialect: Dialect): Comp
 
   switch (family) {
     case 'grbl': return checkGrbl(lines)
+    case 'smoothieware': return checkSmoothieware(lines)
     case 'fanuc': return checkFanuc(lines)
     case 'mach3': return checkMach3(lines)
     case 'linuxcnc': return checkLinuxCNC(lines)

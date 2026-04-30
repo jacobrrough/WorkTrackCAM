@@ -118,7 +118,7 @@ export function HelpPanel({ onClose }: { onClose: () => void }): React.ReactElem
 
       <div className="help-panel__tabs" role="tablist" aria-label="Help sections">
         {HELP_TABS.map(t => (
-          <button
+          <button type="button"
             key={t.id}
             role="tab"
             aria-selected={tab === t.id}

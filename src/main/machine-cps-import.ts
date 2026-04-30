@@ -244,7 +244,10 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
     generic_mm:      'cnc_generic_mm.hbs',
     fanuc:           'cnc_5axis_fanuc.hbs',
     siemens:         'cnc_5axis_siemens.hbs',
-    heidenhain:      'cnc_generic_mm.hbs'
+    heidenhain:      'cnc_generic_mm.hbs',
+    // [ID-0160] Cycle 68 — Smoothieware (Makera Carvera 3-axis) imports
+    // route to the bundled Carvera 3-axis post for shop-specific defaults.
+    smoothieware:    'carvera_3axis.hbs'
   }
   if (
     dialect === 'fanuc_4axis' ||

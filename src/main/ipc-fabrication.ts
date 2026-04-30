@@ -23,6 +23,8 @@ import {
   generateCarveraZProbe
 } from '../shared/carvera-zeroing'
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
+import type { FdmCapabilityFields } from '../shared/cura-slice-defaults'
+import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
   deleteUserMachine,
   getMachineById,
@@ -79,6 +81,93 @@ const manufactureMigrationPipeline = buildMigrationPipeline<ManufactureFile>([],
 
 /** Tracks the AbortController for any currently running cam:run operation. */
 let activeCamController: AbortController | null = null
+
+/**
+ * Payload shape accepted by the `moonraker:push` IPC handler AND by the
+ * pure `resolveMoonrakerPushCapabilities` helper below. Matches
+ * `MoonrakerPushPayload` from `./moonraker-push` extended with the
+ * optional `machineId` hook that the handler resolves into concrete
+ * `FdmCapabilityFields` (see [ID-0078]).
+ */
+export type MoonrakerPushIpcPayload = {
+  gcodePath: string
+  printerUrl: string
+  uploadPath?: string
+  startAfterUpload?: boolean
+  timeoutMs?: number
+  machineId?: string
+  machineCapabilities?: FdmCapabilityFields | null
+}
+
+/**
+ * Extracts the three FDM capability temperature ceilings from a machine
+ * profile if it looks like an FDM profile. Any missing / non-positive /
+ * non-finite field is dropped so downstream callers see "not declared".
+ * Returns `null` when none of the three fields are declared (signals
+ * "this profile has nothing to contribute" -- callers then treat the
+ * capability bundle as absent).
+ */
+export function extractFdmCapabilitiesFromProfile(
+  profile: { maxNozzleTempC?: unknown; maxBedTempC?: unknown; chamberTempC?: unknown } | null | undefined
+): FdmCapabilityFields | null {
+  if (!profile || typeof profile !== 'object') return null
+  const out: FdmCapabilityFields = {}
+  const n = (profile as { maxNozzleTempC?: unknown }).maxNozzleTempC
+  const b = (profile as { maxBedTempC?: unknown }).maxBedTempC
+  const c = (profile as { chamberTempC?: unknown }).chamberTempC
+  if (typeof n === 'number' && Number.isFinite(n) && n > 0) out.maxNozzleTempC = n
+  if (typeof b === 'number' && Number.isFinite(b) && b > 0) out.maxBedTempC = b
+  if (typeof c === 'number' && Number.isFinite(c) && c > 0) out.chamberTempC = c
+  return Object.keys(out).length === 0 ? null : out
+}
+
+/**
+ * Resolves the effective `machineCapabilities` for a `moonraker:push`
+ * payload (see [ID-0078]). Precedence:
+ *   1. `payload.machineCapabilities` is explicit (any non-undefined value,
+ *      including `null` to opt out) -- returned unchanged, machineId is
+ *      stripped from the outgoing payload.
+ *   2. `payload.machineId` is present AND the resolved profile declares
+ *      at least one of the three FDM ceilings -- extracted and threaded
+ *      as `machineCapabilities`. machineId is still stripped.
+ *   3. Neither hook is set OR the resolver found nothing -- the outgoing
+ *      payload omits `machineCapabilities` entirely, producing
+ *      byte-identical pre-[ID-0078] behavior for `moonrakerPush`.
+ *
+ * Safety Rule 2: additive / optional -- existing callers that never set
+ * machineId or machineCapabilities see zero change in behavior.
+ */
+export async function resolveMoonrakerPushCapabilities(
+  payload: MoonrakerPushIpcPayload
+): Promise<{
+  gcodePath: string
+  printerUrl: string
+  uploadPath?: string
+  startAfterUpload?: boolean
+  timeoutMs?: number
+  machineCapabilities?: FdmCapabilityFields | null
+}> {
+  const { machineId, machineCapabilities, ...rest } = payload
+  // Rule 1: explicit override wins (including explicit null).
+  if (machineCapabilities !== undefined) {
+    return { ...rest, machineCapabilities }
+  }
+  // Rule 2: try to resolve from the machine profile.
+  if (typeof machineId === 'string' && machineId.length > 0) {
+    try {
+      const profile = await getMachineById(machineId)
+      const caps = extractFdmCapabilitiesFromProfile(profile)
+      if (caps) return { ...rest, machineCapabilities: caps }
+    } catch {
+      // Swallow profile-resolution failures -- the pre-upload validator
+      // is a defense-in-depth layer, not load-bearing for correctness.
+      // Falling through to the no-caps path preserves pre-[ID-0078]
+      // behavior so a transient FS error cannot block a valid print.
+    }
+  }
+  // Rule 3: neither hook produced caps; omit the field entirely.
+  return rest
+}
 
 export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle('machines:list', async () => loadAllMachines())
@@ -616,8 +705,31 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         uploadPath?: string
         startAfterUpload?: boolean
         timeoutMs?: number
+        /**
+         * Optional machine id. When supplied AND `machineCapabilities` is not
+         * explicitly set on the payload (see [ID-0078]), the handler resolves
+         * the active machine profile via `getMachineById(machineId)` and
+         * threads `maxNozzleTempC` / `maxBedTempC` / `chamberTempC` into the
+         * pre-upload G-code temperature validator (see [ID-0070] +
+         * [ID-0073]). The renderer no longer has to re-read the machine
+         * profile just to surface these safety ceilings.
+         *
+         * Safety Rule 2: additive / optional. Absent machineId + absent
+         * machineCapabilities produces byte-identical pre-[ID-0078] behavior.
+         */
+        machineId?: string
+        /**
+         * Optional explicit capability override. When present (including
+         * `null` to opt out of the resolver), takes precedence over the
+         * `machineId`-driven resolution. This is the explicit override hook
+         * for callers that already have capabilities in hand.
+         */
+        machineCapabilities?: FdmCapabilityFields | null
       }
-    ) => moonrakerPush(payload)
+    ) => {
+      const resolved = await resolveMoonrakerPushCapabilities(payload)
+      return moonrakerPush(resolved)
+    }
   )
 
   ipcMain.handle(
@@ -638,6 +750,43 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle(
     'moonraker:resume',
     async (_e, printerUrl: string, timeoutMs?: number) => moonrakerResume(printerUrl, timeoutMs)
+  )
+
+  /**
+   * Pre-flight Moonraker temperature preview hook -- registered for
+   * [ID-0072-followup] (Cycle 50 ui-polish). The renderer surfaces a
+   * `formatFdmTempPreview` banner above the Send button; this handler
+   * is the IPC counterpart so the renderer can ALSO log the preview
+   * event for future telemetry / dry-run hooks WITHOUT importing
+   * `electron` directly. Validation is intentionally light:
+   *   - `samples` must be a non-empty array.
+   *   - Every entry must have a finite `targetC` -- a single bad
+   *     sample is enough to short-circuit (Safety Rule 4: validate
+   *     payloads at the IPC boundary; do not let malformed data
+   *     reach downstream handlers).
+   * NO network I/O. NO machine touch. The `{ ok: true }` reply is a
+   * pure ack; the visible UI lives entirely in the renderer.
+   */
+  ipcMain.handle(
+    'moonraker:preview',
+    async (
+      _e,
+      samples: readonly GcodeTempSample[]
+    ): Promise<{ ok: true } | { ok: false; reason: string }> => {
+      if (!Array.isArray(samples) || samples.length === 0) {
+        return { ok: false as const, reason: 'no-samples' }
+      }
+      for (const s of samples) {
+        if (
+          !s ||
+          typeof s.targetC !== 'number' ||
+          !Number.isFinite(s.targetC)
+        ) {
+          return { ok: false as const, reason: 'invalid-sample' }
+        }
+      }
+      return { ok: true as const }
+    }
   )
 
   // ── Material library ─────────────────────────────────────────────────────────

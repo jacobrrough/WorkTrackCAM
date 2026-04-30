@@ -5,7 +5,23 @@ import { fitArcsToLinearPath } from '../shared/arc-fitting'
 import type { GCodeSegment, Point3D } from '../shared/arc-fitting'
 import type { MachineProfile } from '../shared/machine-schema'
 import { validateDialectCompliance } from '../shared/gcode-dialect-compliance'
+import {
+  headerInvariantModeForMachine,
+  validateGcodeHeaderInvariants
+} from '../shared/gcode-header-invariants'
+import {
+  endProgramInvariantModeForMachine,
+  validateGcodeEndProgramInvariants
+} from '../shared/gcode-end-program-invariants'
+import {
+  resolveSafeZClearanceMm,
+  safeZInvariantModeForMachine,
+  validateGcodeSafeZRetractInvariants
+} from '../shared/gcode-safe-z-retract-invariants'
 import { resolveDialectSnippets, resolveWorkOffsetLine } from './post-process-dialects'
+import { wrapLagunaToolpathWithVacuumBlocks } from '../shared/laguna-vacuum-postlude'
+import type { LagunaVacuumPostludeOptions } from '../shared/laguna-vacuum-postlude'
+import type { LagunaVacuumZoneAllocation } from '../shared/laguna-vacuum-allocator'
 
 /** Configuration for G-code line numbering (N-words). */
 export type LineNumberingConfig = {
@@ -94,6 +110,71 @@ export type PostContext = {
    * stored diameter). Typical range: 1–99.
    */
   cutterCompDRegister?: number
+  /**
+   * When true, emit dust-collection M-codes in templates that wire them
+   * behind a flag (e.g. the Laguna VCarve Pro / RichAuto A-series post
+   * `vcarve_mach3.hbs` emits `M7` after the spindle warm-up dwell and
+   * `M9` before spindle-off). When false or undefined, dust-collection
+   * lines stay commented out so manually-wired bench controllers aren't
+   * surprised by stray M7/M9 commands on program start.
+   *
+   * Roadmap: [ID-0004]. Laguna Swift 5×10 RichAuto A-series controllers
+   * commonly route M7/M8/M9 to dust-collection relays; this flag is the
+   * safe opt-in.
+   */
+  dustCollection?: boolean
+  /**
+   * When true, the Makera Carvera 4-axis post (`carvera_4axis.hbs`) emits a
+   * prominent UNVERIFIED-SIMULTANEOUS-MOVES warning header acknowledging
+   * that the operator has opted in to community-firmware-dependent
+   * simultaneous 4-axis behaviour (X/Y/Z and A all moving in one block).
+   *
+   * Why this is a separate flag from the strategy choice:
+   * `cnc_4axis_continuous` (the strategy that emits blended X/Y/Z+A moves)
+   * is already in production -- the flag does NOT change which strategy
+   * runs, NOR what toolpath geometry the engine emits. It ONLY adds a
+   * post-level warning banner that makes the opt-in operator-visible in
+   * the G-code header. Templates that don't reference the field
+   * (FDM, Laguna VCarve, Carvera 3-axis, generic CNC) are byte-identical
+   * regardless of the value.
+   *
+   * Roadmap [ID-0015]. Strict-true gate so `false` / undefined / non-bool
+   * params behave identically to pre-flag output.
+   */
+  enableSimultaneous4Axis?: boolean
+  /**
+   * When true, the post template suppresses the automatic-tool-change
+   * sequence (M6 T<n>, G43 H<n>) and emits an operator-visible manual-
+   * change reminder comment instead. Default off (undefined / false) =
+   * existing behaviour where ATC-capable templates emit M6 + G43
+   * unconditionally.
+   *
+   * Used by the Makera Carvera 3-axis post template (carvera_3axis.hbs)
+   * to let users opt OUT of ATC for diagnostic / single-tool jobs where
+   * the tool is already loaded and a mid-program M6 would be
+   * counterproductive (or where the operator wants to verify the tool
+   * by hand). The Carvera 4-axis post does not emit M6 at all (rotary
+   * attachment occupies the table) so this flag is a no-op there.
+   *
+   * Roadmap [ID-0013-integration]. Strict-true gate via the runner-shims
+   * extractor so non-bool / falsy values behave identically to omitted.
+   * Safety Rule 2 byte-identity: pre-existing projects with no field set
+   * see no output difference.
+   */
+  manualToolChange?: boolean
+  /**
+   * Pre-rendered Carvera WCS-setup probing block. When set, the bundled
+   * `carvera_3axis.hbs` and `carvera_4axis.hbs` templates emit it via
+   * `{{{carveraProbingBlock}}}` AFTER the WCS line and BEFORE the first
+   * tool-change M6. Honors the `carvera-3axis.md` reference contract:
+   * `M6 T<probeSlot>` -> `G38.2` cycle -> `G10 L20 P<wcs> ...` -> `M6 T<stowSlot>`.
+   * Set ONLY by `renderPost` when `opts.carveraProbing` is supplied; helper-built
+   * via `buildCarveraProbingBlock`. Templates that do not reference this field
+   * (FDM, Laguna, generic CNC) are byte-identical regardless of the value.
+   *
+   * Roadmap: [ID-0019].
+   */
+  carveraProbingBlock?: string
 }
 
 /**
@@ -158,20 +239,31 @@ export type ToolOperationBlock = {
  * tool slots, this function inserts:
  *   1. Spindle stop (M5)
  *   2. Safe Z retract (G0 Z<max>)
- *   3. Tool change (M6 T<n>)
- *   4. A comment indicating the new operation
+ *   3. Tool change (T<n> M6) -- omitted when supportsToolChange === false
+ *   4. Tool length compensation re-apply (G43 H<n>) -- ONLY when
+ *      `opts.emitToolLengthComp === true` AND supportsToolChange (ATC path).
+ *      Mirrors the carvera_3axis.hbs preamble contract for mid-job changes.
+ *      [ID-0013-followup] -- Safety Rule 1: without G43 H<n> after M6, the
+ *      controller still uses the previous tool's length offset and the next
+ *      feed move can drive Z below the programmed depth. Default false so
+ *      pre-existing callers stay byte-identical (Safety Rule 2).
+ *   5. A comment indicating the new operation
  *
- * When consecutive operations use the same tool slot, no tool change is inserted.
+ * When consecutive operations use the same tool slot, no tool change is
+ * inserted -- the spindle Z reference is already correct, so G43 H<n> is
+ * also omitted (no length offset has changed).
  *
  * @param blocks  Ordered array of tool operation blocks.
  * @param safeZMm  Safe Z retract height for tool changes.
  * @param commentPrefix  Comment prefix for the machine dialect (default "; ").
+ * @param opts  `supportsToolChange` (default true) gates the M6 line;
+ *   `emitToolLengthComp` (default false) gates the G43 H<n> follow-up.
  */
 export function sequenceMultiToolJob(
   blocks: ToolOperationBlock[],
   safeZMm: number,
   commentPrefix = '; ',
-  opts?: { supportsToolChange?: boolean }
+  opts?: { supportsToolChange?: boolean; emitToolLengthComp?: boolean }
 ): string {
   if (blocks.length === 0) return ''
   if (blocks.length === 1) return blocks[0]!.gcode
@@ -179,6 +271,17 @@ export function sequenceMultiToolJob(
   const parts: string[] = []
   let lastToolSlot: number | undefined
   const supportsToolChange = opts?.supportsToolChange !== false
+  // [ID-0013-followup] Cycle 60: G43 H<n> tool-length compensation re-apply
+  // after every mid-job M6 tool change. Defaults to false so callers that
+  // pre-date this flag continue to emit byte-identical sequences (Safety
+  // Rule 2). Carvera integration wires it true; the carvera_3axis.hbs
+  // preamble already emits G43 H<n> after the initial M6 (see the template
+  // at resources/posts/carvera_3axis.hbs:48-49) -- this option mirrors that
+  // contract for every mid-job tool change so the spindle Z reference is
+  // re-established each time the tool length changes. Without it, a longer
+  // T2 inserted after T1 leaves the controller using T1's length and the
+  // first feed move drives Z lower than commanded -- a Safety-Rule-1 crash.
+  const emitToolLengthComp = opts?.emitToolLengthComp === true
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!
@@ -190,6 +293,9 @@ export function sequenceMultiToolJob(
       parts.push(`G0 Z${safeZMm}`)
       if (supportsToolChange) {
         parts.push(`T${block.toolSlot} M6`)
+        if (emitToolLengthComp) {
+          parts.push(`G43 H${block.toolSlot}`)
+        }
       } else {
         parts.push(`${commentPrefix}Manual tool change required: load T${block.toolSlot} before continuing`)
       }
@@ -211,7 +317,162 @@ export function sequenceMultiToolJob(
  * Default arc fitting tolerance in mm.
  * Typical CNC machines can handle 0.005 mm deviation without visible artifacts.
  */
+/**
+ * Configuration for the Carvera WCS-setup probing block ([ID-0019]).
+ *
+ * Drives the `M6 T<probeSlot>` -> `G38.2` -> `G10 L20 P<wcsRegister>` ->
+ * `M6 T<stowSlot>` sequence emitted by `carvera_3axis.hbs` and
+ * `carvera_4axis.hbs` when supplied via `renderPost`'s `carveraProbing` option.
+ * Honors the `.claude/skills/gcode-safety/references/carvera-3axis.md`
+ * "Air-probe vs wireless probe" contract:
+ *
+ *   "Use T0 for the wireless probe; include an explicit
+ *    `M6 T0` -> probe cycle -> `M6 T-1` sequence; do not use T0
+ *    as a cutting tool by mistake."
+ *
+ * Behavior split by axis count:
+ *
+ *   - **3-axis** (`carvera_3axis.hbs`): full XYZ corner probe. Probes
+ *     -X edge, sets WCS X=0; probes -Y edge, sets WCS Y=0; probes -Z
+ *     surface, sets WCS Z=0. `xProbeTargetMm` and `yProbeTargetMm`
+ *     are REQUIRED.
+ *   - **4-axis** (`carvera_4axis.hbs`): Z-only probe (rotary stock has
+ *     no flat XY edge to touch). `xProbeTargetMm` / `yProbeTargetMm`
+ *     are ignored when present.
+ *
+ * Safety contract:
+ *
+ *   - `approachZMm` MUST be at or above the machine's safe clearance.
+ *     The block emits `G0 X<approach> Y<approach> Z<approach>` as the
+ *     FIRST motion; if Z is below safe, the safe-Z retract validator
+ *     ([ID-0110]) flags `RETRACT_NO_PRE_CUT_RETRACT` on the first
+ *     subsequent cut. Callers should pass `machine.workAreaMm.z` (or
+ *     `machine.safeRetractZMm` when set).
+ *   - `feedMmPerMin` is conservatively capped at 300 -- Carvera firmware
+ *     does not document a hard probe-feed limit; faster than 300 risks
+ *     probe deflection error and false contact.
+ *   - The block ends with `G0 Z<approach>` BEFORE `M6 T<stowSlot>` so
+ *     subsequent XY rapids cannot transit at probe depth.
+ */
+export type CarveraProbingContext = {
+  /** Probe slot for `M6 T<n>` to load the wireless probe. Carvera convention = 0. */
+  probeSlot: number
+  /** Slot to return the probe to via `M6 T<n>` after the cycle. Carvera convention = -1. */
+  stowSlot: number
+  /** Approach feed for the G38.2 probing moves (mm/min). Conservative ceiling: 300. */
+  feedMmPerMin: number
+  /** Approach X position above the probe target (mm, machine coords). */
+  approachXMm: number
+  /** Approach Y position above the probe target (mm, machine coords). */
+  approachYMm: number
+  /** Approach Z position above the probe target (mm, machine coords). MUST be >= safe Z. */
+  approachZMm: number
+  /** Maximum descent (absolute Z) for the Z probe. Probe surface should sit above this value. */
+  zProbeTargetMm: number
+  /** 3-axis only: signed X target for the corner edge probe. Required when axisCount===3. */
+  xProbeTargetMm?: number
+  /** 3-axis only: signed Y target for the corner edge probe. Required when axisCount===3. */
+  yProbeTargetMm?: number
+  /** WCS register (1..6 -> G54..G59) the G10 L20 set targets. */
+  wcsRegister: 1 | 2 | 3 | 4 | 5 | 6
+}
+
+/**
+ * Build the Carvera WCS-setup probing block for `carvera_3axis.hbs` / `carvera_4axis.hbs`
+ * ([ID-0019]). Returns a multi-line string ready to drop into the post template via
+ * `{{{carveraProbingBlock}}}`. See `CarveraProbingContext` for the safety contract.
+ *
+ * Throws an `Error` (not a warning) on invalid input -- the caller should be a
+ * job-prep step that surfaces the error in the UI before any G-code is staged.
+ *
+ * @param probing    Probing fixture configuration.
+ * @param axisCount  3 or 4 -- gates the corner-probe vs Z-only sequence.
+ * @returns          Multi-line G-code block, no trailing newline.
+ */
+export function buildCarveraProbingBlock(
+  probing: CarveraProbingContext,
+  axisCount: 3 | 4
+): string {
+  if (probing.feedMmPerMin <= 0) {
+    throw new Error(
+      `[ID-0019] Carvera probing feed must be positive (got ${probing.feedMmPerMin} mm/min)`
+    )
+  }
+  if (probing.feedMmPerMin > 300) {
+    // ASSUMPTION: 300 mm/min is a defensive ceiling derived from common Smoothieware
+    // probe macros; Carvera firmware does not publish a hard limit. Faster than
+    // 300 risks probe deflection error / false contact -- Safety Rule 1 territory.
+    throw new Error(
+      `[ID-0019] Carvera probing feed ${probing.feedMmPerMin} mm/min exceeds the safe ` +
+      '300 mm/min ceiling. Reduce feedMmPerMin and re-render.'
+    )
+  }
+  if (probing.wcsRegister < 1 || probing.wcsRegister > 6) {
+    throw new Error(
+      `[ID-0019] Carvera probing wcsRegister must be 1..6 (got ${probing.wcsRegister})`
+    )
+  }
+  if (probing.zProbeTargetMm >= probing.approachZMm) {
+    throw new Error(
+      `[ID-0019] Carvera probing zProbeTargetMm (${probing.zProbeTargetMm}) must be ` +
+      `strictly less than approachZMm (${probing.approachZMm}) -- the probe descends.`
+    )
+  }
+  if (axisCount === 3) {
+    if (probing.xProbeTargetMm === undefined || probing.yProbeTargetMm === undefined) {
+      throw new Error(
+        '[ID-0019] Carvera 3-axis probing requires xProbeTargetMm and yProbeTargetMm ' +
+        '(corner probe). Use 4-axis probing for Z-only rotary jobs.'
+      )
+    }
+  }
+
+  // The 1-based register index maps to G54..G59 (offset 53). Used in the comment
+  // string only; the G10 L20 P<n> form takes the 1..6 index directly.
+  const wcsLabel = `G5${probing.wcsRegister + 3}`
+
+  const lines: string[] = [
+    '; --- Carvera WCS-setup probing (UNVERIFIED -- verify against Carvera firmware docs) ---',
+    `; Loads wireless probe (T${probing.probeSlot}), probes ${axisCount === 3 ? 'X/Y/Z corner' : 'Z surface'}, sets ${wcsLabel}, stows probe (T${probing.stowSlot}).`,
+    '; Honors carvera-3axis.md "Use T0 for the wireless probe" contract.',
+    `M6 T${probing.probeSlot}            ; load wireless probe`,
+    `G0 X${gFmt(probing.approachXMm)} Y${gFmt(probing.approachYMm)} Z${gFmt(probing.approachZMm)} ; approach probe target at safe Z`
+  ]
+  if (axisCount === 3) {
+    lines.push(
+      `G38.2 X${gFmt(probing.xProbeTargetMm!)} F${gFmt(probing.feedMmPerMin)} ; probe X edge`,
+      `G10 L20 P${probing.wcsRegister} X0 ; set ${wcsLabel} X=0 at probe contact`,
+      `G0 X${gFmt(probing.approachXMm)} ; back off X to approach`,
+      `G38.2 Y${gFmt(probing.yProbeTargetMm!)} F${gFmt(probing.feedMmPerMin)} ; probe Y edge`,
+      `G10 L20 P${probing.wcsRegister} Y0 ; set ${wcsLabel} Y=0 at probe contact`,
+      `G0 Y${gFmt(probing.approachYMm)} ; back off Y to approach`
+    )
+  }
+  // Z probe runs in BOTH 3-axis (top of stock corner) and 4-axis (top of rotary stock at center).
+  lines.push(
+    `G38.2 Z${gFmt(probing.zProbeTargetMm)} F${gFmt(probing.feedMmPerMin)} ; probe Z surface`,
+    `G10 L20 P${probing.wcsRegister} Z0 ; set ${wcsLabel} Z=0 at probe contact`,
+    `G0 Z${gFmt(probing.approachZMm)} ; retract Z to safe approach BEFORE stowing probe`,
+    `M6 T${probing.stowSlot}            ; stow wireless probe (T${probing.stowSlot} = no tool)`,
+    '; --- end probing block ---'
+  )
+  return lines.join('\n')
+}
+
 const DEFAULT_ARC_TOLERANCE_MM = 0.005
+
+/**
+ * [ID-0173] Detect a rotary-axis word (A / B / C) followed by a numeric value
+ * preceded by start-of-string or whitespace. Used by `applyArcFitting` to
+ * bypass arc fitting on any 4-axis (or future B/C-axis) toolpath. The leading
+ * `(?:^|\s)` anchor avoids false positives on letters embedded inside other
+ * tokens (e.g. ``HAB1`` would not match; ``G1 X10 A1`` matches via the space).
+ * Over-conservative by design: a comment line such as ``; A1 mode`` will
+ * trigger the bypass, which only inhibits arc fitting (safe direction). False
+ * negatives -- silently stripping a rotary word from a fitted arc -- are not
+ * allowed (Safety Rule 1).
+ */
+const HAS_ROTARY_AXIS_WORD = /(?:^|\s)[ABC][+-]?\d/
 
 /**
  * Parse a G1 toolpath line into a 3D point (X, Y, Z).
@@ -278,11 +539,31 @@ function segmentToGcodeLine(seg: GCodeSegment, feedRate: string | null): string 
  * on a circular arc into G2/G3 commands. Non-G1 lines (G0 rapids, comments,
  * M-codes, etc.) are passed through unchanged.
  *
+ * **Safety [ID-0173]: 4-axis rotary bypass.** Arc fitting is XY-plane-only --
+ * `parseG1Point` only extracts X / Y / Z words and `segmentToGcodeLine` only
+ * emits X / Y / Z (plus optional I / J / K). If the input toolpath contains
+ * any rotary axis word (A / B / C), buffering those lines into a G1-arc fit
+ * would silently strip the rotary word from the emitted G2/G3 segment -- a
+ * CLAUDE.md "Safety Rule 1: G-code is sacred" violation for the **Makera
+ * Carvera + 4th Axis Rotary** target machine (and any future B / C-axis
+ * configuration). When ANY input line references a rotary word, this
+ * function returns the input lines verbatim (in a fresh array) without
+ * attempting arc fitting. Callers that want arc fitting on a 3-axis subset
+ * of a 4-axis program must filter the rotary lines out before calling.
+ *
  * @param lines     Raw toolpath lines (G0/G1 mix).
  * @param tolerance Maximum deviation (mm) for arc fitting.
- * @returns New array of toolpath lines with arcs inserted where applicable.
+ * @returns New array of toolpath lines with arcs inserted where applicable,
+ *          or a fresh copy of the input array unchanged when any rotary
+ *          axis word (A / B / C) is detected.
  */
 export function applyArcFitting(lines: string[], tolerance: number): string[] {
+  // Safety [ID-0173] -- 4-axis rotary bypass. See JSDoc above.
+  for (const line of lines) {
+    if (HAS_ROTARY_AXIS_WORD.test(line)) {
+      return lines.slice()
+    }
+  }
   const result: string[] = []
   let g1Buffer: { point: Point3D; feedRate: string | null; originalLine: string }[] = []
 
@@ -362,10 +643,32 @@ export function buildCutterCompLines(
  * Apply cutter compensation to toolpath lines by inserting G41/G42 before
  * the first feed move and G40 after the last feed move.
  *
+ * **Safety [ID-0176]: 4-axis rotary bypass.** Cutter compensation (G41/G42)
+ * is XY-plane-only on every controller in CLAUDE.md "USER CONTEXT --
+ * TARGET MACHINES" scope (Mach3 / RichAuto A-series / Smoothieware /
+ * Klipper). Inserting G41 / G42 around a 4-axis toolpath that contains
+ * any rotary axis word (A / B / C) yields controller rejection or
+ * unpredictable diameter compensation while the rotary axis is moving --
+ * a CLAUDE.md "Safety Rule 1: G-code is sacred" violation for the
+ * **Makera Carvera + 4th Axis Rotary** target machine (and any future
+ * B / C-axis configuration).
+ *
+ * When ANY input line references a rotary axis word, this function returns
+ * the input lines verbatim (in a fresh array) without inserting G41 / G42 /
+ * G40. Mirrors the [ID-0173] bypass on `applyArcFitting`. Over-conservative
+ * by design: a comment line such as ``; A1 calibration`` will trigger the
+ * bypass, which only inhibits compensation insertion (safe direction).
+ * False negatives -- silently bracketing a rotary toolpath with G41 / G42 --
+ * are not allowed (Safety Rule 1). Callers that want compensation on a
+ * 3-axis subset of a 4-axis program must filter the rotary lines out
+ * before calling.
+ *
  * @param lines  Toolpath lines (G0/G1/G2/G3 mix).
  * @param mode   Compensation mode.
  * @param dRegister  Optional D-register number.
- * @returns New array of toolpath lines with compensation commands inserted.
+ * @returns New array of toolpath lines with compensation commands inserted,
+ *          or a fresh copy of the input array unchanged when any rotary
+ *          axis word (A / B / C) is detected.
  */
 export function applyCutterCompensation(
   lines: string[],
@@ -374,6 +677,13 @@ export function applyCutterCompensation(
 ): string[] {
   const comp = buildCutterCompLines(mode, dRegister)
   if (!comp) return lines
+
+  // Safety [ID-0176] -- 4-axis rotary bypass. See JSDoc above.
+  for (const line of lines) {
+    if (HAS_ROTARY_AXIS_WORD.test(line)) {
+      return lines.slice()
+    }
+  }
 
   // Find the first feed move (G1/G2/G3) and insert G41/G42 before it
   // Find the last feed move and insert G40 after it
@@ -591,6 +901,53 @@ export function applyLineNumbering(gcode: string, config: LineNumberingConfig): 
   return numbered.join('\n')
 }
 
+/**
+ * [ID-0143] Compiled-post-template cache.
+ *
+ * `renderPost` is hot in tests (199+ calls in `post-process-safety.test.ts`)
+ * and in production (every CAM job + every header-only spindle preflight).
+ * Each call previously did:
+ *   1. `await readFile(tplPath, 'utf-8')` -- ~3-12 KB sync I/O
+ *   2. `Handlebars.compile(source)` -- non-trivial parse + AST build
+ * Both are pure functions of `tplPath`. The bundled posts ship in
+ * `resources/posts/*.hbs` and never mutate at runtime, so caching the
+ * COMPILED delegate keyed on `tplPath` is byte-identical to the uncached
+ * path while avoiding repeated disk + compile cost.
+ *
+ * Cache is module-scoped Map<string, Promise<HandlebarsTemplateDelegate>>:
+ *   - Promise-keyed so concurrent first-callers race-share one read+compile.
+ *   - Cleared via the exported `__resetPostTemplateCache` for test isolation
+ *     and for hot-reload scenarios that rewrite a post template on disk.
+ *
+ * Safety: returns the SAME compiled delegate; output gcode is byte-identical
+ * to the uncached path. Snapshot stability + warning-array isolation
+ * (warnings are computed per-call from the rendered output, not from the
+ * template) are preserved by construction.
+ */
+const compiledPostTemplateCache = new Map<string, Promise<HandlebarsTemplateDelegate<PostContext>>>()
+
+async function getOrLoadCompiledTemplate(
+  tplPath: string
+): Promise<HandlebarsTemplateDelegate<PostContext>> {
+  let cached = compiledPostTemplateCache.get(tplPath)
+  if (cached === undefined) {
+    cached = readFile(tplPath, 'utf-8').then((source) =>
+      Handlebars.compile<PostContext>(source)
+    )
+    compiledPostTemplateCache.set(tplPath, cached)
+  }
+  return cached
+}
+
+/**
+ * Test-only / hot-reload-only cache reset for the [ID-0143] compiled-post-
+ * template cache. Production callers should not need this; the cache is
+ * pure-functional w.r.t. the bundled `resources/posts/*.hbs` files.
+ */
+export function __resetPostTemplateCache(): void {
+  compiledPostTemplateCache.clear()
+}
+
 export async function renderPost(
   resourcesRoot: string,
   machine: MachineProfile,
@@ -610,10 +967,53 @@ export async function renderPost(
     enableSubroutines?: boolean
     subroutineDialect?: SubroutineDialect
     lineNumbering?: LineNumberingConfig
+    dustCollection?: boolean
+    /**
+     * When true, the Carvera 4-axis post emits the UNVERIFIED-SIMULTANEOUS
+     * warning header. See PostContext.enableSimultaneous4Axis for the full
+     * rationale ([ID-0015]). Strict-true gate; non-Carvera-4-axis templates
+     * are byte-identical regardless.
+     */
+    enableSimultaneous4Axis?: boolean
+    /**
+     * When true, suppress ATC M6 + G43 emission in templates that gate on
+     * `manualToolChange`. See PostContext.manualToolChange ([ID-0013-integration]).
+     * Strict-true via the runner-shims extractor; default off preserves byte-identity.
+     */
+    manualToolChange?: boolean
+    /**
+     * Optional Laguna Swift 5x10 vacuum-zone allocation. When supplied,
+     * `wrapLagunaToolpathWithVacuumBlocks` (from
+     * `src/shared/laguna-vacuum-postlude.ts`) splices an operator-readable
+     * preamble + release postamble around the toolpath BEFORE subroutine
+     * wrapping runs (so the wrap markers stay top-level and never become
+     * subroutine bodies). When omitted, the post pipeline is byte-identical
+     * to the pre-Cycle-109 baseline. Roadmap [ID-0020-wire].
+     */
+    vacuumZoneAllocation?: LagunaVacuumZoneAllocation
+    /**
+     * Optional companion options for `vacuumZoneAllocation`. Currently
+     * gates the off-by-default Mach3 M64/M65 immediate-digital-output
+     * emission. Ignored when `vacuumZoneAllocation` is undefined.
+     */
+    vacuumOptions?: LagunaVacuumPostludeOptions
+    /**
+     * Carvera WCS-setup probing fixture. When supplied AND the post
+     * template references `{{{carveraProbingBlock}}}` (the bundled
+     * `carvera_3axis.hbs` and `carvera_4axis.hbs`), `renderPost` builds
+     * the probing block via `buildCarveraProbingBlock` keyed on the
+     * machine's `axisCount` and injects it into the template context.
+     * When omitted, output is byte-identical to the pre-[ID-0019] baseline.
+     *
+     * Throws when probing config is invalid (negative feed, missing
+     * corner targets for 3-axis, etc.) -- see `buildCarveraProbingBlock`
+     * for the validation contract. Roadmap [ID-0019].
+     */
+    carveraProbing?: CarveraProbingContext
   }
 ): Promise<RenderPostResult> {
   const tplPath = join(resourcesRoot, 'posts', machine.postTemplate)
-  const source = await readFile(tplPath, 'utf-8')
+  const template = await getOrLoadCompiledTemplate(tplPath)
   const { on, off, units } = resolveDialectSnippets(machine.dialect)
   const wcsLine = resolveWorkOffsetLine(opts?.workCoordinateIndex)
 
@@ -638,12 +1038,37 @@ export async function renderPost(
     processedLines = applyCutterCompensation(processedLines, compMode, opts?.cutterCompDRegister)
   }
 
+  // ── Laguna Swift 5x10 vacuum-zone wrap (Cycle 109 [ID-0020-wire]) ──
+  // Splice the operator-readable preamble + release postamble around the
+  // toolpath BEFORE subroutine wrapping so the M64/M65 lines and the
+  // semicolon-comment markers stay top-level (never become subroutine bodies)
+  // and so any future arc-fitting / cutter-comp passes see the original
+  // toolpath unchanged. Safety Rule 1: the helper never mutates toolpath
+  // bytes -- it only adds wrapping lines around them.
+  if (opts?.vacuumZoneAllocation) {
+    processedLines = wrapLagunaToolpathWithVacuumBlocks(
+      processedLines,
+      opts.vacuumZoneAllocation,
+      opts.vacuumOptions ?? {}
+    )
+  }
+
   // ── Subroutine wrapping: detect repeated patterns and wrap in subroutines ──
   let subroutineDefs: string[] = []
   if (opts?.enableSubroutines && opts.subroutineDialect) {
     const subResult = wrapRepeatPatternsAsSubroutines(processedLines, opts.subroutineDialect)
     processedLines = subResult.mainLines
     subroutineDefs = subResult.subroutineDefs
+  }
+
+  // Carvera WCS-setup probing block ([ID-0019]).
+  // When supplied, build the block via the helper (with full validation)
+  // and inject as `carveraProbingBlock` into the template context. Templates
+  // that do not reference the field are byte-identical regardless.
+  let carveraProbingBlock: string | undefined
+  if (opts?.carveraProbing) {
+    const ax: 3 | 4 = machine.axisCount === 4 ? 4 : 3
+    carveraProbingBlock = buildCarveraProbingBlock(opts.carveraProbing, ax)
   }
 
   const ctx: PostContext = {
@@ -662,9 +1087,12 @@ export async function renderPost(
     ...(opts?.enableArcFitting ? { enableArcFitting: true } : {}),
     ...(opts?.arcTolerance != null ? { arcTolerance: opts.arcTolerance } : {}),
     ...(compMode !== 'none' ? { cutterCompensation: compMode } : {}),
-    ...(opts?.cutterCompDRegister != null ? { cutterCompDRegister: opts.cutterCompDRegister } : {})
+    ...(opts?.cutterCompDRegister != null ? { cutterCompDRegister: opts.cutterCompDRegister } : {}),
+    ...(opts?.dustCollection ? { dustCollection: true } : {}),
+    ...(opts?.enableSimultaneous4Axis === true ? { enableSimultaneous4Axis: true } : {}),
+    ...(opts?.manualToolChange === true ? { manualToolChange: true } : {}),
+    ...(carveraProbingBlock !== undefined ? { carveraProbingBlock } : {})
   }
-  const template = Handlebars.compile(source)
   let gcode = template(ctx)
 
   // Append subroutine definitions at the end if any were generated
@@ -680,6 +1108,44 @@ export async function renderPost(
   const warnings: string[] = spindleWarning ? [spindleWarning] : []
   const compliance = validateDialectCompliance(gcode, machine.dialect)
   for (const issue of compliance) {
+    warnings.push(`[${issue.code}] ${issue.message} (line ${issue.line})`)
+  }
+  // [ID-0018] Universal post-pipeline header invariants: every CNC post
+  // must declare units, absolute mode, plane select, and (recommended)
+  // WCS before the first motion word. Skipped for FDM machines -- see
+  // gcode-header-invariants.ts for the rationale.
+  const headerMode = headerInvariantModeForMachine(machine)
+  const headerIssues = validateGcodeHeaderInvariants(gcode, headerMode)
+  for (const issue of headerIssues) {
+    warnings.push(
+      `[${issue.code}] ${issue.message} (first motion line ${issue.firstMotionLine})`
+    )
+  }
+  // [ID-0108] Universal post-pipeline end-of-program invariants: every CNC
+  // post must emit a program-end terminator (M2 or M30), must leave the
+  // spindle off before it, and the terminator must match the dialect
+  // convention (mach3/mach3_4axis prefer M30; grbl/grbl_4axis prefer M2
+  // because Smoothieware's M30 deletes the currently-running file).
+  // Skipped for FDM machines -- see gcode-end-program-invariants.ts.
+  const endMode = endProgramInvariantModeForMachine(machine)
+  const endIssues = validateGcodeEndProgramInvariants(gcode, endMode, machine.dialect)
+  for (const issue of endIssues) {
+    warnings.push(`[${issue.code}] ${issue.message} (line ${issue.line})`)
+  }
+  // [ID-0110] Universal post-pipeline safe-Z retract invariants: every CNC
+  // post must (a) emit a G0 Z>=safe before the first cut, (b) emit a G0
+  // Z>=safe between the last cut and the program-end command, and (c)
+  // never rapid in XY while modal Z is below the safe clearance. Skipped
+  // for FDM machines -- see gcode-safe-z-retract-invariants.ts. Follow-up
+  // to Cycle 36 [ID-0109] which landed the pure validator module.
+  const safeZMode = safeZInvariantModeForMachine(machine)
+  const safeZClearance = resolveSafeZClearanceMm(machine)
+  const safeZIssues = validateGcodeSafeZRetractInvariants(
+    gcode,
+    safeZMode,
+    safeZClearance
+  )
+  for (const issue of safeZIssues) {
     warnings.push(`[${issue.code}] ${issue.message} (line ${issue.line})`)
   }
   return { gcode, warnings }

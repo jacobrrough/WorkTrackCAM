@@ -475,6 +475,16 @@ describe('Snapshot — spindle RPM clamping', () => {
     maxSpindleRpm: 15000,
   }
 
+  // [ID-0018] Filter to non-HEADER warnings so these spindle assertions
+  // keep testing only spindle-clamp behavior (header-invariant coverage
+  // lives in post-process-header-invariants.test.ts).
+  // [ID-0108] Also filter END_ warnings: end-program-invariant coverage
+  // lives in post-process-end-program-invariants.test.ts.
+  // [ID-0110] Also filter RETRACT_ warnings: safe-Z retract invariant
+  // coverage lives in post-process-safe-z-retract-invariants.test.ts.
+  const spindleWarnings = (warnings: string[]): string[] =>
+    warnings.filter((w) => !/^\[(HEADER_|END_|RETRACT_)/.test(w))
+
   it('custom RPM within range', async () => {
     const { gcode, warnings } = await renderPost(resourcesRoot, machineLimited, contourToolpath, {
       spindleRpm: 10000,
@@ -482,7 +492,7 @@ describe('Snapshot — spindle RPM clamping', () => {
     })
     expect(gcode).toMatchSnapshot()
     expect(gcode).toContain('S10000')
-    expect(warnings).toEqual([])
+    expect(spindleWarnings(warnings)).toEqual([])
   })
 
   it('RPM exceeding max is clamped', async () => {
@@ -493,7 +503,7 @@ describe('Snapshot — spindle RPM clamping', () => {
     expect(gcode).toMatchSnapshot()
     expect(gcode).toContain('S15000')
     expect(gcode).not.toContain('S20000')
-    expect(warnings.length).toBe(1)
+    expect(spindleWarnings(warnings).length).toBe(1)
   })
 
   it('RPM below min is clamped', async () => {
@@ -504,7 +514,7 @@ describe('Snapshot — spindle RPM clamping', () => {
     expect(gcode).toMatchSnapshot()
     expect(gcode).toContain('S6000')
     expect(gcode).not.toContain('S3000')
-    expect(warnings.length).toBe(1)
+    expect(spindleWarnings(warnings).length).toBe(1)
   })
 })
 
@@ -737,4 +747,80 @@ describe('Snapshot — every dialect with tool change and WCS', () => {
       expect(gcode).toMatchSnapshot()
     })
   }
+})
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// LAGUNA SWIFT 5x10 — vacuum-postlude wiring (Cycle 109 [ID-0020-wire])
+// Real laguna-swift-5x10.json profile + bundled vcarve_mach3.hbs template +
+// 6-zone vacuum allocation. Snapshots the byte-stable wrapped output for
+// regression detection per Safety Rule 1 (G-code is sacred).
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Snapshot — Laguna Swift 5x10 vacuum-postlude', () => {
+  // Lazy-load the real machine profile + allocator helper inside the describe
+  // so that other snapshot tests (which use synthetic baseMachine profiles)
+  // are unaffected by import order.
+  const lagunaSampleToolpath = [
+    'G0 X0 Y0 Z25',
+    'G0 X10 Y10 Z5',
+    'G1 Z-3.000 F300',
+    'G1 X100 Y10 F3000',
+    'G1 X100 Y100 F3000',
+    'G1 X10 Y100 F3000',
+    'G1 X10 Y10 F3000',
+    'G0 Z25',
+  ]
+
+  it('vcarve_mach3.hbs with 6-zone full-coverage vacuum allocation', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { machineProfileSchema } = await import('../shared/machine-schema')
+    const { allocateLagunaVacuumZones } = await import(
+      '../shared/laguna-vacuum-allocator'
+    )
+    const machineJson = readFileSync(
+      join(resourcesRoot, 'machines', 'laguna-swift-5x10.json'),
+      'utf-8'
+    )
+    const machine = machineProfileSchema.parse(JSON.parse(machineJson))
+    // Full-sheet 48 in x 96 in (1219.2 x 2438.4 mm) at origin (0, 0):
+    // engages all 6 zones, outsideEnvelope = false.
+    const allocation = allocateLagunaVacuumZones(0, 0, 1219.2, 2438.4)
+    const { gcode } = await renderPost(
+      resourcesRoot,
+      machine,
+      lagunaSampleToolpath,
+      {
+        vacuumZoneAllocation: allocation,
+        operationLabel: 'Laguna 6-zone vacuum (default off)',
+      }
+    )
+    expect(gcode).toMatchSnapshot()
+  })
+
+  it('vcarve_mach3.hbs with 4-zone half-sheet vacuum + opt-in M64/M65', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { machineProfileSchema } = await import('../shared/machine-schema')
+    const { allocateLagunaVacuumZones } = await import(
+      '../shared/laguna-vacuum-allocator'
+    )
+    const machineJson = readFileSync(
+      join(resourcesRoot, 'machines', 'laguna-swift-5x10.json'),
+      'utf-8'
+    )
+    const machine = machineProfileSchema.parse(JSON.parse(machineJson))
+    // Half-sheet 48 in x 48 in (1219.2 x 1219.2 mm): engages 4 zones.
+    const allocation = allocateLagunaVacuumZones(0, 0, 1219.2, 1219.2)
+    const { gcode } = await renderPost(
+      resourcesRoot,
+      machine,
+      lagunaSampleToolpath,
+      {
+        vacuumZoneAllocation: allocation,
+        vacuumOptions: { enableMach3DigitalOutputs: true },
+        operationLabel: 'Laguna half-sheet 4-zone vacuum (M64/M65 enabled)',
+      }
+    )
+    expect(gcode).toMatchSnapshot()
+  })
 })

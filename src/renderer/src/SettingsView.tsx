@@ -25,9 +25,9 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
           ].map(({ key, label, placeholder }) => (
             <div className="form-group" key={key}><label>{label}</label>
               <div className="input-row">
-                <input placeholder={placeholder} value={String(settings[key] ?? '')}
+                <input type="text" placeholder={placeholder} value={String(settings[key] ?? '')}
                   onChange={e => setSettings(s => ({ ...s, [key]: e.target.value }))} />
-                <button className="btn btn-ghost btn-sm" onClick={async () => {
+                <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
                   const p = await fab().dialogOpenFile([{ name: 'Executable', extensions: ['*'] }])
                   if (p) setSettings(s => ({ ...s, [key]: p }))
                 }}>Browse{'\u2026'}</button>
@@ -37,7 +37,7 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
         </div>
       </div>
       <div className="settings-view__save-row">
-        <button className="btn btn-generate" onClick={async () => {
+        <button type="button" className="btn btn-generate" onClick={async () => {
           await fab().settingsSet(settings); onToast('ok', 'Settings saved')
         }}>Save Settings</button>
       </div>

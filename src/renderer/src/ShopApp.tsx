@@ -28,6 +28,8 @@ import { CAM_CUT_DEFAULTS } from '../../shared/cam-cut-params'
 import { shopJobStockAsCamSetup } from '../../shared/cam-setup-defaults'
 import { friendlyError } from '../../shared/file-parse-errors'
 import { ShopModelViewer, defaultTransform } from './ShopModelViewer'
+import MoonrakerPreviewBanner from './MoonrakerPreviewBanner'
+import type { GcodeTempSample } from '../../shared/gcode-temp-validator'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { ModelTransform, GizmoMode } from './ShopModelViewer'
@@ -52,11 +54,18 @@ import { useUndo } from './useUndo'
 import { PropertyEditCommand, AddItemCommand, DeleteItemCommand } from './undo-manager'
 import { formatErrorForToast } from './error-messages'
 import { assessGcodeForExportSafety } from './gcode-export-safety'
+import {
+  buildMoonrakerPushPayload,
+  formatMoonrakerPushFailure,
+  splitMoonrakerPushFailureForToast
+} from './moonraker-push-payload'
 
 // ── Extracted components ──────────────────────────────────────────────────────
 import { EnvironmentSplash } from './environments/EnvironmentSplash'
 import { EnvActionStrip } from './environments/EnvActionStrip'
 import { getEnvironmentForMachine } from './environments/env-routing'
+import { resolveQuickSwitchMachine } from './environments/quick-switch'
+import { ENVIRONMENT_LIST, isEnvironmentId, type EnvironmentId } from './environments/registry'
 import {
   finalizeLegacyJobsMigration,
   loadEnvJobs,
@@ -67,6 +76,8 @@ import { HelpPanel } from './HelpPanel'
 import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
 import { LibraryDrawer } from '../shell/LibraryDrawer'
 import { SettingsDrawer } from '../shell/SettingsDrawer'
+import { MyShopDrawer } from '../shell/MyShopDrawer'
+import type { MyShopPreset, MyShopMachineId } from './environments/my-shop-presets'
 
 // ── Context providers ────────────────────────────────────────────────────────
 import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
@@ -78,6 +89,11 @@ const LibraryView = lazy(() => import('./LibraryView').then(m => ({ default: m.L
 // ── Shared types & utilities ──────────────────────────────────────────────────
 import type { Toast, Job } from './shop-types'
 import { fab, getMachineMode, MODE_LABELS, MODE_ICONS, OPS_BY_MODE, KIND_LABELS } from './shop-types'
+import {
+  formatMachineBadgeAriaLabel,
+  formatMachineBadgeLabel,
+  formatMachineBadgeTitle
+} from './brand-bar-machine-badge'
 
 // ── Material apply helper ─────────────────────────────────────────────────────
 type MaterialApplyResult = {
@@ -358,7 +374,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
             <div className="vp-empty-title">{MODE_LABELS[mode]}</div>
             <div className="vp-empty-hint">Drop an STL or DXF file here or</div>
             {job
-              ? <button className="btn btn-ghost btn--force-visible" onClick={browseModel}>Browse for Model{'\u2026'}</button>
+              ? <button type="button" className="btn btn-ghost btn--force-visible" onClick={browseModel}>Browse for Model{'\u2026'}</button>
               : <div className="vp-empty-hint">Create or select a job first</div>}
           </div>
         </div>
@@ -377,7 +393,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
         <div className="vp-warning-banner">
           <span className="vp-warning-banner__icon">{'\u26A0'}</span>
           <span>Model extends outside stock</span>
-          <button
+          <button type="button"
             onClick={handleFitToStock}
             className="vp-warning-banner__btn">
             Auto-fit
@@ -388,7 +404,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
       {mode !== 'fdm' && (
         <div className="vp-hud-group">
           {GIZMO_MODES.map(({ mode: m, icon, title }) => (
-            <button key={m} title={title}
+            <button type="button" key={m} title={title}
               aria-label={title}
               aria-pressed={gizmoMode === m}
               onClick={() => setGizmoMode(g => g === m ? null : m)}
@@ -397,7 +413,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
             </button>
           ))}
           {gizmoMode && (
-            <button title="No gizmo (Esc)"
+            <button type="button" title="No gizmo (Esc)"
               aria-label="Deselect gizmo"
               onClick={() => setGizmoMode(null)}
               className="vp-hud-btn">
@@ -424,7 +440,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFloatOpen(o => !o) } }}>
             <div className="flex gap-2" onClick={e => e.stopPropagation()}>
               {GIZMO_MODES.map(({ mode: m, icon, title }) => (
-                <button key={m} title={title}
+                <button type="button" key={m} title={title}
                   aria-label={title}
                   onClick={() => setGizmoMode(g => g === m ? null : m)}
                   className={`vp-hud-btn--sm${gizmoMode === m ? ' vp-hud-btn--active' : ''}`}>
@@ -433,14 +449,14 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
               ))}
             </div>
             <div className="flex-spacer" />
-            <button
+            <button type="button"
               title={modelSize ? 'Fit model to stock \u2014 auto-orient + scale (F)' : 'Load a model first'}
               disabled={!modelSize}
               onClick={e => { e.stopPropagation(); handleFitToStock() }}
               className="vp-fit-btn">
               {'\u229E'} Fit
             </button>
-            <button className="btn btn-ghost btn-sm btn-icon" title="Reset transform (\u21BA)" aria-label="Reset transform"
+            <button type="button" className="btn btn-ghost btn-sm btn-icon" title="Reset transform (\u21BA)" aria-label="Reset transform"
               onClick={e => { e.stopPropagation(); onUpdateJob(job.id, { transform: defaultTransform() }) }}>{'\u21BA'}</button>
             <span className="chevron-sm chevron-sm--spaced">{floatOpen ? '\u25BE' : '\u25B8'}</span>
           </div>
@@ -452,7 +468,7 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
                   <div className="vp-float-field-label">
                     {field === 'position' ? 'Position (mm)' : field === 'rotation' ? 'Rotation (\u00B0)' : 'Scale'}
                     {field === 'rotation' && (
-                      <button className="btn btn-ghost btn-sm vp-float-reset-btn"
+                      <button type="button" className="btn btn-ghost btn-sm vp-float-reset-btn"
                         onClick={() => {
                           if (!job) return
                           onUpdateJob(job.id, { transform: { ...job.transform, rotation: { x: 0, y: 0, z: 0 } } })
@@ -522,7 +538,7 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
       <div className="cmd-box" onClick={e => e.stopPropagation()}>
         <div className="cmd-input-row">
           <span className="cmd-icon" aria-hidden="true">{'\u2318'}</span>
-          <input ref={inputRef} className="cmd-input" placeholder="Type a command\u2026"
+          <input type="text" ref={inputRef} className="cmd-input" placeholder="Type a command\u2026"
             aria-label="Search commands"
             role="combobox"
             aria-expanded={filtered.length > 0}
@@ -630,6 +646,7 @@ function ShopAppInner(): React.ReactElement {
   // New slide-over drawers (replace the old library/settings tab views)
   const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false)
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false)
+  const [myShopDrawerOpen, setMyShopDrawerOpen] = useState(false)
   const { pushToast } = useToast()
   const {
     view, setView,
@@ -645,6 +662,15 @@ function ShopAppInner(): React.ReactElement {
   const [gcodeGeneration, setGcodeGeneration] = useState(0)
   const [lastGenMs, setLastGenMs] = useState<number | null>(null)
   const [gcodeSafetyAckKey, setGcodeSafetyAckKey] = useState<string | null>(null)
+  // [ID-0072-followup] Cycle 50 ui-polish: pre-flight Moonraker
+  // temperature preview samples. Populated from
+  // `MoonrakerPushResult.tempValidation.samples` after each push
+  // attempt (which may also be a rejection); reset whenever the
+  // active job's gcodeOut changes. Renders nothing for non-FDM jobs
+  // and for jobs that have never produced validator output.
+  const [moonrakerPreviewSamples, setMoonrakerPreviewSamples] = useState<
+    readonly GcodeTempSample[] | undefined
+  >(undefined)
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const { execute: undoExec } = useUndo()
@@ -653,6 +679,14 @@ function ShopAppInner(): React.ReactElement {
   useEffect(() => { if (shouldShowOnboarding()) setShowOnboarding(true) }, [])
 
   const activeJob = useMemo(() => jobs.find(j => j.id === activeJobId) ?? null, [jobs, activeJobId])
+
+  // [ID-0072-followup] Cycle 50 ui-polish: clear the preview banner
+  // whenever the active job switches OR a fresh G-code is generated
+  // (changes `gcodeOut`). Stale samples from a previous job must
+  // never leak into the current K2 fab drawer.
+  useEffect(() => {
+    setMoonrakerPreviewSamples(undefined)
+  }, [activeJobId, activeJob?.gcodeOut])
   const mode: MachineUIMode = sessionMachine ? getMachineMode(sessionMachine) : 'cnc_2d'
   const isFdm = mode === 'fdm'
 
@@ -661,6 +695,30 @@ function ShopAppInner(): React.ReactElement {
     () => getEnvironmentForMachine(sessionMachine?.id ?? null),
     [sessionMachine?.id]
   )
+
+  // ── Quick-switch variant memory (per-env last-used machine) ───────────────
+  // Lets the brand-bar env buttons restore the Makera 3-axis vs 4-axis choice
+  // across switches. Persisted under `fab-env-last-variant-v1` (mirrors the
+  // `fab-jobs-<env>-v1` naming pattern). Reads and writes are guarded because
+  // localStorage can throw on quota/disabled-cookies in Electron edge cases.
+  const LAST_VARIANT_STORAGE_KEY = 'fab-env-last-variant-v1'
+  const [lastVariantByEnvId, setLastVariantByEnvId] = useState<Partial<Record<EnvironmentId, string>>>(() => {
+    try {
+      const raw = localStorage.getItem(LAST_VARIANT_STORAGE_KEY)
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      const out: Partial<Record<EnvironmentId, string>> = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (isEnvironmentId(k) && typeof v === 'string' && v.length > 0) {
+          out[k] = v
+        }
+      }
+      return out
+    } catch {
+      return {}
+    }
+  })
 
   // ── Per-environment jobs storage ──────────────────────────────────────────
   // Load jobs whenever the environment changes (which happens on machine pick).
@@ -1150,8 +1208,55 @@ function ShopAppInner(): React.ReactElement {
     }
     if (!(await ensureSafetyGate('Send to printer'))) return
     try {
-      const r = await fab().moonrakerPush({ gcodePath: activeJob.gcodeOut, printerUrl: activeJob.printerUrl, startAfterUpload: true })
-      r.ok ? pushToast('ok', `Sent: ${r.filename}`) : pushToast('err', formatErrorForToast(r.error ?? 'Send failed', 'Send to printer'))
+      // [ID-0080] Thread `machineId` so the main-process `moonraker:push`
+      // handler resolves FDM temperature ceilings from the active profile
+      // and runs the pre-upload validator (see [ID-0070]/[ID-0073]/[ID-0078]).
+      // Without this, the pre-upload temperature guard was disarmed in
+      // production. `formatMoonrakerPushFailure` surfaces the validator's
+      // structured `detail` string (e.g. "M109 targets 400 C but exceeds
+      // the nozzle ceiling of 350 C ...") alongside the high-level error.
+      const payload = buildMoonrakerPushPayload(
+        { gcodeOut: activeJob.gcodeOut, printerUrl: activeJob.printerUrl, machineId: activeJob.machineId },
+        { startAfterUpload: true }
+      )
+      const r = await fab().moonrakerPush(payload)
+      // [ID-0072-followup] Cycle 50 ui-polish: when the validator
+      // surfaced samples (typically on the rejection path -- see
+      // `MoonrakerPushResult.tempValidation.samples`), thread them
+      // into the pre-flight banner state so subsequent renders show
+      // the operator the peak heat targets above the Send button.
+      // Also fire the `moonraker:preview` IPC hook for future
+      // telemetry / dry-run integrations -- errors are intentionally
+      // swallowed to keep the user-facing flow identical to the
+      // pre-[ID-0072-followup] behavior (Safety Rule 2: additive).
+      const previewSamples = r.tempValidation?.samples
+      if (previewSamples && previewSamples.length > 0) {
+        setMoonrakerPreviewSamples(previewSamples)
+        void fab().moonrakerPreview(previewSamples).catch(() => { /* preview hook is non-critical */ })
+      }
+      if (r.ok) {
+        pushToast('ok', `Sent: ${r.filename}`)
+      } else {
+        // [ID-0088] Render rejections as a two-line toast so the long-form
+        // detail (typical: "M109 targets 400 C but exceeds the nozzle
+        // ceiling of 350 C ... (+2 more) — will heat: Nozzle: 215 C")
+        // is not chopped at 200 chars by `formatErrorForToast`. The Copy
+        // button on the toast row reconstructs the full single-line text
+        // for paste-into-bug-report. `formatMoonrakerPushFailure` is kept
+        // imported as the byte-identical legacy fallback for any future
+        // call-site that still needs a single string.
+        const split = splitMoonrakerPushFailureForToast(r)
+        const titleForToast = formatErrorForToast(split.title, 'Send to printer')
+        if (split.detail !== null) {
+          pushToast('err', titleForToast, split.detail)
+        } else {
+          pushToast('err', titleForToast)
+        }
+        // ASSUMPTION: `formatErrorForToast` is intentionally applied to
+        // the title only — the long-form `split.detail` is the
+        // validator's structured output and should appear verbatim so
+        // the operator can match it against the G-code line.
+      }
     } catch (e) { pushToast('err', friendlyError(e, 'Send failed')) }
   }
 
@@ -1339,6 +1444,71 @@ function ShopAppInner(): React.ReactElement {
     try { await fab().settingsSet({ lastMachineId: m.id }) } catch { /* */ }
   }
 
+  /**
+   * Brand-bar env quick-switch. Resolves the target machine via the pure
+   * helper, records the choice in per-env variant memory (localStorage), and
+   * delegates to `handleMachineSelect`. When no owned machine is installed,
+   * toasts a hint and opens the Library drawer rather than failing silently.
+   */
+  const handleQuickSwitchEnv = (envId: EnvironmentId): void => {
+    const targetEnv = ENVIRONMENT_LIST.find((e) => e.id === envId)
+    if (!targetEnv) return
+    const next = resolveQuickSwitchMachine(
+      targetEnv,
+      machines,
+      lastVariantByEnvId,
+      sessionMachine?.id ?? null
+    )
+    if (!next) {
+      pushToast('warn', `No ${targetEnv.name} machine installed. Open the Library to add one.`)
+      setLibraryDrawerOpen(true)
+      return
+    }
+    // No-op when the env already owns the current machine (idempotent rule).
+    if (sessionMachine?.id === next.id) return
+    const updated: Partial<Record<EnvironmentId, string>> = { ...lastVariantByEnvId, [envId]: next.id }
+    setLastVariantByEnvId(updated)
+    try { localStorage.setItem(LAST_VARIANT_STORAGE_KEY, JSON.stringify(updated)) } catch { /* quota / disabled */ }
+    void handleMachineSelect(next)
+  }
+
+  /**
+   * My Shop preset launcher. Delegates to the same quick-switch resolver
+   * the brand-bar env buttons use so variant-memory + missing-machine
+   * rules stay centralised. Closes the drawer when the preset successfully
+   * activates a machine. [ID-0009]
+   */
+  const handleLaunchMyShopPreset = (preset: MyShopPreset): void => {
+    const targetEnv = ENVIRONMENT_LIST.find((e) => e.id === preset.environmentId)
+    if (!targetEnv) return
+    const next = resolveQuickSwitchMachine(
+      targetEnv,
+      machines,
+      lastVariantByEnvId,
+      sessionMachine?.id ?? null
+    )
+    if (!next) {
+      pushToast('warn', `No ${targetEnv.name} machine installed. Open the Library to add one.`)
+      setLibraryDrawerOpen(true)
+      return
+    }
+    if (sessionMachine?.id !== next.id) {
+      const updated: Partial<Record<EnvironmentId, string>> = {
+        ...lastVariantByEnvId,
+        [preset.environmentId]: next.id
+      }
+      setLastVariantByEnvId(updated)
+      try { localStorage.setItem(LAST_VARIANT_STORAGE_KEY, JSON.stringify(updated)) } catch { /* quota / disabled */ }
+      void handleMachineSelect(next)
+    }
+    pushToast('ok', `${preset.label} ready on ${next.name}.`)
+  }
+
+  /** Library-drawer fallback when a My Shop card's machine is not installed. */
+  const handleInstallMyShopMachine = (_machineId: MyShopMachineId): void => {
+    setLibraryDrawerOpen(true)
+  }
+
   const commands = useMemo((): Command[] => {
     const c: Command[] = []
     c.push({ id: 'new_project', group: 'File', label: 'New Project (Ctrl+N)', icon: '\u{1F4C4}', action: () => void newProject() })
@@ -1410,7 +1580,7 @@ function ShopAppInner(): React.ReactElement {
             <div className="machine-lib-overlay__header">
               <span className="machine-lib-overlay__title">Machine Library</span>
               <div className="flex-spacer" />
-              <button className="btn btn-ghost btn-sm" onClick={async () => {
+              <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
                 await reloadMachines()
                 setSplashLibOpen(false)
               }}>{'\u2190'} Back to environment picker</button>
@@ -1443,6 +1613,27 @@ function ShopAppInner(): React.ReactElement {
           </span>
         </div>
         <div className="shop-brand-bar__center">
+          <div className="shop-brand-bar__env-switcher" role="group" aria-label="My Shop quick-switch">
+            {ENVIRONMENT_LIST.map((env) => {
+              const isActive = activeEnv?.id === env.id
+              return (
+                <button
+                  key={env.id}
+                  type="button"
+                  data-environment={env.id}
+                  className={`shop-brand-bar__env-btn${isActive ? ' shop-brand-bar__env-btn--active' : ''}`}
+                  aria-pressed={isActive}
+                  aria-label={`Switch to ${env.name}`}
+                  title={`Switch to ${env.name}`}
+                  onClick={() => handleQuickSwitchEnv(env.id)}
+                >
+                  <span className="shop-brand-bar__env-glyph" aria-hidden="true">{env.iconGlyph}</span>
+                  <span className="shop-brand-bar__env-name">{env.name}</span>
+                </button>
+              )
+            })}
+          </div>
+          <span className="shop-brand-bar__center-sep" aria-hidden="true" />
           <button
             type="button"
             className={`workspace-pill${view === 'jobs' ? ' workspace-pill--active' : ''}`}
@@ -1453,6 +1644,15 @@ function ShopAppInner(): React.ReactElement {
           </button>
         </div>
         <div className="shop-brand-bar__right">
+          <button
+            type="button"
+            className="tb-btn"
+            title="My Shop — machines and real-world presets"
+            aria-label="Open My Shop"
+            onClick={() => setMyShopDrawerOpen(true)}
+          >
+            {'\u{1F3ED}'}
+          </button>
           <button
             type="button"
             className="tb-btn"
@@ -1492,17 +1692,26 @@ function ShopAppInner(): React.ReactElement {
         </div>
       </header>
 
+      {view === 'jobs' && isFdm && (
+        <MoonrakerPreviewBanner samples={moonrakerPreviewSamples} />
+      )}
+
       <div className="shop-toolbar" role="toolbar" aria-label="Main toolbar">
-        <button className={`tb-machine-badge tb-machine-badge--${mode}`}
-          title={`Current machine: ${sessionMachine?.name ?? 'None'} \u2014 Click to change`}
-          onClick={() => setPhase('splash')}>
-          {MODE_ICONS[mode]} {sessionMachine?.name ?? 'No machine'}
+        <button
+          type="button"
+          className={`tb-machine-badge tb-machine-badge--${mode}`}
+          title={formatMachineBadgeTitle({ machineName: sessionMachine?.name, mode })}
+          aria-label={formatMachineBadgeAriaLabel({ machineName: sessionMachine?.name, mode })}
+          onClick={() => setPhase('splash')}
+        >
+          <span aria-hidden="true">{MODE_ICONS[mode]}</span>{' '}
+          {formatMachineBadgeLabel(sessionMachine?.name)}
         </button>
 
         <div className="tb-sep" />
 
         {view === 'jobs' && (
-          <input className="tb-job-name" placeholder="Job name\u2026" aria-label="Job name"
+          <input type="text" className="tb-job-name" placeholder="Job name\u2026" aria-label="Job name"
             value={activeJob?.name ?? ''} disabled={!activeJob}
             onChange={e => activeJob && updateJob(activeJob.id, { name: e.target.value })} />
         )}
@@ -1515,7 +1724,7 @@ function ShopAppInner(): React.ReactElement {
               <option value="">{'\u2014'} material {'\u2014'}</option>
               {materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
-            <button className="tb-btn" title="Apply material cut params to all operations (\u26A1)" aria-label="Apply material cut params" disabled={!activeJob?.materialId} onClick={applyMaterial}>{'\u26A1'}</button>
+            <button type="button" className="tb-btn" title="Apply material cut params to all operations (\u26A1)" aria-label="Apply material cut params" disabled={!activeJob?.materialId} onClick={applyMaterial}>{'\u26A1'}</button>
             <div className="tb-sep" />
             {(mode === 'cnc_4axis' || mode === 'cnc_5axis') && (
               <select className="tb-select tb-select-sm" title="Stock cross-section shape" aria-label="Stock profile"
@@ -1545,11 +1754,11 @@ function ShopAppInner(): React.ReactElement {
 
         {view === 'jobs' && (
           <>
-            <button className="btn-generate" disabled={running || !activeJob} onClick={generate}
+            <button type="button" className="btn-generate" disabled={running || !activeJob} onClick={generate}
               title={isFdm ? 'Slice (F5 or Ctrl+Enter)' : 'Generate G-code (F5 or Ctrl+Enter)'}>
               {running ? <><span className="spinner spinner--sm mr-4 v-mid" /> Running{'\u2026'}</> : isFdm ? '\u25B6 Slice' : '\u25B6 Generate'}
             </button>
-            <button className="btn-send" title="Send G-code to printer via Moonraker" disabled={!activeJob?.gcodeOut} onClick={sendToPrinter}>{'\u2192'} Send</button>
+            <button type="button" className="btn-send" title="Send G-code to printer via Moonraker" disabled={!activeJob?.gcodeOut} onClick={sendToPrinter}>{'\u2192'} Send</button>
             <button
               className="btn btn-ghost btn-sm"
               type="button"
@@ -1582,17 +1791,17 @@ function ShopAppInner(): React.ReactElement {
 
         <div className="tb-sep" />
         {view === 'jobs' && activeJob && !isFdm && (
-          <button className="tb-btn" title="Generate Setup Sheet \u2014 creates an HTML reference with all job parameters" aria-label="Generate setup sheet" onClick={openSetupSheet}>{'\u{1F4CB}'}</button>
+          <button type="button" className="tb-btn" title="Generate Setup Sheet \u2014 creates an HTML reference with all job parameters" aria-label="Generate setup sheet" onClick={openSetupSheet}>{'\u{1F4CB}'}</button>
         )}
         {view === 'jobs' && (
-          <button className="tb-btn" title="Import model \u2014 load an STL, DXF, STEP, IGES, OBJ, or 3MF file into the active job" aria-label="Import model" disabled={!activeJob} onClick={() => void importModel()}>{'\u{1F4E5}'}</button>
+          <button type="button" className="tb-btn" title="Import model \u2014 load an STL, DXF, STEP, IGES, OBJ, or 3MF file into the active job" aria-label="Import model" disabled={!activeJob} onClick={() => void importModel()}>{'\u{1F4E5}'}</button>
         )}
-        <button className="tb-btn" title="New project (Ctrl+N)" aria-label="New project" onClick={() => void newProject()}>{'\u{1F4C4}'}</button>
-        <button className="tb-btn" title="Open project file (Ctrl+O)" aria-label="Open project" onClick={loadProjectFile}>{'\u{1F4C2}'}</button>
-        <button className={`tb-btn${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
+        <button type="button" className="tb-btn" title="New project (Ctrl+N)" aria-label="New project" onClick={() => void newProject()}>{'\u{1F4C4}'}</button>
+        <button type="button" className="tb-btn" title="Open project file (Ctrl+O)" aria-label="Open project" onClick={loadProjectFile}>{'\u{1F4C2}'}</button>
+        <button type="button" className={`tb-btn${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
           {savedIndicator ? '\u2713' : '\u{1F4BE}'}
         </button>
-        <button className={`tb-btn${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}</button>
+        <button type="button" className={`tb-btn${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}</button>
       </div>
 
       {view === 'jobs' ? (
@@ -1672,6 +1881,14 @@ function ShopAppInner(): React.ReactElement {
         onClose={() => setSettingsDrawerOpen(false)}
         onToast={pushToast}
       />
+      <MyShopDrawer
+        open={myShopDrawerOpen}
+        onClose={() => setMyShopDrawerOpen(false)}
+        machines={machines}
+        currentMachineId={sessionMachine?.id ?? null}
+        onLaunchPreset={handleLaunchMyShopPreset}
+        onInstallMachine={handleInstallMyShopMachine}
+      />
 
       {gcodeViewerOpen && (
         <div
@@ -1735,8 +1952,8 @@ function ShopAppInner(): React.ReactElement {
             <span className="shop-log-title">Output Log</span>
             {running && <span className="spinner spinner--sm ml-8" aria-label="Processing" />}
             <div className="flex-spacer" />
-            <button className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
-            <button className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'\u2715'}</button>
+            <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
+            <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'\u2715'}</button>
           </div>
           {running && <div className="progress-bar progress-bar--indeterminate" role="progressbar" aria-label="Generation in progress"><div className="progress-bar__fill" /></div>}
           <div className="shop-log-body" aria-live="polite">

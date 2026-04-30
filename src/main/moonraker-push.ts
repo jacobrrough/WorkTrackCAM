@@ -18,6 +18,14 @@ import https from 'node:https'
 import { basename } from 'node:path'
 import { URL } from 'node:url'
 
+import type { FdmCapabilityFields } from '../shared/cura-slice-defaults'
+import { readGcodeHeaderText } from './gcode-header-read'
+import {
+  summarizeTempViolations,
+  validateGcodeFileTemps,
+  type GcodeTempValidationResult
+} from '../shared/gcode-temp-validator'
+
 export type MoonrakerPushPayload = {
   /** Full path to the .gcode file on disk. */
   gcodePath: string
@@ -35,6 +43,18 @@ export type MoonrakerPushPayload = {
   startAfterUpload?: boolean
   /** Timeout for each HTTP request in ms. Defaults to 15 000. */
   timeoutMs?: number
+  /**
+   * Optional machine FDM capability fields. When supplied, the G-code file is
+   * pre-parsed for M104 / M109 / M140 / M190 targets and cross-checked
+   * against `maxNozzleTempC` / `maxBedTempC` (see [ID-0070] +
+   * `src/shared/gcode-temp-validator.ts`). Any violation short-circuits the
+   * upload BEFORE any bytes cross the network — prevents a doomed job from
+   * wasting heat-up time on the printer.
+   *
+   * Safety Rule 2: additive / optional. Absent caps or unset ceilings
+   * produce the exact pre-[ID-0073] upload behavior.
+   */
+  machineCapabilities?: FdmCapabilityFields | null
 }
 
 export type MoonrakerPushResult =
@@ -45,7 +65,17 @@ export type MoonrakerPushResult =
       printStarted: boolean
       printerUrl: string
     }
-  | { ok: false; error: string; detail?: string }
+  | {
+      ok: false
+      error: string
+      detail?: string
+      /**
+       * Present when the upload was blocked by the pre-upload G-code
+       * temperature validator (see [ID-0073]). The renderer can surface
+       * the structured violation list without re-parsing `detail`.
+       */
+      tempValidation?: GcodeTempValidationResult
+    }
 
 export type MoonrakerStatusResult =
   | {
@@ -80,25 +110,68 @@ function makeRequest(
       reqHeaders['Content-Type'] = opts.contentType ?? 'application/octet-stream'
       reqHeaders['Content-Length'] = bodyBuf.length
     }
+    const timeout = opts.timeoutMs ?? 15_000
+    // [ID-0082] (Cycle 18 / perf): bound the **connect** phase with an
+    // AbortController. `req.setTimeout()` only arms once the socket is
+    // assigned, so on an unreachable host TCP SYN retransmits dominate and
+    // the caller's `timeoutMs` is effectively ignored (observed: 5 s+ waits
+    // against a 500 ms budget on 192.0.2.1). Node's `http.request` accepts
+    // an `AbortSignal` via RequestOptions since Node 15; scheduling the
+    // abort before `lib.request(...)` covers both the pre-socket and
+    // post-socket phases in one bound. `req.setTimeout()` remains as a
+    // belt-and-suspenders fallback for post-connect idle responses.
+    const controller = new AbortController()
     const reqOpts: http.RequestOptions = {
       method,
       host: u.hostname,
       port: u.port ? parseInt(u.port, 10) : isHttps ? 443 : 80,
       path: u.pathname + u.search,
-      headers: reqHeaders
+      headers: reqHeaders,
+      signal: controller.signal
     }
-    const timeout = opts.timeoutMs ?? 15_000
+    let settled = false
+    const abortTimer = setTimeout(() => {
+      if (settled) return
+      controller.abort()
+    }, timeout)
+    // Do not keep the event loop alive solely for the abort timer -- the
+    // request sockets already hold the loop; once they close we should
+    // resolve even if this timer has not yet fired.
+    if (typeof abortTimer.unref === 'function') abortTimer.unref()
+    const settle = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(abortTimer)
+      fn()
+    }
     const req = lib.request(reqOpts, (res) => {
       const chunks: Buffer[] = []
       res.on('data', (d: Buffer) => chunks.push(d))
       res.on('end', () => {
-        resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') })
+        settle(() =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') })
+        )
+      })
+      res.on('error', (err) => {
+        settle(() => reject(err))
       })
     })
     req.setTimeout(timeout, () => {
       req.destroy(new Error(`Request timed out after ${timeout} ms`))
     })
-    req.on('error', reject)
+    req.on('error', (err: NodeJS.ErrnoException) => {
+      // When the AbortController fires, Node rejects the in-flight request
+      // with an `AbortError` (`err.name === 'AbortError'`, code 'ABORT_ERR').
+      // Surface it as a clear timeout message so the upstream
+      // `moonrakerPause`/`moonrakerResume`/`moonrakerPush` catch branches
+      // continue to return `{ok: false, error: <string>}` with a
+      // human-readable cause.
+      if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') {
+        settle(() => reject(new Error(`Request aborted after ${timeout} ms`)))
+        return
+      }
+      settle(() => reject(err))
+    })
     if (opts.body != null) {
       const bodyBuf = typeof opts.body === 'string' ? Buffer.from(opts.body, 'utf-8') : opts.body
       req.write(bodyBuf)
@@ -231,7 +304,8 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
     printerUrl,
     uploadPath = '',
     startAfterUpload = false,
-    timeoutMs = 15_000
+    timeoutMs = 15_000,
+    machineCapabilities = null
   } = payload
 
   const filename = basename(gcodePath)
@@ -244,6 +318,42 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
       ok: false,
       error: 'G-code file not found.',
       detail: `Path: ${gcodePath} — generate or export the file first (Manufacture → Run).`
+    }
+  }
+
+  // [ID-0073] Pre-upload temperature ceiling check. When the caller threads
+  // `machineCapabilities` through, parse the gcode for M104 / M109 / M140 /
+  // M190 targets and reject BEFORE any bytes cross the network if any target
+  // exceeds the machine ceiling. Absent caps => same behavior as before this
+  // change (Safety Rule 2).
+  //
+  // [ID-0075] Bounded header read: every slicer-emitted temperature command
+  // lives in the header (typically first ~20 KB), so `readGcodeHeaderText`
+  // reads only the first 128 KiB rather than `readFileSync`-ing the entire
+  // file. Avoids a full-file UTF-8 decode + string allocation on jobs where
+  // the gcode is tens or hundreds of megabytes.
+  if (machineCapabilities != null) {
+    let gcodeText: string
+    try {
+      gcodeText = readGcodeHeaderText(gcodePath)
+    } catch (e) {
+      return {
+        ok: false,
+        error: 'G-code file unreadable — cannot pre-validate temperatures.',
+        detail: e instanceof Error ? e.message : String(e)
+      }
+    }
+    const tempValidation = validateGcodeFileTemps(gcodeText, machineCapabilities)
+    if (!tempValidation.ok) {
+      const summary = summarizeTempViolations(tempValidation)
+      return {
+        ok: false,
+        error: 'Upload blocked — G-code exceeds machine temperature ceiling.',
+        detail:
+          summary ??
+          `One or more heat targets in ${filename} exceed the active machine profile's declared ceilings.`,
+        tempValidation
+      }
     }
   }
 

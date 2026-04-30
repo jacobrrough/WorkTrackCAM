@@ -108,6 +108,142 @@ N160 M30
 "
 `;
 
+exports[`Snapshot — Laguna Swift 5x10 vacuum-postlude > vcarve_mach3.hbs with 4-zone half-sheet vacuum + opt-in M64/M65 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 18000 RPM
+; Operation: Laguna half-sheet 4-zone vacuum (M64/M65 enabled)
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+; --- Laguna Swift 5x10 vacuum zone allocation ---
+; 4 of 6 zones engaged (32.0% bed coverage)
+; Engaged zones: X0Y0, X0Y1, X1Y0, X1Y1
+; Idle zones:    X0Y2, X1Y2
+; OPERATOR: confirm vacuum zones engaged on panel before cycle start
+; OPERATOR: confirm wiring before running -- M64/M65 fire digital outputs
+M64 P0              ; engage X0Y0
+M64 P1              ; engage X0Y1
+M64 P3              ; engage X1Y0
+M64 P4              ; engage X1Y1
+; --- end vacuum zone allocation ---
+G0 X0 Y0 Z25
+G0 X10 Y10 Z5
+G1 Z-3.000 F300
+G1 X100 Y10 F3000
+G1 X100 Y100 F3000
+G1 X10 Y100 F3000
+G1 X10 Y10 F3000
+G0 Z25
+; --- Laguna Swift 5x10 vacuum zone release ---
+; Releasing 4 zone(s)
+; OPERATOR: confirm wiring before running -- M64/M65 fire digital outputs
+M65 P0              ; release X0Y0
+M65 P1              ; release X0Y1
+M65 P3              ; release X1Y0
+M65 P4              ; release X1Y1
+; --- end vacuum zone release ---
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;
+
+exports[`Snapshot — Laguna Swift 5x10 vacuum-postlude > vcarve_mach3.hbs with 6-zone full-coverage vacuum allocation 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 18000 RPM
+; Operation: Laguna 6-zone vacuum (default off)
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+; --- Laguna Swift 5x10 vacuum zone allocation ---
+; 6 of 6 zones engaged (64.0% bed coverage)
+; Engaged zones: X0Y0, X0Y1, X0Y2, X1Y0, X1Y1, X1Y2
+; Idle zones:    (none)
+; OPERATOR: confirm vacuum zones engaged on panel before cycle start
+; --- end vacuum zone allocation ---
+G0 X0 Y0 Z25
+G0 X10 Y10 Z5
+G1 Z-3.000 F300
+G1 X100 Y10 F3000
+G1 X100 Y100 F3000
+G1 X10 Y100 F3000
+G1 X10 Y10 F3000
+G0 Z25
+; --- Laguna Swift 5x10 vacuum zone release ---
+; Releasing 6 zone(s)
+; --- end vacuum zone release ---
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;
+
 exports[`Snapshot — WCS offsets > G54 (WCS index 1) 1`] = `
 "; Comprehensive Snapshot Mill — snapshot-comprehensive
 ; ---------------------------------------------------------------------------

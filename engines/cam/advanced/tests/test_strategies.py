@@ -152,6 +152,22 @@ class TestAdaptiveClear:
         stock_result = run_strategy(stock_job, mesh)
         assert stock_result.cut_distance_mm < base_result.cut_distance_mm
 
+    def test_stock_allowance_reduces_cut_distance_hemisphere(self):
+        """Cycle 4 regression: hemisphere geometry exercises a different mix
+        of `_clear_full_stock` (above-mesh Z levels) and `_clear_around_mesh`
+        (within-mesh Z levels) than the flat-top box above. Asserts the same
+        strict-reduction invariant on a curved-surface fixture so future
+        refactors cannot regress either geometry path in isolation.
+        """
+        mesh = _make_mesh(_hemisphere_triangles(radius=5.0))
+        base_job = _make_job(Strategy.ADAPTIVE_CLEAR)
+        base_job.stock_allowance_mm = 0.0
+        stock_job = _make_job(Strategy.ADAPTIVE_CLEAR)
+        stock_job.stock_allowance_mm = 1.0
+        base_result = run_strategy(base_job, mesh)
+        stock_result = run_strategy(stock_job, mesh)
+        assert stock_result.cut_distance_mm < base_result.cut_distance_mm
+
 
 class TestWaterline:
     def test_box_produces_chains(self):

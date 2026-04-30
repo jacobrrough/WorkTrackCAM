@@ -230,7 +230,7 @@ export function ToolLibraryPanel({
       {/* ── Toolbar ────────────────────────────────────────────────────── */}
       <div className="tlp-toolbar">
         <div className="tlp-toolbar-left">
-          <button className="btn btn-generate btn-sm" onClick={importTools}>
+          <button type="button" className="btn btn-generate btn-sm" onClick={importTools}>
             \u2191 Import Tool Library\u2026
           </button>
           <select
@@ -244,7 +244,7 @@ export function ToolLibraryPanel({
               <option key={m.id} value={m.id}>{m.name} (machine)</option>
             ))}
           </select>
-          <button className="btn btn-ghost btn-sm" onClick={handleAdd}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={handleAdd}>
             + New Tool
           </button>
         </div>
@@ -300,7 +300,7 @@ export function ToolLibraryPanel({
           </span>
         )}
         {hasActiveFilters && (
-          <button
+          <button type="button"
             className="btn btn-ghost btn-xs tlp-clear-btn"
             onClick={() => {
               setSearchQuery('')
@@ -318,7 +318,7 @@ export function ToolLibraryPanel({
       <div className="tlp-sort-bar">
         <span className="text-muted text-sm">Sort:</span>
         {(['name', 'diameter', 'type', 'fluteCount'] as ToolSortKey[]).map(key => (
-          <button
+          <button type="button"
             key={key}
             className={`btn btn-ghost btn-xs${sortBy === key ? ' btn-ghost--active' : ''}`}
             onClick={() => toggleSort(key)}
@@ -346,7 +346,7 @@ export function ToolLibraryPanel({
 
           <div className="tlp-edit-grid">
             <label className="tlp-label">Name
-              <input className="tlp-input" value={editingTool.name}
+              <input type="text" className="tlp-input" value={editingTool.name}
                 onChange={e => updateField('name', e.target.value)} />
             </label>
             <label className="tlp-label">Type
@@ -387,7 +387,7 @@ export function ToolLibraryPanel({
                 }} />
             </label>
             <label className="tlp-label">Material
-              <input className="tlp-input" value={editingTool.material ?? ''}
+              <input type="text" className="tlp-input" value={editingTool.material ?? ''}
                 onChange={e => updateField('material', e.target.value || undefined)}
                 placeholder="e.g. Carbide, HSS" />
             </label>
@@ -416,10 +416,10 @@ export function ToolLibraryPanel({
           </div>
 
           <div className="tlp-edit-actions">
-            <button className="btn btn-generate btn-sm" onClick={() => void handleSave()}>
+            <button type="button" className="btn btn-generate btn-sm" onClick={() => void handleSave()}>
               Save
             </button>
-            <button className="btn btn-ghost btn-sm" onClick={handleCancel}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleCancel}>
               Cancel
             </button>
           </div>
@@ -454,7 +454,7 @@ export function ToolLibraryPanel({
             )}
             <ToolWearBadge tool={t} />
             <div className="tlp-row-actions">
-              <button
+              <button type="button"
                 className="btn btn-ghost btn-sm btn-icon"
                 title="Edit"
                 aria-label={`Edit ${t.name}`}
@@ -462,7 +462,7 @@ export function ToolLibraryPanel({
               >
                 \u270F
               </button>
-              <button
+              <button type="button"
                 className="btn btn-ghost btn-sm btn-icon"
                 title="Duplicate"
                 aria-label={`Duplicate ${t.name}`}
@@ -470,7 +470,7 @@ export function ToolLibraryPanel({
               >
                 \u29C9
               </button>
-              <button
+              <button type="button"
                 className="btn btn-ghost btn-sm btn-icon text-danger"
                 title="Delete"
                 aria-label={`Delete ${t.name}`}

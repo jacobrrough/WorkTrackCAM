@@ -138,7 +138,11 @@ describe('renderPost compliance warning propagation', () => {
       postTemplate: 'cnc_generic_mm.hbs'
     }
     const { warnings } = await renderPost(resourcesRoot, machine, sampleToolpath)
-    const complianceWarnings = warnings.filter(w => /^\[/.test(w))
+    // [ID-0018] exclude HEADER_* codes from the universal header-invariant
+    // validator; this test only asserts dialect-compliance behavior.
+    // [ID-0108] also exclude END_* (end-program-invariant validator).
+    // [ID-0110] also exclude RETRACT_* (safe-Z retract-invariant validator).
+    const complianceWarnings = warnings.filter(w => /^\[(?!HEADER_|END_|RETRACT_)/.test(w))
     expect(complianceWarnings).toEqual([])
   })
 

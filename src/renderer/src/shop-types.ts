@@ -94,7 +94,19 @@ export declare const window: Window & {
     postsRead: (filename: string) => Promise<string>
     postsUploadFile: (filePath: string) => Promise<{ filename: string; path: string; source: 'bundled' | 'user'; preview: string }>
     postsPickAndUpload: () => Promise<{ filename: string; path: string; source: 'bundled' | 'user'; preview: string } | null>
-    moonrakerPush: (payload: { gcodePath: string; printerUrl: string; uploadPath?: string; startAfterUpload?: boolean; timeoutMs?: number }) => Promise<{ ok: boolean; filename?: string; error?: string; detail?: string }>
+    moonrakerPush: (payload: {
+      gcodePath: string
+      printerUrl: string
+      uploadPath?: string
+      startAfterUpload?: boolean
+      timeoutMs?: number
+      /**
+       * Optional machine id. When supplied, the main-process handler
+       * resolves FDM temperature ceilings from the profile and threads
+       * them through the pre-upload validator. See [ID-0078]/[ID-0080].
+       */
+      machineId?: string
+    }) => Promise<{ ok: boolean; filename?: string; error?: string; detail?: string }>
     moonrakerStatus: (url: string) => Promise<{ ok: boolean; state?: string; filename?: string; progress?: number; etaSeconds?: number; error?: string }>
     moonrakerCancel: (url: string) => Promise<{ ok: boolean; error?: string }>
     materialsList: () => Promise<MaterialRecord[]>

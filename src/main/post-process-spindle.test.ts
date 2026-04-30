@@ -15,7 +15,7 @@ const machine: MachineProfile = {
 
 const resourcesRoot = join(process.cwd(), 'resources')
 
-// ─── clampSpindleRpm ─────────────────────────────────────────────────────────
+// --- clampSpindleRpm --------------------------------------------------------
 describe('clampSpindleRpm', () => {
   it('no limits returns input unchanged, no warning', () => {
     const machineNoLimits: MachineProfile = { ...machine }
@@ -72,20 +72,33 @@ describe('clampSpindleRpm', () => {
   })
 })
 
-// ─── renderPost with spindleRpm ──────────────────────────────────────────────
+// --- renderPost with spindleRpm ---------------------------------------------
 describe('renderPost with spindleRpm', () => {
+  // [ID-0018] Filter to non-HEADER warnings so these spindle assertions
+  // continue to test only spindle-clamp behavior. The header-invariant
+  // validator runs on every CNC render and may emit HEADER_NO_WCS when
+  // the test machine omits workCoordinateIndex; that's exercised in
+  // post-process-header-invariants.test.ts.
+  // [ID-0108] Also filter END_ warnings: the synthetic test machine
+  // pairs dialect=grbl with vcarve_mach3.hbs (which emits M30), so the
+  // end-program validator correctly surfaces END_DIALECT_MISMATCH.
+  // End-program invariants are exercised in
+  // post-process-end-program-invariants.test.ts.
+  const spindleWarnings = (warnings: string[]): string[] =>
+    warnings.filter(w => !/^\[(HEADER_|END_)/.test(w))
+
   it('default behavior without spindleRpm unchanged', async () => {
     const { gcode: g, warnings } = await renderPost(resourcesRoot, machine, ['G0 X1 Y1'])
     // grbl dialect default: M3 S12000
     expect(g).toContain('M3 S12000')
-    expect(warnings).toEqual([])
+    expect(spindleWarnings(warnings)).toEqual([])
   })
 
   it('with spindleRpm, the S-word in output matches the provided RPM', async () => {
     const { gcode: g, warnings } = await renderPost(resourcesRoot, machine, ['G0 X1 Y1'], { spindleRpm: 8000 })
     expect(g).toContain('M3 S8000')
     expect(g).not.toContain('S12000')
-    expect(warnings).toEqual([])
+    expect(spindleWarnings(warnings)).toEqual([])
   })
 
   it('with spindleRpm exceeding machine max, output uses clamped RPM and returns warning', async () => {
@@ -93,8 +106,9 @@ describe('renderPost with spindleRpm', () => {
     const { gcode: g, warnings } = await renderPost(resourcesRoot, machineWithMax, ['G0 X1 Y1'], { spindleRpm: 20000 })
     expect(g).toContain('M3 S15000')
     expect(g).not.toContain('S20000')
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('15000')
+    const sw = spindleWarnings(warnings)
+    expect(sw).toHaveLength(1)
+    expect(sw[0]).toContain('15000')
   })
 
   it('with spindleRpm below machine min, output uses clamped RPM and returns warning', async () => {
@@ -102,7 +116,8 @@ describe('renderPost with spindleRpm', () => {
     const { gcode: g, warnings } = await renderPost(resourcesRoot, machineWithMin, ['G0 X1 Y1'], { spindleRpm: 3000 })
     expect(g).toContain('M3 S6000')
     expect(g).not.toContain('S3000')
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('6000')
+    const sw = spindleWarnings(warnings)
+    expect(sw).toHaveLength(1)
+    expect(sw[0]).toContain('6000')
   })
 })

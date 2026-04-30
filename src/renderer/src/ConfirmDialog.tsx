@@ -54,15 +54,15 @@ export function ConfirmDialog({
           <p style={{ margin: 0, whiteSpace: 'pre-line' }}>{message}</p>
         </div>
         <div className="modal-footer">
-          <button className="btn" onClick={onCancel}>
+          <button type="button" className="btn" onClick={onCancel}>
             {cancelLabel}
           </button>
           {secondaryLabel && onSecondary && (
-            <button className="btn" onClick={onSecondary}>
+            <button type="button" className="btn" onClick={onSecondary}>
               {secondaryLabel}
             </button>
           )}
-          <button
+          <button type="button"
             className={danger ? 'btn btn-danger' : 'btn btn-primary'}
             onClick={onConfirm}
           >

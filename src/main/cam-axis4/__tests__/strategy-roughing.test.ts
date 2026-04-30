@@ -195,3 +195,224 @@ describe('generateRoughing', () => {
     expect(Array.isArray(result.warnings)).toBe(true)
   })
 })
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// [ID-0010c] Roughing strategy edge-case + safety-emit invariants
+// (DISCOVERED-2026-04-25 sibling-extension on Cycle 42 [ID-0010b]
+// strategy-contour pattern). Pure test-only cycle: zero production-code edits.
+// Tests pinning behavior of:
+//   1. finishAllowanceMm leaves additional radial material on the mesh surface
+//   2. maxZMm clamps clearZ so no rapid Z exceeds maxZMm-1
+//   3. adaptiveRefinement: true produces additional A angles outside the
+//      regular stepoverDeg grid
+//   4. plunge G1 Z lines use plungeMmMin feed (NOT cut feed)
+//   5. cut G1 X lines declare feedMmMin and never plungeMmMin
+//   6. returnHome trailing-line sequence (G0 Z Y0; G0 A0)
+//   7. overcutMm: 0 still produces valid passes within [machXStart, machXEnd]
+// ────────────────────────────────────────────────────────────────────────────
+describe('generateRoughing -- edge-case + safety-emit invariants (DISCOVERED-2026-04-25 [ID-0010c])', () => {
+  it('finishAllowanceMm shifts the cut-Z distribution upward', () => {
+    // The allowance bumps cuts wherever the surface limit dominates
+    // (`cutZ = max(compR + allowance, targetCutR)`). The waterline floor and
+    // the no-mesh cells are unaffected, so we expect SET (zWithAllow) to
+    // include at least one G1-Z value larger than max(zNoAllow), proving the
+    // allowance term is reaching the cut depth selection. We also assert
+    // that mean(zWithAllow) >= mean(zNoAllow) (allowance can only push cuts
+    // shallower-from-axis = larger Z value).
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const baseParams = {
+      triangles: tris,
+      cylinderDiameterMm: 30, // stockR = 15
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-6, -10],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175
+    }
+    const noAllowance = generateRoughing(baseParams)
+    const withAllowance = generateRoughing({ ...baseParams, finishAllowanceMm: 4 })
+
+    const zNoAllow = extractG1ZValues(noAllowance.lines)
+    const zWithAllow = extractG1ZValues(withAllowance.lines)
+    expect(zNoAllow.length).toBeGreaterThan(0)
+    expect(zWithAllow.length).toBeGreaterThan(0)
+
+    const maxNoAllow = Math.max(...zNoAllow)
+    const maxWithAllow = Math.max(...zWithAllow)
+    // With allowance=4 the corner cuts shift up by ~4mm relative to baseline
+    // wherever compR > targetCutR - allowance. Pin the strict ordering.
+    expect(maxWithAllow).toBeGreaterThan(maxNoAllow + 0.5)
+
+    const meanNoAllow = zNoAllow.reduce((a, b) => a + b, 0) / zNoAllow.length
+    const meanWithAllow = zWithAllow.reduce((a, b) => a + b, 0) / zWithAllow.length
+    expect(meanWithAllow).toBeGreaterThanOrEqual(meanNoAllow)
+  })
+
+  it('maxZMm clamps clearZ -- no rapid Z above maxZMm - 1', () => {
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const result = generateRoughing({
+      triangles: tris,
+      cylinderDiameterMm: 30, // stockR = 15
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10, // raw clearZ = 25, would normally clamp to maxZMm - 1
+      maxZMm: 20, // clamped clearZ = min(25, 19) = 19
+      toolDiameterMm: 3.175
+    })
+    const allG0Z = result.lines
+      .filter((l) => /^G0\s+Z[\d.]/i.test(l))
+      .flatMap((l) => {
+        const m = l.match(/Z(\d+(?:\.\d+)?)/)
+        return m ? [parseFloat(m[1]!)] : []
+      })
+    expect(allG0Z.length).toBeGreaterThan(0)
+    // Every rapid-Z must respect the maxZMm-1 cap.
+    expect(Math.max(...allG0Z)).toBeLessThanOrEqual(20 - 1 + 1e-6)
+  })
+
+  it('adaptiveRefinement: true inserts extra A angles outside the stepover grid', () => {
+    // Square cross-section has 4 sharp corners -> high angular curvature at
+    // those bands. buildAdaptiveAngles inserts midpoint passes there, so the
+    // total count of G0 A lines must exceed the non-adaptive baseline.
+    const tris = makeBox(10, 60, -8, 8, -8, 8)
+    const baseParams = {
+      triangles: tris,
+      cylinderDiameterMm: 40,
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 15, // base na ~ 24
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175
+    }
+    const without = generateRoughing(baseParams)
+    const withAdaptive = generateRoughing({ ...baseParams, adaptiveRefinement: true })
+
+    const aWithout = without.lines.filter((l) => /^G0\s+A/i.test(l)).length
+    const aWithAdaptive = withAdaptive.lines.filter((l) => /^G0\s+A/i.test(l)).length
+    expect(aWithAdaptive).toBeGreaterThan(aWithout)
+  })
+
+  it('plunge G1 Z lines use plungeMmMin feed (not cut feed)', () => {
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const result = generateRoughing({
+      triangles: tris,
+      cylinderDiameterMm: 30,
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175
+    })
+    // Pure-plunge lines (G1 Z<...> F<...> with no X) come from emit.plungeZ().
+    const plungeLines = result.lines.filter(
+      (l) => /^G1\s+Z[\d.]/i.test(l) && !/X-?[\d.]/.test(l)
+    )
+    expect(plungeLines.length).toBeGreaterThan(0)
+    for (const line of plungeLines) {
+      const fm = line.match(/F(\d+)/)
+      expect(fm).not.toBeNull()
+      expect(parseInt(fm![1]!, 10)).toBe(300)
+    }
+  })
+
+  it('lateral cut moves at constant Z use feedMmMin (not plunge feed)', () => {
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const result = generateRoughing({
+      triangles: tris,
+      cylinderDiameterMm: 30,
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175
+    })
+    // Lateral cuts at constant Z (G1 X<...> with no Z word -- the emitter
+    // omits Z when |dz| <= 0.005 mm) use the cut feed by construction. A
+    // deepening lateral cut > 0.5 mm intentionally borrows the plunge feed
+    // (see emit.cutTo()), so we exclude those by filtering for "no Z word"
+    // cut lines. Among constant-Z lateral cuts, F800 must be declared at
+    // least once (after each plunge, the cut feed is emitted), and F300
+    // must NEVER appear (that would mean a flat lateral move is misusing
+    // plunge feed).
+    const cutLines = result.lines.filter((l) => /^G1\s+X-?[\d.]/i.test(l))
+    expect(cutLines.length).toBeGreaterThan(0)
+    const flatLateralCuts = cutLines.filter((l) => !/\bZ-?[\d.]/.test(l))
+    expect(flatLateralCuts.length).toBeGreaterThan(0)
+    const f800FlatCuts = flatLateralCuts.filter((l) => /\bF800\b/.test(l))
+    const f300FlatCuts = flatLateralCuts.filter((l) => /\bF300\b/.test(l))
+    expect(f800FlatCuts.length).toBeGreaterThan(0)
+    expect(f300FlatCuts.length).toBe(0)
+  })
+
+  it('program ends with returnHome sequence (G0 Z Y0; G0 A0)', () => {
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const result = generateRoughing({
+      triangles: tris,
+      cylinderDiameterMm: 30,
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175
+    })
+    const len = result.lines.length
+    expect(len).toBeGreaterThan(2)
+    const last = result.lines[len - 1]!
+    const secondLast = result.lines[len - 2]!
+    expect(last).toMatch(/^G0\s+A0(?:\.\d+)?\s+;\s*return\s+A\s+to\s+home/i)
+    expect(secondLast).toMatch(/^G0\s+Z[\d.]+\s+Y0\b/i)
+  })
+
+  it('overcutMm: 0 keeps cuts inside [machXStart, machXEnd]', () => {
+    const tris = makeBox(10, 60, -6, 6, -6, 6)
+    const result = generateRoughing({
+      triangles: tris,
+      cylinderDiameterMm: 30,
+      machXStartMm: 10,
+      machXEndMm: 60,
+      stepoverDeg: 30,
+      stepXMm: 5,
+      zDepthsMm: [-2],
+      feedMmMin: 800,
+      plungeMmMin: 300,
+      safeZMm: 10,
+      toolDiameterMm: 3.175,
+      overcutMm: 0
+    })
+    const xs = extractAllXValues(result.lines)
+    expect(xs.length).toBeGreaterThan(0)
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(0)
+    const cutLines = result.lines.filter((l) => /^G1\s+X-?[\d.]/i.test(l))
+    expect(cutLines.length).toBeGreaterThan(0)
+    // With overcut=0 the X range stays inside [machXStart, machXEnd] (within
+    // a 1-cell tolerance because the grid samples at the boundaries).
+    expect(Math.max(...xs)).toBeLessThanOrEqual(60 + 0.05)
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(10 - 0.05)
+  })
+})

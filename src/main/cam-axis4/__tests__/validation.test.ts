@@ -287,4 +287,26 @@ describe('validateAxis4Job — indexed mode', () => {
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.warnings.some((w) => /duplicates/.test(w))).toBe(true)
   })
+
+  // [ID-0062] The bundled Carvera 4-axis profile uses `aAxisRangeDeg: 99999`
+  // as a sentinel meaning "continuous rotary / effectively unbounded" (the
+  // community firmware allows unlimited A revolutions). `Math.abs(99999)` is
+  // treated as the in-range limit by `validateAxis4Job`, so any realistic
+  // set of indexed angles (including multi-turn moves like 720deg or -540deg)
+  // must pass without triggering the `exceed machine A-axis range` error.
+  // This pins that behavior so a future caller does not accidentally clamp
+  // the sentinel to 360 and break continuous-rotary Carvera jobs.
+  it('treats aAxisRangeDeg: 99999 as effectively unbounded (Carvera continuous rotary)', () => {
+    const r = validateAxis4Job(
+      ctx({
+        ...baseIndexed,
+        indexAnglesDeg: [0, 180, 360, 720, -540],
+        aAxisRangeDeg: 99999
+      })
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.warnings.every((w) => !/exceed machine A-axis range/.test(w))).toBe(true)
+    }
+  })
 })

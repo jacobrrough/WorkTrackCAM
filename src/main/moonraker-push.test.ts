@@ -159,10 +159,22 @@ describe('moonrakerPause', () => {
   })
 
   it('returns error when printer URL is unreachable', async () => {
-    // Use a non-routable IP to ensure connection failure without hitting a real printer
-    const result = await moonrakerPause('http://192.0.2.1:7125', 500)
+    // Use a non-routable IP to ensure connection failure without hitting a real printer.
+    // [ID-0082] (Cycle 18 / perf) + [ID-0105] (Cycle 41 / perf): pin the wall-clock
+    // bound so a future regression in `makeRequest`'s AbortController wiring is caught
+    // here instead of re-inflating the whole src/main/ sweep past the 45-s sandbox
+    // timeout. Cycle 18 set the bound at 500 ms timeout / 1500 ms budget (3x). Cycle
+    // 41 dropped the timeout to 100 ms and tightened the budget to 600 ms (6x) -- the
+    // 6x ceiling preserves the abort-fired-correctly assertion (a regression that
+    // ignores `timeoutMs` blows past 600 ms easily on a non-routable IP) while
+    // shaving ~400 ms per test. Per-perf-inventory: 1012 ms file pre-Cycle-41 was
+    // dominated by 505+501 ms here.
+    const t0 = Date.now()
+    const result = await moonrakerPause('http://192.0.2.1:7125', 100)
+    const elapsed = Date.now() - t0
     expect(result.ok).toBe(false)
     expect(result.error).toBeDefined()
+    expect(elapsed).toBeLessThan(600)
   })
 })
 
@@ -174,9 +186,16 @@ describe('moonrakerResume', () => {
   })
 
   it('returns error when printer URL is unreachable', async () => {
-    // Use a non-routable IP to ensure connection failure without hitting a real printer
-    const result = await moonrakerResume('http://192.0.2.1:7125', 500)
+    // Use a non-routable IP to ensure connection failure without hitting a real printer.
+    // [ID-0082] (Cycle 18 / perf) + [ID-0105] (Cycle 41 / perf): wall-clock bound
+    // assertion -- see the matching comment on the moonrakerPause test above. Cycle
+    // 41 dropped the timeout 500 -> 100 ms and the budget 1500 -> 600 ms (6x ceiling)
+    // for the same reasons.
+    const t0 = Date.now()
+    const result = await moonrakerResume('http://192.0.2.1:7125', 100)
+    const elapsed = Date.now() - t0
     expect(result.ok).toBe(false)
     expect(result.error).toBeDefined()
+    expect(elapsed).toBeLessThan(600)
   })
 })

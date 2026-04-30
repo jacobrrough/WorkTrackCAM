@@ -145,3 +145,119 @@ export function mergeCuraSliceInvocationSettings(
     profile
   })
 }
+
+// ----------------------------------------------------------------------------
+// FDM capability fields -> CuraEngine -s settings bridge  (roadmap [ID-0068])
+// ----------------------------------------------------------------------------
+// Rationale: Cycle 8 [ID-0012] added 7 optional FDM capability fields to
+// `machineProfileSchema` (maxNozzleTempC, maxBedTempC, chamberTempC,
+// inputShapingPresets, rfidFilamentSupport, cfsMultiColorEnabled,
+// powerLossRecovery). Those fields were declared + populated + pinned by
+// unit tests but never consumed by any G-code emission path. [ID-0068]
+// (DISCOVERED-TODAY 2026-04-24) closes the loop for the three Cura-mappable
+// fields: translate maxNozzleTempC / maxBedTempC / chamberTempC into the
+// matching CuraEngine `-s` keys so the bundled K2 Plus profile (350 C / 120 C
+// / 60 C heated chamber) is consumed by `buildCuraSliceArgsFromSettingsMap`
+// instead of being declarative-only.
+//
+// The four non-temperature fields (inputShapingPresets, rfidFilamentSupport,
+// cfsMultiColorEnabled, powerLossRecovery) are all Creality-firmware /
+// Klipper-macro concerns with NO native CuraEngine setting key. They stay
+// as machine-profile metadata for future consumers (pre-flight validator,
+// Moonraker status UI, per-job preset selector).
+//
+// Safety Rule 1: no G-code emitted by this module. Only `-s` key/value
+// strings for the CuraEngine CLI invocation.
+// Safety Rule 2: additive and fully optional. An empty input produces an
+// empty output map; callers that do not supply a machine profile see
+// byte-identical behavior to pre-ID-0068.
+// ----------------------------------------------------------------------------
+
+/**
+ * Structural subset of `MachineProfile` consumed by the FDM capability
+ * bridge. Declared here (rather than importing `MachineProfile` directly)
+ * so this pure module stays decoupled from Zod / `machine-schema.ts` and
+ * can be called with any subset-shaped object.
+ */
+export type FdmCapabilityFields = {
+  /** Firmware-enforced nozzle temperature ceiling in deg C. K2 Plus: 350. */
+  maxNozzleTempC?: number
+  /** Firmware-enforced bed temperature ceiling in deg C. K2 Plus: 120. */
+  maxBedTempC?: number
+  /**
+   * Heated-build-chamber target in deg C. Absent means "no heated chamber"
+   * -- callers must NOT emit `machine_heated_build_volume=true` with an
+   * unset chamber target.
+   */
+  chamberTempC?: number
+}
+
+/**
+ * Mapping of FDM capability fields to CuraEngine `-s` keys. Kept public so
+ * tests and future consumers can assert the exact key strings emitted.
+ */
+export const FDM_CAPABILITY_CURA_KEYS = {
+  maxNozzleTempC: 'machine_nozzle_temp_max',
+  maxBedTempC: 'machine_max_bed_temp',
+  chamberTempC: 'build_volume_temperature',
+  heatedBuildVolumeFlag: 'machine_heated_build_volume'
+} as const
+
+/**
+ * Translate a machine profile's FDM capability fields into CuraEngine `-s`
+ * settings. Returns an empty map when no relevant fields are set. Numeric
+ * values <= 0 or non-finite are ignored (defensive: protects against
+ * accidentally emitting `machine_max_bed_temp=-5`, which some CuraEngine
+ * builds silently accept and then skip bed-heat ramps).
+ *
+ * The three temp keys are always safe to merge over a preset/profile map
+ * because they describe firmware ceilings, not slicing targets -- callers
+ * still supply `material_print_temperature`, `material_bed_temperature`
+ * etc. at slice time.
+ *
+ * When `chamberTempC` is present AND > 0, the helper ALSO sets
+ * `machine_heated_build_volume=true` so CuraEngine enables the chamber
+ * heater path (without this flag, `build_volume_temperature` is ignored).
+ */
+export function fdmCapabilitiesToEngineSettings(
+  caps: FdmCapabilityFields | null | undefined
+): Map<string, string> {
+  const m = new Map<string, string>()
+  if (caps == null) return m
+  const { maxNozzleTempC, maxBedTempC, chamberTempC } = caps
+  if (typeof maxNozzleTempC === 'number' && Number.isFinite(maxNozzleTempC) && maxNozzleTempC > 0) {
+    m.set(FDM_CAPABILITY_CURA_KEYS.maxNozzleTempC, String(maxNozzleTempC))
+  }
+  if (typeof maxBedTempC === 'number' && Number.isFinite(maxBedTempC) && maxBedTempC > 0) {
+    m.set(FDM_CAPABILITY_CURA_KEYS.maxBedTempC, String(maxBedTempC))
+  }
+  if (typeof chamberTempC === 'number' && Number.isFinite(chamberTempC) && chamberTempC > 0) {
+    m.set(FDM_CAPABILITY_CURA_KEYS.heatedBuildVolumeFlag, 'true')
+    m.set(FDM_CAPABILITY_CURA_KEYS.chamberTempC, String(chamberTempC))
+  }
+  return m
+}
+
+/**
+ * Merge FDM capability settings UNDER an existing preset/profile map so
+ * explicit user-supplied settings always win. This is the preferred
+ * entrypoint for slicer.ts's `sliceWithCuraEngine` because it preserves
+ * the existing "preset < profile < explicit override" precedence chain.
+ *
+ *   Precedence (lowest first):
+ *     1. Machine FDM capability ceilings  (this helper's input)
+ *     2. Existing preset/profile map      (caller-supplied)
+ *
+ * In other words: if the caller already set `machine_max_bed_temp=115`
+ * for a specific job, the capability's `maxBedTempC=120` does NOT
+ * overwrite it. Callers who want the opposite precedence can swap the
+ * arguments.
+ */
+export function mergeFdmCapabilitiesUnder(
+  caps: FdmCapabilityFields | null | undefined,
+  over: Map<string, string>
+): Map<string, string> {
+  const base = fdmCapabilitiesToEngineSettings(caps)
+  for (const [k, v] of over.entries()) base.set(k, v)
+  return base
+}

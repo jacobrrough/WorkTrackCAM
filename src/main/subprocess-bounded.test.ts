@@ -20,12 +20,21 @@ describe('spawnBounded', () => {
   })
 
   it('rejects on timeout for a long-running child', async () => {
+    // [ID-0107] (Cycle 41 / perf): timeoutMs 400 -> 100 + wall-clock budget pin so a
+    // future regression that ignores `timeoutMs` (e.g. drops the AbortController
+    // wiring or re-introduces a setInterval-based timeout that survives spawn) is
+    // caught here instead of silently re-inflating the suite. spawn() startup adds
+    // ~50 ms on Linux; the 400 ms ceiling is 4x the 100 ms timeout which preserves
+    // headroom for slow CI workers while still proving the abort fired on time.
+    const t0 = Date.now()
     await expect(
       spawnBounded(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-        timeoutMs: 400,
+        timeoutMs: 100,
         maxBufferBytes: 1024 * 1024
       })
     ).rejects.toThrow(/timed out/)
+    const elapsed = Date.now() - t0
+    expect(elapsed).toBeLessThan(400)
   })
 
   it('rejects immediately with AbortError when signal is already aborted before spawn', async () => {
@@ -45,19 +54,25 @@ describe('spawnBounded', () => {
   it('rejects with AbortError when signal is aborted during execution', async () => {
     const controller = new AbortController()
     const script = 'setInterval(() => {}, 1000)'
+    const t0 = Date.now()
     const promise = spawnBounded(process.execPath, ['-e', script], {
       timeoutMs: 10_000,
       maxBufferBytes: 1024 * 1024,
       signal: controller.signal
     })
-    // Abort after a short delay while the child is running
-    setTimeout(() => controller.abort(), 150)
+    // Abort after a short delay while the child is running. [ID-0107] (Cycle 41 /
+    // perf): abort delay 150 -> 50 ms + wall-clock pin. spawn() startup is ~50 ms on
+    // Linux, so 50 ms gives the child a moment to start before abort fires; 350 ms
+    // ceiling is 7x the abort delay which preserves headroom on slow workers.
+    setTimeout(() => controller.abort(), 50)
     const err = await promise.then(
       () => null,
       (e: unknown) => e
     )
+    const elapsed = Date.now() - t0
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
+    expect(elapsed).toBeLessThan(350)
   })
 
   it('resolves normally when signal is provided but never aborted', async () => {

@@ -8,6 +8,9 @@
   "dialect": "mach3",
   "maxSpindleRpm": 18000,
   "minSpindleRpm": 8000,
+  "spindleVariantHp": 3,
+  "vacuumZoneCount": 6,
+  "safeRetractZMm": 25,
   "meta": {
     "manufacturer": "Laguna",
     "model": "Swift 5×10",

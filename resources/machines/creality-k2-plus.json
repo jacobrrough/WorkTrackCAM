@@ -2,10 +2,27 @@
   "id": "creality-k2-plus",
   "name": "Creality K2 Plus",
   "kind": "fdm",
-  "workAreaMm": { "x": 350, "y": 350, "z": 350 },
+  "workAreaMm": {
+    "x": 350,
+    "y": 350,
+    "z": 350
+  },
   "maxFeedMmMin": 18000,
   "postTemplate": "fdm_passthrough.hbs",
   "dialect": "generic_mm",
+  "maxNozzleTempC": 350,
+  "maxBedTempC": 120,
+  "chamberTempC": 60,
+  "inputShapingPresets": [
+    "ZV",
+    "MZV",
+    "EI",
+    "2HUMP_EI",
+    "3HUMP_EI"
+  ],
+  "rfidFilamentSupport": true,
+  "cfsMultiColorEnabled": true,
+  "powerLossRecovery": true,
   "meta": {
     "manufacturer": "Creality",
     "model": "K2 Plus",
