@@ -14,6 +14,7 @@ import {
   listAllMaterials,
   saveMaterial
 } from './materials-manager'
+import { deleteFilament, listAllFilaments, saveFilament } from './filament-manager'
 import { carveraUpload, type CarveraUploadPayload } from './carvera-cli-run'
 import {
   generateCarvera4AxisSetup,
@@ -253,6 +254,13 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         definitionPath?: string
         slicePreset?: string | null
         curaEngineSettings?: Record<string, string>
+        /** K2 Plus quality preset id. Roadmap: [P2-K2-SLICE]/Cycle 6. */
+        k2QualityPresetId?: 'standard' | 'high_speed'
+        filamentSettings?: {
+          nozzleTempC: number; bedTempC: number; chamberTempC?: number
+          fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
+          retractionMm?: number; retractionSpeedMmPerSec?: number
+        }
       }
     ) => {
       // Validate executable path before spawning
@@ -266,7 +274,9 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         definitionPath: payload.definitionPath,
         curaDefinitionsPath: payload.definitionsPath,
         slicePreset: payload.slicePreset,
-        curaEngineSettings: payload.curaEngineSettings
+        curaEngineSettings: payload.curaEngineSettings,
+        k2QualityPresetId: payload.k2QualityPresetId,
+        filamentSettings: payload.filamentSettings
       })
     }
   )
@@ -804,6 +814,11 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     if (result.canceled || result.filePaths.length === 0) return null
     return importMaterialsFile(result.filePaths[0]!)
   })
+
+  // ── Filament library ────────────────────────────────────────────────────────
+  ipcMain.handle('filaments:list', async () => listAllFilaments())
+  ipcMain.handle('filaments:save', async (_e, record) => saveFilament(record))
+  ipcMain.handle('filaments:delete', async (_e, id: string) => deleteFilament(id))
 
   /**
    * Read any local file as a base64 string so the renderer can decode it

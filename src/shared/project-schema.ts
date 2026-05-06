@@ -56,6 +56,17 @@ export const appSettingsSchema = z.object({
   /** CuraEngine `-s` bundle for `buildCuraSliceArgs` (see `cura-slice-defaults.ts`). */
   curaSlicePreset: z.enum(['balanced', 'draft', 'fine']).optional(),
   /**
+   * Creality K2 Plus quality preset id ('standard' | 'high_speed').
+   * Layered between the generic `curaSlicePreset` and explicit
+   * `curaEngineExtraSettingsJson` overrides; consumed by
+   * `runFdmSliceFromOp` in the Manufacture workspace and threaded into
+   * `SliceRequest.k2QualityPresetId` for the bundled CuraEngine call.
+   * Only meaningful when the active machine is the Creality K2 Plus.
+   * Roadmap: [P2-K2-SLICE]/Cycle 6.
+   */
+  k2QualityPresetId: z.enum(['standard', 'high_speed']).optional(),
+  activeFilamentId: z.string().optional(),
+  /**
    * Extra CuraEngine `-s` keys as JSON object, e.g. `{"infill_pattern":"grid","material_print_temperature":"210"}`.
    * Merged after the numeric preset; keys match Cura setting ids (underscore names).
    */
@@ -108,7 +119,35 @@ export const appSettingsSchema = z.object({
    * fetches releases from this endpoint instead of the default GitHub Releases feed.
    * The `WORKTRACK_UPDATE_URL` environment variable takes priority over this setting.
    */
-  updateServerUrl: z.string().url().optional()
+  updateServerUrl: z.string().url().optional(),
+  /**
+   * Creality K2 Plus Moonraker base URL, e.g. `http://192.168.1.50` or
+   * `http://k2plus.local:7125`. When set AND the active machine kind is
+   * `fdm`, the Manufacture workspace surfaces a "Send to K2 Plus" button
+   * that uploads the most recent sliced `.gcode` via the
+   * `moonraker:push` IPC channel. URL form is loose (no `z.string().url()`)
+   * because home-network shorthand like `http://192.168.1.50:7125` is
+   * common; the main-process push handler validates the URL when the
+   * request fires. Roadmap: Phase 2 [P2-K2-PUSH].
+   */
+  moonrakerUrl: z.string().optional(),
+  /**
+   * Laguna Swift 5x10 active vacuum zones (1..6) for full-sheet jobs.
+   * The Laguna table is split into six T-slot vacuum zones in a 2x3
+   * grid; the operator selects which zones to engage based on stock
+   * placement. The Manufacture/CAM tab surfaces six toggle chips
+   * (visible only when active machine is the Laguna Swift) and
+   * persists the selection through `onSaveSettingsField`. Absent
+   * means "all six engaged" (Jacob's typical workflow is full-sheet
+   * plywood); the consumer applies the default at read-time so the
+   * inferred `AppSettings` type keeps this field truly optional and
+   * existing test fixtures / `defaultAppSettings()` callers do not
+   * have to thread it through. Roadmap: Phase 2 [P2-LAGUNA-FULLSHEET]
+   * (kept optional in [P2-K2-PUSH]/Cycle 349 to clear typecheck
+   * regressions in 6+ test files; the `.default(...)` was flipping
+   * the inferred type to required).
+   */
+  lagunaActiveZones: z.array(z.number().int().min(1).max(6)).optional()
 }).superRefine((data, ctx) => {
   // Validate JSON string fields are parseable and have the expected structural type.
   // Catching malformed JSON at schema parse time surfaces a clear error rather than

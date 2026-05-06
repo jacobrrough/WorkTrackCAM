@@ -10,6 +10,7 @@ import type { ManufactureFile } from '../shared/manufacture-schema'
 import type { ToolLibraryFile } from '../shared/tool-schema'
 import type { MeshImportPlacement, MeshImportTransform, MeshImportUpAxis } from '../shared/mesh-import-placement'
 import type { MaterialRecord } from '../shared/material-schema'
+import type { FilamentRecord } from '../shared/filament-schema'
 import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-cli-run'
 import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { DesignFileV2 } from '../shared/design-schema'
@@ -102,6 +103,13 @@ export type Api = {
     stlPath: string; outPath: string; curaEnginePath: string
     definitionsPath?: string; definitionPath?: string
     slicePreset?: string | null; curaEngineSettings?: Record<string, string>
+    /** K2 Plus quality preset id. Roadmap: [P2-K2-SLICE]/Cycle 6. */
+    k2QualityPresetId?: 'standard' | 'high_speed'
+    filamentSettings?: {
+      nozzleTempC: number; bedTempC: number; chamberTempC?: number
+      fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
+      retractionMm?: number; retractionSpeedMmPerSec?: number
+    }
   }) => Promise<{ ok: boolean; stderr?: string; stdout?: string }>
 
   // ── Manufacture file ─────────────────────────────────────────────────────
@@ -160,6 +168,11 @@ export type Api = {
   materialsImportJson: (jsonText: string) => Promise<MaterialRecord[]>
   materialsImportFile: (filePath: string) => Promise<MaterialRecord[]>
   materialsPickAndImport: () => Promise<MaterialRecord[] | null>
+
+  // ── Filaments ────────────────────────────────────────────────────────────
+  filamentsList: () => Promise<FilamentRecord[]>
+  filamentsSave: (record: FilamentRecord) => Promise<FilamentRecord>
+  filamentsDelete: (id: string) => Promise<boolean>
 
   // ── Machine upload ───────────────────────────────────────────────────────
   moonrakerPush: (payload: {
@@ -390,6 +403,11 @@ const api: Api = {
   materialsImportJson: (jsonText) => ipcRenderer.invoke('materials:importJson', jsonText),
   materialsImportFile: (filePath) => ipcRenderer.invoke('materials:importFile', filePath),
   materialsPickAndImport: () => ipcRenderer.invoke('materials:pickAndImport'),
+
+  // Filaments
+  filamentsList: () => ipcRenderer.invoke('filaments:list'),
+  filamentsSave: (record) => ipcRenderer.invoke('filaments:save', record),
+  filamentsDelete: (id) => ipcRenderer.invoke('filaments:delete', id),
 
   // Machine upload
   moonrakerPush: (payload) => ipcRenderer.invoke('moonraker:push', payload),

@@ -2234,6 +2234,33 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
   color: var(--accent);
 }
 
+/* ── Placement tools ── */
+.viewport-3d__toolstrip {
+  display: flex;
+  gap: 3px;
+  margin-top: 6px;
+}
+.viewport-3d__tool-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg1);
+  color: var(--txt2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.viewport-3d__tool-btn:hover {
+  background: var(--bg2);
+  color: var(--txt1);
+}
+.viewport-3d__tool-btn--active {
+  background: var(--accent-10);
+  border-color: var(--accent-20);
+  color: var(--accent);
+}
+
 /* ── Measurement tools ── */
 .viewport-3d__measure-label {
   background: rgba(15, 10, 22, 0.85);

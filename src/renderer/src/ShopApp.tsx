@@ -78,6 +78,8 @@ import { LibraryDrawer } from '../shell/LibraryDrawer'
 import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { MyShopDrawer } from '../shell/MyShopDrawer'
 import type { MyShopPreset, MyShopMachineId } from './environments/my-shop-presets'
+import { composePresetLaunchPlan } from './environments/preset-launch-plan'
+import { ENVIRONMENTS } from './environments/registry'
 
 // ── Context providers ────────────────────────────────────────────────────────
 import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
@@ -1479,29 +1481,41 @@ function ShopAppInner(): React.ReactElement {
    * activates a machine. [ID-0009]
    */
   const handleLaunchMyShopPreset = (preset: MyShopPreset): void => {
-    const targetEnv = ENVIRONMENT_LIST.find((e) => e.id === preset.environmentId)
-    if (!targetEnv) return
-    const next = resolveQuickSwitchMachine(
-      targetEnv,
+    const plan = composePresetLaunchPlan(
+      preset,
+      ENVIRONMENTS,
       machines,
       lastVariantByEnvId,
       sessionMachine?.id ?? null
     )
-    if (!next) {
-      pushToast('warn', `No ${targetEnv.name} machine installed. Open the Library to add one.`)
-      setLibraryDrawerOpen(true)
-      return
+    switch (plan.kind) {
+      case 'env-not-found':
+        // Programmer error / drift — preset names an env not in the registry.
+        // Bail rather than silently picking another env.
+        return
+      case 'no-machine-installed':
+        pushToast('warn', plan.toastMessage)
+        setLibraryDrawerOpen(true)
+        return
+      case 'already-active':
+        // Active machine already belongs to the preset's env — no session
+        // switch, no variant-memory mutation, just surface the success toast.
+        pushToast('ok', plan.toastMessage)
+        return
+      case 'switch':
+        setLastVariantByEnvId(plan.updatedVariantMap)
+        try {
+          localStorage.setItem(
+            LAST_VARIANT_STORAGE_KEY,
+            JSON.stringify(plan.updatedVariantMap)
+          )
+        } catch {
+          /* quota / disabled */
+        }
+        void handleMachineSelect(plan.next)
+        pushToast('ok', plan.toastMessage)
+        return
     }
-    if (sessionMachine?.id !== next.id) {
-      const updated: Partial<Record<EnvironmentId, string>> = {
-        ...lastVariantByEnvId,
-        [preset.environmentId]: next.id
-      }
-      setLastVariantByEnvId(updated)
-      try { localStorage.setItem(LAST_VARIANT_STORAGE_KEY, JSON.stringify(updated)) } catch { /* quota / disabled */ }
-      void handleMachineSelect(next)
-    }
-    pushToast('ok', `${preset.label} ready on ${next.name}.`)
   }
 
   /** Library-drawer fallback when a My Shop card's machine is not installed. */
