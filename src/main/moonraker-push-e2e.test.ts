@@ -21,10 +21,9 @@
  * wire-level E2E coverage that those parsers assume works.
  */
 import { mkdtempSync, writeFileSync } from 'node:fs'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   moonrakerCancel,
@@ -33,80 +32,21 @@ import {
   moonrakerResume,
   moonrakerStatus,
 } from './moonraker-push'
+import {
+  freshMockMoonrakerState,
+  resetMockMoonrakerState,
+  startMockMoonraker,
+  stopMockMoonraker,
+  type MockMoonrakerState,
+} from './__mocks__/moonraker-fake'
 
 // ─── Mock server ─────────────────────────────────────────────────────────────
+// Phase 2 [P2-K2-PUSH]/Cycle 349: the mock-Moonraker harness is now the
+// reusable module at `./__mocks__/moonraker-fake`. The local symbol
+// aliases below preserve the variable names the existing assertions
+// already use so the diff stays minimal.
 
-type CapturedRequest = {
-  method: string
-  path: string
-  contentType: string | undefined
-  body: Buffer
-}
-
-type MockServerState = {
-  /** Every request the test sent, in order — primary inspection surface. */
-  captured: CapturedRequest[]
-  /** What `/server/files/upload` responds with — swappable per-test. */
-  uploadResponse: { status: number; body: string }
-  /** What `/printer/print/start` responds with. */
-  startResponse: { status: number; body: string }
-  /** What `/printer/objects/query?print_stats` responds with. */
-  statusResponse: { status: number; body: string }
-  /** What `/printer/print/cancel` responds with. */
-  cancelResponse: { status: number; body: string }
-  /** What `/printer/print/pause` responds with. */
-  pauseResponse: { status: number; body: string }
-  /** What `/printer/print/resume` responds with. */
-  resumeResponse: { status: number; body: string }
-}
-
-function collectBody(req: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
-
-function startMockServer(state: MockServerState): Promise<{ server: Server; url: string }> {
-  return new Promise((resolve) => {
-    const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      const body = await collectBody(req)
-      state.captured.push({
-        method: req.method ?? '',
-        path: req.url ?? '',
-        contentType: req.headers['content-type'],
-        body,
-      })
-
-      const path = req.url ?? ''
-      const method = req.method ?? ''
-
-      const pick = (): { status: number; body: string } => {
-        if (method === 'POST' && path === '/server/files/upload') return state.uploadResponse
-        if (method === 'POST' && path.startsWith('/printer/print/start')) return state.startResponse
-        if (method === 'GET' && path.startsWith('/printer/objects/query')) return state.statusResponse
-        if (method === 'POST' && path === '/printer/print/cancel') return state.cancelResponse
-        if (method === 'POST' && path === '/printer/print/pause') return state.pauseResponse
-        if (method === 'POST' && path === '/printer/print/resume') return state.resumeResponse
-        return { status: 404, body: JSON.stringify({ error: `no mock route for ${method} ${path}` }) }
-      }
-
-      const resp = pick()
-      res.writeHead(resp.status, { 'Content-Type': 'application/json' })
-      res.end(resp.body)
-    })
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address() as AddressInfo
-      resolve({ server, url: `http://127.0.0.1:${addr.port}` })
-    })
-  })
-}
-
-function stopMockServer(server: Server): Promise<void> {
-  return new Promise((resolve) => server.close(() => resolve()))
-}
+type MockServerState = MockMoonrakerState
 
 // ─── Test fixture ─────────────────────────────────────────────────────────────
 
@@ -128,43 +68,11 @@ const fixtureGcodeBody = [
 writeFileSync(fixtureGcode, fixtureGcodeBody)
 
 // Default mock responses — individual tests override as needed.
+// Delegated to `freshMockMoonrakerState` in the shared harness; this
+// thin wrapper exists so the call-sites below keep their `freshState()`
+// shape and the diff to the existing 47-test suite is minimal.
 function freshState(): MockServerState {
-  return {
-    captured: [],
-    uploadResponse: {
-      status: 201,
-      body: JSON.stringify({
-        item: {
-          path: 'cube.gcode',
-          root: 'gcodes',
-          modified: 1_700_000_000,
-          size: fixtureGcodeBody.length,
-        },
-        print: { name: '', started: false },
-        action: 'create_file',
-      }),
-    },
-    startResponse: { status: 200, body: JSON.stringify({ result: 'ok' }) },
-    statusResponse: {
-      status: 200,
-      body: JSON.stringify({
-        result: {
-          status: {
-            print_stats: {
-              state: 'printing',
-              filename: 'cube.gcode',
-              progress: 0.25,
-              print_duration: 300.0,
-              total_duration: 1200.0,
-            },
-          },
-        },
-      }),
-    },
-    cancelResponse: { status: 200, body: JSON.stringify({ result: 'ok' }) },
-    pauseResponse: { status: 200, body: JSON.stringify({ result: 'ok' }) },
-    resumeResponse: { status: 200, body: JSON.stringify({ result: 'ok' }) },
-  }
+  return freshMockMoonrakerState()
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -176,25 +84,19 @@ describe('Moonraker end-to-end — [ID-0007b]', () => {
 
   beforeAll(async () => {
     state = freshState()
-    const booted = await startMockServer(state)
+    const booted = await startMockMoonraker(state)
     server = booted.server
     baseUrl = booted.url
   })
 
   afterAll(async () => {
-    await stopMockServer(server)
+    await stopMockMoonraker(server)
   })
 
-  // Reset captured state between describe-blocks by mutating the shared state.
+  // Reset captured state between describe-blocks by delegating to the
+  // shared harness's in-place reset helper.
   const resetState = (): void => {
-    const fresh = freshState()
-    state.captured = fresh.captured
-    state.uploadResponse = fresh.uploadResponse
-    state.startResponse = fresh.startResponse
-    state.statusResponse = fresh.statusResponse
-    state.cancelResponse = fresh.cancelResponse
-    state.pauseResponse = fresh.pauseResponse
-    state.resumeResponse = fresh.resumeResponse
+    resetMockMoonrakerState(state)
   }
 
   describe('moonrakerPush — upload only (no start)', () => {
