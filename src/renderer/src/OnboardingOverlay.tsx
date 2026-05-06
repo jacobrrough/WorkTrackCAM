@@ -26,6 +26,12 @@ function dismissOnboarding(): void {
   } catch { /* storage unavailable -- ignore */ }
 }
 
+export function resetOnboarding(): void {
+  try {
+    localStorage.removeItem(ONBOARDING_DISMISSED_KEY)
+  } catch { /* storage unavailable -- ignore */ }
+}
+
 // ── Steps ────────────────────────────────────────────────────────────────────
 
 interface OnboardingStep {

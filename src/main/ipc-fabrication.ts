@@ -913,6 +913,33 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     }
   )
 
+  // ── Fixture List (load from resources/fixtures/) ───────────────────────────
+  ipcMain.handle('fixture:list', async () => {
+    try {
+      const fixturesDir = join(getResourcesRoot(), 'fixtures')
+      const { readdir } = await import('node:fs/promises')
+      const files = await readdir(fixturesDir).catch(() => [] as string[])
+      const results: Array<{ id: string; name: string; type: string; geometry: unknown[]; clampingPositions: unknown[] }> = []
+      for (const f of files) {
+        if (!f.endsWith('.json')) continue
+        try {
+          const raw = await readFile(join(fixturesDir, f), 'utf-8')
+          const data = JSON.parse(raw) as Record<string, unknown>
+          results.push({
+            id: (data.id as string) ?? f.replace('.json', ''),
+            name: (data.name as string) ?? f.replace('.json', ''),
+            type: (data.type as string) ?? 'unknown',
+            geometry: Array.isArray(data.geometry) ? data.geometry : [],
+            clampingPositions: Array.isArray(data.clampingPositions) ? data.clampingPositions : []
+          })
+        } catch { /* skip malformed files */ }
+      }
+      return results
+    } catch (e) {
+      return []
+    }
+  })
+
   // ── Multi-Setup Automation ────────────────────────────────────────────────
   ipcMain.handle('setup:autoAssignWcs', async (_e, setups: ManufactureSetup[]) => {
     try {

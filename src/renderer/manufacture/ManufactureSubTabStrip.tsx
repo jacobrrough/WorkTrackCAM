@@ -10,6 +10,7 @@ const TABS: { id: ManufacturePanelTab; label: string; icon: string; title: strin
   { id: 'setup', label: 'Setup', icon: '▣', title: 'Stock parameters, material type, WCS origin' },
   { id: 'cam', label: 'CAM', icon: '⚙', title: 'Generate G-code toolpaths' },
   { id: 'simulate', label: 'Simulate', icon: '▶', title: '3D toolpath simulation viewer' },
+  { id: 'probe', label: 'Probe', icon: '⌖', title: 'Touch-probe cycles for WCS zeroing' },
   { id: 'slice', label: 'Slice', icon: '⊟', title: 'FDM slicer (CuraEngine)' },
   { id: 'tools', label: 'Tools', icon: '🔧', title: 'Tool library import and management' }
 ]

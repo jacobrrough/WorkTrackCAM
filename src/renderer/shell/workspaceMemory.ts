@@ -14,9 +14,9 @@ import type {
  * - slice: FDM CuraEngine slice
  * - tools: tool library management
  */
-export type ManufacturePanelTab = 'plan' | 'setup' | 'cam' | 'simulate' | 'slice' | 'tools'
+export type ManufacturePanelTab = 'plan' | 'setup' | 'cam' | 'simulate' | 'probe' | 'slice' | 'tools'
 
-const VALID_MFG_PANEL: ReadonlySet<ManufacturePanelTab> = new Set(['plan', 'setup', 'cam', 'simulate', 'slice', 'tools'])
+const VALID_MFG_PANEL: ReadonlySet<ManufacturePanelTab> = new Set(['plan', 'setup', 'cam', 'simulate', 'probe', 'slice', 'tools'])
 
 const MFG_PANEL_TAB_KEY = 'ufs_manufacture_panel_tab'
 

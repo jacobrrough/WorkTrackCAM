@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
   CURA_SLICE_PRESETS,
@@ -26,6 +26,7 @@ import { evaluateManufactureReadiness } from '../../shared/manufacture-readiness
 import type { ManufactureFile } from '../../shared/manufacture-schema'
 import { CarveraSetupPanel } from './CarveraSetupPanel'
 import { FilamentPicker } from './FilamentPicker'
+import { PrinterMonitorPanel } from './PrinterMonitorPanel'
 import type { FilamentRecord } from '../../shared/filament-schema'
 
 const SLICE_PREVIEW = 8000
@@ -52,6 +53,92 @@ export function computeNextLagunaActiveZones(
     set.add(zone)
   }
   return [...set].sort((a, b) => a - b)
+}
+
+function parseGcodeToToolpathPoints(gcode: string): { line: number; x: number; y: number; z: number }[] {
+  const points: { line: number; x: number; y: number; z: number }[] = []
+  let cx = 0, cy = 0, cz = 0
+  const lines = gcode.split(/\r?\n/)
+  for (let i = 0; i < lines.length && points.length < 5000; i++) {
+    const ln = lines[i]!.trim()
+    if (!ln.startsWith('G0') && !ln.startsWith('G1')) continue
+    const xm = ln.match(/X([-\d.]+)/)
+    const ym = ln.match(/Y([-\d.]+)/)
+    const zm = ln.match(/Z([-\d.]+)/)
+    if (xm) cx = parseFloat(xm[1]!)
+    if (ym) cy = parseFloat(ym[1]!)
+    if (zm) cz = parseFloat(zm[1]!)
+    points.push({ line: i + 1, x: cx, y: cy, z: cz })
+  }
+  return points
+}
+
+function FixtureCollisionCheckButton({ camOut, toolDiameterMm, onStatus }: {
+  camOut: string
+  toolDiameterMm: number
+  onStatus?: (msg: string) => void
+}): ReactNode {
+  const [result, setResult] = useState<{ safe: boolean; count: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const handleCheck = useCallback(async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const toolpath = parseGcodeToToolpathPoints(camOut)
+      if (toolpath.length === 0) {
+        onStatus?.('No toolpath motion found in G-code output.')
+        return
+      }
+      const fixture = {
+        id: 'vise-6inch',
+        name: '6" Machinist Vise',
+        type: 'vise' as const,
+        geometry: [
+          { minX: -140, maxX: 140, minY: -80, maxY: 80, minZ: 0, maxZ: 100 }
+        ],
+        clampingPositions: [
+          { label: 'Left jaw', position: { x: -120, y: 0, z: 50 } },
+          { label: 'Right jaw', position: { x: 120, y: 0, z: 50 } }
+        ]
+      }
+      const r = await window.fab.fixtureCheckCollision({
+        toolpath,
+        fixture,
+        toolDiameterMm
+      })
+      if (r.ok) {
+        setResult({ safe: r.safe, count: r.collisions.length })
+        onStatus?.(r.safe
+          ? 'Fixture collision check: SAFE — no collisions detected.'
+          : `Fixture collision check: ${r.collisions.length} collision(s) detected!`)
+      } else {
+        onStatus?.(`Fixture check failed: ${r.error}`)
+      }
+    } catch (e) {
+      onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [camOut, toolDiameterMm, onStatus])
+
+  return (
+    <div className="row row--wrap" style={{ marginTop: '0.5rem' }}>
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy}
+        onClick={() => void handleCheck()}
+      >
+        {busy ? 'Checking…' : 'Check Fixture Collision'}
+      </button>
+      {result !== null ? (
+        <span className={result.safe ? 'msg msg--muted' : 'msg msg--warn'} role="status">
+          {result.safe ? 'Safe — no collisions' : `${result.count} collision(s) found`}
+        </span>
+      ) : null}
+    </div>
+  )
 }
 
 export type ManufactureAuxPanelsProps = {
@@ -352,6 +439,9 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           ) : null}
         </section>
       ) : null}
+      {isK2Plus && moonrakerUrl.length > 0 ? (
+        <PrinterMonitorPanel moonrakerUrl={moonrakerUrl} onStatus={p.onStatus} />
+      ) : null}
     </section>
   )
 }
@@ -469,6 +559,20 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           </button>
         ) : null}
       </div>
+      {p.camOut?.trim() && activeCnc ? (
+        <FixtureCollisionCheckButton
+          camOut={p.camOut}
+          toolDiameterMm={(() => {
+            const ops = p.manufacture?.operations ?? []
+            for (const op of ops) {
+              const d = (op.params as Record<string, unknown> | undefined)?.toolDiameterMm
+              if (typeof d === 'number' && d > 0) return d
+            }
+            return 6
+          })()}
+          onStatus={p.onStatus}
+        />
+      ) : null}
       {/*
        * Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 350: Laguna Swift 6-zone
        * vacuum table picker. Visible only when the active machine is a

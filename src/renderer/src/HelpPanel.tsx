@@ -7,6 +7,7 @@
  */
 import React, { useState } from 'react'
 import { APP_KEYBOARD_SHORTCUT_GROUPS } from '../../shared/app-keyboard-shortcuts'
+import { resetOnboarding } from './OnboardingOverlay'
 
 // ── Section tab type ─────────────────────────────────────────────────────────
 type HelpTab = 'shortcuts' | 'glossary' | 'operations' | 'tips'
@@ -136,6 +137,16 @@ export function HelpPanel({ onClose }: { onClose: () => void }): React.ReactElem
         {tab === 'glossary' && <GlossarySection />}
         {tab === 'operations' && <OperationsSection />}
         {tab === 'tips' && <TipsSection />}
+      </div>
+
+      <div className="help-panel__footer">
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => { resetOnboarding(); window.location.reload() }}
+        >
+          Show Welcome Guide
+        </button>
       </div>
     </div>
   )

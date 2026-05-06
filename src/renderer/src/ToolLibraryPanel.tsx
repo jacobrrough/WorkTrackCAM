@@ -415,6 +415,63 @@ export function ToolLibraryPanel({
             </label>
           </div>
 
+          <div className="tlp-edit-grid tlp-edit-grid--wear">
+            <span className="tlp-section-label">Tool Life &amp; Wear</span>
+            <label className="tlp-label">Life (min)
+              <input className="tlp-input" type="number" min="0" step="1"
+                value={editingTool.toolLifeMinutes ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  updateField('toolLifeMinutes', v === '' ? undefined : parseInt(v, 10))
+                }} />
+            </label>
+            <label className="tlp-label">Used (min)
+              <input className="tlp-input" type="number" min="0" step="1"
+                value={editingTool.toolLifeUsedMinutes ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  updateField('toolLifeUsedMinutes', v === '' ? undefined : parseInt(v, 10))
+                }} />
+            </label>
+            <label className="tlp-label">Wear limit (mm)
+              <input className="tlp-input" type="number" min="0" step="0.01"
+                value={editingTool.wearLimitMm ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  updateField('wearLimitMm', v === '' ? undefined : parseFloat(v))
+                }} />
+            </label>
+            <label className="tlp-label">H offset
+              <input className="tlp-input" type="number" min="0" step="1"
+                value={editingTool.wearOffsetH ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  updateField('wearOffsetH', v === '' ? undefined : parseInt(v, 10))
+                }} />
+            </label>
+            <label className="tlp-label">D offset
+              <input className="tlp-input" type="number" min="0" step="1"
+                value={editingTool.wearOffsetD ?? ''}
+                onChange={e => {
+                  const v = e.target.value
+                  updateField('wearOffsetD', v === '' ? undefined : parseInt(v, 10))
+                }} />
+            </label>
+            <label className="tlp-label">Last replaced
+              <input className="tlp-input" type="date"
+                value={editingTool.lastReplacedAt ?? ''}
+                onChange={e => updateField('lastReplacedAt', e.target.value || undefined)} />
+            </label>
+            <button type="button" className="btn btn-ghost btn-sm"
+              onClick={() => {
+                updateField('toolLifeUsedMinutes', 0)
+                updateField('lastReplacedAt', new Date().toISOString().slice(0, 10))
+              }}
+            >
+              Reset Tool Life
+            </button>
+          </div>
+
           <div className="tlp-edit-actions">
             <button type="button" className="btn btn-generate btn-sm" onClick={() => void handleSave()}>
               Save

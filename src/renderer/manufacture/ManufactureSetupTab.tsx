@@ -6,6 +6,7 @@ import type { ManufactureFile, ManufactureSetup } from '../../shared/manufacture
 import type { StockMaterialType, WcsOriginPoint } from '../../shared/manufacture-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import { StockMaterialPanel } from './StockMaterialPanel'
+import { MultiSetupWizard } from './MultiSetupWizard'
 
 type Props = {
   projectDir: string | null
@@ -26,6 +27,7 @@ type Props = {
   onFitStockPadChange: (v: number) => void
   onFitStockFromPart: (setupIndex: number) => void
   onSave: () => void
+  onStatus?: (msg: string) => void
 }
 
 export function ManufactureSetupTab({
@@ -46,7 +48,8 @@ export function ManufactureSetupTab({
   onUpdateSetupAxisMode,
   onFitStockPadChange,
   onFitStockFromPart,
-  onSave
+  onSave,
+  onStatus
 }: Props): React.ReactElement {
   return (
     <section className="panel workspace-util-panel makera-setup-panel" aria-labelledby="mfg-setup-tab-heading">
@@ -143,6 +146,20 @@ export function ManufactureSetupTab({
                 onRotaryStockProfileChange={(profile) =>
                   onUpdateSetup(selectedSetupIndex, { rotaryStockProfile: profile })
                 }
+              />
+              <MultiSetupWizard
+                setups={mfg.setups}
+                selectedSetupIndex={selectedSetupIndex}
+                onSetupsChange={(setups) => {
+                  for (let i = 0; i < setups.length; i++) {
+                    onUpdateSetup(i, setups[i]!)
+                  }
+                }}
+                onAddSetup={(setup) => {
+                  onAddSetup()
+                  onUpdateSetup(mfg.setups.length, setup)
+                }}
+                onStatus={onStatus}
               />
               <div className="row mfg-action-row">
                 <button type="button" className="primary" onClick={onSave} aria-label="Save manufacture plan">Save</button>

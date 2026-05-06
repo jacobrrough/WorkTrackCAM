@@ -230,6 +230,34 @@
   transition: color 0.3s;
 }
 
+.tb-btn--labeled {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+}
+.tb-btn__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  opacity: 0.7;
+}
+.tb-btn--labeled:hover .tb-btn__label { opacity: 1; }
+
+.tb-shortcut-hint {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 3px;
+  background: var(--bg3);
+  color: var(--txt2);
+  opacity: 0.7;
+  vertical-align: middle;
+}
+
 /* ── Mode accent colours on toolbar machine badge ── */
 .tb-machine-badge {
   display: flex; align-items: center; gap: 6px;

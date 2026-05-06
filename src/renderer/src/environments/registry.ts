@@ -49,12 +49,19 @@ export interface ShopEnvironment {
 // `LeftPanel.tsx` intersects these with `OPS_BY_MODE[mode]` so each
 // environment surfaces only the relevant subset of the global op catalog.
 
-/** Wood-routing & 2D/2.5D toolpaths for the Laguna Swift 5×10. */
+/** Wood-routing, 3D carving, and surfacing toolpaths for the Laguna Swift 5×10. */
 export const VCARVE_PRO_OPS: readonly ManufactureOperationKind[] = [
   'cnc_pocket',
   'cnc_contour',
   'cnc_drill',
-  'cnc_chamfer'
+  'cnc_chamfer',
+  'cnc_adaptive',
+  'cnc_parallel',
+  'cnc_3d_rough',
+  'cnc_3d_finish',
+  'cnc_waterline',
+  'cnc_raster',
+  'cnc_probe'
 ] as const
 
 /** FDM slicing + STL export for the Creality K2 Plus. */
@@ -70,6 +77,7 @@ export const MAKERA_3AXIS_OPS: readonly ManufactureOperationKind[] = [
   'cnc_drill',
   'cnc_chamfer',
   'cnc_adaptive',
+  'cnc_parallel',
   'cnc_3d_rough',
   'cnc_3d_finish',
   'cnc_waterline',
@@ -86,7 +94,10 @@ export const MAKERA_CAM_OPS: readonly ManufactureOperationKind[] = [
   'cnc_4axis_roughing',
   'cnc_4axis_finishing',
   'cnc_4axis_contour',
-  'cnc_4axis_indexed'
+  'cnc_4axis_indexed',
+  'cnc_4axis_continuous',
+  'cnc_trochoidal_hsm',
+  'cnc_probe'
 ] as const
 
 // ── Environment definitions ─────────────────────────────────────────────────
@@ -94,7 +105,7 @@ export const MAKERA_CAM_OPS: readonly ManufactureOperationKind[] = [
 const VCARVE_PRO_ENV: ShopEnvironment = {
   id: 'vcarve_pro',
   name: 'VCarve Pro',
-  tagline: 'Wood routing and 2D/2.5D toolpaths for the Laguna Swift 5×10.',
+  tagline: 'Wood routing, 3D carving, and surfacing toolpaths for the Laguna Swift 5×10.',
   iconGlyph: '\u{1FAB5}', // 🪵 wood
   accentColor: '#c47a2c',
   machineIds: ['laguna-swift-5x10'],

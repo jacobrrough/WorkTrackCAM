@@ -41,6 +41,8 @@ import { ManufactureOperationList } from './ManufactureOperationList'
 import { ManufactureSetupList } from './ManufactureSetupList'
 import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
+import { ProbeCyclePanel } from './ProbeCyclePanel'
+import { DrawingExportRibbon } from '../shell/DrawingExportRibbon'
 
 
 type Props = {
@@ -983,7 +985,16 @@ export function ManufactureWorkspace({
         aria-labelledby={`mfg-subtab-${panelTab}`}
       >
         {panelTab === 'plan' ? (
-          planBody
+          <>
+            {planBody}
+            {projectDir ? (
+              <DrawingExportRibbon
+                projectName={project?.name}
+                onExportPdf={() => void window.fab.drawingExport({ kind: 'pdf', projectDir: projectDir!, projectName: project?.name })}
+                onExportDxf={() => void window.fab.drawingExport({ kind: 'dxf', projectDir: projectDir!, projectName: project?.name })}
+              />
+            ) : null}
+          </>
         ) : panelTab === 'setup' ? (
           <ManufactureSetupTab
             projectDir={projectDir}
@@ -1004,6 +1015,7 @@ export function ManufactureWorkspace({
             onFitStockPadChange={setFitStockPadMm}
             onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
             onSave={() => void save()}
+            onStatus={onStatus}
           />
         ) : panelTab === 'simulate' ? (
           /* -- SIMULATE TAB: full-screen 3D toolpath viewer -- */
@@ -1033,6 +1045,10 @@ export function ManufactureWorkspace({
                 <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>CAM</strong> tab to visualize it here.</p>
               )}
             </div>
+          </section>
+        ) : panelTab === 'probe' ? (
+          <section className="panel workspace-util-panel" aria-labelledby="mfg-probe-heading">
+            <ProbeCyclePanel />
           </section>
         ) : panelTab === 'slice' ? (
           <SliceManufacturePanel {...auxPanelProps} />

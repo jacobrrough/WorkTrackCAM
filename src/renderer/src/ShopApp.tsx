@@ -1660,48 +1660,48 @@ function ShopAppInner(): React.ReactElement {
         <div className="shop-brand-bar__right">
           <button
             type="button"
-            className="tb-btn"
+            className="tb-btn tb-btn--labeled"
             title="My Shop — machines and real-world presets"
             aria-label="Open My Shop"
             onClick={() => setMyShopDrawerOpen(true)}
           >
-            {'\u{1F3ED}'}
+            {'\u{1F3ED}'}<span className="tb-btn__label">My Shop</span>
           </button>
           <button
             type="button"
-            className="tb-btn"
+            className="tb-btn tb-btn--labeled"
             title="Tool & material library"
             aria-label="Open library"
             onClick={() => setLibraryDrawerOpen(true)}
           >
-            {'\u{1F4DA}'}
+            {'\u{1F4DA}'}<span className="tb-btn__label">Library</span>
           </button>
           <button
             type="button"
-            className="tb-btn"
+            className="tb-btn tb-btn--labeled"
             title="Settings"
             aria-label="Open settings"
             onClick={() => setSettingsDrawerOpen(true)}
           >
-            {'\u2699'}
+            {'\u2699'}<span className="tb-btn__label">Settings</span>
           </button>
           <button
             type="button"
-            className="tb-btn"
+            className="tb-btn tb-btn--labeled"
             title="Command palette (Ctrl+K)"
             aria-label="Command palette"
             onClick={() => setCmdOpen(true)}
           >
-            {'\u2318'}
+            {'\u2318'}<span className="tb-btn__label">Ctrl+K</span>
           </button>
           <button
             type="button"
-            className="tb-btn"
+            className="tb-btn tb-btn--labeled"
             title="Keyboard shortcuts (Ctrl+Shift+?)"
             aria-label="Keyboard shortcuts"
             onClick={() => setShowShortcuts((x) => !x)}
           >
-            ?
+            ?<span className="tb-btn__label">Keys</span>
           </button>
         </div>
       </header>
@@ -1770,7 +1770,7 @@ function ShopAppInner(): React.ReactElement {
           <>
             <button type="button" className="btn-generate" disabled={running || !activeJob} onClick={generate}
               title={isFdm ? 'Slice (F5 or Ctrl+Enter)' : 'Generate G-code (F5 or Ctrl+Enter)'}>
-              {running ? <><span className="spinner spinner--sm mr-4 v-mid" /> Running{'\u2026'}</> : isFdm ? '\u25B6 Slice' : '\u25B6 Generate'}
+              {running ? <><span className="spinner spinner--sm mr-4 v-mid" /> Running{'\u2026'}</> : isFdm ? '\u25B6 Slice' : '\u25B6 Generate'}<span className="tb-shortcut-hint">F5</span>
             </button>
             <button type="button" className="btn-send" title="Send G-code to printer via Moonraker" disabled={!activeJob?.gcodeOut} onClick={sendToPrinter}>{'\u2192'} Send</button>
             <button
@@ -1808,14 +1808,14 @@ function ShopAppInner(): React.ReactElement {
           <button type="button" className="tb-btn" title="Generate Setup Sheet \u2014 creates an HTML reference with all job parameters" aria-label="Generate setup sheet" onClick={openSetupSheet}>{'\u{1F4CB}'}</button>
         )}
         {view === 'jobs' && (
-          <button type="button" className="tb-btn" title="Import model \u2014 load an STL, DXF, STEP, IGES, OBJ, or 3MF file into the active job" aria-label="Import model" disabled={!activeJob} onClick={() => void importModel()}>{'\u{1F4E5}'}</button>
+          <button type="button" className="tb-btn tb-btn--labeled" title="Import model \u2014 load an STL, DXF, STEP, IGES, OBJ, or 3MF file into the active job" aria-label="Import model" disabled={!activeJob} onClick={() => void importModel()}>{'\u{1F4E5}'}<span className="tb-btn__label">Import</span></button>
         )}
-        <button type="button" className="tb-btn" title="New project (Ctrl+N)" aria-label="New project" onClick={() => void newProject()}>{'\u{1F4C4}'}</button>
-        <button type="button" className="tb-btn" title="Open project file (Ctrl+O)" aria-label="Open project" onClick={loadProjectFile}>{'\u{1F4C2}'}</button>
-        <button type="button" className={`tb-btn${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
-          {savedIndicator ? '\u2713' : '\u{1F4BE}'}
+        <button type="button" className="tb-btn tb-btn--labeled" title="New project (Ctrl+N)" aria-label="New project" onClick={() => void newProject()}>{'\u{1F4C4}'}<span className="tb-btn__label">New</span></button>
+        <button type="button" className="tb-btn tb-btn--labeled" title="Open project file (Ctrl+O)" aria-label="Open project" onClick={loadProjectFile}>{'\u{1F4C2}'}<span className="tb-btn__label">Open</span></button>
+        <button type="button" className={`tb-btn tb-btn--labeled${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
+          {savedIndicator ? '\u2713' : '\u{1F4BE}'}<span className="tb-btn__label">Save</span>
         </button>
-        <button type="button" className={`tb-btn${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}</button>
+        <button type="button" className={`tb-btn tb-btn--labeled${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}<span className="tb-btn__label">Help</span></button>
       </div>
 
       {view === 'jobs' ? (

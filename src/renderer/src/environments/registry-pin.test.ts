@@ -284,9 +284,11 @@ describe('D. ENVIRONMENT_LIST -- ordering and completeness', () => {
 // E. Op-kind invariants per environment
 // ---------------------------------------------------------------------------
 describe('E. Op-kind sets per environment', () => {
-  it('VCARVE_PRO_OPS is the 4-op Laguna 2D/2.5D set', () => {
+  it('VCARVE_PRO_OPS is the 11-op Laguna routing + 3D carving + surfacing set', () => {
     expect([...VCARVE_PRO_OPS].sort()).toEqual(
-      ['cnc_pocket', 'cnc_contour', 'cnc_drill', 'cnc_chamfer'].sort()
+      ['cnc_pocket', 'cnc_contour', 'cnc_drill', 'cnc_chamfer',
+       'cnc_adaptive', 'cnc_parallel', 'cnc_3d_rough', 'cnc_3d_finish',
+       'cnc_waterline', 'cnc_raster', 'cnc_probe'].sort()
     )
   })
 
@@ -294,14 +296,15 @@ describe('E. Op-kind sets per environment', () => {
     expect([...CREALITY_PRINT_OPS].sort()).toEqual(['fdm_slice', 'export_stl'].sort())
   })
 
-  it('MAKERA_3AXIS_OPS contains exactly the 13 documented 3-axis op kinds', () => {
-    expect(MAKERA_3AXIS_OPS).toHaveLength(13)
+  it('MAKERA_3AXIS_OPS contains exactly the 14 documented 3-axis op kinds', () => {
+    expect(MAKERA_3AXIS_OPS).toHaveLength(14)
     const expected: readonly ManufactureOperationKind[] = [
       'cnc_pocket',
       'cnc_contour',
       'cnc_drill',
       'cnc_chamfer',
       'cnc_adaptive',
+      'cnc_parallel',
       'cnc_3d_rough',
       'cnc_3d_finish',
       'cnc_waterline',
@@ -319,20 +322,23 @@ describe('E. Op-kind sets per environment', () => {
     expect(MAKERA_3AXIS_OPS).toContain('cnc_scallop_finish')
   })
 
-  it('MAKERA_CAM_OPS is a strict superset of MAKERA_3AXIS_OPS (4-axis HD adds 4 ops)', () => {
-    expect(MAKERA_CAM_OPS.length).toBe(MAKERA_3AXIS_OPS.length + 4)
+  it('MAKERA_CAM_OPS is a strict superset of MAKERA_3AXIS_OPS (adds 7 extended ops)', () => {
+    expect(MAKERA_CAM_OPS.length).toBe(MAKERA_3AXIS_OPS.length + 7)
     for (const op of MAKERA_3AXIS_OPS) {
       expect(MAKERA_CAM_OPS).toContain(op)
     }
   })
 
-  it('MAKERA_CAM_OPS adds exactly the 4 documented 4-axis HD ops', () => {
-    const fourAxisOnly = MAKERA_CAM_OPS.filter((op) => !MAKERA_3AXIS_OPS.includes(op))
-    expect(fourAxisOnly.sort()).toEqual([
+  it('MAKERA_CAM_OPS adds exactly the 7 extended ops (4-axis HD + trochoidal + probe + 4axis-continuous)', () => {
+    const extendedOnly = MAKERA_CAM_OPS.filter((op) => !MAKERA_3AXIS_OPS.includes(op))
+    expect(extendedOnly.sort()).toEqual([
+      'cnc_4axis_continuous',
       'cnc_4axis_contour',
       'cnc_4axis_finishing',
       'cnc_4axis_indexed',
-      'cnc_4axis_roughing'
+      'cnc_4axis_roughing',
+      'cnc_probe',
+      'cnc_trochoidal_hsm'
     ])
   })
 
@@ -631,7 +637,7 @@ describe('L. Source-text whitelist', () => {
   })
 
   it('source pins the wood-routing tagline for Laguna', () => {
-    expect(SRC).toMatch(/Wood-routing & 2D\/2\.5D toolpaths for the Laguna Swift 5×10/)
+    expect(SRC).toMatch(/Wood routing, 3D carving, and surfacing toolpaths for the Laguna Swift 5/)
   })
 
   it('source pins the FDM tagline for K2 Plus', () => {

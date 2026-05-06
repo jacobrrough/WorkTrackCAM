@@ -1,6 +1,6 @@
 /**
- * WorkTrackCAM preload — exposes CAM/fabrication + core IPC to the renderer.
- * Design, assembly, drawing, and kernel build APIs are NOT included.
+ * WorkTrackCAM preload — exposes all IPC bridges to the renderer.
+ * Includes: core, CAM/fabrication, assembly, drawing, and kernel build APIs.
  */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppSettings, ImportHistoryEntry, ProjectFile } from '../shared/project-schema'
@@ -24,6 +24,9 @@ import type { MaterialAuditResult } from '../shared/material-audit'
 import type { FixtureCollisionResult, ToolpathPoint } from '../shared/fixture-collision'
 import type { FixtureRecord } from '../shared/fixture-schema'
 import type { ManufactureSetup } from '../shared/manufacture-schema'
+import type { AssemblyFile, AssemblyInterferenceReport, AssemblySummaryReport } from '../shared/assembly-schema'
+import type { DrawingFile } from '../shared/drawing-sheet-schema'
+import type { DrawingExportPayload, DrawingExportResult } from '../main/drawing-export-service'
 import type { SetupSequenceValidation, FlipSetupSuggestion } from '../shared/multi-setup-utils'
 import type { ProbeCycleType, ProbeBaseParams } from '../shared/probing-cycles'
 import type { CamRunPayload, CamRunResultContract } from '../shared/cam-ipc-contract'
@@ -303,6 +306,28 @@ export type Api = {
     | { ok: true; gcode: string }
     | { ok: false; error: string }
   >
+
+  // ── Assembly ────────────────────────────────────────────────────────────
+  assemblyLoad: (projectDir: string) => Promise<AssemblyFile>
+  assemblySave: (projectDir: string, json: string) => Promise<void>
+  assemblyExportBom: (projectDir: string) => Promise<string>
+  assemblyExportBomHierarchical: (projectDir: string) => Promise<string>
+  assemblyExportBomHierarchyJson: (projectDir: string) => Promise<string>
+  assemblySaveInterferenceReport: (projectDir: string, json: string) => Promise<string>
+  assemblyInterferenceCheck: (projectDir: string) => Promise<AssemblyInterferenceReport>
+  assemblySummary: (projectDir: string) => Promise<AssemblySummaryReport>
+  assemblySolve: (assemblyInput: unknown) => Promise<{ ok: true; transforms: Array<{ id: string; transform: unknown }>; diagnostics: string[] }>
+
+  // ── Drawing ─────────────────────────────────────────────────────────────
+  drawingLoad: (projectDir: string) => Promise<DrawingFile | null>
+  drawingSave: (projectDir: string, json: string) => Promise<void>
+  drawingExport: (payload: DrawingExportPayload) => Promise<DrawingExportResult>
+
+  // ── CAD Kernel ──────────────────────────────────────────────────────────
+  cadKernelBuild: (projectDir: string, pythonPath: string) => Promise<{ ok: true; manifest: unknown } | { ok: false; error: string }>
+
+  // ── Fixture Library ─────────────────────────────────────────────────────
+  fixtureList: () => Promise<Array<{ id: string; name: string; type: string; geometry: unknown[]; clampingPositions: unknown[] }>>
 }
 
 const api: Api = {
@@ -445,6 +470,28 @@ const api: Api = {
 
   // Probing Cycles
   probeGenerate: (payload) => ipcRenderer.invoke('probe:generate', payload),
+
+  // Assembly
+  assemblyLoad: (projectDir) => ipcRenderer.invoke('assembly:load', projectDir),
+  assemblySave: (projectDir, json) => ipcRenderer.invoke('assembly:save', projectDir, json),
+  assemblyExportBom: (projectDir) => ipcRenderer.invoke('assembly:exportBom', projectDir),
+  assemblyExportBomHierarchical: (projectDir) => ipcRenderer.invoke('assembly:exportBomHierarchical', projectDir),
+  assemblyExportBomHierarchyJson: (projectDir) => ipcRenderer.invoke('assembly:exportBomHierarchyJson', projectDir),
+  assemblySaveInterferenceReport: (projectDir, json) => ipcRenderer.invoke('assembly:saveInterferenceReport', projectDir, json),
+  assemblyInterferenceCheck: (projectDir) => ipcRenderer.invoke('assembly:interferenceCheck', projectDir),
+  assemblySummary: (projectDir) => ipcRenderer.invoke('assembly:summary', projectDir),
+  assemblySolve: (assemblyInput) => ipcRenderer.invoke('assembly:solve', assemblyInput),
+
+  // Drawing
+  drawingLoad: (projectDir) => ipcRenderer.invoke('drawing:load', projectDir),
+  drawingSave: (projectDir, json) => ipcRenderer.invoke('drawing:save', projectDir, json),
+  drawingExport: (payload) => ipcRenderer.invoke('drawing:export', payload),
+
+  // CAD Kernel
+  cadKernelBuild: (projectDir, pythonPath) => ipcRenderer.invoke('cad:kernelBuild', projectDir, pythonPath),
+
+  // Fixture Library
+  fixtureList: () => ipcRenderer.invoke('fixture:list'),
 }
 
 contextBridge.exposeInMainWorld('fab', api)
