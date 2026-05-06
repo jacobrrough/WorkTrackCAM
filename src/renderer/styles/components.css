@@ -138,6 +138,53 @@
 .toast-item--err { background: #7f1d1d; }
 .toast-item--warn { background: #78350f; }
 
+/* [ID-0088] Multi-line variant for toasts that carry a `detail` body
+   (Moonraker push rejection summaries, [ID-0072] "will heat" preview).
+   Doubles the max-width so realistic ~150-char detail strings wrap on
+   a few lines instead of overflowing the 360px legacy bubble; adds a
+   compact Copy button so the operator can paste the full text into a
+   bug report. Legacy single-line toasts (those without `detail`) keep
+   their original 360px width and box model — see the `.toast-item`
+   selector above. */
+.toast-item--with-detail {
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.toast-item__msg {
+  font-weight: var(--weight-medium);
+  font-size: var(--text-base);
+}
+.toast-item__detail {
+  font-weight: var(--weight-regular);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  opacity: 0.92;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.toast-item__copy {
+  align-self: flex-end;
+  margin-top: var(--sp-1);
+  padding: 2px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.toast-item__copy:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.toast-item__copy:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
 /* ── Context menu ───────────────────────────────────────────────── */
 .ctx-menu-overlay {
   position: fixed;

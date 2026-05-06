@@ -920,3 +920,162 @@ describe('Safety: 4-axis Y=0 centering on rotation axis', () => {
     expect(y0Idx).toBeLessThan(spindleIdx)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 14. 4-axis ATC-BYPASS + wood-routing inverseTimeFeed isolation [ID-0146]
+// ─────────────────────────────────────────────────────────────────────────────
+// DISCOVERED-2026-04-25 (Cycle 48 post-processing rotation slot 3, 11 cycles
+// since last post-processing cycle in Cycle 37 [ID-0110]):
+//
+// Two cross-cutting safety invariants this suite did not previously pin
+// end-to-end against the bundled posts.
+//
+//   (a) 4-axis ATC-bypass: when the rotary attachment is mounted, the
+//       Carvera ATC is mechanically bypassed (the rotary occupies the
+//       table). The carvera_4axis.hbs template intentionally omits M6
+//       anywhere in its body. The cnc_4axis_grbl.hbs template likewise
+//       omits M6 because GRBL has no native ATC support. Operators may
+//       still pass `toolNumber` (it is a generic post-context flag and
+//       gets used by the 3-axis Carvera post for M6 + G43); the
+//       invariant we want to pin is that NEITHER 4-axis template
+//       accidentally emits M6 when `toolNumber` is set, regardless of
+//       any other option combination (incl. `inverseTimeFeed`). A
+//       regression here would crash the rotary attachment (M6 attempts
+//       to home the spindle to the tool slot, which is occupied by the
+//       rotary chuck on the 4-axis Carvera setup).
+//
+//   (b) Wood-routing inverseTimeFeed isolation: vcarve_mach3.hbs is
+//       deliberately NOT gated on `inverseTimeFeed` -- wood routing on
+//       the Laguna Swift 5x10 always uses constant feed-per-minute
+//       (G94) because the RichAuto A-series controller's inverse-time
+//       feed handling is not validated for our routing workflow. The
+//       template hard-codes `G94` in the header. We pin that even when
+//       a caller passes `inverseTimeFeed: true` (e.g., a future shared
+//       UI control that mistakenly threads the flag through to all
+//       posts), the rendered output STILL contains G94 and does NOT
+//       contain G93. A regression would silently switch the Laguna to
+//       inverse-time-feed mode and the F-words downstream would be
+//       interpreted as `1/minutes` instead of `mm/min`, sending the
+//       spindle through the workpiece at hundreds of mm/s.
+//
+// Both invariants are end-to-end against the real bundled `.hbs`
+// templates. Pure test-only: zero production code changes.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Safety: 4-axis ATC-bypass + wood-routing inverseTimeFeed isolation [ID-0146]', () => {
+  const carvera4ax: MachineProfile = {
+    ...baseMachine,
+    id: 'carvera-4ax-atc-bypass',
+    name: 'Carvera 4-Axis ATC-Bypass Test',
+    postTemplate: 'carvera_4axis.hbs',
+    dialect: 'grbl_4axis',
+    axisCount: 4,
+    aAxisRangeDeg: 360,
+    minSpindleRpm: 6000,
+    maxSpindleRpm: 15000,
+  }
+
+  const grbl4ax: MachineProfile = {
+    ...baseMachine,
+    id: 'grbl-4ax-atc-bypass',
+    name: 'GRBL 4-Axis ATC-Bypass Test',
+    postTemplate: 'cnc_4axis_grbl.hbs',
+    dialect: 'grbl_4axis',
+    axisCount: 4,
+    aAxisRangeDeg: 360,
+  }
+
+  const vcarveMach3: MachineProfile = {
+    ...baseMachine,
+    id: 'vcarve-itf-isolation',
+    name: 'VCarve InverseTimeFeed Isolation Test',
+    postTemplate: 'vcarve_mach3.hbs',
+    dialect: 'mach3',
+  }
+
+  // ── (a) 4-axis ATC-bypass invariants ──────────────────────────────────────
+
+  it('Carvera 4-axis: no M6 emitted in default render (baseline ATC-bypass)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, carvera4ax, fourAxisLines)
+    expect(gcode).not.toContain('M6')
+    // Also pin that no T<n>-then-M6 fragments leak via the spindle dialect snippet.
+    expect(gcode).not.toMatch(/T\d+\s*M6/)
+  })
+
+  it('Carvera 4-axis: no M6 emitted even with explicit toolNumber: 5 (ATC-bypass holds)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, carvera4ax, fourAxisLines, {
+      toolNumber: 5,
+    })
+    expect(gcode).not.toContain('M6')
+    expect(gcode).not.toMatch(/T5\s*M6/)
+    // Footer / safety still intact.
+    expect(gcode).toContain('M5')
+    expect(gcode).toContain('M2')
+    // Carvera 4-axis terminates with M2 -- M30 appears in an operator-visible
+    // safety comment ("NOT M30 -- M30 may delete file on Smoothieware") but
+    // must never appear as a standalone command. Pin via a per-line scan
+    // that strips `;` comments before matching the M30 token.
+    const noStandaloneM30 = gcode
+      .split('\n')
+      .map(l => l.replace(/;[^\n]*$/, '').trim())
+      .every(l => !/(?:^|\s)M0*30(?:\s|$)/.test(l))
+    expect(noStandaloneM30).toBe(true)
+  })
+
+  it('Carvera 4-axis: no M6 emitted even with toolNumber: 5 + inverseTimeFeed: true (combined options ATC-bypass)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, carvera4ax, fourAxisLines, {
+      toolNumber: 5,
+      inverseTimeFeed: true,
+    })
+    expect(gcode).not.toContain('M6')
+    expect(gcode).not.toMatch(/T5\s*M6/)
+    // G93/G94 pair still present (inverseTimeFeed honored independently).
+    expect(gcode).toContain('G93')
+    expect(gcode).toContain('G94')
+    // Safe-Z lift still present (Carvera 4-axis Y=0 centering happens at safe Z).
+    expect(gcode).toContain(`G0 Z${carvera4ax.workAreaMm.z}`)
+  })
+
+  it('GRBL 4-axis: no M6 emitted even with explicit toolNumber: 5 (cnc_4axis_grbl ATC-bypass)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, grbl4ax, fourAxisLines, {
+      toolNumber: 5,
+    })
+    expect(gcode).not.toContain('M6')
+    expect(gcode).not.toMatch(/T5\s*M6/)
+    // Footer / safety still intact (GRBL 4-axis ends with M30).
+    expect(gcode).toContain('M5')
+    expect(gcode).toContain('M30')
+  })
+
+  // ── (b) Wood-routing inverseTimeFeed isolation invariants ─────────────────
+
+  it('vcarve_mach3.hbs: ignores inverseTimeFeed: true (wood routing always uses G94)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, vcarveMach3, toolpathLines, {
+      inverseTimeFeed: true,
+    })
+    // Header G94 (feed per minute) must still be present.
+    expect(gcode).toContain('G94')
+    // The G93 inverse-time mode must NOT be emitted -- vcarve_mach3.hbs
+    // does not gate on inverseTimeFeed and has no G93 codepath.
+    expect(gcode).not.toContain('G93')
+    // Footer must still terminate with M30 (Mach3 dialect).
+    expect(gcode).toContain('M30')
+  })
+
+  it('vcarve_mach3.hbs: ignores inverseTimeFeed: true even with full kitchen-sink option combo (defense-in-depth)', async () => {
+    const { gcode } = await renderPost(resourcesRoot, vcarveMach3, toolpathLines, {
+      inverseTimeFeed: true,
+      dustCollection: true,
+      toolNumber: 3,
+      lineNumbering: { enabled: true, start: 100, increment: 10 },
+      spindleRpm: 18000,
+    })
+    expect(gcode).toContain('G94')
+    expect(gcode).not.toContain('G93')
+    // Dust-collection M-codes still flip on/off correctly under the flag.
+    expect(gcode).toContain('M7')
+    expect(gcode).toContain('M9')
+    // No surprise M6 emission either (vcarve_mach3.hbs is single-tool by design).
+    expect(gcode).not.toContain('M6')
+  })
+})

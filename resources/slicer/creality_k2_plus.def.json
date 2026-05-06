@@ -4,17 +4,92 @@
   "inherits": "fdmprinter",
   "metadata": {
     "visible": true,
-    "author": "Unified Fab Studio",
+    "author": "WorkTrackCAM",
     "manufacturer": "Creality",
-    "type": "machine"
+    "type": "machine",
+    "file_formats": "text/x-gcode"
   },
   "overrides": {
-    "machine_name": { "default_value": "Creality K2 Plus" },
-    "machine_width": { "default_value": 500 },
-    "machine_depth": { "default_value": 500 },
-    "machine_height": { "default_value": 500 },
+    "machine_name": {
+      "default_value": "Creality K2 Plus"
+    },
+    "machine_width": {
+      "default_value": 350
+    },
+    "machine_depth": {
+      "default_value": 350
+    },
+    "machine_height": {
+      "default_value": 350
+    },
     "machine_head_with_fans_polygon": {
       "default_value": "[[-30, 20], [-30, -20], [30, -20], [30, 20]]"
+    },
+    "gantry_height": {
+      "value": 45
+    },
+    "machine_extruder_count": {
+      "default_value": 1
+    },
+    "machine_heated_bed": {
+      "default_value": true
+    },
+    "machine_heated_build_volume": {
+      "default_value": true
+    },
+    "machine_center_is_zero": {
+      "default_value": false
+    },
+    "material_diameter": {
+      "default_value": 1.75
+    },
+    "machine_max_feedrate_x": {
+      "value": 600
+    },
+    "machine_max_feedrate_y": {
+      "value": 600
+    },
+    "machine_max_feedrate_z": {
+      "value": 30
+    },
+    "machine_max_feedrate_e": {
+      "value": 100
+    },
+    "machine_max_acceleration_x": {
+      "value": 30000
+    },
+    "machine_max_acceleration_y": {
+      "value": 30000
+    },
+    "machine_max_acceleration_z": {
+      "value": 500
+    },
+    "machine_max_acceleration_e": {
+      "value": 5000
+    },
+    "machine_max_jerk_xy": {
+      "value": 9
+    },
+    "machine_max_jerk_z": {
+      "value": 2
+    },
+    "machine_max_jerk_e": {
+      "value": 2.5
+    },
+    "machine_acceleration": {
+      "value": 8000
+    },
+    "retraction_amount": {
+      "default_value": 0.5
+    },
+    "retraction_speed": {
+      "default_value": 40
+    },
+    "machine_start_gcode": {
+      "default_value": "M140 S0\nM104 S0\nSTART_PRINT EXTRUDER_TEMP={material_print_temperature_layer_0} BED_TEMP={material_bed_temperature_layer_0} CHAMBER_TEMP={build_volume_temperature}\n"
+    },
+    "machine_end_gcode": {
+      "default_value": "END_PRINT\n"
     }
   }
 }

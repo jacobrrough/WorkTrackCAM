@@ -19,6 +19,7 @@ import {
   polygonPerimeterMm,
   resolveMeshRasterSampleBudget
 } from './cam-local'
+import { resolveContourRampOptions, resolveContourTabParams } from './cam-runner'
 
 describe('computeNegativeZDepthPasses', () => {
   it('returns single level for non-negative Z', () => {
@@ -1298,41 +1299,41 @@ describe('generateContour2dLines — holding tabs (Feature C)', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('resolveContourRampOptions', () => {
-  // Import inline to avoid circular deps — these are integration-style tests
-  let resolveContourRampOptions: typeof import('./cam-runner').resolveContourRampOptions
-  let resolveContourTabParams: typeof import('./cam-runner').resolveContourTabParams
+  // [ID-0144] static top-level imports replaced a 449ms dynamic-import-inside-it()
+  // pattern; the original "// Import inline to avoid circular deps" comment was
+  // stale (cam-local.ts does NOT import cam-runner; cam-runner imports cam-local
+  // one-way), so the static import is safe and avoids paying the cam-runner
+  // module-init cost inside a per-test timing budget.
 
-  // Dynamic import so vitest resolves the module
-  it('loads resolvers', async () => {
-    const mod = await import('./cam-runner')
-    resolveContourRampOptions = mod.resolveContourRampOptions
-    resolveContourTabParams = mod.resolveContourTabParams
+  it('exports the resolveContourRampOptions resolver', () => {
+    expect(typeof resolveContourRampOptions).toBe('function')
+    expect(typeof resolveContourTabParams).toBe('function')
   })
 
   it('defaults to plunge with 3-degree angle', () => {
-    const { rampType, rampAngleDeg } = resolveContourRampOptions!({})
+    const { rampType, rampAngleDeg } = resolveContourRampOptions({})
     expect(rampType).toBe('plunge')
     expect(rampAngleDeg).toBe(3)
   })
 
   it('resolves linear ramp type', () => {
-    const { rampType } = resolveContourRampOptions!({ rampType: 'linear' })
+    const { rampType } = resolveContourRampOptions({ rampType: 'linear' })
     expect(rampType).toBe('linear')
   })
 
   it('resolves helix ramp type', () => {
-    const { rampType } = resolveContourRampOptions!({ rampType: 'helix' })
+    const { rampType } = resolveContourRampOptions({ rampType: 'helix' })
     expect(rampType).toBe('helix')
   })
 
   it('clamps ramp angle to valid range', () => {
-    expect(resolveContourRampOptions!({ rampAngleDeg: 0 }).rampAngleDeg).toBe(0.5)
-    expect(resolveContourRampOptions!({ rampAngleDeg: 95 }).rampAngleDeg).toBe(89)
-    expect(resolveContourRampOptions!({ rampAngleDeg: 15 }).rampAngleDeg).toBe(15)
+    expect(resolveContourRampOptions({ rampAngleDeg: 0 }).rampAngleDeg).toBe(0.5)
+    expect(resolveContourRampOptions({ rampAngleDeg: 95 }).rampAngleDeg).toBe(89)
+    expect(resolveContourRampOptions({ rampAngleDeg: 15 }).rampAngleDeg).toBe(15)
   })
 
   it('resolves tab params with count mode', () => {
-    const tab = resolveContourTabParams!({ tabsMode: 'count', tabCount: 6, tabWidthMm: 4, tabHeightMm: 2 })
+    const tab = resolveContourTabParams({ tabsMode: 'count', tabCount: 6, tabWidthMm: 4, tabHeightMm: 2 })
     expect(tab).toBeDefined()
     expect(tab!.tabsMode).toBe('count')
     expect(tab!.tabCount).toBe(6)
@@ -1341,20 +1342,20 @@ describe('resolveContourRampOptions', () => {
   })
 
   it('resolves tab params with interval mode', () => {
-    const tab = resolveContourTabParams!({ tabsMode: 'interval', tabIntervalMm: 25 })
+    const tab = resolveContourTabParams({ tabsMode: 'interval', tabIntervalMm: 25 })
     expect(tab).toBeDefined()
     expect(tab!.tabsMode).toBe('interval')
     expect(tab!.tabIntervalMm).toBe(25)
   })
 
   it('returns undefined for no tabs or unknown mode', () => {
-    expect(resolveContourTabParams!({})).toBeUndefined()
-    expect(resolveContourTabParams!({ tabsMode: 'none' })).toBeUndefined()
-    expect(resolveContourTabParams!({ tabsMode: 'bogus' })).toBeUndefined()
+    expect(resolveContourTabParams({})).toBeUndefined()
+    expect(resolveContourTabParams({ tabsMode: 'none' })).toBeUndefined()
+    expect(resolveContourTabParams({ tabsMode: 'bogus' })).toBeUndefined()
   })
 
   it('applies defaults for missing tab dimensions', () => {
-    const tab = resolveContourTabParams!({ tabsMode: 'count' })
+    const tab = resolveContourTabParams({ tabsMode: 'count' })
     expect(tab).toBeDefined()
     expect(tab!.tabCount).toBe(4) // default
     expect(tab!.tabWidthMm).toBe(3) // default

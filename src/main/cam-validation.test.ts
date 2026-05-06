@@ -485,6 +485,44 @@ describe('Pre-flight: extractPostProcessingOpts', () => {
     const opts = extractPostProcessingOpts({ inverseTimeFeed: false })
     expect(opts.inverseTimeFeed).toBeUndefined()
   })
+
+  // ─── [ID-0064] dustCollection pass-through (Laguna Swift 5x10 ui-polish) ──
+  it('[ID-0064] extracts dustCollection: true', () => {
+    const opts = extractPostProcessingOpts({ dustCollection: true })
+    expect(opts.dustCollection).toBe(true)
+  })
+
+  it('[ID-0064] does not set dustCollection when false', () => {
+    const opts = extractPostProcessingOpts({ dustCollection: false })
+    expect(opts.dustCollection).toBeUndefined()
+  })
+
+  it('[ID-0064] does not set dustCollection when undefined', () => {
+    const opts = extractPostProcessingOpts({})
+    expect(opts.dustCollection).toBeUndefined()
+  })
+
+  it('[ID-0064] does not set dustCollection for non-boolean truthy values (strict-true gate)', () => {
+    // Guards against accidental enablement from string "true" / 1 / object payloads.
+    expect(extractPostProcessingOpts({ dustCollection: 'true' }).dustCollection).toBeUndefined()
+    expect(extractPostProcessingOpts({ dustCollection: 1 }).dustCollection).toBeUndefined()
+    expect(extractPostProcessingOpts({ dustCollection: {} }).dustCollection).toBeUndefined()
+  })
+
+  it('[ID-0064] dustCollection coexists with other flags without interference', () => {
+    const opts = extractPostProcessingOpts({
+      enableArcFitting: true,
+      arcTolerance: 0.02,
+      dustCollection: true,
+      cutterCompensation: 'left',
+      cutterCompDRegister: 7
+    })
+    expect(opts.enableArcFitting).toBe(true)
+    expect(opts.arcTolerance).toBe(0.02)
+    expect(opts.dustCollection).toBe(true)
+    expect(opts.cutterCompensation).toBe('left')
+    expect(opts.cutterCompDRegister).toBe(7)
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════

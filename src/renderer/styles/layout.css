@@ -444,7 +444,7 @@
 .shop-brand-bar__center {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   justify-self: center;
 }
 .shop-brand-bar__right {
@@ -452,6 +452,64 @@
   align-items: center;
   gap: var(--sp-3);
   justify-self: end;
+}
+
+/* ── "My Shop" quick-switch (three env buttons) ──────────────── */
+.shop-brand-bar__env-switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.shop-brand-bar__env-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-5);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--txt1);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              color var(--duration-fast) var(--ease-out-expo),
+              border-color var(--duration-fast) var(--ease-out-expo),
+              transform var(--duration-fast) var(--ease-out-expo);
+}
+.shop-brand-bar__env-btn:hover:not(.shop-brand-bar__env-btn--active) {
+  background: var(--surface-overlay);
+  color: var(--txt0);
+}
+.shop-brand-bar__env-btn:active {
+  transform: scale(0.97);
+}
+.shop-brand-bar__env-btn--active {
+  /* Each button carries `data-environment={env.id}`, so --accent here is
+     the env's own accent (from tokens.css), not the active shell's. */
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.shop-brand-bar__env-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.shop-brand-bar__env-glyph {
+  font-size: var(--text-md);
+  line-height: 1;
+}
+.shop-brand-bar__env-name {
+  letter-spacing: 0.02em;
+}
+.shop-brand-bar__center-sep {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 var(--sp-2);
 }
 
 /* ── Workspace pill (Fusion-style) ───────────────────────────── */

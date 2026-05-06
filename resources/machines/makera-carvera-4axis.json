@@ -10,6 +10,7 @@
   "aAxisRangeDeg": 99999,
   "aAxisOrientation": "x",
   "maxRotaryRpm": 6,
+  "rotaryChuckOuterRadiusMm": 46,
   "maxSpindleRpm": 15000,
   "minSpindleRpm": 6000,
   "meta": {

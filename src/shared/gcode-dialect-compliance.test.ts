@@ -92,6 +92,112 @@ describe('GRBL compliance', () => {
   })
 })
 
+// ── Smoothieware dialect ───────────────────────────────────────────────────
+// [ID-0160] Cycle 68 — Smoothieware-family controllers (Makera Carvera 3-axis)
+// share the GRBL-flavored heritage but support tool-length compensation
+// (G43/G49) and richer feed/coolant control. The validator MUST NOT emit
+// GRBL_NO_TLC false-positives on legitimate Smoothieware ATC G-code.
+
+describe('Smoothieware compliance', () => {
+  // Representative Carvera 3-axis ATC block with TLC: this is the canonical
+  // shape the Cycle 67 [ID-0155] paired pin captured as a false-positive
+  // under dialect="grbl". Under dialect="smoothieware", the validator must
+  // emit ZERO warnings for this exact shape.
+  const VALID_SMOOTHIEWARE_ATC = [
+    '; Makera Carvera — 3-Axis G-code',
+    'G21',
+    'G90',
+    'G17',
+    'M6 T1',
+    'G43 H1',
+    'M3 S12000',
+    'G0 Z140',
+    'G1 X50 Y30 F800',
+    'G1 Z-2 F200',
+    'M5',
+    'G49',
+    'G0 Z140',
+    'G0 X0 Y0',
+    'M9',
+    'M2'
+  ].join('\n')
+
+  it('passes a canonical Carvera 3-axis ATC block (G43/G49) with ZERO issues', () => {
+    // [ID-0160] flip-point — under dialect="grbl" this same input fired two
+    // GRBL_NO_TLC warnings (one for G43, one for G49). Under "smoothieware"
+    // the warnings disappear because Smoothieware DOES support TLC.
+    expect(validateDialectCompliance(VALID_SMOOTHIEWARE_ATC, 'smoothieware')).toEqual([])
+  })
+
+  it('does NOT emit GRBL_NO_TLC for G43/G49 (the [ID-0160] regression guard)', () => {
+    const gcode = 'G21\nG43 H1\nG1 X10 F100\nG49\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(findByCode(issues, 'GRBL_NO_TLC').length).toBe(0)
+  })
+
+  it('emits a SOFT G28 warning (not an error) — Smoothieware can be configured to home', () => {
+    // Smoothieware genuinely supports G28 when home_position is wired up,
+    // so the conservative warning level (not error) lets the operator know
+    // to verify the firmware config rather than blocking the export.
+    const gcode = 'G21\nG90\nG91 G28 Z0\nG90\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    const g28 = findByCode(issues, 'SMOOTHIEWARE_G28_CHECK')
+    expect(g28.length).toBe(1)
+    expect(g28[0].level).toBe('warning')
+    expect(g28[0].line).toBe(3)
+    expect(g28[0].message).toContain('home_position')
+  })
+
+  it('emits SMOOTHIEWARE_G28_CHECK for G30 too', () => {
+    const gcode = 'G21\nG30 Z0\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    const checks = findByCode(issues, 'SMOOTHIEWARE_G28_CHECK')
+    expect(checks.length).toBe(1)
+    expect(checks[0].message).toContain('G30')
+  })
+
+  it('warns on parenthetical comments in non-comment lines (consistency with GRBL)', () => {
+    const gcode = 'G21\nG1 X10 (move to start) F100\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(findByCode(issues, 'SMOOTHIEWARE_PAREN_COMMENT').length).toBe(1)
+  })
+
+  it('does not warn on pure parenthetical comment lines', () => {
+    const gcode = '(This is a comment)\nG21\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(findByCode(issues, 'SMOOTHIEWARE_PAREN_COMMENT').length).toBe(0)
+  })
+
+  it('warns on lines exceeding 256 characters', () => {
+    const longLine = 'G1 X' + '1'.repeat(260) + ' F100'
+    const gcode = `G21\n${longLine}\nM2`
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(findByCode(issues, 'SMOOTHIEWARE_LINE_LENGTH').length).toBe(1)
+  })
+
+  it('returns empty for empty input', () => {
+    expect(validateDialectCompliance('', 'smoothieware')).toEqual([])
+    expect(validateDialectCompliance('   ', 'smoothieware')).toEqual([])
+  })
+
+  it('handles G28 inside a comment without flagging', () => {
+    const gcode = 'G21\n; G28 reference return not used\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(findByCode(issues, 'SMOOTHIEWARE_G28_CHECK').length).toBe(0)
+  })
+
+  it('does not share GRBL warning codes — codes are SMOOTHIEWARE_*-prefixed', () => {
+    // Defense-in-depth: the new family MUST NOT emit codes prefixed with
+    // GRBL_*. Operator-facing warnings should surface the real dialect name.
+    const gcode = 'G21\nG43 H1\nG1 X10 (inline) F100\nG49\nG30 Z0\nM2'
+    const issues = validateDialectCompliance(gcode, 'smoothieware')
+    expect(issues.length).toBeGreaterThan(0)
+    for (const issue of issues) {
+      expect(issue.code.startsWith('GRBL_')).toBe(false)
+    }
+  })
+})
+
 // ── Fanuc dialect ──────────────────────────────────────────────────────────
 
 describe('Fanuc compliance', () => {

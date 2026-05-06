@@ -9,6 +9,29 @@ This implements a contour-offset based roughing approach:
 
 The approach is similar to HSMWorks/Fusion 360 adaptive clearing but simplified
 for mesh-based (non-BREP) geometry.
+
+Cycle 4 note (Option A, 2026-04-22): `stock_allowance_mm` is now plumbed
+into `_clear_full_stock`. Previously the allowance only entered
+`_clear_around_mesh`'s mesh-boundary offset (`tool_r + stock_allowance`)
+and was completely absent from `_clear_full_stock`. For stock geometries
+whose mesh footprint fills or exceeds the stock footprint (the common
+CNC-routing case), `_clear_around_mesh` short-circuits on the first pass
+via `_contour_inside_any(current, mesh_boundaries)` and every emitted
+chain comes from `_clear_full_stock` at above-mesh Z levels — meaning
+`stock_allowance_mm` was functionally ignored on those jobs. The fix
+(Option A, narrow) threads the allowance into `_clear_full_stock`'s
+initial offset from the stock boundary so raising `stock_allowance_mm`
+strictly reduces the emitted spiral's outermost extent, and therefore
+strictly reduces `cut_distance_mm`. Sign convention: `offset_contour`
+on a CCW contour treats POSITIVE as inward and NEGATIVE as outward
+(the implementation's behavior, which differs from the docstring);
+the existing `-tool_r` start places the spiral's first pass OUTSIDE
+the stock by `tool_r`, so `stock_allowance` enters additively with a
+positive sign (`-tool_r + stock_allowance`) to shrink the initial
+contour toward the stock boundary as allowance grows. The allowance=0
+baseline is preserved bit-for-bit so other TestAdaptiveClear cases
+(box_produces_chains / has_feed_moves / all_z_above_minimum /
+stats_computed) are unchanged.
 """
 from __future__ import annotations
 
@@ -103,6 +126,7 @@ def generate_adaptive_clear(job: ToolpathJob, mesh: Mesh) -> ToolpathResult:
             chains = _clear_full_stock(
                 stock_contour, z_level, tool_r, effective_stepover,
                 safe_z, link_retract_z, feed, plunge, ramp_angle, hf,
+                stock_allowance,
                 is_first_level=(z_idx == 0),
                 max_passes=proportional_max_passes,
             )
@@ -160,14 +184,28 @@ def _clear_full_stock(
     plunge: float,
     ramp_angle: float,
     hf: Heightfield,
+    stock_allowance: float,
     is_first_level: bool,
     max_passes: int = 500,
 ) -> list[ToolpathChain]:
-    """Generate offset clearing passes across the full stock area at z_level."""
+    """Generate offset clearing passes across the full stock area at z_level.
+
+    `stock_allowance` shrinks the initial spiral contour toward the stock
+    boundary so larger allowances leave more material standing at the stock
+    edge — see module docstring (Cycle 4, Option A) for the sign-convention
+    rationale. The allowance=0 path is unchanged from prior behavior.
+    """
     chains: list[ToolpathChain] = []
 
-    # Start from stock boundary offset inward by tool radius
-    current = offset_contour(stock_contour, -tool_r)
+    # Start from stock boundary offset by `-tool_r + stock_allowance`. For the
+    # CCW stock rectangle used by this strategy, `offset_contour` treats
+    # positive values as inward and negative as outward (opposite to its
+    # docstring — empirically confirmed). The existing `-tool_r` places the
+    # first pass tool_r OUTSIDE the stock; adding `stock_allowance` with a
+    # positive sign pulls it back toward the stock boundary, shrinking the
+    # outermost cut extent and strictly reducing `cut_distance_mm` for any
+    # non-zero allowance without perturbing the allowance=0 baseline.
+    current = offset_contour(stock_contour, -tool_r + stock_allowance)
     pass_num = 0
 
     while True:

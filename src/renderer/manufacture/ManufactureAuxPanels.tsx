@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
   CURA_SLICE_PRESETS,
@@ -8,6 +8,15 @@ import {
   resolveCuraSliceParams,
   type CuraSlicePresetId
 } from '../../shared/cura-slice-defaults'
+import {
+  K2_PLUS_QUALITY_PRESET_IDS,
+  K2_PLUS_SLICE_PRESETS,
+  type K2PlusQualityPresetId
+} from '../../shared/k2-plus-slice-presets'
+import {
+  buildMoonrakerPushPayload,
+  formatMoonrakerPushFailure
+} from '../src/moonraker-push-payload'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import { buildCamSimulationPreview } from '../../shared/cam-simulation-preview'
@@ -16,10 +25,34 @@ import { CamLastRunHint } from '../utilities/CamLastRunHint'
 import { evaluateManufactureReadiness } from '../../shared/manufacture-readiness'
 import type { ManufactureFile } from '../../shared/manufacture-schema'
 import { CarveraSetupPanel } from './CarveraSetupPanel'
+import { FilamentPicker } from './FilamentPicker'
+import type { FilamentRecord } from '../../shared/filament-schema'
 
 const SLICE_PREVIEW = 8000
 const CAM_PREVIEW = 8000
 const countVisibleLines = (text: string): number => text.split(/\r?\n/).length
+
+/**
+ * Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 350 pure helper consumed by the
+ * Laguna 6-zone vacuum picker in `CamManufacturePanel`. Computes the
+ * next sorted set of active zones after the operator clicks the chip
+ * for `zone`. Pulled out as a module-level export so the renderer
+ * interaction test can verify toggle semantics without spinning up a
+ * jsdom or React render lifecycle (the panel uses hooks, which forbid
+ * direct invocation from tests). Pure: no side-effects, no React deps.
+ */
+export function computeNextLagunaActiveZones(
+  currentZones: readonly number[],
+  zone: number
+): number[] {
+  const set = new Set(currentZones)
+  if (set.has(zone)) {
+    set.delete(zone)
+  } else {
+    set.add(zone)
+  }
+  return [...set].sort((a, b) => a - b)
+}
 
 export type ManufactureAuxPanelsProps = {
   machines: MachineProfile[]
@@ -50,6 +83,18 @@ export type ManufactureAuxPanelsProps = {
   onExportSetupSheet?: () => void | Promise<void>
   /** Project-relative mesh paths newer than `output/cam.nc` (mtime) — from main process. */
   camStaleMeshRelativePaths?: string[]
+  /**
+   * Phase 2 [P2-K2-PUSH]/Cycle 349: absolute path to the most recent
+   * successfully-sliced FDM G-code on disk. Set by
+   * `ManufactureWorkspace.runFdmSliceFromOp` and consumed by the
+   * "Send to K2 Plus" button in `SliceManufacturePanel`. `null` (or
+   * absent) means there is no candidate file to push, so the button
+   * is disabled. The K2 Plus "Send" surface NEVER fabricates a path
+   * from `sliceOut` text — only the on-disk write path is pushed
+   * because Moonraker requires a real file payload upstream of the
+   * upload boundary.
+   */
+  lastSliceGcodePath?: string | null
 }
 
 export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
@@ -69,16 +114,79 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
     .slice(0, 24)
     .join(', ')
   const activeProfileId = p.settings?.curaActiveSliceProfileId ?? ''
+  // Phase 2 [P2-K2-SLICE]/Cycle 6: K2 Plus quality preset picker is
+  // only meaningful when the active machine is a K2 Plus (an FDM
+  // printer in the three-machine cohort). Other machines hide the
+  // selector entirely.
+  const isFdm = p.activeMachine?.kind === 'fdm'
+  const isK2Plus = isFdm
+  const k2QualityPresetId: K2PlusQualityPresetId =
+    p.settings?.k2QualityPresetId ?? 'standard'
+
+  const [filaments, setFilaments] = useState<FilamentRecord[]>([])
+  useEffect(() => {
+    if (!isFdm) return
+    window.fab.filamentsList().then(setFilaments).catch(() => {})
+  }, [isFdm])
+
+  // Phase 2 [P2-K2-PUSH]/Cycle 349: K2 Plus "Send to Printer" surface.
+  // Uploads the most recent sliced G-code at `p.lastSliceGcodePath`
+  // to the printer at `settings.moonrakerUrl` via the existing
+  // `moonraker:push` IPC. Status messages flow through `p.onStatus`
+  // (the same channel the Carvera upload uses), and the busy state
+  // disables the button so a double-click cannot launch two uploads.
+  const moonrakerUrl = p.settings?.moonrakerUrl?.trim() ?? ''
+  const sendCandidatePath = p.lastSliceGcodePath?.trim() ?? ''
+  const canSendToK2 =
+    isK2Plus && sendCandidatePath.length > 0 && moonrakerUrl.length > 0
+  const [k2SendBusy, setK2SendBusy] = useState(false)
+  async function sendToK2Plus(): Promise<void> {
+    if (!canSendToK2 || k2SendBusy) return
+    setK2SendBusy(true)
+    try {
+      const payload = buildMoonrakerPushPayload(
+        {
+          gcodeOut: sendCandidatePath,
+          printerUrl: moonrakerUrl,
+          machineId: p.activeMachine?.id ?? null
+        },
+        { startAfterUpload: true }
+      )
+      p.onStatus?.('Uploading to K2 Plus…')
+      const r = await window.fab.moonrakerPush(payload)
+      if (r.ok) {
+        p.onStatus?.(
+          `Started on K2 Plus: ${r.filename ?? sendCandidatePath.split(/[\\/]/).pop()}`
+        )
+      } else {
+        p.onStatus?.(formatMoonrakerPushFailure(r))
+      }
+    } catch (e) {
+      p.onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      setK2SendBusy(false)
+    }
+  }
+
   return (
     <section className="panel workspace-util-panel" aria-labelledby="mfg-slice-heading">
       <h2 id="mfg-slice-heading">FDM slice (K2 Plus profile)</h2>
       <p className="msg util-panel-intro">
-        Uses CuraEngine with the bundled <code>resources/slicer/creality_k2_plus.def.json</code> unless you set{' '}
-        <strong>machine definition (-j)</strong> under <strong>File → Settings → External tool paths</strong>. Paths also come
-        from that section. Pick a <strong>preset</strong> below (maps to{' '}
-        <code>buildCuraSliceArgs</code> <code>-s</code> values in <code>cura-slice-defaults.ts</code>). Optional{' '}
-        <strong>named profiles</strong> and extra JSON are configured under <strong>File → Settings → CuraEngine advanced</strong>.
+        Uses CuraEngine with the bundled <code>resources/slicer/creality_k2_plus.def.json</code>. Pick a{' '}
+        <strong>filament</strong> and <strong>quality preset</strong> below. Temperature and fan settings are applied
+        from the selected filament material.
       </p>
+
+      {isFdm && filaments.length > 0 && (
+        <FilamentPicker
+          filaments={filaments}
+          activeFilamentId={p.settings?.activeFilamentId}
+          onSelect={(id) => void p.onSaveSettingsField({ activeFilamentId: id })}
+          machineMaxNozzleTempC={p.activeMachine?.maxNozzleTempC}
+          machineMaxBedTempC={p.activeMachine?.maxBedTempC}
+        />
+      )}
+
       <div className="row">
         <label htmlFor="mfg-slice-preset">
           Slice preset
@@ -114,6 +222,26 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
             ))}
           </select>
         </label>
+        {isK2Plus ? (
+          <label htmlFor="mfg-k2-quality-preset" data-testid="k2-quality-preset-picker">
+            K2 Plus quality preset
+            <select
+              id="mfg-k2-quality-preset"
+              value={k2QualityPresetId}
+              onChange={(e) =>
+                void p.onSaveSettingsField({
+                  k2QualityPresetId: e.target.value as K2PlusQualityPresetId
+                })
+              }
+            >
+              {K2_PLUS_QUALITY_PRESET_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {K2_PLUS_SLICE_PRESETS[id].label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <p className="msg msg-row-flex">
           Base preset (when no profile): layer <strong>{active.layerHeightMm}</strong> mm, line{' '}
           <strong>{active.lineWidthMm}</strong> mm, <strong>{active.wallLineCount}</strong> walls,{' '}
@@ -179,6 +307,51 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           </pre>
         </>
       ) : null}
+      {isK2Plus ? (
+        <section
+          className="util-k2-send"
+          data-testid="k2-send-to-printer-section"
+          aria-labelledby="mfg-k2-send-heading"
+        >
+          <h3 className="subh util-section-heading" id="mfg-k2-send-heading">
+            Send to K2 Plus
+          </h3>
+          <p className="msg util-panel-intro">
+            Uploads the most recent sliced <code>.gcode</code> to the printer's Moonraker API and starts the print.
+            Configure <strong>File → Settings → moonrakerUrl</strong> (e.g. <code>http://k2plus.local</code> or
+            <code>http://192.168.1.50:7125</code>).
+          </p>
+          <button
+            type="button"
+            className="primary"
+            data-testid="k2-send-to-printer-button"
+            disabled={!canSendToK2 || k2SendBusy}
+            onClick={() => void sendToK2Plus()}
+            title={
+              !isK2Plus
+                ? 'Active machine is not a K2 Plus FDM printer'
+                : sendCandidatePath.length === 0
+                  ? 'Run Slice STL… first to produce a .gcode file'
+                  : moonrakerUrl.length === 0
+                    ? 'Set moonrakerUrl in File → Settings'
+                    : k2SendBusy
+                      ? 'Upload in progress'
+                      : 'Upload sliced G-code to the K2 Plus and start the print'
+            }
+          >
+            {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
+          </button>
+          {!canSendToK2 ? (
+            <p className="msg msg--muted util-panel-intro" role="status">
+              {sendCandidatePath.length === 0
+                ? 'Slice an FDM operation to enable Send.'
+                : moonrakerUrl.length === 0
+                  ? 'Add a Moonraker URL in File → Settings to enable Send.'
+                  : 'Send is unavailable.'}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
     </section>
   )
 }
@@ -200,6 +373,18 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   const activeCnc = p.activeMachine?.kind === 'cnc' ? p.activeMachine : undefined
   const isCarvera = activeCnc != null && /carvera/i.test(activeCnc.id + ' ' + activeCnc.name)
   const is4Axis = (activeCnc?.axisCount ?? 3) >= 4
+  // Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 350: detect the Laguna Swift 5x10
+  // so the 6-zone vacuum table picker only appears for that machine.
+  // Laguna uses a 2x3 grid of T-slot vacuum zones (1..6) for full-sheet
+  // jobs; the operator picks which zones to engage based on stock
+  // placement. Selection persists in `appSettings.lagunaActiveZones`.
+  const isLaguna = activeCnc != null && /laguna/i.test(activeCnc.id + ' ' + activeCnc.name)
+  const lagunaActiveZones = p.settings?.lagunaActiveZones ?? [1, 2, 3, 4, 5, 6]
+  function toggleLagunaZone(zone: number): void {
+    p.onSaveSettingsField({
+      lagunaActiveZones: computeNextLagunaActiveZones(lagunaActiveZones, zone)
+    })
+  }
 
   function runCamPreview(): void {
     setCamPreview(buildCamSimulationPreview(p.camOut))
@@ -284,6 +469,138 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           </button>
         ) : null}
       </div>
+      {/*
+       * Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 350: Laguna Swift 6-zone
+       * vacuum table picker. Visible only when the active machine is a
+       * Laguna Swift 5x10. Six toggle chips (Zone 1..6) select which
+       * T-slot vacuum zones are engaged for the current job; selection
+       * persists in `appSettings.lagunaActiveZones` via
+       * `onSaveSettingsField`. Pairs the C346 backend integration test
+       * (post-process-laguna-fullsheet-integration.test.ts) per the
+       * UI/UX equality directive — backend capability + clickable
+       * surface in the same workspace tab. 3-clicks-from-launch:
+       * My Shop -> Laguna preset -> Manufacture/CAM (picker visible).
+       */}
+      {isLaguna ? (
+        <section
+          className="panel workspace-util-panel"
+          aria-labelledby="mfg-laguna-vacuum-heading"
+          data-testid="laguna-vacuum-zone-picker"
+        >
+          <h3
+            id="mfg-laguna-vacuum-heading"
+            className="subh util-section-heading"
+          >
+            Laguna 6-Zone Vacuum Table
+          </h3>
+          <p className="msg msg--muted util-panel-intro">
+            Toggle which T-slot vacuum zones to engage for this job
+            (2x3 grid; Zone 1 is front-left). Engaged zones emit{' '}
+            <code>M8 P&lt;n&gt;</code> at job start and{' '}
+            <code>M9 P&lt;n&gt;</code> at job end. Defaults to all six
+            engaged (full-sheet workflow).
+          </p>
+          <div
+            className="row util-laguna-vacuum-row"
+            role="group"
+            aria-labelledby="mfg-laguna-vacuum-heading"
+          >
+            {[1, 2, 3, 4, 5, 6].map((zone) => {
+              const active = lagunaActiveZones.includes(zone)
+              return (
+                <button
+                  key={zone}
+                  type="button"
+                  className={active ? 'primary' : 'secondary'}
+                  data-testid={`laguna-vacuum-zone-${zone}`}
+                  data-active={active ? 'true' : 'false'}
+                  aria-pressed={active}
+                  onClick={() => toggleLagunaZone(zone)}
+                >
+                  Zone {zone}
+                </button>
+              )
+            })}
+          </div>
+          <p className="msg msg--muted" role="status">
+            {lagunaActiveZones.length === 0
+              ? 'No zones engaged — at least one zone is recommended for hold-down.'
+              : `${lagunaActiveZones.length} of 6 zones engaged: ${lagunaActiveZones.join(', ')}.`}
+          </p>
+        </section>
+      ) : null}
+      {/*
+       * Phase 2 Cycle 351 -- Laguna Swift 5x10 spec card. Read-only surface
+       * for the operator-relevant profile fields the post-processor depends
+       * on: full-sheet work envelope (1524 x 3048 x 203 mm), vacuum zone
+       * count + currently-engaged subset, ER-20 collet identifier, and the
+       * spindle warm-up / cool-down dwells emitted by vcarve_mach3.hbs as
+       * G4 P<sec>. Pairs the schema-pin extension (machine-schema-laguna-
+       * meta.test.ts) per the UI/UX equality directive: every Phase 2 backend
+       * capability must land a paired renderer surface in the same workspace
+       * tab. Visible only when the active machine matches /laguna/i so the
+       * card never bleeds into K2 or Carvera renders.
+       *
+       * 3-clicks-from-launch: My Shop -> Laguna preset -> Manufacture/CAM
+       * (spec card visible directly under the vacuum-zone picker).
+       */}
+      {isLaguna ? (
+        <section
+          className="panel workspace-util-panel"
+          aria-labelledby="mfg-laguna-spec-heading"
+          data-testid="laguna-spec-card"
+        >
+          <h3
+            id="mfg-laguna-spec-heading"
+            className="subh util-section-heading"
+          >
+            Laguna Swift 5x10 Spec
+          </h3>
+          <p className="msg msg--muted util-panel-intro">
+            Read-only summary of the machine profile fields the
+            post-processor honors. Edits to envelope, collet, or
+            spindle-dwell values must land in
+            {' '}
+            <code>resources/machines/laguna-swift-5x10.json</code>
+            {' '}
+            so the bundled profile and the emitted G-code stay in sync.
+          </p>
+          <dl className="util-laguna-spec-list" data-testid="laguna-spec-list">
+            <div className="util-laguna-spec-row" data-testid="laguna-spec-envelope">
+              <dt>Work envelope</dt>
+              <dd>
+                {`${activeCnc?.workAreaMm.x ?? '—'} × ${activeCnc?.workAreaMm.y ?? '—'} × ${activeCnc?.workAreaMm.z ?? '—'} mm`}
+              </dd>
+            </div>
+            <div className="util-laguna-spec-row" data-testid="laguna-spec-vacuum">
+              <dt>Vacuum zones</dt>
+              <dd>
+                {`${lagunaActiveZones.length} of ${activeCnc?.vacuumZoneCount ?? 6} engaged`}
+              </dd>
+            </div>
+            <div className="util-laguna-spec-row" data-testid="laguna-spec-collet">
+              <dt>Collet</dt>
+              <dd>{activeCnc?.colletType ?? 'Not declared'}</dd>
+            </div>
+            <div className="util-laguna-spec-row" data-testid="laguna-spec-warmup">
+              <dt>Spindle warm-up</dt>
+              <dd>
+                {activeCnc?.spindleWarmupDwellSec != null
+                  ? `${activeCnc.spindleWarmupDwellSec.toFixed(1)} s (G4 P${activeCnc.spindleWarmupDwellSec.toFixed(1)} after M3)`
+                  : 'Not declared'}
+              </dd>
+            </div>
+            <div className="util-laguna-spec-row" data-testid="laguna-spec-cooldown">
+              <dt>Spindle cool-down</dt>
+              <dd>
+                {activeCnc?.spindleCooldownDwellSec != null
+                  ? `${activeCnc.spindleCooldownDwellSec.toFixed(1)} s (G4 P${activeCnc.spindleCooldownDwellSec.toFixed(1)} after M5)`
+                  : 'Not declared'}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      ) : null}
       <h3 className="subh util-section-heading" id="mfg-carvera-heading">
         Makera Carvera
       </h3>
@@ -341,6 +658,234 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           carveraConn={carveraConn}
           carveraDevice={carveraDevice}
         />
+      ) : null}
+      {/*
+       * Phase 2 [P2-CARVERA-ATC]/Cycle 347: Carvera ATC Tool Table panel.
+       * Visible only when the active machine is a Makera Carvera (3-axis or
+       * 4-axis). For 3-axis Carvera (atcSlotCount=6, atcProbeSlot=0): renders
+       * one row per ATC position — slot 0 (T0) is the wireless probe and is
+       * read-only; slots 1..atcSlotCount are cutting tools whose name /
+       * diameter / length / G43 H register are read from the active tool
+       * library by `toolSlot`. For 4-axis Carvera: ATC is physically blocked
+       * by the rotary attachment, so the panel renders an explanatory banner
+       * (no slot rows). Pure read-only display in this cycle; editing tool ↔
+       * slot assignments still happens on the Tools tab via tool-library
+       * imports. The paired backend integration test
+       * (post-process-multi-tool.test.ts > "3-distinct-tool Carvera 3-axis
+       * fixture") landed C346.
+       */}
+      {isCarvera ? (
+        <section
+          className="panel workspace-util-panel"
+          aria-labelledby="mfg-carvera-tool-table-heading"
+          data-testid="carvera-tool-table"
+        >
+          <h3
+            id="mfg-carvera-tool-table-heading"
+            className="subh util-section-heading"
+          >
+            Tool Table (Makera Carvera ATC)
+          </h3>
+          {is4Axis ? (
+            <>
+              <p className="msg msg--warn" role="status">
+                ATC unavailable in 4-axis mode — the rotary harmonic-drive
+                attachment occupies the ATC bay. Tool changes are operator-driven
+                and the post-processor emits no <code>M6</code>.
+              </p>
+              {/*
+               * Phase 2 [P2-CARVERA-4AXIS-SIM]/Cycle 351 paired UI: the
+               * "Rotary fixture" read-only info card. Surfaces the rotary
+               * geometry pinned in `resources/machines/makera-carvera-4axis.json`
+               * so Jacob can cross-check the values against the physical
+               * fixture before posting. The directive paired this with the
+               * carvera_4axis.hbs rotation-direction audit (sign is NOT
+               * configurable — emit always writes absolute A; the audit
+               * confirmed no drift vs. the contract pin file).
+               *
+               * Read-only on purpose: machine geometry is owned by the
+               * machine profile JSON, not by per-session UI state. The
+               * chuck outer radius is a chuck-body property; the chuck
+               * depth + clamp offset are job-level and live on the CAM
+               * setup form (cam-4axis-params), so they are intentionally
+               * NOT shown here.
+               */}
+              <h4
+                className="subh util-section-heading"
+                id="mfg-carvera-rotary-fixture-heading"
+                style={{ marginTop: '0.75rem' }}
+              >
+                Rotary fixture
+              </h4>
+              <table
+                className="util-tool-table"
+                role="table"
+                aria-labelledby="mfg-carvera-rotary-fixture-heading"
+                data-testid="carvera-rotary-fixture"
+              >
+                <tbody>
+                  <tr data-testid="carvera-rotary-fixture-row-axis">
+                    <th scope="row">A-axis orientation</th>
+                    <td>
+                      A around{' '}
+                      <strong>
+                        {(activeCnc?.aAxisOrientation ?? 'x').toUpperCase()}
+                      </strong>
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-range">
+                    <th scope="row">A-axis range</th>
+                    <td>
+                      {activeCnc?.aAxisRangeDeg != null
+                        ? activeCnc.aAxisRangeDeg >= 9999
+                          ? 'Continuous'
+                          : `${activeCnc.aAxisRangeDeg.toFixed(1)}°`
+                        : '—'}
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-rpm">
+                    <th scope="row">Max rotary speed</th>
+                    <td>
+                      {activeCnc?.maxRotaryRpm != null
+                        ? `${activeCnc.maxRotaryRpm} RPM`
+                        : '—'}
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-chuck">
+                    <th scope="row">Chuck outer radius</th>
+                    <td>
+                      {activeCnc?.rotaryChuckOuterRadiusMm != null
+                        ? `${activeCnc.rotaryChuckOuterRadiusMm.toFixed(1)} mm`
+                        : '—'}
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-xspan">
+                    <th scope="row">Machinable X envelope</th>
+                    <td>
+                      {activeCnc?.workAreaMm.x != null
+                        ? `${activeCnc.workAreaMm.x.toFixed(0)} mm (machine origin → tailstock)`
+                        : '—'}
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-y-mandate">
+                    <th scope="row">Y mandate</th>
+                    <td>
+                      <strong>Y = 0</strong> on rotation axis (post enforces)
+                    </td>
+                  </tr>
+                  <tr data-testid="carvera-rotary-fixture-row-z-mandate">
+                    <th scope="row">Z = 0 convention</th>
+                    <td>Stock <strong>center</strong> (rotation axis), NOT surface</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="msg msg--muted">
+                Verify these values against your physical Carvera 4th-Axis HD
+                attachment before running. The chuck depth and clamp offset
+                are job-level fields on the CAM setup form (used for the
+                rotary collision sweep) and intentionally not shown here.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="msg msg--muted util-panel-intro">
+                ATC slot map for the Makera Carvera. Slot <strong>T0</strong>{' '}
+                is the wireless tool-length probe and is reserved. Cutting
+                slots <strong>T1–T{activeCnc?.atcSlotCount ?? 6}</strong> list
+                the tool currently assigned in the active library
+                (<code>toolSlot</code> field). Edit assignments from the{' '}
+                <strong>Tools</strong> tab.
+              </p>
+              <table
+                className="util-tool-table"
+                role="table"
+                aria-label="Carvera ATC slot assignments"
+              >
+                <thead>
+                  <tr>
+                    <th scope="col">Slot</th>
+                    <th scope="col">Tool</th>
+                    <th scope="col">Ø (mm)</th>
+                    <th scope="col">Length (mm)</th>
+                    <th scope="col">H register</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const slotCount = activeCnc?.atcSlotCount ?? 6
+                    const probeSlot = activeCnc?.atcProbeSlot
+                    const tools = p.tools?.tools ?? []
+                    const slotToTool = new Map<number, (typeof tools)[number]>()
+                    for (const t of tools) {
+                      if (typeof t.toolSlot === 'number') {
+                        slotToTool.set(t.toolSlot, t)
+                      }
+                    }
+                    type Row = {
+                      key: string
+                      slot: number
+                      isProbe: boolean
+                      tool?: (typeof tools)[number]
+                    }
+                    const rows: Row[] = []
+                    if (typeof probeSlot === 'number') {
+                      rows.push({
+                        key: `slot-${probeSlot}-probe`,
+                        slot: probeSlot,
+                        isProbe: true
+                      })
+                    }
+                    for (let i = 1; i <= slotCount; i++) {
+                      rows.push({
+                        key: `slot-${i}`,
+                        slot: i,
+                        isProbe: false,
+                        tool: slotToTool.get(i)
+                      })
+                    }
+                    return rows.map((row) => (
+                      <tr key={row.key} data-testid={`carvera-slot-${row.slot}`}>
+                        <td>
+                          <strong>T{row.slot}</strong>
+                        </td>
+                        <td>
+                          {row.isProbe ? (
+                            <em>Wireless probe (reserved)</em>
+                          ) : row.tool ? (
+                            row.tool.name
+                          ) : (
+                            <span className="msg msg--muted">— unassigned —</span>
+                          )}
+                        </td>
+                        <td>
+                          {row.isProbe
+                            ? '—'
+                            : row.tool?.diameterMm != null
+                              ? row.tool.diameterMm.toFixed(2)
+                              : '—'}
+                        </td>
+                        <td>
+                          {row.isProbe
+                            ? '—'
+                            : row.tool?.lengthMm != null
+                              ? row.tool.lengthMm.toFixed(2)
+                              : '—'}
+                        </td>
+                        <td>
+                          {row.isProbe
+                            ? '—'
+                            : (row.tool?.wearOffsetH ??
+                                row.tool?.toolSlot ??
+                                '—')}
+                        </td>
+                      </tr>
+                    ))
+                  })()}
+                </tbody>
+              </table>
+            </>
+          )}
+        </section>
       ) : null}
       {!readiness.canCam ? (
         <div className="msg manufacture-op-hint">

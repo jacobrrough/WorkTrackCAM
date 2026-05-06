@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "filaments": [
+    {
+      "id": "creality-pla",
+      "name": "PLA",
+      "type": "PLA",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.24,
+      "printSettings": {
+        "nozzleTempC": 215,
+        "bedTempC": 60,
+        "chamberTempC": 35,
+        "fanSpeedPercent": 100,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      }
+    },
+    {
+      "id": "creality-pla-hs",
+      "name": "PLA (High-Speed)",
+      "type": "PLA",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.24,
+      "printSettings": {
+        "nozzleTempC": 230,
+        "bedTempC": 60,
+        "chamberTempC": 40,
+        "fanSpeedPercent": 100,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 60
+      },
+      "notes": "Tuned for K2 Plus high-speed preset (500 mm/s). Higher nozzle temp for melt-rate at speed."
+    },
+    {
+      "id": "creality-abs",
+      "name": "ABS",
+      "type": "ABS",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.04,
+      "printSettings": {
+        "nozzleTempC": 250,
+        "bedTempC": 100,
+        "chamberTempC": 50,
+        "fanSpeedPercent": 30,
+        "fanSpeedFirstLayerPercent": 0,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "Enclosed chamber required. Low fan to prevent warping."
+    },
+    {
+      "id": "creality-petg",
+      "name": "PETG",
+      "type": "PETG",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.27,
+      "printSettings": {
+        "nozzleTempC": 240,
+        "bedTempC": 80,
+        "fanSpeedPercent": 50,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      }
+    },
+    {
+      "id": "creality-tpu95a",
+      "name": "TPU 95A",
+      "type": "TPU",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.21,
+      "printSettings": {
+        "nozzleTempC": 230,
+        "bedTempC": 60,
+        "fanSpeedPercent": 50,
+        "retractionMm": 0.3,
+        "retractionSpeedMmPerSec": 25
+      },
+      "notes": "Reduced retraction for flexible filament. Print speed should be limited to ~40 mm/s."
+    },
+    {
+      "id": "creality-asa",
+      "name": "ASA",
+      "type": "ASA",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.07,
+      "printSettings": {
+        "nozzleTempC": 255,
+        "bedTempC": 100,
+        "chamberTempC": 55,
+        "fanSpeedPercent": 30,
+        "fanSpeedFirstLayerPercent": 0,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "UV-stable for outdoor use. Enclosed chamber required."
+    },
+    {
+      "id": "creality-pa-nylon",
+      "name": "Nylon (PA)",
+      "type": "PA",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.14,
+      "printSettings": {
+        "nozzleTempC": 270,
+        "bedTempC": 100,
+        "chamberTempC": 55,
+        "fanSpeedPercent": 30,
+        "fanSpeedFirstLayerPercent": 0,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "Dry filament before use. Hygroscopic — store sealed with desiccant."
+    },
+    {
+      "id": "creality-pc",
+      "name": "Polycarbonate (PC)",
+      "type": "PC",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.20,
+      "printSettings": {
+        "nozzleTempC": 270,
+        "bedTempC": 110,
+        "chamberTempC": 55,
+        "fanSpeedPercent": 20,
+        "fanSpeedFirstLayerPercent": 0,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "High-temp engineering filament. Enclosed chamber required."
+    },
+    {
+      "id": "creality-pla-cf",
+      "name": "PLA-CF",
+      "type": "PLA_CF",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.29,
+      "printSettings": {
+        "nozzleTempC": 220,
+        "bedTempC": 60,
+        "chamberTempC": 35,
+        "fanSpeedPercent": 100,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "Hardened steel nozzle recommended. Carbon fiber is abrasive."
+    },
+    {
+      "id": "creality-petg-cf",
+      "name": "PETG-CF",
+      "type": "PETG_CF",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.30,
+      "printSettings": {
+        "nozzleTempC": 250,
+        "bedTempC": 80,
+        "fanSpeedPercent": 50,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "Hardened steel nozzle recommended. Carbon fiber is abrasive."
+    },
+    {
+      "id": "creality-pva",
+      "name": "PVA (Support)",
+      "type": "PVA",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.23,
+      "printSettings": {
+        "nozzleTempC": 200,
+        "bedTempC": 60,
+        "fanSpeedPercent": 100,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 25
+      },
+      "notes": "Water-soluble support material. Store dry — extremely hygroscopic."
+    },
+    {
+      "id": "creality-hips",
+      "name": "HIPS (Support)",
+      "type": "HIPS",
+      "brand": "Creality",
+      "diameterMm": 1.75,
+      "densityGPerCm3": 1.05,
+      "printSettings": {
+        "nozzleTempC": 240,
+        "bedTempC": 100,
+        "fanSpeedPercent": 50,
+        "retractionMm": 0.5,
+        "retractionSpeedMmPerSec": 40
+      },
+      "notes": "Limonene-soluble support for ABS. Print at similar temps to ABS."
+    }
+  ]
+}

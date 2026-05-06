@@ -49,6 +49,12 @@ import { generateIndexed } from './strategies/indexed'
 import { generatePattern } from './strategies/pattern'
 import { generateContinuous } from './strategies/continuous'
 import { extractPostProcessingOpts, manufactureKindUses4AxisEngine } from './runner-shims'
+import { extractToolpathSegments4AxisFromGcode } from '../../shared/cam-gcode-toolpath'
+import {
+  checkRotaryFixtureCollision,
+  formatRotaryCollisionWarnings,
+  type RotaryFixtureConfig
+} from '../../shared/rotary-collision'
 
 // Re-export for cam-runner.ts so it can keep its existing dispatch import.
 export { manufactureKindUses4AxisEngine }
@@ -79,6 +85,15 @@ export type Axis4JobConfig = {
   rotaryClampOffsetMm?: number
   /** User gizmo transform (Three.js viewer space). Defaults to identity. */
   placement?: Placement
+  /**
+   * Optional rotary fixture geometry for the chuck (and optional tailstock)
+   * collision sweep. When present, every 4-axis toolpath segment is checked
+   * against the fixture cylinders and any violations are surfaced as warnings
+   * on the result. When omitted, the chuck-radius sweep is skipped — the
+   * existing X-span validator still catches contour points inside the chuck's
+   * axial footprint; this extra check is the radial extent guard.
+   */
+  rotaryFixture?: RotaryFixtureConfig
 }
 
 export type Axis4Result =
@@ -95,15 +110,41 @@ export type Axis4Result =
 const UNVERIFIED =
   'Posted with the new 4-axis engine — run an air cut with spindle OFF before any real cut.'
 
-/** Normalize zPass to a negative radial depth (the convention the strategies expect). */
-function normalizeRadialZPassMm(zPassMm: number): number {
+/**
+ * Normalize zPass to a negative radial depth (the convention the strategies
+ * expect). Pairs with [ID-0178] depth-passes-contract pin set: any drift in
+ * the sign-coercion or zero-fallback semantics will surface as a focused
+ * test failure in `__tests__/depth-passes-contract.test.ts` -- production
+ * callers (`runAxis4`, `cam-runner.ts`) treat the return value as a
+ * strictly-negative cut depth and rely on the -0.5 default for zPass=0.
+ *
+ * Contract:
+ *   - `zPassMm < -1e-9` -> returned unchanged (already negative)
+ *   - `zPassMm > 1e-9`  -> returned as `-Math.abs(zPassMm)` (sign-flipped)
+ *   - `|zPassMm| <= 1e-9` (i.e. zero) -> returned as `-0.5` (sentinel default)
+ */
+export function normalizeRadialZPassMm(zPassMm: number): number {
   if (zPassMm < -1e-9) return zPassMm
   if (zPassMm > 1e-9) return -Math.abs(zPassMm)
   return -0.5
 }
 
-/** Iterate from -zStep down to zPass (inclusive), in zStep increments. */
-function iterDepthsMm(zPassMm: number, zStepMm: number): number[] {
+/**
+ * Iterate from `-zStep` down to `zPass` (inclusive), in `zStep` increments.
+ * Used by `runAxis4` to materialise the depth-pass schedule when no mesh
+ * radial-extent shortcut applies. Pairs with [ID-0178] contract pin set.
+ *
+ * Contract:
+ *   - `zPassMm >= -1e-9` (i.e. non-negative) -> single-element `[zPassMm]`
+ *   - `zStepMm <= 1e-6` (i.e. effectively zero step) -> single-element `[zPassMm]`
+ *     (degenerate guard: the strategies expect at least one pass)
+ *   - Otherwise: emits `-zStep, -2*zStep, ...` until the next step would
+ *     pass `zPassMm`, then appends `zPassMm` as the final pass. The
+ *     `+1e-6` epsilon in the loop guard prevents float-rounding from
+ *     emitting a duplicate-of-zPass pass when `zPassMm` is an integer
+ *     multiple of `zStepMm`.
+ */
+export function iterDepthsMm(zPassMm: number, zStepMm: number): number[] {
   const zp = zPassMm
   const zs = Math.max(0, zStepMm)
   if (zp >= -1e-9) return [zp]
@@ -124,8 +165,23 @@ function iterDepthsMm(zPassMm: number, zStepMm: number): number[] {
  * If we know the mesh's maximum radial extent, start at the depth where the
  * tool first encounters the mesh (`mr - r`) instead of the stock surface.
  * Avoids spending dozens of empty waterline passes on undersized parts.
+ *
+ * Pairs with [ID-0178] depth-passes-contract pin set; any drift in the
+ * shallow-start guard (`mr >= r - 1e-6`, `zShallow <= zp + 1e-6`) is
+ * load-bearing for Carvera 4-axis roughing performance and gets caught
+ * by the focused tests in `__tests__/depth-passes-contract.test.ts`.
+ *
+ * Contract (in order of guards):
+ *   1. `useMeshRadial=false` OR `meshRadialMaxMm` falsy/non-positive
+ *      OR `mr >= r - 1e-6` (mesh extends past stock OD) -> falls through
+ *      to `iterDepthsMm` (no shallow shortcut).
+ *   2. `zShallow = mr - r <= zp + 1e-6` (the shallow start is already
+ *      deeper than the deepest target) -> falls through to `iterDepthsMm`.
+ *   3. `zStepMm <= 1e-6` (degenerate step) -> single-element `[zp]`.
+ *   4. Otherwise: emits `zShallow, zShallow-zStep, ...` until the next
+ *      step would pass `zPassMm`, then appends `zPassMm` as the final pass.
  */
-function computeDepthsMm(
+export function computeDepthsMm(
   zPassMm: number,
   zStepMm: number,
   cylinderRadiusMm: number,
@@ -492,7 +548,53 @@ export async function runAxis4(job: Axis4JobConfig): Promise<Axis4Result> {
     envelopeHint(job.machine, gcode, stockDiameter) +
     alignHint
 
-  const allWarnings = [...validationWarnings, ...stratWarnings, ...postResult.warnings]
+  // ── Rotary fixture collision sweep (radial extent guard) ─────────────────
+  // The X-span validator already rejects contour points inside the chuck's
+  // axial footprint. This additional sweep catches the complementary problem:
+  // the tool tip may be past `chuckDepthMm` axially but still dive below the
+  // chuck body's outer radius, which would crash on fixtures where the chuck
+  // OD is wider than the stock OD (typical of harmonic-drive rotary modules
+  // like the Carvera 4th-axis attachment).
+  //
+  // Fixture resolution order:
+  //   1. Caller-supplied `job.rotaryFixture` wins (full control: tailstock,
+  //      custom radii, etc.).
+  //   2. Otherwise, synthesize a default chuck-only fixture from the machine
+  //      profile's `rotaryChuckOuterRadiusMm` (mandated by that field's
+  //      JSDoc: "Used as the conservative radial clearance floor by the
+  //      on-by-default checkRotaryFixtureCollision sweep ... when the caller
+  //      does not supply an explicit rotaryFixture"). Chuck axial extent
+  //      defaults to the already-computed `machXStartMm` (chuck depth +
+  //      clamp offset), which is the start of the machinable X span.
+  //   3. If neither is available (machine missing the field, or
+  //      `toolDiameterMm` not set), the sweep is skipped -- the historical
+  //      X-span axial check is still in effect via `validateAxis4Job`.
+  let resolvedFixture: RotaryFixtureConfig | undefined = job.rotaryFixture
+  if (
+    resolvedFixture == null &&
+    job.machine.rotaryChuckOuterRadiusMm != null &&
+    job.machine.rotaryChuckOuterRadiusMm > 0
+  ) {
+    resolvedFixture = {
+      chuckDepthMm: machXStartMm,
+      chuckOuterRadiusMm: job.machine.rotaryChuckOuterRadiusMm
+    }
+  }
+  let collisionWarnings: string[] = []
+  if (resolvedFixture && job.toolDiameterMm != null && job.toolDiameterMm > 0) {
+    const segments = extractToolpathSegments4AxisFromGcode(gcode)
+    const collisionResult = checkRotaryFixtureCollision(segments, resolvedFixture, {
+      toolDiameterMm: job.toolDiameterMm
+    })
+    collisionWarnings = formatRotaryCollisionWarnings(collisionResult)
+  }
+
+  const allWarnings = [
+    ...validationWarnings,
+    ...stratWarnings,
+    ...postResult.warnings,
+    ...collisionWarnings
+  ]
 
   return {
     ok: true,

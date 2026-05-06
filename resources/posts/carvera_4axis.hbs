@@ -24,7 +24,32 @@
 ; [4] Z=0 is at stock CENTER (rotation axis), NOT surface
 ; [5] A=0 set via controller or G28.3 A0
 ; [6] Air-cut first: spindle off, Z raised, 10% feed override
-; ---------------------------------------------------------------------------
+{{#if enableSimultaneous4Axis}}
+; ===========================================================================
+; *** SIMULTANEOUS 4-AXIS MOVES ENABLED -- UNVERIFIED COMMUNITY FIRMWARE ***
+; ===========================================================================
+; You opted in to simultaneous 4-axis (X / Y / Z and A all moving in the
+; same block). The stock Makera Controller does NOT advertise verified
+; support for this; community firmware adds it. Behaviour depends on the
+; specific firmware build installed on your Carvera and on the rotary
+; attachment's mechanical capacity.
+;
+; BEFORE RUNNING THIS PROGRAM:
+;   [a] Confirm your Carvera firmware build supports G93 inverse-time feed
+;       AND XYZ + A blended motion in a single G1 block. The stock build
+;       often runs A as a separate move even when the block contains XYZA.
+;   [b] Run an air-cut FIRST: spindle OFF, Z raised >= safe Z, feed
+;       override 10 percent. Watch for unexpected pauses, stutters, or
+;       A-axis lag relative to XYZ -- those are the failure modes a stock
+;       firmware exhibits when it cannot honour the simultaneous semantic.
+;   [c] If air-cut looks correct, do a low-feed dry run on softwood or wax
+;       BEFORE cutting your real stock. Treat the first 5 minutes of cut
+;       as a verification window; abort on any unexpected motion.
+;   [d] If you do not understand any of the above, set
+;       `enableSimultaneous4Axis: false` and use the indexed-positioning
+;       strategy instead (no rotation during a cutting move).
+; ===========================================================================
+{{/if}}; ---------------------------------------------------------------------------
 ; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
 ; and your rotary attachment manual before running on the machine.
 ; Before production: dry run — spindle off, Z high, feed reduced.
@@ -40,6 +65,8 @@ G90              ; absolute positioning
 G17              ; XY plane
 {{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
 {{wcsLine}}
+{{/if}}
+{{#if carveraProbingBlock}}{{{carveraProbingBlock}}}
 {{/if}}
 ; Safe retract, center on rotary axis, and spindle start
 G0 Z{{machine.workAreaMm.z}} ; safe Z retract

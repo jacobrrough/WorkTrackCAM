@@ -177,8 +177,14 @@ vi.mock('./binary-stl-placement', () => ({
 }))
 
 import { writeFile } from 'node:fs/promises'
-import { registerFabricationIpc } from './ipc-fabrication'
+import {
+  extractFdmCapabilitiesFromProfile,
+  registerFabricationIpc,
+  resolveMoonrakerPushCapabilities
+} from './ipc-fabrication'
 import type { MainIpcWindowContext } from './ipc-context'
+import { getMachineById } from './machines'
+import { moonrakerPush } from './moonraker-push'
 
 function createMockContext(): MainIpcWindowContext {
   return {
@@ -467,6 +473,264 @@ describe('ipc-fabrication', () => {
       const out = capturedOutPath()
       expect(out).toMatch(/\/p\/part\.cam-aligned\.stl$/)
       expect(out).not.toMatch(/\.cam-aligned\.cam-aligned/)
+    })
+  })
+
+  // -- [ID-0078] moonraker:push machineCapabilities resolver --
+  describe('extractFdmCapabilitiesFromProfile [ID-0078]', () => {
+    it('returns null for null / undefined / non-object inputs', () => {
+      expect(extractFdmCapabilitiesFromProfile(null)).toBe(null)
+      expect(extractFdmCapabilitiesFromProfile(undefined)).toBe(null)
+    })
+
+    it('returns null when none of the three fields are declared', () => {
+      expect(extractFdmCapabilitiesFromProfile({})).toBe(null)
+    })
+
+    it('extracts all three K2 Plus ceilings verbatim', () => {
+      const caps = extractFdmCapabilitiesFromProfile({
+        maxNozzleTempC: 350,
+        maxBedTempC: 120,
+        chamberTempC: 60
+      })
+      expect(caps).toEqual({ maxNozzleTempC: 350, maxBedTempC: 120, chamberTempC: 60 })
+    })
+
+    it('drops non-finite ceilings', () => {
+      const caps = extractFdmCapabilitiesFromProfile({
+        maxNozzleTempC: Number.POSITIVE_INFINITY,
+        maxBedTempC: Number.NaN,
+        chamberTempC: 60
+      })
+      expect(caps).toEqual({ chamberTempC: 60 })
+    })
+
+    it('drops zero and negative ceilings', () => {
+      const caps = extractFdmCapabilitiesFromProfile({
+        maxNozzleTempC: 0,
+        maxBedTempC: -5,
+        chamberTempC: 60
+      })
+      expect(caps).toEqual({ chamberTempC: 60 })
+    })
+
+    it('drops non-number types so a Zod-less cast does not leak strings through', () => {
+      const caps = extractFdmCapabilitiesFromProfile({
+        maxNozzleTempC: '350' as unknown as number,
+        maxBedTempC: true as unknown as number,
+        chamberTempC: 60
+      })
+      expect(caps).toEqual({ chamberTempC: 60 })
+    })
+
+    it('returns only the subset of declared fields (partial FDM profile)', () => {
+      const caps = extractFdmCapabilitiesFromProfile({ maxBedTempC: 120 })
+      expect(caps).toEqual({ maxBedTempC: 120 })
+    })
+  })
+
+  describe('resolveMoonrakerPushCapabilities [ID-0078]', () => {
+    const basePayload = {
+      gcodePath: '/tmp/job.gcode',
+      printerUrl: 'http://192.168.1.50',
+      startAfterUpload: true
+    }
+
+    beforeEach(() => {
+      vi.mocked(getMachineById).mockReset()
+    })
+
+    it('returns the payload unchanged (minus machineId) when neither hook is set', async () => {
+      const out = await resolveMoonrakerPushCapabilities({ ...basePayload })
+      expect(out).toEqual(basePayload)
+      expect('machineCapabilities' in out).toBe(false)
+      expect('machineId' in out).toBe(false)
+    })
+
+    it('explicit machineCapabilities wins over machineId (resolver is not consulted)', async () => {
+      const caps = { maxNozzleTempC: 300, maxBedTempC: 100 }
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'creality-k2-plus',
+        machineCapabilities: caps
+      })
+      expect(out.machineCapabilities).toEqual(caps)
+      expect(vi.mocked(getMachineById)).not.toHaveBeenCalled()
+      expect('machineId' in out).toBe(false)
+    })
+
+    it('explicit null machineCapabilities opts OUT of resolution (passes null through)', async () => {
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'creality-k2-plus',
+        machineCapabilities: null
+      })
+      expect(out.machineCapabilities).toBeNull()
+      expect(vi.mocked(getMachineById)).not.toHaveBeenCalled()
+    })
+
+    it('resolves K2 Plus ceilings from the machine profile when machineId is set', async () => {
+      vi.mocked(getMachineById).mockResolvedValueOnce({
+        id: 'creality-k2-plus',
+        name: 'Creality K2 Plus',
+        kind: 'fdm',
+        maxNozzleTempC: 350,
+        maxBedTempC: 120,
+        chamberTempC: 60
+      } as unknown as Awaited<ReturnType<typeof getMachineById>>)
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'creality-k2-plus'
+      })
+      expect(out.machineCapabilities).toEqual({
+        maxNozzleTempC: 350,
+        maxBedTempC: 120,
+        chamberTempC: 60
+      })
+      expect(vi.mocked(getMachineById)).toHaveBeenCalledWith('creality-k2-plus')
+    })
+
+    it('omits machineCapabilities when the resolved profile has no FDM ceilings (e.g. Laguna CNC)', async () => {
+      vi.mocked(getMachineById).mockResolvedValueOnce({
+        id: 'laguna-swift-5x10',
+        name: 'Laguna Swift 5x10',
+        kind: 'cnc'
+      } as unknown as Awaited<ReturnType<typeof getMachineById>>)
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'laguna-swift-5x10'
+      })
+      expect('machineCapabilities' in out).toBe(false)
+    })
+
+    it('omits machineCapabilities when machineId resolves to null (profile missing)', async () => {
+      vi.mocked(getMachineById).mockResolvedValueOnce(null)
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'unknown-id'
+      })
+      expect('machineCapabilities' in out).toBe(false)
+    })
+
+    it('swallows getMachineById errors and falls through to no-caps (Safety Rule 2)', async () => {
+      vi.mocked(getMachineById).mockRejectedValueOnce(new Error('FS transient'))
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: 'creality-k2-plus'
+      })
+      expect('machineCapabilities' in out).toBe(false)
+    })
+
+    it('empty-string machineId short-circuits without calling getMachineById', async () => {
+      const out = await resolveMoonrakerPushCapabilities({
+        ...basePayload,
+        machineId: ''
+      })
+      expect('machineCapabilities' in out).toBe(false)
+      expect(vi.mocked(getMachineById)).not.toHaveBeenCalled()
+    })
+
+    it('passes all non-capability payload fields through verbatim', async () => {
+      const out = await resolveMoonrakerPushCapabilities({
+        gcodePath: '/tmp/job.gcode',
+        printerUrl: 'http://192.168.1.50',
+        uploadPath: 'subdir/',
+        startAfterUpload: false,
+        timeoutMs: 30000,
+        machineCapabilities: { maxNozzleTempC: 350 }
+      })
+      expect(out.gcodePath).toBe('/tmp/job.gcode')
+      expect(out.printerUrl).toBe('http://192.168.1.50')
+      expect(out.uploadPath).toBe('subdir/')
+      expect(out.startAfterUpload).toBe(false)
+      expect(out.timeoutMs).toBe(30000)
+      expect(out.machineCapabilities).toEqual({ maxNozzleTempC: 350 })
+    })
+  })
+
+  describe("'moonraker:push' handler threads resolved capabilities to moonrakerPush [ID-0078]", () => {
+    beforeEach(() => {
+      vi.mocked(getMachineById).mockReset()
+      vi.mocked(moonrakerPush).mockReset()
+      vi.mocked(moonrakerPush).mockResolvedValue({
+        ok: true,
+        filename: 'job.gcode',
+        uploadedPath: 'job.gcode',
+        printStarted: true,
+        printerUrl: 'http://192.168.1.50'
+      })
+    })
+
+    it('calls moonrakerPush with the resolved K2 Plus capabilities when machineId is supplied', async () => {
+      vi.mocked(getMachineById).mockResolvedValueOnce({
+        id: 'creality-k2-plus',
+        name: 'Creality K2 Plus',
+        kind: 'fdm',
+        maxNozzleTempC: 350,
+        maxBedTempC: 120,
+        chamberTempC: 60
+      } as unknown as Awaited<ReturnType<typeof getMachineById>>)
+
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('moonraker:push')!
+      const result = await handler(
+        {},
+        {
+          gcodePath: '/tmp/job.gcode',
+          printerUrl: 'http://192.168.1.50',
+          machineId: 'creality-k2-plus'
+        }
+      )
+
+      expect(result).toMatchObject({ ok: true })
+      expect(vi.mocked(moonrakerPush)).toHaveBeenCalledTimes(1)
+      const forwarded = vi.mocked(moonrakerPush).mock.calls[0]![0]!
+      expect(forwarded.machineCapabilities).toEqual({
+        maxNozzleTempC: 350,
+        maxBedTempC: 120,
+        chamberTempC: 60
+      })
+      expect('machineId' in forwarded).toBe(false)
+      expect(forwarded.gcodePath).toBe('/tmp/job.gcode')
+      expect(forwarded.printerUrl).toBe('http://192.168.1.50')
+    })
+
+    it('calls moonrakerPush WITHOUT machineCapabilities when no machineId (byte-identical pre-[ID-0078])', async () => {
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('moonraker:push')!
+      await handler(
+        {},
+        {
+          gcodePath: '/tmp/job.gcode',
+          printerUrl: 'http://192.168.1.50',
+          startAfterUpload: true
+        }
+      )
+
+      expect(vi.mocked(getMachineById)).not.toHaveBeenCalled()
+      const forwarded = vi.mocked(moonrakerPush).mock.calls[0]![0]!
+      expect('machineCapabilities' in forwarded).toBe(false)
+      expect('machineId' in forwarded).toBe(false)
+      expect(forwarded.startAfterUpload).toBe(true)
+    })
+
+    it('forwards explicit machineCapabilities unchanged (override path)', async () => {
+      const explicit = { maxNozzleTempC: 250 }
+      registerFabricationIpc(createMockContext())
+      const handler = handlers.get('moonraker:push')!
+      await handler(
+        {},
+        {
+          gcodePath: '/tmp/job.gcode',
+          printerUrl: 'http://192.168.1.50',
+          machineId: 'creality-k2-plus',
+          machineCapabilities: explicit
+        }
+      )
+
+      expect(vi.mocked(getMachineById)).not.toHaveBeenCalled()
+      const forwarded = vi.mocked(moonrakerPush).mock.calls[0]![0]!
+      expect(forwarded.machineCapabilities).toEqual(explicit)
     })
   })
 })

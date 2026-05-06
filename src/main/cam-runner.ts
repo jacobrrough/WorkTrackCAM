@@ -45,6 +45,7 @@ import {
 } from './stl'
 import { dispatch2dStrategy } from './cam-runner-2d'
 import { runAxis4, type Axis4JobConfig, type Placement } from './cam-axis4'
+import type { RotaryFixtureConfig } from '../shared/rotary-collision'
 import {
   extractPostProcessingOpts as extractPostProcessingOptsImpl,
   manufactureKindUses4AxisEngine as manufactureKindUses4AxisEngineImpl
@@ -132,6 +133,14 @@ export type CamJobConfig = {
    * relying on a renderer-baked `.cam-aligned.stl`. Other strategies ignore it.
    */
   placement?: Placement
+  /**
+   * Optional rotary fixture geometry used for the chuck (+ optional tailstock)
+   * radial-extent collision sweep in the 4-axis engine. When supplied, the
+   * engine parses its own posted G-code into 4-axis segments and checks every
+   * move for radial clearance against the chuck/tailstock cylinders, surfacing
+   * any violations as warnings on the run result. Ignored by non-4-axis ops.
+   */
+  rotaryFixture?: RotaryFixtureConfig
 }
 
 export type CamRunResult =
@@ -391,10 +400,15 @@ export function resolveDrillCycleDecision(input: {
     }
     return { mode: raw, hint: `Drill cycle: using explicit override (${raw.toUpperCase()}).` }
   }
-  if (input.dialect === 'grbl') {
+  if (input.dialect === 'grbl' || input.dialect === 'smoothieware') {
+    // [ID-0160] Cycle 68 — Smoothieware (Makera Carvera 3-axis) technically
+    // supports canned cycles but the bundled posts default to the same
+    // expanded-cycle behavior as GRBL for consistency and to avoid relying
+    // on community-firmware canned-cycle implementations that may diverge.
+    const label = input.dialect === 'grbl' ? 'grbl' : 'smoothieware'
     return {
       mode: 'expanded',
-      hint: 'Drill cycle: grbl defaulted to expanded (G0/G1) unless you explicitly choose a canned cycle.'
+      hint: `Drill cycle: ${label} defaulted to expanded (G0/G1) unless you explicitly choose a canned cycle.`
     }
   }
   if (peckMm != null && peckMm > 0) {
@@ -1191,7 +1205,8 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
       rotaryStockDiameterMm: job.rotaryStockDiameterMm,
       rotaryChuckDepthMm: job.rotaryChuckDepthMm,
       rotaryClampOffsetMm: job.rotaryClampOffsetMm,
-      placement: job.placement
+      placement: job.placement,
+      rotaryFixture: job.rotaryFixture
     }
     const result = await runAxis4(ax4Job)
     dbg('4axis:facade_done')

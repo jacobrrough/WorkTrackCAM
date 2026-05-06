@@ -394,7 +394,7 @@ export const LeftPanel = React.memo(function LeftPanel({
           <span className="panel-section-chevron">{jobsOpen ? '\u25BE' : '\u25B8'}</span>
           <span>JOBS</span>
           <div className="flex-spacer" />
-          <button className="btn btn-ghost btn-sm btn-icon"
+          <button type="button" className="btn btn-ghost btn-sm btn-icon"
             aria-label="Create new job"
             onClick={e => { e.stopPropagation(); createJob() }}>+</button>
         </div>
@@ -413,7 +413,7 @@ export const LeftPanel = React.memo(function LeftPanel({
                 <span className="op-item-dot" style={{ background: STATUS_DOT[j.status] }} />
                 <span className="op-item-info">{j.name || 'Untitled'}</span>
                 {j.id === activeJobId && (
-                  <button className="btn btn-ghost btn-sm btn-icon ml-auto opacity-50"
+                  <button type="button" className="btn btn-ghost btn-sm btn-icon ml-auto opacity-50"
                     aria-label={`Delete job ${j.name || 'Untitled'}`}
                     onClick={e => { e.stopPropagation(); deleteJob(j.id) }}>{'\u{1F5D1}'}</button>
                 )}
@@ -446,7 +446,7 @@ export const LeftPanel = React.memo(function LeftPanel({
             <span>MODEL</span>
             <div className="flex-spacer" />
             {onImportModel && (
-              <button className="btn btn-ghost btn-sm btn-icon"
+              <button type="button" className="btn btn-ghost btn-sm btn-icon"
                 aria-label="Import model"
                 title="Import model file (STL, DXF, STEP, IGES, OBJ, 3MF)"
                 onClick={e => { e.stopPropagation(); onImportModel() }}>+</button>
@@ -459,7 +459,7 @@ export const LeftPanel = React.memo(function LeftPanel({
                   {activeJob.stlPath.split(/[\\/]/).pop() ?? activeJob.stlPath}
                 </span>
                 {onRemoveModel && (
-                  <button
+                  <button type="button"
                     className="btn btn-ghost btn-sm btn-icon btn-icon--danger"
                     aria-label="Remove model from job"
                     title="Remove model from this job"
@@ -472,7 +472,7 @@ export const LeftPanel = React.memo(function LeftPanel({
               <div className="text-sm text-muted lh-relaxed">
                 No model loaded.{' '}
                 {onImportModel && (
-                  <button className="btn btn-ghost btn-sm btn-xs btn-inline"
+                  <button type="button" className="btn btn-ghost btn-sm btn-xs btn-inline"
                     onClick={onImportModel}>Import model{'\u2026'}</button>
                 )}
               </div>
@@ -494,7 +494,7 @@ export const LeftPanel = React.memo(function LeftPanel({
             <span>SUPPORT POSTS</span>
             <div className="flex-spacer" />
             {activeJob && (
-              <button className="btn btn-ghost btn-sm btn-icon"
+              <button type="button" className="btn btn-ghost btn-sm btn-icon"
                 aria-label={activeJob.posts ? 'Remove support post' : 'Add support post'}
                 title={activeJob.posts ? 'Remove support post' : 'Add support post'}
                 onClick={e => {
@@ -534,7 +534,7 @@ export const LeftPanel = React.memo(function LeftPanel({
 
                     {/* Visual diagram */}
                     <div className="axis4-viz-center">
-                      <svg width="120" height="60" viewBox="0 0 120 60">
+                      <svg width="120" height="60" viewBox="0 0 120 60" aria-hidden="true">
                         <rect x="8" y="10" width="104" height="40" rx="4"
                           fill="none" stroke="var(--border-hi)" strokeWidth="1.5" />
                         <ellipse cx="8" cy="30" rx="5" ry="20"
@@ -565,7 +565,7 @@ export const LeftPanel = React.memo(function LeftPanel({
                       <label className="post-config-label">Posts</label>
                       <div className="axis4-chunk-row">
                         {([1, 2, 4] as const).map(n => (
-                          <button key={n}
+                          <button type="button" key={n}
                             onClick={() => set({ count: n })}
                             className={`post-count-btn${p.count === n ? ' post-count-btn--active' : ''}`}>
                             {n === 1 ? '1 (centre)' : `${n} posts`}
@@ -623,7 +623,7 @@ export const LeftPanel = React.memo(function LeftPanel({
             </div>
             <div className="headstock-grip-row">
               {([5, 10] as const).map(d => (
-                <button key={d}
+                <button type="button" key={d}
                   className={`btn btn-sm flex-spacer text-base${activeJob.chuckDepthMm === d ? ' btn-primary' : ' btn-ghost'}`}
                   onClick={() => onUpdateJob(activeJob.id, { chuckDepthMm: d })}>
                   {d}mm
@@ -674,7 +674,7 @@ export const LeftPanel = React.memo(function LeftPanel({
             </select>
             {activeJob?.materialId && (
               <div className="tool-select-row">
-                <button className="btn btn-ghost btn-sm btn-xs"
+                <button type="button" className="btn btn-ghost btn-sm btn-xs"
                   title="Apply material cut params to all CNC operations"
                   onClick={() => {
                     if (!activeJob?.materialId) return
@@ -727,7 +727,7 @@ export const LeftPanel = React.memo(function LeftPanel({
           <span>OPERATIONS</span>
           <div className="flex-spacer" />
           {activeJob && (
-            <button className="btn btn-ghost btn-sm btn-icon"
+            <button type="button" className="btn btn-ghost btn-sm btn-icon"
               aria-label="Add operation"
               onClick={e => { e.stopPropagation(); setAddOpOpen(o => !o) }}>+</button>
           )}
@@ -794,7 +794,7 @@ export const LeftPanel = React.memo(function LeftPanel({
                     onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, items: buildOpContextMenu(op.id) }) }}>
                     <span className="op-item-idx">{idx + 1}</span>
                     {isRenamingThis ? (
-                      <input
+                      <input type="text"
                         className="op-label-edit"
                         value={editingLabelValue}
                         autoFocus
@@ -821,15 +821,15 @@ export const LeftPanel = React.memo(function LeftPanel({
                       <OpParamsEditor op={op} tools={machineTools} jobStock={activeJob.stock}
                         onChange={params => updateOp(op.id, params)} />
                       <div className="op-action-row">
-                        <button className="btn btn-ghost btn-sm" aria-label="Move operation up" onClick={() => moveOp(op.id, -1)}>{'\u2191'}</button>
-                        <button className="btn btn-ghost btn-sm" aria-label="Move operation down" onClick={() => moveOp(op.id, 1)}>{'\u2193'}</button>
+                        <button type="button" className="btn btn-ghost btn-sm" aria-label="Move operation up" onClick={() => moveOp(op.id, -1)}>{'\u2191'}</button>
+                        <button type="button" className="btn btn-ghost btn-sm" aria-label="Move operation down" onClick={() => moveOp(op.id, 1)}>{'\u2193'}</button>
                         {op.kind.startsWith('cnc_') && materials.length > 0 && (
-                          <button className="btn btn-ghost btn-sm btn-xs"
+                          <button type="button" className="btn btn-ghost btn-sm btn-xs"
                             title="Feeds & Speeds Calculator for this operation"
                             onClick={() => setShowFeedsCalc(op.id)}>{'\u2699'} F&S</button>
                         )}
                         <div className="flex-spacer" />
-                        <button className="btn btn-ghost btn-sm text-danger"
+                        <button type="button" className="btn btn-ghost btn-sm text-danger"
                           onClick={() => removeOp(op.id)}>Remove</button>
                       </div>
                     </div>

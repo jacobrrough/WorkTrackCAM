@@ -43,10 +43,22 @@ G17              ; XY plane
 {{#if wcsLine}}; Active work offset — verify fixture zero matches G54–G59 selection
 {{wcsLine}}
 {{/if}}
+{{#if carveraProbingBlock}}{{{carveraProbingBlock}}}
+{{/if}}
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
-M6 T{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}            ; select tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}} and execute tool change (auto-probes length)
-G43 H{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}           ; apply tool length compensation for tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}
+{{#if manualToolChange}}; ===========================================================================
+; MANUAL TOOL CHANGE MODE — ATC opt-out ([ID-0013-integration])
+; The user disabled automatic tool change for this job.
+; Before the program runs:
+;   [1] Confirm tool T{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}} is already in the spindle.
+;   [2] Tool length compensation must be set BEFORE running this program
+;       (no in-program G43 H<n> is emitted in manual mode).
+;   [3] If the wrong tool is loaded, abort and re-run with ATC enabled
+;       (set `manualToolChange: false` in the job's operationParams).
+; ===========================================================================
+{{else}}M6 T{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}            ; select tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}} and execute tool change (auto-probes length)
+G43 H{{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}           ; apply tool length compensation for tool {{#if toolNumber}}{{toolNumber}}{{else}}1{{/if}}{{/if}}
 
 ; Safe retract and spindle start
 G0 Z{{machine.workAreaMm.z}} ; safe Z retract

@@ -16,6 +16,11 @@ export function resolveDialectSnippets(dialect: MachineProfile['dialect']): Post
       return { on: 'M3 S12000', off: 'M5', units: 'G21' }
     case 'grbl_4axis':
       return { on: 'M3 S12000', off: 'M5', units: 'G21' }
+    case 'smoothieware':
+      // [ID-0160] Cycle 68 — Smoothieware-family (Makera Carvera 3-axis)
+      // shares the GRBL-flavored M3/M5 spindle convention. The 12000 RPM
+      // default sits in the middle of the Carvera's 6000–15000 RPM band.
+      return { on: 'M3 S12000', off: 'M5', units: 'G21' }
     case 'fanuc_4axis':
       return { on: 'M3 S10000', off: 'M5', units: 'G21' }
     case 'mach3_4axis':

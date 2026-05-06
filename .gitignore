@@ -43,3 +43,9 @@ build/
 *.tmp
 npm-debug.log*
 engines/cam/_tmp_*.json
+cam/_tmp_*.json
+# Throwaway render / debug scratch scripts (sandbox can't delete, so ignore).
+_render-*.cjs
+_render-*.mjs
+_scratch-*.cjs
+_scratch-*.mjs

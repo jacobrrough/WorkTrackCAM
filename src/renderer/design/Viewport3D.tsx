@@ -4,6 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { measureMarkerRadiusMmFromGeometry } from './viewport3d-bounds'
+import { FdmBuildPlate } from './FdmBuildPlate'
+import type { MachineProfile } from '../../shared/machine-schema'
 import { Viewport3DDatumPlanes, type SketchDatumId } from './Viewport3DDatumPlanes'
 import { Viewport3DMeasurementLabels } from './Viewport3DMeasurementLabels'
 import { CameraAnimator } from './Viewport3DCameraAnimator'
@@ -56,6 +58,13 @@ type Props = {
   onDatumPlaneSelect?: (d: SketchDatumId) => void
   /** Unit system for the built-in measurement tool (default: 'mm'). */
   measureUnit?: MeasurementUnit
+  /** Active machine profile for FDM build plate visualization. */
+  machineProfile?: MachineProfile | null
+  /** When true, clicking a face rotates the model to lay that face on the bed. */
+  layOnFaceMode?: boolean
+  onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
+  onCenterOnBed?: () => void
+  onSnapToBed?: () => void
 }
 
 const HOME_POS: [number, number, number] = [120, 90, 120]
@@ -69,6 +78,8 @@ const Solid = memo(function Solid({
   onProjectSketchPoint,
   facePickMode,
   onPickFace,
+  layOnFaceMode,
+  onLayOnFace,
   clipPlane
 }: {
   geometry: THREE.BufferGeometry
@@ -78,6 +89,8 @@ const Solid = memo(function Solid({
   onProjectSketchPoint?: (p: THREE.Vector3) => void
   facePickMode?: boolean
   onPickFace?: (pick: FacePick) => void
+  layOnFaceMode?: boolean
+  onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -110,6 +123,14 @@ const Solid = memo(function Solid({
           if (projectSketchMode && onProjectSketchPoint) {
             e.stopPropagation()
             onProjectSketchPoint(e.point.clone())
+            return
+          }
+          if (layOnFaceMode && onLayOnFace) {
+            e.stopPropagation()
+            const wn = e.face?.normal.clone().transformDirection(e.object.matrixWorld).normalize()
+            if (wn && wn.lengthSq() > 1e-8) {
+              onLayOnFace({ x: wn.x, y: wn.y, z: wn.z })
+            }
             return
           }
           if (!facePickMode || !onPickFace) return
@@ -303,12 +324,20 @@ function ViewportHud({
   controlsRef,
   animRef,
   navMode,
-  onNavMode
+  onNavMode,
+  onCenterOnBed,
+  onSnapToBed,
+  layOnFaceMode,
+  onToggleLayOnFace
 }: {
   controlsRef: React.RefObject<OrbitControlsImpl | null>
   animRef: React.RefObject<CameraAnimationState>
   navMode: NavMode
   onNavMode: (m: NavMode) => void
+  onCenterOnBed?: () => void
+  onSnapToBed?: () => void
+  layOnFaceMode?: boolean
+  onToggleLayOnFace?: () => void
 }) {
   const runAnimated = useCallback(
     (preset: StandardView) => {
@@ -393,6 +422,33 @@ function ViewportHud({
           Zoom
         </button>
       </div>
+
+      {(onCenterOnBed || onSnapToBed || onToggleLayOnFace) && (
+        <div className="viewport-3d__toolstrip" role="toolbar" aria-label="Placement tools">
+          {onCenterOnBed && (
+            <button type="button" className="viewport-3d__tool-btn" onClick={onCenterOnBed} title="Center on bed" aria-label="Center object on build plate">
+              Center
+            </button>
+          )}
+          {onSnapToBed && (
+            <button type="button" className="viewport-3d__tool-btn" onClick={onSnapToBed} title="Snap to bed" aria-label="Snap object bottom to build plate">
+              Snap
+            </button>
+          )}
+          {onToggleLayOnFace && (
+            <button
+              type="button"
+              className={`viewport-3d__tool-btn${layOnFaceMode ? ' viewport-3d__tool-btn--active' : ''}`}
+              onClick={onToggleLayOnFace}
+              title="Lay on face — click a face to orient it downward"
+              aria-label="Lay on face mode"
+              aria-pressed={layOnFaceMode}
+            >
+              Lay Flat
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -411,12 +467,19 @@ export function Viewport3D({
   sketchPlaneIsFace = false,
   activeDatum = null,
   onDatumPlaneSelect,
-  measureUnit = 'mm'
+  measureUnit = 'mm',
+  machineProfile = null,
+  layOnFaceMode: layOnFaceModeExternal,
+  onLayOnFace,
+  onCenterOnBed,
+  onSnapToBed
 }: Props) {
   const disposed = useRef<THREE.BufferGeometry | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const animRef = useRef<CameraAnimationState>(createInactiveAnimation())
   const [navMode, setNavMode] = useState<NavMode>('orbit')
+  const [layOnFaceInternal, setLayOnFaceInternal] = useState(false)
+  const layOnFaceActive = layOnFaceModeExternal ?? layOnFaceInternal
 
   /* Built-in measurement tool (independent from parent measureMode/measureMarkers). */
   const measureTool = useMeasurementTool(measureUnit)
@@ -492,6 +555,8 @@ export function Viewport3D({
               onProjectSketchPoint={onProjectSketchPoint}
               facePickMode={facePickMode}
               onPickFace={onPickFace}
+              layOnFaceMode={layOnFaceActive}
+              onLayOnFace={onLayOnFace ? (n) => { setLayOnFaceInternal(false); onLayOnFace(n) } : undefined}
               clipPlane={clipPlane}
             />
           </Bounds>
@@ -511,20 +576,28 @@ export function Viewport3D({
             unit={measureUnit}
           />
         ) : null}
-        <Grid
-          args={[520, 520]}
-          cellSize={10}
-          sectionSize={50}
-          cellColor={gridCell}
-          sectionColor={clipping ? '#8b7aad' : '#4c3d63'}
-          cellThickness={0.6}
-          sectionThickness={clipping ? 1.42 : 1.1}
-          fadeDistance={clipping ? 380 : 300}
-          fadeStrength={gridFade}
-          infiniteGrid
-          followCamera
-          position={[0, 0, 0]}
-        />
+        {machineProfile?.kind === 'fdm' && machineProfile.workAreaMm ? (
+          <FdmBuildPlate
+            workAreaMm={machineProfile.workAreaMm}
+            brand={machineProfile.id === 'creality-k2-plus' ? 'creality' : 'generic'}
+            showVolume
+          />
+        ) : (
+          <Grid
+            args={[520, 520]}
+            cellSize={10}
+            sectionSize={50}
+            cellColor={gridCell}
+            sectionColor={clipping ? '#8b7aad' : '#4c3d63'}
+            cellThickness={0.6}
+            sectionThickness={clipping ? 1.42 : 1.1}
+            fadeDistance={clipping ? 380 : 300}
+            fadeStrength={gridFade}
+            infiniteGrid
+            followCamera
+            position={[0, 0, 0]}
+          />
+        )}
         <Viewport3DDatumPlanes
           halfExtentMm={200}
           datumPlanePickMode={datumPlanePickMode}
@@ -563,7 +636,16 @@ export function Viewport3D({
           />
         </GizmoHelper>
       </Canvas>
-      <ViewportHud controlsRef={controlsRef} animRef={animRef} navMode={navMode} onNavMode={setNavMode} />
+      <ViewportHud
+        controlsRef={controlsRef}
+        animRef={animRef}
+        navMode={navMode}
+        onNavMode={setNavMode}
+        onCenterOnBed={onCenterOnBed}
+        onSnapToBed={onSnapToBed}
+        layOnFaceMode={layOnFaceActive}
+        onToggleLayOnFace={onLayOnFace ? () => setLayOnFaceInternal(v => !v) : undefined}
+      />
       {/* Measurement tool HUD controls (toggle button + status) */}
       <MeasurementToolHud
         active={measureTool.active}

@@ -15,7 +15,6 @@
  * displayed mesh in the simulation viewer.
  */
 import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { MachineProfile } from '../../../shared/machine-schema'
@@ -23,15 +22,37 @@ import { extractToolpathSegments4AxisFromGcode } from '../../../shared/cam-gcode
 import { runCamPipeline } from '../../cam-runner'
 import type { CamJobConfig } from '../../cam-runner'
 
+// Hoisted above imports so the `vi.mock` factory below can close over
+// `scratchDir`. Vitest hoists `vi.mock` to the top of the file, so any value
+// it references must be produced by `vi.hoisted` (also hoisted), not by a
+// module-scope statement that would run later. The `require` calls reach
+// Node's built-in CJS loader directly; node types are in scope via
+// `@types/node`. This is the Cycle-4 Task-4.2 fix: prior to this file, the
+// mock returned `process.cwd()` as the engines root, causing `cam-runner`
+// to write `cam/_tmp_*.json` into the repo root on every `npm test` run.
+const { scratchDir } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodeFs = require('node:fs') as typeof import('node:fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodePath = require('node:path') as typeof import('node:path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- hoisted before imports
+  const nodeOs = require('node:os') as typeof import('node:os')
+  return { scratchDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'axis4-int-')) }
+})
+
 vi.mock('../../paths', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../paths')>()
   return {
     ...actual,
-    getEnginesRoot: () => process.cwd()
+    getEnginesRoot: () => scratchDir
   }
 })
 
 const resourcesRoot = join(process.cwd(), 'resources')
+
+// Per-test-file tmpdir so back-to-back runs under different uids don't hit
+// EACCES overwriting files owned by a prior run. Cleaned up by the OS.
+const scratch = (name: string): string => join(scratchDir, name)
 
 // ─── Synthetic STL builders ─────────────────────────────────────────────────
 
@@ -135,8 +156,8 @@ const carvera4ax: MachineProfile = {
 
 function baseJob(over: Partial<CamJobConfig>): CamJobConfig {
   return {
-    stlPath: join(tmpdir(), 'unused-axis4-integration.stl'),
-    outputGcodePath: join(tmpdir(), 'axis4-integration-output.nc'),
+    stlPath: scratch('unused-axis4-integration.stl'),
+    outputGcodePath: scratch('axis4-integration-output.nc'),
     machine: carvera4ax,
     resourcesRoot,
     appRoot: process.cwd(),
@@ -157,15 +178,27 @@ function baseJob(over: Partial<CamJobConfig>): CamJobConfig {
 
 describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
   it('roughing on a centered ring lands in [0, stockLen] / [0, stockRadius]', async () => {
-    const stockLen = 100
+    // Cycle 31 [ID-0106] perf: shrank axial and angular sampling to speed
+    // the only heavy-compute test in this file (previously ~800 ms, the
+    // slowest per-test in the suite per .claude/perf-inventory.md). The
+    // assertions below cover the machine-frame contract (X/Z/A bounds,
+    // deepest-cut window, uniqueA count) and are invariant to these
+    // reductions:
+    //   * stockLen 100 -> 60 mm            (fewer X-sweeps)
+    //   * ringLength 60 -> 30 mm            (still centered in stock)
+    //   * segments 24 -> 16                  (same tessellation as tests 2/5)
+    //   * stepoverMm 1.5 -> 3                (fewer A-sweeps per depth)
+    // stockRadius (dia=40), ringRadius=15, zPassMm=-2 are unchanged because
+    // deepestCut > stockRadius-5 is radial and depends on those.
+    const stockLen = 60
     const stockDia = 40
     const stockRadius = stockDia / 2
     const ringRadius = 15
-    const ringLength = 60
+    const ringLength = 30
 
-    const stlPath = join(tmpdir(), 'axis4-int-roughing.stl')
-    const outPath = join(tmpdir(), 'axis4-int-roughing.nc')
-    await writeFile(stlPath, buildCenteredRingStl(ringRadius, ringLength, 24))
+    const stlPath = scratch('axis4-int-roughing.stl')
+    const outPath = scratch('axis4-int-roughing.nc')
+    await writeFile(stlPath, buildCenteredRingStl(ringRadius, ringLength, 16))
 
     const result = await runCamPipeline(
       baseJob({
@@ -173,7 +206,8 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
         outputGcodePath: outPath,
         operationKind: 'cnc_4axis_roughing',
         rotaryStockLengthMm: stockLen,
-        rotaryStockDiameterMm: stockDia
+        rotaryStockDiameterMm: stockDia,
+        stepoverMm: 3
       })
     )
 
@@ -240,8 +274,8 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
     const ringRadius = 12
     const ringLength = 50
 
-    const stlPath = join(tmpdir(), 'axis4-int-position.stl')
-    const outPath = join(tmpdir(), 'axis4-int-position.nc')
+    const stlPath = scratch('axis4-int-position.stl')
+    const outPath = scratch('axis4-int-position.nc')
     await writeFile(stlPath, buildCenteredRingStl(ringRadius, ringLength, 16))
 
     // FINISHING is the cleanest test for placement propagation: the strategy
@@ -272,7 +306,7 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
     if (!centeredResult.ok) return
 
     // Shifted placement: ring spans [30, 80] along X (user pushed +5).
-    const shiftedOutPath = join(tmpdir(), 'axis4-int-position-shifted.nc')
+    const shiftedOutPath = scratch('axis4-int-position-shifted.nc')
     const shiftedResult = await runCamPipeline(
       baseJob({
         stlPath,
@@ -329,8 +363,8 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
   }, 45_000)
 
   it('mesh radius exceeding stock radius is a hard error (no silent clamp)', async () => {
-    const stlPath = join(tmpdir(), 'axis4-int-oversize.stl')
-    const outPath = join(tmpdir(), 'axis4-int-oversize.nc')
+    const stlPath = scratch('axis4-int-oversize.stl')
+    const outPath = scratch('axis4-int-oversize.nc')
     // Ring radius 25 > stock radius 15 → undercut bug if silent clamp returns.
     await writeFile(stlPath, buildCenteredRingStl(25, 50, 16))
 
@@ -353,7 +387,7 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
   }, 15_000)
 
   it('contour operation produces wrap-around toolpath without a mesh', async () => {
-    const outPath = join(tmpdir(), 'axis4-int-contour.nc')
+    const outPath = scratch('axis4-int-contour.nc')
     // Square contour 10×10 around the rotation axis (Y is mapped to A).
     // contourPoints schema is `[x, y][]` (tuples, not {x,y} objects).
     const contourPoints: [number, number][] = [
@@ -365,7 +399,7 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
     ]
     const result = await runCamPipeline(
       baseJob({
-        stlPath: join(tmpdir(), 'unused-contour.stl'),
+        stlPath: scratch('unused-contour.stl'),
         outputGcodePath: outPath,
         operationKind: 'cnc_4axis_contour',
         rotaryStockLengthMm: 100,
@@ -391,8 +425,8 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
   }, 15_000)
 
   it('indexed operation produces discrete-angle passes', async () => {
-    const stlPath = join(tmpdir(), 'axis4-int-indexed.stl')
-    const outPath = join(tmpdir(), 'axis4-int-indexed.nc')
+    const stlPath = scratch('axis4-int-indexed.stl')
+    const outPath = scratch('axis4-int-indexed.nc')
     await writeFile(stlPath, buildCenteredRingStl(15, 60, 16))
 
     const result = await runCamPipeline(

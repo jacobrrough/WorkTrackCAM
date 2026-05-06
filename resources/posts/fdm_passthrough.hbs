@@ -10,6 +10,13 @@
   Lines starting with ";" are operator-visible comments. Marlin/Klipper firmware
   treats ";" as a line comment.
 
+  [ID-0092] Klipper-macro capability header: the four non-Cura FDM capability
+  fields (inputShapingPresets, rfidFilamentSupport, cfsMultiColorEnabled,
+  powerLossRecovery) are emitted as `;` comment lines when set on the
+  MachineProfile. They are FYI for the operator reading the G-code; no
+  M-codes, no firmware-mutating commands. Absent fields emit nothing
+  (Safety Rule 2 byte-identical behavior vs. pre-[ID-0092] output).
+
   Template context keys: resources/posts/README.md (PostContext / renderPost).
 --}}
 ; ---------------------------------------------------------------------------
@@ -17,7 +24,11 @@
 ; Machine: {{machine.name}} ({{machine.id}})
 {{#if operationLabel}}; Operation: {{operationLabel}}
 {{/if}}; Work volume (mm): {{machine.workAreaMm.x}} x {{machine.workAreaMm.y}} x {{machine.workAreaMm.z}}
-; ---------------------------------------------------------------------------
+{{#if machine.inputShapingPresets}}; Input shaping presets: {{#each machine.inputShapingPresets}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}
+{{/if}}{{#if machine.rfidFilamentSupport}}; RFID filament support: enabled
+{{/if}}{{#if machine.cfsMultiColorEnabled}}; CFS multi-color: enabled
+{{/if}}{{#if machine.powerLossRecovery}}; Power-loss recovery: enabled
+{{/if}}; ---------------------------------------------------------------------------
 ; This is a passthrough — slicing is performed by CuraEngine and the resulting
 ; G-code is the source of truth. Verify start/end macros, bed/nozzle temps,
 ; and home/park sequences match your Creality firmware before printing.

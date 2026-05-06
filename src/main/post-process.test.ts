@@ -1,7 +1,19 @@
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { MachineProfile } from '../shared/machine-schema'
-import { applyArcFitting, applyCutterCompensation, buildCutterCompLines, renderPost, sequenceMultiToolJob } from './post-process'
+import { machineProfileSchema, type MachineProfile } from '../shared/machine-schema'
+import {
+  deriveAtcCapability,
+  machineSupportsAtc
+} from '../shared/post-process-atc-capability'
+import {
+  applyArcFitting,
+  applyCutterCompensation,
+  buildCutterCompLines,
+  renderPost,
+  sequenceMultiToolJob,
+  __resetPostTemplateCache
+} from './post-process'
 
 const machine: MachineProfile = {
   id: 'test-mill',
@@ -839,5 +851,453 @@ describe('renderPost — cutter compensation integration', () => {
     // Should have cutter compensation
     expect(gcode).toContain('G42 D2')
     expect(gcode).toContain('G40')
+  })
+})
+
+// ─── [ID-0143] compiled-post-template cache ─────────────────────────────────
+
+describe('renderPost -- [ID-0143] compiled-post-template cache', () => {
+  // The cache is byte-identical to the uncached path: same compiled
+  // Handlebars delegate, no runtime context mutation. These tests pin the
+  // contract so a future refactor cannot silently regress snapshot stability
+  // or warning-array isolation.
+
+  it('returns identical gcode for back-to-back calls with the same machine', async () => {
+    __resetPostTemplateCache()
+    const { gcode: a } = await renderPost(resourcesRoot, machine, ['G0 X1 Y1', 'G1 X2 Y2 F500'])
+    const { gcode: b } = await renderPost(resourcesRoot, machine, ['G0 X1 Y1', 'G1 X2 Y2 F500'])
+    expect(a).toBe(b)
+    // Cache hit MUST produce a non-empty result (regression guard against the
+    // race where the cache stores an unresolved/rejected promise).
+    expect(a.length).toBeGreaterThan(0)
+    expect(a).toContain('G21')
+  })
+
+  it('produces identical output before and after a cache reset', async () => {
+    const lines = ['G0 X3 Y3', 'G1 X5 Y5 F800']
+    const { gcode: pre } = await renderPost(resourcesRoot, machine, lines)
+    __resetPostTemplateCache()
+    const { gcode: post } = await renderPost(resourcesRoot, machine, lines)
+    expect(post).toBe(pre)
+  })
+
+  it('keeps warnings per-call (not cached) when render context differs', async () => {
+    __resetPostTemplateCache()
+    // Two back-to-back calls with different spindleRpm settings: the second
+    // must NOT inherit the first call's spindleWarning.
+    const lowMachine: MachineProfile = {
+      ...machine,
+      maxSpindleRpm: 8000
+    }
+    const { warnings: w1 } = await renderPost(
+      resourcesRoot,
+      lowMachine,
+      ['G0 X0 Y0', 'G1 X1 Y1 F500'],
+      { spindleRpm: 12000 } // exceeds maxSpindleRpm -> clamp warning
+    )
+    const { warnings: w2 } = await renderPost(
+      resourcesRoot,
+      lowMachine,
+      ['G0 X0 Y0', 'G1 X1 Y1 F500'],
+      { spindleRpm: 6000 } // within range -> no clamp warning
+    )
+    // First call MUST report the clamp; second MUST NOT carry it over.
+    const w1HasClamp = w1.some((w) => /spindle/i.test(w) || /rpm/i.test(w) || /clamp/i.test(w))
+    const w2HasClamp = w2.some((w) => /spindle/i.test(w) || /rpm/i.test(w) || /clamp/i.test(w))
+    expect(w1HasClamp).toBe(true)
+    expect(w2HasClamp).toBe(false)
+  })
+
+  it('serves multiple distinct templates from independent cache entries', async () => {
+    __resetPostTemplateCache()
+    const grblMachine = machine // grbl + cnc_generic_mm.hbs
+    const carvera4: MachineProfile = {
+      ...machine,
+      id: 'carvera-4axis-cache-probe',
+      postTemplate: 'carvera_4axis.hbs',
+      dialect: 'grbl_4axis',
+      axisCount: 4
+    }
+    const { gcode: g1 } = await renderPost(resourcesRoot, grblMachine, ['G0 X1 Y1'])
+    const { gcode: g2 } = await renderPost(resourcesRoot, carvera4, ['G0 X1 Y0 Z5 A0'])
+    // Distinct templates produce distinct headers (carvera_4axis.hbs has the
+    // 4-axis toolpath markers; cnc_generic_mm.hbs does not).
+    expect(g1).not.toBe(g2)
+    expect(g1.length).toBeGreaterThan(0)
+    expect(g2.length).toBeGreaterThan(0)
+    // Re-running each call still returns identical output -> cache served both.
+    const { gcode: g1b } = await renderPost(resourcesRoot, grblMachine, ['G0 X1 Y1'])
+    const { gcode: g2b } = await renderPost(resourcesRoot, carvera4, ['G0 X1 Y0 Z5 A0'])
+    expect(g1b).toBe(g1)
+    expect(g2b).toBe(g2)
+  })
+})
+
+// ─── sequenceMultiToolJob × deriveAtcCapability integration [ID-0151] ───────
+//
+// Cycle 57 -- Integration-layer test coverage wiring `deriveAtcCapability`
+// (Cycle 55 [ID-0093]) through `sequenceMultiToolJob.opts.supportsToolChange`
+// for every machine in the bundled fleet (CLAUDE.md USER CONTEXT three +
+// Carvera 3-axis sibling). The helper is unit-pinned in
+// `src/shared/post-process-atc-capability.test.ts`; the sequencer is
+// unit-pinned in the `sequenceMultiToolJob` describe above. This block
+// pins the *wiring contract*: the boolean produced by the helper drives
+// the boolean consumed by the sequencer, and the resulting G-code shape
+// matches each machine's CLAUDE.md USER CONTEXT (K2 Plus = FDM, no ATC;
+// Laguna Swift 5×10 = manual ER-20, no ATC; Carvera 3-axis = T1-T6 + T0
+// probe; Carvera 4-axis = rotary occupies the bay, no ATC).
+describe('sequenceMultiToolJob × deriveAtcCapability integration [ID-0151]', () => {
+  const profilesRoot = join(process.cwd(), 'resources', 'machines')
+
+  function loadBundledProfile(filename: string): MachineProfile {
+    return machineProfileSchema.parse(
+      JSON.parse(readFileSync(join(profilesRoot, filename), 'utf-8'))
+    )
+  }
+
+  // Two distinct tool blocks reused across the table so the byte-shape
+  // comparisons across machines are isolated to the gate boolean.
+  const blocks = [
+    { toolSlot: 1, gcode: 'G1 X10 F800', label: 'Roughing' },
+    { toolSlot: 2, gcode: 'G1 X20 F600', label: 'Finishing' }
+  ] as const
+
+  it('K2 Plus FDM: helper.supported=false (reason=fdm) AND sequencer omits M6', () => {
+    const k2 = loadBundledProfile('creality-k2-plus.json')
+    const cap = deriveAtcCapability(k2)
+    expect(cap.supported).toBe(false)
+    if (!cap.supported) expect(cap.reason).toBe('fdm')
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: cap.supported
+    })
+    expect(result).not.toContain('M6')
+    expect(result).toContain('Manual tool change required: load T2')
+  })
+
+  it('Laguna Swift 5×10: helper.supported=false (reason=no-atc-slots) AND sequencer omits M6', () => {
+    const laguna = loadBundledProfile('laguna-swift-5x10.json')
+    const cap = deriveAtcCapability(laguna)
+    expect(cap.supported).toBe(false)
+    if (!cap.supported) expect(cap.reason).toBe('no-atc-slots')
+    const result = sequenceMultiToolJob([...blocks], 25, '; ', {
+      supportsToolChange: cap.supported
+    })
+    expect(result).not.toContain('M6')
+    expect(result).toContain('Manual tool change required: load T2')
+  })
+
+  it('Carvera 3-axis: helper.supported=true (slotCount=6, probeSlot=0) AND sequencer emits T2 M6', () => {
+    const carvera3 = loadBundledProfile('makera-carvera-3axis.json')
+    const cap = deriveAtcCapability(carvera3)
+    expect(cap.supported).toBe(true)
+    if (cap.supported) {
+      expect(cap.slotCount).toBe(6)
+      expect(cap.probeSlot).toBe(0)
+    }
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: cap.supported
+    })
+    expect(result).toContain('T2 M6')
+    expect(result).not.toContain('Manual tool change required')
+  })
+
+  it('Carvera 4-axis: helper.supported=false (reason=no-atc-slots, rotary occupies bay) AND sequencer omits M6', () => {
+    const carvera4 = loadBundledProfile('makera-carvera-4axis.json')
+    const cap = deriveAtcCapability(carvera4)
+    expect(cap.supported).toBe(false)
+    // Carvera 4-axis intentionally omits atcSlotCount in the bundled
+    // JSON (rotary chuck occupies the ATC bay); the helper must surface
+    // this as no-atc-slots, NOT as fdm (the machine is still kind=cnc).
+    if (!cap.supported) expect(cap.reason).toBe('no-atc-slots')
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: cap.supported
+    })
+    expect(result).not.toContain('M6')
+    expect(result).toContain('Manual tool change required: load T2')
+  })
+
+  it('wiring contract: machineSupportsAtc(profile) === deriveAtcCapability(profile).supported drives byte-identical sequencer output', () => {
+    // The convenience predicate must produce the same gate boolean as
+    // the discriminated-union helper, end-to-end through the sequencer.
+    for (const filename of [
+      'creality-k2-plus.json',
+      'laguna-swift-5x10.json',
+      'makera-carvera-3axis.json',
+      'makera-carvera-4axis.json'
+    ] as const) {
+      const profile = loadBundledProfile(filename)
+      const viaPredicate = sequenceMultiToolJob([...blocks], 50, '; ', {
+        supportsToolChange: machineSupportsAtc(profile)
+      })
+      const viaUnion = sequenceMultiToolJob([...blocks], 50, '; ', {
+        supportsToolChange: deriveAtcCapability(profile).supported
+      })
+      expect(viaPredicate).toBe(viaUnion)
+    }
+  })
+
+  it('same-tool blocks short-circuit the gate (M6 omitted regardless of capability)', () => {
+    // Regression pin: when consecutive blocks share a tool slot the
+    // sequencer never emits ANY tool-change separator, so the ATC-
+    // capability gate has no effect. Pinning this on the Carvera 3-axis
+    // (the ONLY bundled machine where supportsToolChange flips to true)
+    // protects against a future "always insert M6 when supported" bug.
+    const carvera3 = loadBundledProfile('makera-carvera-3axis.json')
+    const sameTool = [
+      { toolSlot: 1, gcode: 'OP_A', label: 'Roughing' },
+      { toolSlot: 1, gcode: 'OP_B', label: 'Spring pass' }
+    ] as const
+    const result = sequenceMultiToolJob([...sameTool], 50, '; ', {
+      supportsToolChange: machineSupportsAtc(carvera3)
+    })
+    expect(result).not.toContain('M6')
+    expect(result).not.toContain('Manual tool change required')
+    expect(result).toContain('same tool T1')
+  })
+
+  it('three-block alternating tools (T1→T2→T1) on Carvera 3-axis emits exactly two M6 sequences', () => {
+    const carvera3 = loadBundledProfile('makera-carvera-3axis.json')
+    const trio = [
+      { toolSlot: 1, gcode: 'OP1' },
+      { toolSlot: 2, gcode: 'OP2', label: 'Finishing' },
+      { toolSlot: 1, gcode: 'OP3' }
+    ]
+    const result = sequenceMultiToolJob(trio, 50, '; ', {
+      supportsToolChange: machineSupportsAtc(carvera3)
+    })
+    expect(result).toContain('T2 M6')
+    expect(result).toContain('T1 M6')
+    // Exactly two `Tn M6` tool-change directives -- one per tool transition.
+    const m6Count = (result.match(/T\d+ M6/g) ?? []).length
+    expect(m6Count).toBe(2)
+    // The "Manual tool change required" hint must NOT leak in when ATC
+    // is supported, even with multiple transitions.
+    expect(result).not.toContain('Manual tool change required')
+  })
+
+  it('bundled-fleet table: every supported=false machine emits manual-hint AND zero M6; every supported=true machine emits ≥1 M6 AND zero manual-hint', () => {
+    const fleet = [
+      'creality-k2-plus.json',
+      'laguna-swift-5x10.json',
+      'makera-carvera-3axis.json',
+      'makera-carvera-4axis.json'
+    ] as const
+    let supportedCount = 0
+    let unsupportedCount = 0
+    for (const filename of fleet) {
+      const profile = loadBundledProfile(filename)
+      const cap = deriveAtcCapability(profile)
+      const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+        supportsToolChange: cap.supported
+      })
+      if (cap.supported) {
+        supportedCount += 1
+        expect(result, `${filename} should emit M6`).toMatch(/T\d+ M6/)
+        expect(result, `${filename} should NOT emit manual-hint`).not.toContain(
+          'Manual tool change required'
+        )
+      } else {
+        unsupportedCount += 1
+        expect(result, `${filename} should NOT emit M6`).not.toContain('M6')
+        expect(result, `${filename} should emit manual-hint`).toContain(
+          'Manual tool change required'
+        )
+      }
+    }
+    // CLAUDE.md USER CONTEXT pinning: of the 4 bundled machines, exactly
+    // ONE supports ATC (Carvera 3-axis) and THREE do not (K2 Plus FDM,
+    // Laguna manual ER-20, Carvera 4-axis rotary-occupies-bay). Any
+    // future bundled-profile addition that flips this count must be
+    // accompanied by an intentional update to this assertion -- the
+    // count is a CLAUDE.md fleet-shape invariant, not an implementation
+    // detail.
+    expect(supportedCount).toBe(1)
+    expect(unsupportedCount).toBe(3)
+  })
+})
+
+// ─── sequenceMultiToolJob × G43 H<n> tool-length comp [ID-0013-followup] ───
+//
+// Cycle 60 -- Post-processing follow-up to Cycle 59's discovery: the per-job
+// preamble in `resources/posts/carvera_3axis.hbs` emits `G43 H<n>` after
+// the initial `M6 T<n>` (template lines 48-49), but `sequenceMultiToolJob`
+// did NOT emit G43 H<n> after each MID-job tool change. Without G43 H<n>
+// re-apply, a longer tool inserted after a shorter one leaves the
+// controller using the previous offset and the first feed move can drive
+// Z below the programmed depth -- a Safety-Rule-1 crash on the Carvera
+// ATC. This block pins the new `opts.emitToolLengthComp` flag.
+//
+// Default behavior (flag absent or false) is byte-identical to pre-Cycle-60
+// (Safety Rule 2). When true AND `supportsToolChange !== false`, every
+// `T<n> M6` is immediately followed by `G43 H<n>` with matching tool
+// number. When `supportsToolChange === false`, neither M6 nor G43 H<n>
+// is emitted -- the manual-change comment stands alone (no tool length
+// register to reset, the operator handles offsets manually).
+describe('sequenceMultiToolJob × G43 H<n> tool-length comp [ID-0013-followup]', () => {
+  const profilesRoot = join(process.cwd(), 'resources', 'machines')
+
+  function loadBundledProfile(filename: string): MachineProfile {
+    return machineProfileSchema.parse(
+      JSON.parse(readFileSync(join(profilesRoot, filename), 'utf-8'))
+    )
+  }
+
+  const blocks = [
+    { toolSlot: 1, gcode: 'G1 X10 F800', label: 'Roughing' },
+    { toolSlot: 2, gcode: 'G1 X20 F600', label: 'Finishing' }
+  ] as const
+
+  it('Safety Rule 2: emitToolLengthComp omitted -> byte-identical to pre-Cycle-60 (no G43 H)', () => {
+    const baseline = sequenceMultiToolJob([...blocks], 50, '; ', { supportsToolChange: true })
+    const explicit = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: true,
+      emitToolLengthComp: false
+    })
+    expect(baseline).toBe(explicit)
+    expect(baseline).not.toMatch(/G43\s+H\d+/)
+  })
+
+  it('emitToolLengthComp=true emits `G43 H<n>` immediately after `T<n> M6` (ordering pin)', () => {
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: true,
+      emitToolLengthComp: true
+    })
+    expect(result).toContain('T2 M6')
+    expect(result).toContain('G43 H2')
+    const t2Idx = result.indexOf('T2 M6')
+    const g43Idx = result.indexOf('G43 H2')
+    expect(g43Idx).toBeGreaterThan(t2Idx)
+    // No intervening lines between M6 and G43 H<n> -- the controller must
+    // re-apply the offset BEFORE the next operation's first feed move.
+    const between = result.slice(t2Idx + 'T2 M6'.length, g43Idx)
+    expect(between).toBe('\n')
+  })
+
+  it('G43 H<n> tool number matches M6 tool number across alternating blocks', () => {
+    const trio = [
+      { toolSlot: 1, gcode: 'OP1' },
+      { toolSlot: 3, gcode: 'OP3', label: 'Drilling' },
+      { toolSlot: 5, gcode: 'OP5', label: 'Chamfer' }
+    ]
+    const result = sequenceMultiToolJob(trio, 50, '; ', {
+      supportsToolChange: true,
+      emitToolLengthComp: true
+    })
+    // Tool transitions: T1 -> T3, T3 -> T5. Two M6 lines, two matching G43 H.
+    expect(result).toContain('T3 M6')
+    expect(result).toContain('G43 H3')
+    expect(result).toContain('T5 M6')
+    expect(result).toContain('G43 H5')
+    // No spurious G43 H1 (tool 1 was already loaded; preamble handled its offset).
+    expect(result).not.toContain('G43 H1')
+  })
+
+  it('emitToolLengthComp=true + supportsToolChange=false: NEITHER M6 NOR G43 H emitted', () => {
+    // Manual-change workflow: the operator sets length offsets at the
+    // controller; emitting `G43 H<n>` against a missing M6 would assert
+    // a length register that the operator has not configured.
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: false,
+      emitToolLengthComp: true
+    })
+    expect(result).not.toContain('M6')
+    expect(result).not.toMatch(/G43\s+H\d+/)
+    expect(result).toContain('Manual tool change required: load T2')
+  })
+
+  it('same-tool consecutive blocks with emitToolLengthComp=true: NO G43 H (no offset change)', () => {
+    const sameTool = [
+      { toolSlot: 1, gcode: 'OP_A', label: 'Roughing' },
+      { toolSlot: 1, gcode: 'OP_B', label: 'Spring pass' }
+    ]
+    const result = sequenceMultiToolJob(sameTool, 50, '; ', {
+      supportsToolChange: true,
+      emitToolLengthComp: true
+    })
+    expect(result).not.toContain('M6')
+    expect(result).not.toMatch(/G43\s+H\d+/)
+    expect(result).toContain('same tool T1')
+  })
+
+  it('three-block alternating T1 → T2 → T1 emits exactly 2 G43 H lines (one per tool change)', () => {
+    const trio = [
+      { toolSlot: 1, gcode: 'OP1' },
+      { toolSlot: 2, gcode: 'OP2', label: 'Finishing' },
+      { toolSlot: 1, gcode: 'OP3' }
+    ]
+    const result = sequenceMultiToolJob(trio, 50, '; ', {
+      supportsToolChange: true,
+      emitToolLengthComp: true
+    })
+    const m6Count = (result.match(/T\d+ M6/g) ?? []).length
+    const g43Count = (result.match(/G43\s+H\d+/g) ?? []).length
+    expect(m6Count).toBe(2)
+    expect(g43Count).toBe(2)
+    // Order pin: T2 M6 -> G43 H2 -> OP2 -> T1 M6 -> G43 H1 -> OP3
+    const t2Idx = result.indexOf('T2 M6')
+    const g43H2Idx = result.indexOf('G43 H2')
+    const op2Idx = result.indexOf('OP2')
+    const t1Idx = result.indexOf('T1 M6')
+    const g43H1Idx = result.indexOf('G43 H1')
+    const op3Idx = result.indexOf('OP3')
+    expect(t2Idx).toBeLessThan(g43H2Idx)
+    expect(g43H2Idx).toBeLessThan(op2Idx)
+    expect(op2Idx).toBeLessThan(t1Idx)
+    expect(t1Idx).toBeLessThan(g43H1Idx)
+    expect(g43H1Idx).toBeLessThan(op3Idx)
+  })
+
+  it('Carvera 3-axis end-to-end: machineSupportsAtc + emitToolLengthComp=true wires G43 H<n> through the helper', () => {
+    const carvera3 = loadBundledProfile('makera-carvera-3axis.json')
+    const cap = deriveAtcCapability(carvera3)
+    expect(cap.supported).toBe(true)
+    const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+      supportsToolChange: cap.supported,
+      emitToolLengthComp: cap.supported
+    })
+    expect(result).toContain('T2 M6')
+    expect(result).toContain('G43 H2')
+    // CLAUDE.md USER CONTEXT #3: T0 reserved as wireless probe; mid-job
+    // changes use T1-T6. The helper.probeSlot pin in the [ID-0151] block
+    // already guards probe-slot semantics; here we pin that the G43 H
+    // number tracks the working-tool slot, never the probe slot.
+    if (cap.supported) {
+      expect(cap.probeSlot).toBe(0)
+      expect(result).not.toContain('G43 H0')
+    }
+  })
+
+  it('non-ATC machine via helper: emitToolLengthComp=true is suppressed by supportsToolChange=false', () => {
+    // Defense-in-depth: even when the integration layer requests G43 H,
+    // a non-ATC machine (Laguna, K2 Plus FDM, Carvera 4-axis rotary)
+    // must NOT see G43 H emissions because there is no M6 to follow.
+    for (const filename of [
+      'creality-k2-plus.json',
+      'laguna-swift-5x10.json',
+      'makera-carvera-4axis.json'
+    ] as const) {
+      const profile = loadBundledProfile(filename)
+      const cap = deriveAtcCapability(profile)
+      expect(cap.supported).toBe(false)
+      const result = sequenceMultiToolJob([...blocks], 50, '; ', {
+        supportsToolChange: cap.supported,
+        emitToolLengthComp: true
+      })
+      expect(result, `${filename} must not emit M6`).not.toContain('M6')
+      expect(result, `${filename} must not emit G43 H`).not.toMatch(/G43\s+H\d+/)
+    }
+  })
+
+  it('custom commentPrefix is preserved; G43 H is plain G-code (no prefix)', () => {
+    // Mach3-style `( ` comment prefix should not bleed into the G43 line.
+    const result = sequenceMultiToolJob([...blocks], 50, '( ', {
+      supportsToolChange: true,
+      emitToolLengthComp: true
+    })
+    expect(result).toContain('( --- TOOL CHANGE')
+    expect(result).toContain('T2 M6')
+    expect(result).toContain('G43 H2')
+    // The G43 line is a real G-code command, not a comment.
+    expect(result).not.toContain('( G43 H2')
   })
 })

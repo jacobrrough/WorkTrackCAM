@@ -10,7 +10,9 @@ import type { ManufactureFile } from '../shared/manufacture-schema'
 import type { ToolLibraryFile } from '../shared/tool-schema'
 import type { MeshImportPlacement, MeshImportTransform, MeshImportUpAxis } from '../shared/mesh-import-placement'
 import type { MaterialRecord } from '../shared/material-schema'
+import type { FilamentRecord } from '../shared/filament-schema'
 import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-cli-run'
+import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { DesignFileV2 } from '../shared/design-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { PartFeaturesFile } from '../shared/part-features-schema'
@@ -101,6 +103,13 @@ export type Api = {
     stlPath: string; outPath: string; curaEnginePath: string
     definitionsPath?: string; definitionPath?: string
     slicePreset?: string | null; curaEngineSettings?: Record<string, string>
+    /** K2 Plus quality preset id. Roadmap: [P2-K2-SLICE]/Cycle 6. */
+    k2QualityPresetId?: 'standard' | 'high_speed'
+    filamentSettings?: {
+      nozzleTempC: number; bedTempC: number; chamberTempC?: number
+      fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
+      retractionMm?: number; retractionSpeedMmPerSec?: number
+    }
   }) => Promise<{ ok: boolean; stderr?: string; stdout?: string }>
 
   // ── Manufacture file ─────────────────────────────────────────────────────
@@ -160,10 +169,58 @@ export type Api = {
   materialsImportFile: (filePath: string) => Promise<MaterialRecord[]>
   materialsPickAndImport: () => Promise<MaterialRecord[] | null>
 
+  // ── Filaments ────────────────────────────────────────────────────────────
+  filamentsList: () => Promise<FilamentRecord[]>
+  filamentsSave: (record: FilamentRecord) => Promise<FilamentRecord>
+  filamentsDelete: (id: string) => Promise<boolean>
+
   // ── Machine upload ───────────────────────────────────────────────────────
-  moonrakerPush: (payload: { gcodePath: string; printerUrl: string; uploadPath?: string; startAfterUpload?: boolean; timeoutMs?: number }) => Promise<
-    | { ok: true; filename: string; uploadedPath: string; printStarted: boolean; printerUrl: string }
-    | { ok: false; error: string; detail?: string }
+  moonrakerPush: (payload: {
+    gcodePath: string
+    printerUrl: string
+    uploadPath?: string
+    startAfterUpload?: boolean
+    timeoutMs?: number
+    /**
+     * Optional active machine id. When supplied, the main-process
+     * `moonraker:push` handler resolves `maxNozzleTempC` / `maxBedTempC` /
+     * `chamberTempC` from the profile and threads them through the
+     * pre-upload temperature validator (see [ID-0070]/[ID-0073]/[ID-0078]).
+     * Absent machineId = byte-identical pre-[ID-0078] behavior.
+     */
+    machineId?: string
+  }) => Promise<
+    | {
+        ok: true
+        filename: string
+        uploadedPath: string
+        printStarted: boolean
+        printerUrl: string
+        /**
+         * [ID-0072-followup] Cycle 50: align the preload type with
+         * `MoonrakerPushResult` from `src/main/moonraker-push.ts`
+         * so the renderer can read pre-flight validator samples on
+         * the success path too once a future cycle widens the main-
+         * process handler. Today the success branch never carries
+         * samples; the optional shape is purely future-proofing the
+         * renderer-side typing without requiring another preload
+         * change.
+         */
+        tempValidation?: { samples?: readonly GcodeTempSample[] }
+      }
+    | {
+        ok: false
+        error: string
+        detail?: string
+        /**
+         * [ID-0072-followup] Cycle 50: structured pre-upload
+         * temperature validator samples (Cycle 27 [ID-0072]). Present
+         * when `validateGcodeFileTemps` produced a sample set --
+         * either because a violation blocked the upload or for a
+         * future preview-only path.
+         */
+        tempValidation?: { samples?: readonly GcodeTempSample[] }
+      }
   >
   moonrakerStatus: (printerUrl: string, timeoutMs?: number) => Promise<
     | { ok: true; state: string; filename?: string; progress?: number; etaSeconds?: number; rawState?: string }
@@ -172,6 +229,18 @@ export type Api = {
   moonrakerCancel: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   moonrakerPause: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   moonrakerResume: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
+  /**
+   * Pre-flight Moonraker temperature preview hook ([ID-0072-followup],
+   * Cycle 50 ui-polish). Lightweight signal that the renderer is about
+   * to surface a `formatFdmTempPreview` banner above the Send button.
+   * The handler does NOT touch the network or any device -- it exists
+   * so a future telemetry / dry-run path has a single registered IPC
+   * channel to attach to. Returns `{ ok: false, reason }` when there
+   * is nothing to preview (empty / fully invalid samples).
+   */
+  moonrakerPreview: (
+    samples: readonly GcodeTempSample[]
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>
   carveraUpload: (payload: CarveraUploadPayload) => Promise<CarveraUploadResult>
   carveraGenerateSetup: (payload: {
     mode: 'a_axis_zero' | 'wcs_zero' | 'z_probe' | 'full_4axis_setup' | 'preflight_check'
@@ -335,12 +404,28 @@ const api: Api = {
   materialsImportFile: (filePath) => ipcRenderer.invoke('materials:importFile', filePath),
   materialsPickAndImport: () => ipcRenderer.invoke('materials:pickAndImport'),
 
+  // Filaments
+  filamentsList: () => ipcRenderer.invoke('filaments:list'),
+  filamentsSave: (record) => ipcRenderer.invoke('filaments:save', record),
+  filamentsDelete: (id) => ipcRenderer.invoke('filaments:delete', id),
+
   // Machine upload
   moonrakerPush: (payload) => ipcRenderer.invoke('moonraker:push', payload),
   moonrakerStatus: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:status', printerUrl, timeoutMs),
   moonrakerCancel: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:cancel', printerUrl, timeoutMs),
   moonrakerPause: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:pause', printerUrl, timeoutMs),
   moonrakerResume: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:resume', printerUrl, timeoutMs),
+  moonrakerPreview: (samples) => {
+    // Short-circuit absent / empty samples WITHOUT invoking the IPC
+    // channel -- preserves the renderer-side guarantee that an empty
+    // banner never produces telemetry noise.
+    if (!Array.isArray(samples) || samples.length === 0) {
+      return Promise.resolve({ ok: false as const, reason: 'no-samples' })
+    }
+    return ipcRenderer.invoke('moonraker:preview', samples) as Promise<
+      { ok: true } | { ok: false; reason: string }
+    >
+  },
   carveraUpload: (payload) => ipcRenderer.invoke('carvera:upload', payload),
   carveraGenerateSetup: (payload) => ipcRenderer.invoke('carvera:generateSetup', payload),
 

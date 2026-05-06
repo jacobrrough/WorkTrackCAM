@@ -120,6 +120,12 @@ export function ManufactureWorkspace({
   const [projectTypeChosen, setProjectTypeChosen] = useState(false)
   /** Tracks whether a CAM generation run is in progress (for progress bar). */
   const [camRunning, setCamRunning] = useState(false)
+  // Phase 2 [P2-K2-PUSH]/Cycle 349: most recent successfully-sliced
+  // FDM G-code path on disk. Set by `runFdmSliceFromOp` after the
+  // slicer reports `r.ok`. Threaded through the aux-panel props so
+  // the K2 Plus "Send to Printer" button has a concrete file to push
+  // to Moonraker. `null` means no slice has succeeded this session.
+  const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
   const fab = window.fab
 
   const meshRelPathsForStaleCheck = useMemo(() => {
@@ -244,6 +250,31 @@ export function ManufactureWorkspace({
     const stlPath = `${projectDir}${sep}${rel.replace(/\//g, sep)}`
     const out = `${projectDir}${sep}output${sep}fdm_slice_${op.id}.gcode`
     const curaEngineSettings = Object.fromEntries(mergeCuraSliceInvocationSettings(settings))
+
+    // Resolve active filament for temperature/fan/retraction settings
+    let filamentSettings: {
+      nozzleTempC: number; bedTempC: number; chamberTempC?: number
+      fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
+      retractionMm?: number; retractionSpeedMmPerSec?: number
+    } | undefined
+    if (settings.activeFilamentId) {
+      try {
+        const filaments = await fab.filamentsList()
+        const active = filaments.find(f => f.id === settings.activeFilamentId)
+        if (active) {
+          filamentSettings = {
+            nozzleTempC: active.printSettings.nozzleTempC,
+            bedTempC: active.printSettings.bedTempC,
+            chamberTempC: active.printSettings.chamberTempC,
+            fanSpeedPercent: active.printSettings.fanSpeedPercent,
+            fanSpeedFirstLayerPercent: active.printSettings.fanSpeedFirstLayerPercent,
+            retractionMm: active.printSettings.retractionMm,
+            retractionSpeedMmPerSec: active.printSettings.retractionSpeedMmPerSec
+          }
+        }
+      } catch { /* filament lookup is best-effort */ }
+    }
+
     const r = await fab.sliceCura({
       stlPath,
       outPath: out,
@@ -251,12 +282,16 @@ export function ManufactureWorkspace({
       definitionsPath: settings.curaDefinitionsPath,
       definitionPath: settings.curaMachineDefinitionPath?.trim() || undefined,
       slicePreset: settings.curaSlicePreset ?? 'balanced',
-      curaEngineSettings
+      curaEngineSettings,
+      // [P2-K2-SLICE]/Cycle 6: K2 quality preset + filament settings
+      k2QualityPresetId: settings.k2QualityPresetId,
+      filamentSettings
     })
     if (!r.ok) {
       onStatus?.(`FDM slice failed: ${r.stderr ?? 'unknown error'}`)
       return
     }
+    setLastSliceGcodePath(out)
     onStatus?.(`FDM slice wrote ${out}`)
   }
 
@@ -783,7 +818,8 @@ export function ManufactureWorkspace({
     onGoProject,
     onStatus,
     onExportSetupSheet: exportManufactureSetupSheet,
-    camStaleMeshRelativePaths
+    camStaleMeshRelativePaths,
+    lastSliceGcodePath
   }
 
   // ── Plan body (the main "Plan" sub-tab) ───────────────────────────────────────
