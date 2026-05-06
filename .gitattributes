@@ -1,0 +1,18 @@
+# WorkTrackCAM — git attributes.
+#
+# CuraEngine binary set vendored under resources/slicer/bin/<platform>-<arch>/
+# (Phase 2 [P2-K2-SLICE]/Cycle 3 -- win32-x64 vendored 2026-05-05). Mark the
+# whole tree as binary so `git diff` doesn't try to text-render PE/DLL files
+# and merge conflicts surface as "binary changed" rather than garbled hex.
+resources/slicer/bin/** binary
+resources/slicer/bin/**/*.exe binary
+resources/slicer/bin/**/*.dll binary
+resources/slicer/bin/**/*.pyd binary
+
+# Definition JSONs are text but check them in with LF endings even on Windows
+# so a Windows checkout doesn't change the on-disk SHA256 vs the line in
+# resources/slicer/THIRD_PARTY_LICENSES.md.
+resources/slicer/definitions/*.json text eol=lf
+
+# AGPLv3 license text is kept LF-only for the same provenance reason.
+resources/slicer/LICENSES/*.txt text eol=lf

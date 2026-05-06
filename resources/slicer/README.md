@@ -1,5 +1,9 @@
 # Slicer definitions (CuraEngine)
 
+> **Phase 2 [P2-K2-SLICE]/Cycle 3 — VENDORED 2026-05-05 (win32-x64).** The Windows x64 CuraEngine binary set is now on disk at `resources/slicer/bin/win32-x64/` (CuraEngine.exe + 60 supporting MSVC/UCRT/CuraEngine DLLs from Cura 5.12.1, ~47 MB total) plus the trimmed definitions tree at `resources/slicer/definitions/`. Jacob's K2 Plus workflow ships ready-to-slice with no external Cura install. The macOS and Linux binary sets are still pending — extract from the corresponding Cura 5.12.1 release artifacts when needed. See [`docs/SLICING.md`](../../docs/SLICING.md) and [`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md) for SHA256 provenance + AGPLv3 attribution.
+>
+> The workflow below (configuring an external Cura install via *File → Settings → Paths*) is now the **override path**, not the default. The override still works exactly as documented — when you fill in the field, your CuraEngine wins; when you leave it blank, the bundled binary is used.
+
 Parallel agent lane: **Stream L** — [`docs/agents/STREAM-L-cura-slicer.md`](../../docs/agents/STREAM-L-cura-slicer.md) (slicer-only; broader bundled work → **Stream F**). Merge-ready pasteable: **Aggressive — Stream L**; narrow scope: **MICRO-SPRINT (attach to Stream L)** in [`docs/agents/PARALLEL_PASTABLES.md`](../../docs/agents/PARALLEL_PASTABLES.md).
 
 This folder ships a **machine definition stub** used when Unified Fab Studio runs **CuraEngine** from **Utilities → Slice**. The app passes the JSON path on the CLI; CuraEngine still needs Ultimaker-style **base definitions** on disk (not bundled here).

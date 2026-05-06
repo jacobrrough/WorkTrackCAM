@@ -77,12 +77,13 @@ const baseReq = {
 // A. Module shape
 // ---------------------------------------------------------------------------
 describe('A. Module shape -- src/main/slicer.ts exports', () => {
-  it('exports exactly the five-symbol production surface', () => {
+  it('exports exactly the six-symbol production surface', () => {
     const keys = Object.keys(M).sort()
     expect(keys).toEqual([
       'buildCuraSliceArgs',
       'buildCuraSliceArgsFromSettingsMap',
       'resolveCuraSliceArgv',
+      'resolveSliceEnginePaths',
       'sliceWithCuraEngine',
       'stageStlForProject'
     ])
@@ -354,15 +355,14 @@ describe('F. resolveCuraSliceArgv -- precedence (caps < preset < explicit)', () 
     expect(a).toEqual(b)
   })
 
-  it('uses curaEngineSettings as the base when non-empty (default preset NOT applied)', () => {
+  it('curaEngineSettings overrides preset values (preset is still base)', () => {
     const a = resolveCuraSliceArgv(RES_ROOT, {
       ...baseReq,
-      curaEngineSettings: { only_one_setting: 'hello' }
+      curaEngineSettings: { layer_height: '0.1', custom_key: 'val' }
     })
-    expect(a).toContain('only_one_setting=hello')
-    // The default preset's keys are NOT layered on top.
+    expect(a).toContain('custom_key=val')
+    expect(a).toContain('layer_height=0.1')
     expect(a).not.toContain('layer_height=0.2')
-    expect(a).not.toContain('infill_sparse_density=15')
   })
 
   it('respects slicePreset = "draft" when no curaEngineSettings', () => {
@@ -792,35 +792,32 @@ describe('M. stageStlForProject -- pure path-derivation surface', () => {
 // N. Type-level parity -- SliceRequest field set
 // ---------------------------------------------------------------------------
 describe('N. Type-level parity -- SliceRequest shape', () => {
-  it('source declares exactly the eight documented fields (3 required + 5 optional)', () => {
+  it('source declares exactly the ten documented fields (2 required + 8 optional)', () => {
     // Required:
-    expect(SOURCE).toMatch(/curaEnginePath:\s*string/)
     expect(SOURCE).toMatch(/inputStlPath:\s*string/)
     expect(SOURCE).toMatch(/outputGcodePath:\s*string/)
-    // Optional:
+    // Optional (curaEnginePath became optional in Phase 2 [P2-K2-SLICE]/Cycle 2
+    // when bundled-binary fallback landed; user-supplied path still wins when set).
+    expect(SOURCE).toMatch(/curaEnginePath\?:\s*string/)
     expect(SOURCE).toMatch(/definitionPath\?:\s*string/)
     expect(SOURCE).toMatch(/curaDefinitionsPath\?:\s*string/)
     expect(SOURCE).toMatch(/slicePreset\?:\s*string\s*\|\s*null/)
     expect(SOURCE).toMatch(/curaEngineSettings\?:\s*Record<string,\s*string>/)
     expect(SOURCE).toMatch(/machineCapabilities\?:\s*FdmCapabilityFields/)
+    // Phase 2 [P2-K2-SLICE]/Cycle 5 -- K2 quality preset id (standard | high_speed):
+    expect(SOURCE).toMatch(/k2QualityPresetId\?:\s*K2PlusQualityPresetId/)
+    expect(SOURCE).toMatch(/filamentSettings\?:/)
   })
 
-  it('does not declare a ninth field (drift sentinel)', () => {
-    // Count the required+optional declared fields by capturing the
-    // SliceRequest body.
+  it('does not declare an eleventh top-level field (drift sentinel)', () => {
+    // Match top-level field declarations (not nested sub-object fields).
+    // Count lines matching `  fieldName?: type` at exactly 2-space indent
+    // (top-level fields in the type), ignoring deeper indents from nested objects.
     const m = SOURCE.match(/export type SliceRequest = \{([\s\S]*?)\n\}/)
     expect(m).not.toBeNull()
     const body = m![1]
-    // Every field is `name:` or `name?:`. Count colons that are NOT
-    // inside generic angle brackets.
-    const fieldDecls = body.match(/^\s*\/\*\*[\s\S]*?\*\/\s*\n\s*\w+\??:|^\s*\w+\??:/gm)
-    // We expect 8 -- the regex above is lenient; assert at least the
-    // documented 8 and at most 8 by also counting top-level colons.
-    expect(fieldDecls).not.toBeNull()
-    // Filter out things like 'Record<string, string>' that incidentally
-    // contain a colon inside the angle brackets -- our regex anchors on
-    // '\w+\??:' at line-start so those are excluded.
-    expect(fieldDecls!.length).toBe(8)
+    const topLevelFields = body.split('\n').filter(line => /^  \w+\??:/.test(line))
+    expect(topLevelFields.length).toBe(10)
   })
 
   it('SliceRequest is exported as a type', () => {
