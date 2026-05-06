@@ -77,6 +77,11 @@ import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
 import { LibraryDrawer } from '../shell/LibraryDrawer'
 import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { MyShopDrawer } from '../shell/MyShopDrawer'
+import { NavRail, type NavSection } from './NavRail'
+import { PropertyPanel } from './PropertyPanel'
+import { OpSequencer } from './OpSequencer'
+import { AppHeader } from './AppHeader'
+import { AppStatusBar } from './AppStatusBar'
 import type { MyShopPreset, MyShopMachineId } from './environments/my-shop-presets'
 import { composePresetLaunchPlan } from './environments/preset-launch-plan'
 import { ENVIRONMENTS } from './environments/registry'
@@ -649,6 +654,10 @@ function ShopAppInner(): React.ReactElement {
   const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false)
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false)
   const [myShopDrawerOpen, setMyShopDrawerOpen] = useState(false)
+  // v2 Control Center layout state
+  const [navSection, setNavSection] = useState<NavSection>('jobs')
+  const [selectedOpId, setSelectedOpId] = useState<string | null>(null)
+  const [propCollapsed, setPropCollapsed] = useState(false)
   const { pushToast } = useToast()
   const {
     view, setView,
@@ -1523,6 +1532,13 @@ function ShopAppInner(): React.ReactElement {
     setLibraryDrawerOpen(true)
   }
 
+  const handleNavSelect = useCallback((section: NavSection): void => {
+    if (section === 'library') { setLibraryDrawerOpen(true); return }
+    if (section === 'settings') { setSettingsDrawerOpen(true); return }
+    if (section === 'myshop') { setMyShopDrawerOpen(true); return }
+    setNavSection(s => s === section ? null : section)
+  }, [])
+
   const commands = useMemo((): Command[] => {
     const c: Command[] = []
     c.push({ id: 'new_project', group: 'File', label: 'New Project (Ctrl+N)', icon: '\u{1F4C4}', action: () => void newProject() })
@@ -1577,6 +1593,7 @@ function ShopAppInner(): React.ReactElement {
       onChange={e => activeJob && updateJob(activeJob.id, { stock: { ...activeJob.stock, [ax]: +e.target.value } })} />
   )
 
+
   // ── Splash ──
   if (phase === 'splash') {
     return (
@@ -1597,10 +1614,10 @@ function ShopAppInner(): React.ReactElement {
               <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
                 await reloadMachines()
                 setSplashLibOpen(false)
-              }}>{'\u2190'} Back to environment picker</button>
+              }}>{'←'} Back to environment picker</button>
             </div>
             <div className="machine-lib-overlay__body">
-              <Suspense fallback={<div className="text-muted p-16">Loading library{'\u2026'}</div>}>
+              <Suspense fallback={<div className="text-muted p-16">Loading library{'…'}</div>}>
                 <LibraryView onToast={pushToast} onMachinesChanged={reloadMachines} />
               </Suspense>
             </div>
@@ -1610,269 +1627,144 @@ function ShopAppInner(): React.ReactElement {
     )
   }
 
-  // ── Main app ──
+  // ── v2 Control Center layout ──
   return (
-    <div className="shop-shell" data-environment={activeEnv?.id ?? undefined}>
-      {/* Brand header bar (top-most strip) */}
-      <header className="shop-brand-bar" role="banner">
-        <div className="shop-brand-bar__left">
-          <span className="shop-brand-bar__logo" aria-hidden="true">
-            {activeEnv?.iconGlyph ?? '\u25C6'}
-          </span>
-          <span className="shop-brand-bar__title">
-            {activeEnv?.name ?? 'WorkTrackCAM'}
-          </span>
-          <span className="shop-brand-bar__sub">
-            {activeEnv ? `WorkTrackCAM \u00B7 ${activeEnv.tagline}` : 'Professional CAM & FDM'}
-          </span>
-        </div>
-        <div className="shop-brand-bar__center">
-          <div className="shop-brand-bar__env-switcher" role="group" aria-label="My Shop quick-switch">
-            {ENVIRONMENT_LIST.map((env) => {
-              const isActive = activeEnv?.id === env.id
-              return (
-                <button
-                  key={env.id}
-                  type="button"
-                  data-environment={env.id}
-                  className={`shop-brand-bar__env-btn${isActive ? ' shop-brand-bar__env-btn--active' : ''}`}
-                  aria-pressed={isActive}
-                  aria-label={`Switch to ${env.name}`}
-                  title={`Switch to ${env.name}`}
-                  onClick={() => handleQuickSwitchEnv(env.id)}
-                >
-                  <span className="shop-brand-bar__env-glyph" aria-hidden="true">{env.iconGlyph}</span>
-                  <span className="shop-brand-bar__env-name">{env.name}</span>
-                </button>
-              )
-            })}
-          </div>
-          <span className="shop-brand-bar__center-sep" aria-hidden="true" />
-          <button
-            type="button"
-            className={`workspace-pill${view === 'jobs' ? ' workspace-pill--active' : ''}`}
-            onClick={() => setView('jobs')}
-            aria-current={view === 'jobs' ? 'page' : undefined}
-          >
-            {'\u{1F527}'} Manufacture
-          </button>
-        </div>
-        <div className="shop-brand-bar__right">
-          <button
-            type="button"
-            className="tb-btn"
-            title="My Shop — machines and real-world presets"
-            aria-label="Open My Shop"
-            onClick={() => setMyShopDrawerOpen(true)}
-          >
-            {'\u{1F3ED}'}
-          </button>
-          <button
-            type="button"
-            className="tb-btn"
-            title="Tool & material library"
-            aria-label="Open library"
-            onClick={() => setLibraryDrawerOpen(true)}
-          >
-            {'\u{1F4DA}'}
-          </button>
-          <button
-            type="button"
-            className="tb-btn"
-            title="Settings"
-            aria-label="Open settings"
-            onClick={() => setSettingsDrawerOpen(true)}
-          >
-            {'\u2699'}
-          </button>
-          <button
-            type="button"
-            className="tb-btn"
-            title="Command palette (Ctrl+K)"
-            aria-label="Command palette"
-            onClick={() => setCmdOpen(true)}
-          >
-            {'\u2318'}
-          </button>
-          <button
-            type="button"
-            className="tb-btn"
-            title="Keyboard shortcuts (Ctrl+Shift+?)"
-            aria-label="Keyboard shortcuts"
-            onClick={() => setShowShortcuts((x) => !x)}
-          >
-            ?
-          </button>
-        </div>
-      </header>
+    <div className="cc-shell" data-environment={activeEnv?.id ?? undefined}>
+      {/* Header */}
+      <AppHeader
+        sessionMachine={sessionMachine}
+        activeEnv={activeEnv}
+        mode={mode}
+        activeJob={activeJob}
+        running={running}
+        isFdm={isFdm}
+        savedIndicator={savedIndicator}
+        onSwitchEnv={handleQuickSwitchEnv}
+        onChangeMachine={() => setPhase('splash')}
+        onCmdOpen={() => setCmdOpen(true)}
+        onShortcuts={() => setShowShortcuts(x => !x)}
+        onHelp={() => setHelpOpen(x => !x)}
+        onGenerate={generate}
+        onSendToPrinter={sendToPrinter}
+        onGcodeView={() => void openGcodeViewer()}
+        onGcodeExport={() => void exportGcodeCopy()}
+        onGcodeOpenFile={() => void openGcodeInSystemApp()}
+        onImportModel={() => void importModel()}
+        onNewProject={() => void newProject()}
+        onOpenProject={loadProjectFile}
+        onSaveProject={saveProjectFile}
+        onSetupSheet={openSetupSheet}
+      />
 
-      {view === 'jobs' && isFdm && (
+      {isFdm && (
         <MoonrakerPreviewBanner samples={moonrakerPreviewSamples} />
       )}
 
-      <div className="shop-toolbar" role="toolbar" aria-label="Main toolbar">
-        <button
-          type="button"
-          className={`tb-machine-badge tb-machine-badge--${mode}`}
-          title={formatMachineBadgeTitle({ machineName: sessionMachine?.name, mode })}
-          aria-label={formatMachineBadgeAriaLabel({ machineName: sessionMachine?.name, mode })}
-          onClick={() => setPhase('splash')}
-        >
-          <span aria-hidden="true">{MODE_ICONS[mode]}</span>{' '}
-          {formatMachineBadgeLabel(sessionMachine?.name)}
-        </button>
+      {/* Main workspace: rail + panel + viewport + properties */}
+      <div className="cc-workspace">
+        <NavRail
+          active={navSection}
+          onSelect={handleNavSelect}
+          jobCount={jobs.length}
+          opCount={activeJob?.operations.length ?? 0}
+        />
 
-        <div className="tb-sep" />
-
-        {view === 'jobs' && (
-          <input type="text" className="tb-job-name" placeholder="Job name\u2026" aria-label="Job name"
-            value={activeJob?.name ?? ''} disabled={!activeJob}
-            onChange={e => activeJob && updateJob(activeJob.id, { name: e.target.value })} />
-        )}
-
-        {view === 'jobs' && !isFdm && (
-          <>
-            <div className="tb-sep" />
-            <select className="tb-select tb-select-sm" title="Material \u2014 sets feeds, speeds, and cut depths for all operations" aria-label="Material" value={activeJob?.materialId ?? ''} disabled={!activeJob}
-              onChange={e => activeJob && updateJob(activeJob.id, { materialId: e.target.value || null })}>
-              <option value="">{'\u2014'} material {'\u2014'}</option>
-              {materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-            <button type="button" className="tb-btn" title="Apply material cut params to all operations (\u26A1)" aria-label="Apply material cut params" disabled={!activeJob?.materialId} onClick={applyMaterial}>{'\u26A1'}</button>
-            <div className="tb-sep" />
-            {(mode === 'cnc_4axis' || mode === 'cnc_5axis') && (
-              <select className="tb-select tb-select-sm" title="Stock cross-section shape" aria-label="Stock profile"
-                value={activeJob?.stockProfile ?? 'cylinder'} disabled={!activeJob}
-                onChange={e => activeJob && updateJob(activeJob.id, { stockProfile: e.target.value as 'cylinder' | 'square' })}>
-                <option value="cylinder">{'\u25CB'} Cylinder</option>
-                <option value="square">{'\u25A1'} Square</option>
-              </select>
-            )}
-            <div className="tb-xyz">
-              <span className="tb-xyz-label">X</span>{stockField('x')}
-              <span className="tb-xyz-label">{(mode === 'cnc_4axis' || mode === 'cnc_5axis') ? (activeJob?.stockProfile === 'square' ? 'Side' : '\u00D8') : 'Y'}</span>{stockField('y')}
-              <span className="tb-xyz-label">Z</span>{stockField('z')}
-              <span className="tb-xyz-unit">mm</span>
-            </div>
-          </>
-        )}
-
-        <div className="tb-spacer" />
-
-        {activeJob && view === 'jobs' && (
-          <span className="job-status-badge">
-            <span className={`job-status-dot job-status-dot--${activeJob.status}`} />
-            {activeJob.status}
-          </span>
-        )}
-
-        {view === 'jobs' && (
-          <>
-            <button type="button" className="btn-generate" disabled={running || !activeJob} onClick={generate}
-              title={isFdm ? 'Slice (F5 or Ctrl+Enter)' : 'Generate G-code (F5 or Ctrl+Enter)'}>
-              {running ? <><span className="spinner spinner--sm mr-4 v-mid" /> Running{'\u2026'}</> : isFdm ? '\u25B6 Slice' : '\u25B6 Generate'}
-            </button>
-            <button type="button" className="btn-send" title="Send G-code to printer via Moonraker" disabled={!activeJob?.gcodeOut} onClick={sendToPrinter}>{'\u2192'} Send</button>
+        {navSection === 'jobs' && (
+          <div className="cc-nav-panel" style={{ width: `${leftPanelWidth}px` }}>
+            <ErrorBoundary label="Operations Panel" severity="panel">
+              <LeftPanel
+                jobs={jobs} activeJobId={activeJobId} setActiveJobId={setActiveJobId}
+                createJob={createJob} deleteJob={deleteJob}
+                activeJob={activeJob} mode={mode}
+                activeEnv={activeEnv}
+                envHeaderSlot={
+                  activeEnv ? (
+                    <EnvActionStrip
+                      env={activeEnv}
+                      machines={machines}
+                      sessionMachine={sessionMachine}
+                      onSwitchMachine={(m) => {
+                        setSessionMachine(m)
+                        setLastMachineId(m.id)
+                        void fab().settingsSet({ lastMachineId: m.id }).catch(() => { /* */ })
+                      }}
+                      materials={materials}
+                      activeJob={activeJob}
+                      onUpdateJob={updateJob}
+                    />
+                  ) : undefined
+                }
+                onUpdateJob={updateJob} onAddOp={addOp}
+                onRemoveOp={removeOp}
+                onUpdateOpParams={updateOpParams}
+                onImportModel={importModel}
+                onRemoveModel={removeModel}
+                machineTools={machineTools}
+                materials={materials}
+              />
+            </ErrorBoundary>
             <button
-              className="btn btn-ghost btn-sm"
               type="button"
-              disabled={!activeJob?.gcodeOut}
-              title={activeJob?.gcodeOut ? `View G-code\n${activeJob.gcodeOut}` : 'Generate G-code first'}
-              onClick={() => void openGcodeViewer()}
-            >
-              G-code
-            </button>
-            <button
-              className="btn btn-ghost btn-sm"
-              type="button"
-              disabled={!activeJob?.gcodeOut}
-              title="Export G-code \u2014 save a copy to a different location"
-              onClick={() => void exportGcodeCopy()}
-            >
-              Export{'\u2026'}
-            </button>
-            <button
-              className="btn btn-ghost btn-sm"
-              type="button"
-              disabled={!activeJob?.gcodeOut}
-              title="Open G-code file in your system's default editor"
-              onClick={() => void openGcodeInSystemApp()}
-            >
-              Open file
-            </button>
-          </>
-        )}
-
-        <div className="tb-sep" />
-        {view === 'jobs' && activeJob && !isFdm && (
-          <button type="button" className="tb-btn" title="Generate Setup Sheet \u2014 creates an HTML reference with all job parameters" aria-label="Generate setup sheet" onClick={openSetupSheet}>{'\u{1F4CB}'}</button>
-        )}
-        {view === 'jobs' && (
-          <button type="button" className="tb-btn" title="Import model \u2014 load an STL, DXF, STEP, IGES, OBJ, or 3MF file into the active job" aria-label="Import model" disabled={!activeJob} onClick={() => void importModel()}>{'\u{1F4E5}'}</button>
-        )}
-        <button type="button" className="tb-btn" title="New project (Ctrl+N)" aria-label="New project" onClick={() => void newProject()}>{'\u{1F4C4}'}</button>
-        <button type="button" className="tb-btn" title="Open project file (Ctrl+O)" aria-label="Open project" onClick={loadProjectFile}>{'\u{1F4C2}'}</button>
-        <button type="button" className={`tb-btn${savedIndicator ? ' tb-btn--saved' : ''}`} title="Save session to file (Ctrl+S)" aria-label="Save session" onClick={saveProjectFile}>
-          {savedIndicator ? '\u2713' : '\u{1F4BE}'}
-        </button>
-        <button type="button" className={`tb-btn${helpOpen ? ' tb-btn--active' : ''}`} title="Help reference panel (F1)" aria-label="Help" onClick={() => setHelpOpen(x => !x)}>{'\u{2753}'}</button>
-      </div>
-
-      {view === 'jobs' ? (
-        <div className="shop-workspace" style={{ '--left-w': `${leftPanelWidth}px` } as React.CSSProperties}>
-          <ErrorBoundary label="Operations Panel" severity="panel">
-            <LeftPanel
-              jobs={jobs} activeJobId={activeJobId} setActiveJobId={setActiveJobId}
-              createJob={createJob} deleteJob={deleteJob}
-              activeJob={activeJob} mode={mode}
-              activeEnv={activeEnv}
-              envHeaderSlot={
-                activeEnv ? (
-                  <EnvActionStrip
-                    env={activeEnv}
-                    machines={machines}
-                    sessionMachine={sessionMachine}
-                    onSwitchMachine={(m) => {
-                      setSessionMachine(m)
-                      setLastMachineId(m.id)
-                      void fab().settingsSet({ lastMachineId: m.id }).catch(() => { /* */ })
-                    }}
-                    materials={materials}
-                    activeJob={activeJob}
-                    onUpdateJob={updateJob}
-                  />
-                ) : undefined
-              }
-              onUpdateJob={updateJob} onAddOp={addOp}
-              onRemoveOp={removeOp}
-              onUpdateOpParams={updateOpParams}
-              onImportModel={importModel}
-              onRemoveModel={removeModel}
-              machineTools={machineTools}
-              materials={materials}
+              className="shell-resize-handle"
+              aria-label="Resize panel"
+              onMouseDown={e => {
+                e.preventDefault()
+                splitterDragRef.current = { startX: e.clientX, startW: leftPanelWidth }
+                const onMove = (me: MouseEvent): void => {
+                  if (!splitterDragRef.current) return
+                  const newW = splitterDragRef.current.startW + (me.clientX - splitterDragRef.current.startX)
+                  setLeftPanelWidth(newW)
+                }
+                const onUp = (): void => {
+                  splitterDragRef.current = null
+                  window.removeEventListener('mousemove', onMove)
+                  window.removeEventListener('mouseup', onUp)
+                }
+                window.addEventListener('mousemove', onMove)
+                window.addEventListener('mouseup', onUp)
+              }}
             />
-          </ErrorBoundary>
-          <button
-            type="button"
-            className="shell-resize-handle"
-            aria-label="Resize left panel"
-            onMouseDown={e => {
-              e.preventDefault()
-              splitterDragRef.current = { startX: e.clientX, startW: leftPanelWidth }
-              const onMove = (me: MouseEvent): void => {
-                if (!splitterDragRef.current) return
-                const newW = splitterDragRef.current.startW + (me.clientX - splitterDragRef.current.startX)
-                setLeftPanelWidth(newW)
-              }
-              const onUp = (): void => {
-                splitterDragRef.current = null
-                window.removeEventListener('mousemove', onMove)
-                window.removeEventListener('mouseup', onUp)
-              }
-              window.addEventListener('mousemove', onMove)
-              window.addEventListener('mouseup', onUp)
-            }}
-          />
+          </div>
+        )}
+
+        {navSection === 'tools' && (
+          <div className="cc-nav-panel" style={{ width: `${leftPanelWidth}px` }}>
+            <div className="cc-nav-panel__header">
+              <span className="cc-nav-panel__title">{'\u{1F527}'} Tools & Materials</span>
+            </div>
+            <div className="cc-nav-panel__body">
+              <div className="prop-section">
+                <h3 className="prop-section__title">{'\u{1F9F1}'} Material</h3>
+                <select
+                  className="prop-field__input"
+                  value={activeJob?.materialId ?? ''}
+                  disabled={!activeJob}
+                  onChange={e => activeJob && updateJob(activeJob.id, { materialId: e.target.value || null })}
+                >
+                  <option value="">{'—'} None {'—'}</option>
+                  {materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                {activeJob?.materialId && !isFdm && (
+                  <button type="button" className="prop-section__action" onClick={applyMaterial}>
+                    {'⚡'} Apply to all ops
+                  </button>
+                )}
+              </div>
+              <div className="prop-section">
+                <h3 className="prop-section__title">{'\u{1F527}'} Tool Library</h3>
+                <p className="prop-field__hint">
+                  {machineTools.length} tool{machineTools.length !== 1 ? 's' : ''} loaded.
+                </p>
+                <button type="button" className="prop-section__action" onClick={() => setLibraryDrawerOpen(true)}>
+                  Open Library
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Central column: viewport + sequencer */}
+        <div className="cc-center-col">
           <ErrorBoundary label="3D Viewport" severity="panel">
             <ViewportArea
               job={activeJob} mode={mode} onUpdateJob={updateJob} onToast={pushToast}
@@ -1880,10 +1772,65 @@ function ShopAppInner(): React.ReactElement {
               gcodeGeneration={gcodeGeneration}
             />
           </ErrorBoundary>
-        </div>
-      ) : null}
 
-      {/* Slide-over drawers (replace the old library/settings tab views) */}
+          <OpSequencer
+            operations={activeJob?.operations ?? []}
+            selectedOpId={selectedOpId}
+            onSelectOp={setSelectedOpId}
+            onAddOp={addOp}
+            onRemoveOp={removeOp}
+            mode={mode}
+            running={running}
+            disabled={!activeJob}
+          />
+
+          {logOpen && (
+            <div className="shop-log" role="region" aria-label="Output log">
+              <div className="shop-log-bar">
+                <span className="shop-log-title">Output Log</span>
+                {running && <span className="spinner spinner--sm ml-8" aria-label="Processing" />}
+                <div className="flex-spacer" />
+                <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
+                <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'✕'}</button>
+              </div>
+              {running && <div className="progress-bar progress-bar--indeterminate" role="progressbar" aria-label="Generation in progress"><div className="progress-bar__fill" /></div>}
+              <div className="shop-log-body" aria-live="polite">
+                {log.map((l, i) => (
+                  <div key={i} className={`shop-log-line${l.includes('✕') ? ' log-line--error' : l.includes('✓') ? ' log-line--ok' : ''}`}>
+                    {l}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <PropertyPanel
+          activeJob={activeJob}
+          mode={mode}
+          isFdm={isFdm}
+          sessionMachine={sessionMachine}
+          materials={materials}
+          machineTools={machineTools}
+          selectedOpId={selectedOpId}
+          onUpdateJob={updateJob}
+          onUpdateOpParams={updateOpParams}
+          onApplyMaterial={applyMaterial}
+          collapsed={propCollapsed}
+          onToggle={() => setPropCollapsed(c => !c)}
+        />
+      </div>
+
+      <AppStatusBar
+        activeJob={activeJob}
+        running={running}
+        sessionMachine={sessionMachine}
+        lastGenMs={lastGenMs}
+        logOpen={logOpen}
+        onToggleLog={() => setLogOpen(x => !x)}
+      />
+
+      {/* Drawers */}
       <LibraryDrawer
         open={libraryDrawerOpen}
         onClose={() => setLibraryDrawerOpen(false)}
@@ -1904,121 +1851,33 @@ function ShopAppInner(): React.ReactElement {
         onInstallMachine={handleInstallMyShopMachine}
       />
 
+      {/* Overlays */}
       {gcodeViewerOpen && (
-        <div
-          className="shop-gcode-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="shop-gcode-title"
-          onClick={() => setGcodeViewerOpen(false)}
-        >
+        <div className="shop-gcode-overlay" role="dialog" aria-modal="true" aria-labelledby="shop-gcode-title" onClick={() => setGcodeViewerOpen(false)}>
           <div className="shop-gcode-sheet" onClick={(e) => e.stopPropagation()}>
             <ErrorBoundary label="G-code Viewer" severity="panel">
             <div className="shop-gcode-sheet-bar">
-              <span id="shop-gcode-title" className="shop-gcode-title">
-                G-code
-              </span>
-              {gcodeViewerPath ? (
-                <span
-                  className="shop-gcode-path"
-                  title={gcodeViewerPath}
-                >
-                  {gcodeViewerPath}
-                </span>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={!gcodeViewerPath}
-                onClick={() => void copyGcodePath(gcodeViewerPath)}
-              >
-                Copy path
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={!activeJob?.gcodeOut}
-                onClick={() => void exportGcodeCopy()}
-              >
-                Export{'\u2026'}
-              </button>
-              <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => setGcodeViewerOpen(false)} aria-label="Close">
-                {'\u2715'}
-              </button>
+              <span id="shop-gcode-title" className="shop-gcode-title">G-code</span>
+              {gcodeViewerPath && <span className="shop-gcode-path" title={gcodeViewerPath}>{gcodeViewerPath}</span>}
+              <button type="button" className="btn btn-ghost btn-sm" disabled={!gcodeViewerPath} onClick={() => void copyGcodePath(gcodeViewerPath)}>Copy path</button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={!activeJob?.gcodeOut} onClick={() => void exportGcodeCopy()}>Export{'…'}</button>
+              <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => setGcodeViewerOpen(false)} aria-label="Close">{'✕'}</button>
             </div>
             <div className="shop-gcode-sheet-body">
-              {gcodeViewerLoading ? (
-                <span className="shop-gcode-loading">Loading{'\u2026'}</span>
-              ) : (
-                <pre className="shop-gcode-pre" tabIndex={0}>
-                  {gcodeViewerText || '(empty)'}
-                </pre>
-              )}
+              {gcodeViewerLoading
+                ? <span className="shop-gcode-loading">Loading{'…'}</span>
+                : <pre className="shop-gcode-pre" tabIndex={0}>{gcodeViewerText || '(empty)'}</pre>}
             </div>
             </ErrorBoundary>
           </div>
         </div>
       )}
 
-      {logOpen && (
-        <div className="shop-log" role="region" aria-label="Output log">
-          <div className="shop-log-bar">
-            <span className="shop-log-title">Output Log</span>
-            {running && <span className="spinner spinner--sm ml-8" aria-label="Processing" />}
-            <div className="flex-spacer" />
-            <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
-            <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'\u2715'}</button>
-          </div>
-          {running && <div className="progress-bar progress-bar--indeterminate" role="progressbar" aria-label="Generation in progress"><div className="progress-bar__fill" /></div>}
-          <div className="shop-log-body" aria-live="polite">
-            {log.map((l, i) => (
-              <div key={i} className={`shop-log-line${l.includes('\u2715') ? ' log-line--error' : l.includes('\u2713') ? ' log-line--ok' : ''}`}>
-                {l}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {cmdOpen && (
-        <ErrorBoundary label="Command Palette" severity="panel">
-          <CommandPalette commands={commands} onClose={() => setCmdOpen(false)} />
-        </ErrorBoundary>
-      )}
-      {showShortcuts && (
-        <ErrorBoundary label="Keyboard Shortcuts" severity="panel">
-          <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />
-        </ErrorBoundary>
-      )}
-
+      {cmdOpen && <ErrorBoundary label="Command Palette" severity="panel"><CommandPalette commands={commands} onClose={() => setCmdOpen(false)} /></ErrorBoundary>}
+      {showShortcuts && <ErrorBoundary label="Keyboard Shortcuts" severity="panel"><KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /></ErrorBoundary>}
       {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
-
       {showOnboarding && <OnboardingOverlay onDismiss={() => setShowOnboarding(false)} />}
 
-      <div className="app-status-bar app-status-bar--split" role="status" aria-live="polite">
-        <span className="app-status-text">
-          {running ? (
-            <span className="status-warn"><span className="spinner spinner--sm mr-4 v-mid" /> Generating{'\u2026'}</span>
-          ) : activeJob?.status === 'error' ? (
-            <span className="status-err">{'\u2715'} Error {'\u2014'} check output log</span>
-          ) : activeJob?.status === 'done' ? (
-            <span className="status-ok">{'\u2713'} Ready</span>
-          ) : (
-            <span>Engine idle</span>
-          )}
-        </span>
-        <span className="app-status-text">
-          {activeJob ? `${activeJob.operations.length} op${activeJob.operations.length !== 1 ? 's' : ''}` : 'No job'}
-          {sessionMachine ? ` \u00B7 ${sessionMachine.name}` : ''}
-        </span>
-        <span className="app-status-text">
-          {lastGenMs !== null
-            ? `Last gen: ${lastGenMs < 1000 ? `${lastGenMs}ms` : `${(lastGenMs / 1000).toFixed(1)}s`}`
-            : 'F1 Help \u00B7 Ctrl+Shift+? Shortcuts \u00B7 Ctrl+K Commands'}
-        </span>
-      </div>
-
-      {/* ── Confirm dialogs ────────────────────────────────────── */}
       <ConfirmDialog
         open={showRemoveModelConfirm}
         title="Remove Model"
