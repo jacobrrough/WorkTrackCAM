@@ -113,6 +113,20 @@ export interface LagunaVacuumPostludeOptions {
    * Default: false (semicolon comments only).
    */
   readonly enableMach3DigitalOutputs?: boolean
+  /**
+   * Operator picker selection (zone numbers 1..6, column-major:
+   * 1->X0Y0, 2->X0Y1, 3->X0Y2, 4->X1Y0, 5->X1Y1, 6->X1Y2). When
+   * supplied, the build helpers restrict `engaged` to exactly this
+   * subset before emitting any preamble / postamble lines so the
+   * comment summary, engaged/idle lists, and M64/M65 lines all
+   * reflect the picker. Geometric `bedCoverageFraction` /
+   * `outsideEnvelope` / per-zone overlap stats are preserved.
+   * Out-of-range / NaN / non-integer entries are dropped, duplicates
+   * deduped. `undefined` (default) preserves status-quo emission.
+   * Consumer-applied default for `appSettings.lagunaActiveZones`
+   * (see `src/shared/project-schema.ts`).
+   */
+  readonly activeZones?: readonly number[]
 }
 
 /**
@@ -124,6 +138,43 @@ export function lagunaVacuumZonePNumber(zoneId: string): number | null {
   if (typeof zoneId !== 'string' || zoneId.length === 0) return null
   const p = LAGUNA_VACUUM_DIGITAL_OUTPUT_MAP[zoneId]
   return typeof p === 'number' ? p : null
+}
+
+/**
+ * Picker-driven engagement transform: when `activeZones` is supplied,
+ * override `engaged` / `idle` / `engagedCount` / `fullBedEngaged` to
+ * reflect the operator's selection (column-major 1..6 mapping to
+ * LAGUNA_VACUUM_ZONES) while preserving every geometric stat. Private
+ * helper -- callers reach it exclusively through the `activeZones`
+ * option. `undefined` short-circuits to the source allocation so byte
+ * identity holds for every existing call site.
+ */
+function restrictAllocationToActiveZones(
+  source: LagunaVacuumZoneAllocation,
+  activeZones: readonly number[] | undefined
+): LagunaVacuumZoneAllocation {
+  if (activeZones === undefined) return source
+  const totalZones = LAGUNA_VACUUM_ZONES.length
+  const picked = new Set<number>()
+  for (const z of activeZones) {
+    if (Number.isInteger(z) && z >= 1 && z <= totalZones) picked.add(z)
+  }
+  const orderedIds = LAGUNA_VACUUM_ZONES.map((zone) => zone.id)
+  const engaged = orderedIds.filter((_id, index) => picked.has(index + 1))
+  if (
+    engaged.length === source.engaged.length &&
+    engaged.every((id, i) => id === source.engaged[i])
+  ) {
+    return source
+  }
+  const idle = orderedIds.filter((id) => !engaged.includes(id))
+  return {
+    ...source,
+    engaged,
+    idle,
+    engagedCount: engaged.length,
+    fullBedEngaged: engaged.length === totalZones
+  }
 }
 
 /**
@@ -158,27 +209,31 @@ export function buildLagunaVacuumPreambleLines(
   allocation: LagunaVacuumZoneAllocation,
   options: LagunaVacuumPostludeOptions = {}
 ): string[] {
+  const restricted = restrictAllocationToActiveZones(
+    allocation,
+    options.activeZones
+  )
   const lines: string[] = []
   lines.push(LAGUNA_VACUUM_PREAMBLE_OPEN)
-  const coverage = formatBedCoveragePercent(allocation.bedCoverageFraction)
+  const coverage = formatBedCoveragePercent(restricted.bedCoverageFraction)
   lines.push(
-    `; ${allocation.engagedCount} of 6 zones engaged (${coverage}% bed coverage)`
+    `; ${restricted.engagedCount} of 6 zones engaged (${coverage}% bed coverage)`
   )
   const engagedList =
-    allocation.engaged.length > 0 ? allocation.engaged.join(', ') : '(none)'
+    restricted.engaged.length > 0 ? restricted.engaged.join(', ') : '(none)'
   lines.push(`; Engaged zones: ${engagedList}`)
   const idleList =
-    allocation.idle.length > 0 ? allocation.idle.join(', ') : '(none)'
+    restricted.idle.length > 0 ? restricted.idle.join(', ') : '(none)'
   lines.push(`; Idle zones:    ${idleList}`)
-  if (allocation.outsideEnvelope) {
+  if (restricted.outsideEnvelope) {
     lines.push(LAGUNA_VACUUM_OUTSIDE_ENVELOPE_WARNING)
   }
   lines.push(
     '; OPERATOR: confirm vacuum zones engaged on panel before cycle start'
   )
-  if (options.enableMach3DigitalOutputs && allocation.engaged.length > 0) {
+  if (options.enableMach3DigitalOutputs && restricted.engaged.length > 0) {
     lines.push(LAGUNA_VACUUM_MCODE_WARNING)
-    for (const zoneId of allocation.engaged) {
+    for (const zoneId of restricted.engaged) {
       const p = lagunaVacuumZonePNumber(zoneId)
       if (p === null) continue
       lines.push(`M64 P${p}              ; engage ${zoneId}`)
@@ -204,12 +259,16 @@ export function buildLagunaVacuumPostambleLines(
   allocation: LagunaVacuumZoneAllocation,
   options: LagunaVacuumPostludeOptions = {}
 ): string[] {
+  const restricted = restrictAllocationToActiveZones(
+    allocation,
+    options.activeZones
+  )
   const lines: string[] = []
   lines.push(LAGUNA_VACUUM_POSTAMBLE_OPEN)
-  lines.push(`; Releasing ${allocation.engagedCount} zone(s)`)
-  if (options.enableMach3DigitalOutputs && allocation.engaged.length > 0) {
+  lines.push(`; Releasing ${restricted.engagedCount} zone(s)`)
+  if (options.enableMach3DigitalOutputs && restricted.engaged.length > 0) {
     lines.push(LAGUNA_VACUUM_MCODE_WARNING)
-    for (const zoneId of allocation.engaged) {
+    for (const zoneId of restricted.engaged) {
       const p = lagunaVacuumZonePNumber(zoneId)
       if (p === null) continue
       lines.push(`M65 P${p}              ; release ${zoneId}`)

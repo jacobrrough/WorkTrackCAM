@@ -527,6 +527,26 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
               ? 'No zones engaged — at least one zone is recommended for hold-down.'
               : `${lagunaActiveZones.length} of 6 zones engaged: ${lagunaActiveZones.join(', ')}.`}
           </p>
+          {/*
+           * Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 352: persistence-to-G-code
+           * preview line. The picker now drives emitted G-code through
+           * `wrapLagunaToolpathWithVacuumBlocks`'s `activeZones` option, so
+           * the operator can verify before posting how many M64/M65 lines
+           * the current selection will produce in the post header / footer
+           * (one M64 in the preamble + one M65 in the postamble per
+           * engaged zone, when Mach3 digital outputs are enabled in the
+           * post). The badge always reflects the picker authoritatively;
+           * the geometric coverage line above remains unchanged.
+           */}
+          <p
+            className="msg msg--muted util-laguna-vacuum-preview"
+            data-testid="laguna-vacuum-zone-preview"
+            role="status"
+          >
+            {lagunaActiveZones.length === 0
+              ? '→ Active in next post: 0 M64/M65 lines (no zones picked).'
+              : `→ Active in next post: ${lagunaActiveZones.length} M64 line(s) + ${lagunaActiveZones.length} M65 line(s) (${lagunaActiveZones.length * 2} total) when Mach3 digital outputs are enabled.`}
+          </p>
         </section>
       ) : null}
       {/*

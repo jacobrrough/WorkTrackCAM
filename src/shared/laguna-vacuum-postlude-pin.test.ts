@@ -1030,12 +1030,17 @@ describe('[ID-0232] I) source-text whitelist', () => {
     expect(CODE).toMatch(/M65\s+P/)
   })
 
-  it('source size is under 300 lines', () => {
-    expect(SRC.split('\n').length).toBeLessThan(300)
+  it('source size is under 320 lines', () => {
+    // Cycle 352 [P2-LAGUNA-FULLSHEET] persistence-to-G-code wiring added
+    // the `activeZones` option + private `restrictAllocationToActiveZones`
+    // helper (+~30 LOC) to close the picker -> emitted G-code loop.
+    expect(SRC.split('\n').length).toBeLessThan(320)
   })
 
-  it('source size is under 12 KB', () => {
-    expect(SRC.length).toBeLessThan(12 * 1024)
+  it('source size is under 13 KB', () => {
+    // Cycle 352 widening tied to the activeZones field + private
+    // restriction helper described in the line-count pin above.
+    expect(SRC.length).toBeLessThan(13 * 1024)
   })
 
   it('JSDoc explicitly names [ID-0014b] sister allocator + [ID-0020] sister UI helper', () => {

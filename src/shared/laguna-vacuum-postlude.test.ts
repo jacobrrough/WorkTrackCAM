@@ -627,3 +627,176 @@ describe('JSDoc paired-pin (module shape + Safety Rule 1 contract)', () => {
     expect(source).toMatch(/multimeter|control-panel/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// activeZones picker option [P2-LAGUNA-FULLSHEET]/Cycle 352
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanity-check the new `activeZones` option on
+ * `LagunaVacuumPostludeOptions`. Closes the persistence-to-G-code loop:
+ * the operator's 6-zone picker selection (`appSettings.lagunaActiveZones`)
+ * now drives engaged/idle/M64/M65 emission directly, while preserving the
+ * geometric coverage stats from the upstream allocator.
+ */
+describe('activeZones picker restriction', () => {
+  function fullBedAlloc(): NonNullable<
+    ReturnType<typeof allocateLagunaVacuumZonesForSheet>
+  >['allocation'] {
+    const sheet = allocateLagunaVacuumZonesForSheet('full-sheet-48x96')
+    if (!sheet) throw new Error('full-sheet-48x96 allocation returned null')
+    return sheet.allocation
+  }
+
+  it('activeZones=undefined preserves the source allocation byte-for-byte (preamble)', () => {
+    const alloc = fullBedAlloc()
+    const baseline = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true
+    })
+    const withUndefined = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: undefined
+    })
+    expect(withUndefined).toEqual(baseline)
+  })
+
+  it('activeZones=undefined preserves the source allocation byte-for-byte (postamble)', () => {
+    const alloc = fullBedAlloc()
+    const baseline = buildLagunaVacuumPostambleLines(alloc, {
+      enableMach3DigitalOutputs: true
+    })
+    const withUndefined = buildLagunaVacuumPostambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: undefined
+    })
+    expect(withUndefined).toEqual(baseline)
+  })
+
+  it('activeZones=[1,2,3] restricts engaged to X0Y0/X0Y1/X0Y2 with corresponding M64 P0..P2', () => {
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [1, 2, 3]
+    })
+    expect(lines).toContain('; 3 of 6 zones engaged (64.0% bed coverage)')
+    expect(lines).toContain('; Engaged zones: X0Y0, X0Y1, X0Y2')
+    expect(lines).toContain('; Idle zones:    X1Y0, X1Y1, X1Y2')
+    expect(lines.some((l) => /^M64 P0\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P1\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P2\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P3\b/.test(l))).toBe(false)
+    expect(lines.some((l) => /^M64 P4\b/.test(l))).toBe(false)
+    expect(lines.some((l) => /^M64 P5\b/.test(l))).toBe(false)
+  })
+
+  it('activeZones=[4,5,6] restricts engaged to X1Y0/X1Y1/X1Y2 with M64 P3..P5', () => {
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [4, 5, 6]
+    })
+    expect(lines).toContain('; 3 of 6 zones engaged (64.0% bed coverage)')
+    expect(lines).toContain('; Engaged zones: X1Y0, X1Y1, X1Y2')
+    expect(lines).toContain('; Idle zones:    X0Y0, X0Y1, X0Y2')
+    expect(lines.some((l) => /^M64 P3\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P4\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P5\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P0\b/.test(l))).toBe(false)
+  })
+
+  it('activeZones=[] suppresses every M64 line and reports 0 of 6 engaged', () => {
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: []
+    })
+    expect(lines).toContain('; 0 of 6 zones engaged (64.0% bed coverage)')
+    expect(lines).toContain('; Engaged zones: (none)')
+    expect(lines.filter((l) => l.startsWith('M64 ')).length).toBe(0)
+    expect(lines.find((l) => l === LAGUNA_VACUUM_MCODE_WARNING)).toBeUndefined()
+  })
+
+  it('activeZones=[1,2,3,4,5,6] equals the source allocation (full bed)', () => {
+    const alloc = fullBedAlloc()
+    const all = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [1, 2, 3, 4, 5, 6]
+    })
+    const baseline = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true
+    })
+    expect(all).toEqual(baseline)
+  })
+
+  it('activeZones drops out-of-range / non-integer / NaN entries silently', () => {
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [0, 1, 2.5, 7, NaN, -3, 4]
+    })
+    // Survivors after filtering: 1 + 4 = X0Y0, X1Y0
+    expect(lines).toContain('; Engaged zones: X0Y0, X1Y0')
+    expect(lines.some((l) => /^M64 P0\b/.test(l))).toBe(true)
+    expect(lines.some((l) => /^M64 P3\b/.test(l))).toBe(true)
+  })
+
+  it('activeZones dedupes duplicate zone numbers', () => {
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [2, 2, 2, 5, 5]
+    })
+    expect(lines).toContain('; Engaged zones: X0Y1, X1Y1')
+    const m64Count = lines.filter((l) => l.startsWith('M64 ')).length
+    expect(m64Count).toBe(2)
+  })
+
+  it('activeZones controls postamble M65 lines symmetrically with preamble M64', () => {
+    const alloc = fullBedAlloc()
+    const post = buildLagunaVacuumPostambleLines(alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [1, 4]
+    })
+    expect(post).toContain('; Releasing 2 zone(s)')
+    expect(post.some((l) => /^M65 P0\b/.test(l))).toBe(true)
+    expect(post.some((l) => /^M65 P3\b/.test(l))).toBe(true)
+    expect(post.filter((l) => l.startsWith('M65 ')).length).toBe(2)
+  })
+
+  it('activeZones preserves geometric bedCoverageFraction in the comment summary', () => {
+    // 48x96 sheet on 60x120 bed = 64.0% geometric coverage even when the
+    // operator engages just 1 zone via the picker -- the comment summary
+    // reports geometric coverage, the engagedCount reflects the picker.
+    const alloc = fullBedAlloc()
+    const lines = buildLagunaVacuumPreambleLines(alloc, {
+      activeZones: [3]
+    })
+    expect(lines).toContain('; 1 of 6 zones engaged (64.0% bed coverage)')
+  })
+
+  it('wrap respects activeZones end-to-end (preamble + postamble bracket toolpath)', () => {
+    const alloc = fullBedAlloc()
+    const toolpath = ['G0 Z25', 'G1 X10 Y20 F8000', 'G0 Z25']
+    const wrapped = wrapLagunaToolpathWithVacuumBlocks(toolpath, alloc, {
+      enableMach3DigitalOutputs: true,
+      activeZones: [2, 4, 6]
+    })
+    const m64s = wrapped.filter((l) => l.startsWith('M64 '))
+    const m65s = wrapped.filter((l) => l.startsWith('M65 '))
+    expect(m64s.length).toBe(3)
+    expect(m65s.length).toBe(3)
+    expect(m64s).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^M64 P1\b/),
+        expect.stringMatching(/^M64 P3\b/),
+        expect.stringMatching(/^M64 P5\b/)
+      ])
+    )
+    // Toolpath bytes survive between the preamble close and postamble open.
+    const idxToolpath = wrapped.indexOf('G1 X10 Y20 F8000')
+    const idxPreClose = wrapped.indexOf(LAGUNA_VACUUM_PREAMBLE_CLOSE)
+    const idxPostOpen = wrapped.indexOf(LAGUNA_VACUUM_POSTAMBLE_OPEN)
+    expect(idxToolpath).toBeGreaterThan(idxPreClose)
+    expect(idxToolpath).toBeLessThan(idxPostOpen)
+  })
+})
