@@ -39,6 +39,8 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import moonraker_push
         from workbench.commands import moonraker_status
         from workbench.commands import k2_slice
+        from workbench.commands import laguna_vacuum_zones
+        from workbench.commands import laguna_fullsheet
 
         # --- Toolbar: My Shop ---
         shop_cmds = [
@@ -53,6 +55,12 @@ class WorkTrackCAMWorkbench(Workbench):
             "WorkTrackCAM_K2Slice",
             "WorkTrackCAM_MoonrakerPush",
             "WorkTrackCAM_MoonrakerStatus",
+        ]
+
+        # --- Toolbar: Laguna ---
+        laguna_cmds = [
+            "WorkTrackCAM_VacuumZones",
+            "WorkTrackCAM_FullSheet",
         ]
 
         # --- Toolbar: CAM Operations (reuse FreeCAD CAM commands) ---
@@ -106,6 +114,10 @@ class WorkTrackCAMWorkbench(Workbench):
             cam_dressup_cmds,
         )
         self.appendToolbar(
+            QT_TRANSLATE_NOOP("Workbench", "Laguna Swift"),
+            laguna_cmds,
+        )
+        self.appendToolbar(
             QT_TRANSLATE_NOOP("Workbench", "K2 Plus FDM"),
             k2_cmds,
         )
@@ -126,6 +138,10 @@ class WorkTrackCAMWorkbench(Workbench):
         self.appendMenu(
             QT_TRANSLATE_NOOP("Workbench", "&Dressups"),
             cam_dressup_cmds,
+        )
+        self.appendMenu(
+            QT_TRANSLATE_NOOP("Workbench", "&Laguna Swift"),
+            laguna_cmds,
         )
         self.appendMenu(
             QT_TRANSLATE_NOOP("Workbench", "&K2 Plus"),
