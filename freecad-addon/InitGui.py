@@ -43,10 +43,12 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import laguna_fullsheet
         from workbench.commands import carvera_rotary_setup
         from workbench.commands import carvera_atc_sequencer
+        from workbench.commands import job_templates
 
         # --- Toolbar: My Shop ---
         shop_cmds = [
             "WorkTrackCAM_MyShop",
+            "WorkTrackCAM_JobTemplates",
             "WorkTrackCAM_NewJob_Laguna",
             "WorkTrackCAM_NewJob_Carvera",
             "WorkTrackCAM_NewJob_K2",
