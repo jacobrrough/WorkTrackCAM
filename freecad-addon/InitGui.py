@@ -41,6 +41,8 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import k2_slice
         from workbench.commands import laguna_vacuum_zones
         from workbench.commands import laguna_fullsheet
+        from workbench.commands import carvera_rotary_setup
+        from workbench.commands import carvera_atc_sequencer
 
         # --- Toolbar: My Shop ---
         shop_cmds = [
@@ -61,6 +63,12 @@ class WorkTrackCAMWorkbench(Workbench):
         laguna_cmds = [
             "WorkTrackCAM_VacuumZones",
             "WorkTrackCAM_FullSheet",
+        ]
+
+        # --- Toolbar: Carvera ---
+        carvera_cmds = [
+            "WorkTrackCAM_RotarySetup",
+            "WorkTrackCAM_AtcSequencer",
         ]
 
         # --- Toolbar: CAM Operations (reuse FreeCAD CAM commands) ---
@@ -118,6 +126,10 @@ class WorkTrackCAMWorkbench(Workbench):
             laguna_cmds,
         )
         self.appendToolbar(
+            QT_TRANSLATE_NOOP("Workbench", "Carvera"),
+            carvera_cmds,
+        )
+        self.appendToolbar(
             QT_TRANSLATE_NOOP("Workbench", "K2 Plus FDM"),
             k2_cmds,
         )
@@ -142,6 +154,10 @@ class WorkTrackCAMWorkbench(Workbench):
         self.appendMenu(
             QT_TRANSLATE_NOOP("Workbench", "&Laguna Swift"),
             laguna_cmds,
+        )
+        self.appendMenu(
+            QT_TRANSLATE_NOOP("Workbench", "&Carvera"),
+            carvera_cmds,
         )
         self.appendMenu(
             QT_TRANSLATE_NOOP("Workbench", "&K2 Plus"),
