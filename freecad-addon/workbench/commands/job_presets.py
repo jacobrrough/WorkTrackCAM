@@ -37,12 +37,18 @@ MACHINE_PRESETS = {
 }
 
 
-def create_job_for_machine(machine_id):
-    """Create a new CAM Job pre-configured for the specified machine."""
+def create_job_for_machine(machine_id, stock_override=None):
+    """Create a new CAM Job pre-configured for the specified machine.
+
+    stock_override: optional dict with stock dimensions to use instead of
+    machine preset defaults (e.g. {"width": 609.6, "length": 1219.2, "height": 12.7}).
+    """
     preset = MACHINE_PRESETS.get(machine_id)
     if not preset:
         FreeCAD.Console.PrintError(f"WorkTrackCAM: unknown machine '{machine_id}'\n")
         return
+
+    stock = stock_override if stock_override else preset["stock_defaults"]
 
     doc = FreeCAD.ActiveDocument
     if doc is None:
@@ -81,8 +87,12 @@ def create_job_for_machine(machine_id):
     try:
         from Path.Main.Gui import JobCmd
         FreeCADGui.runCommand("CAM_Job")
+        stock_info = ""
+        if stock:
+            dims = " × ".join(f"{v}" for v in stock.values())
+            stock_info = f" (stock: {dims} mm)"
         FreeCAD.Console.PrintMessage(
-            f"WorkTrackCAM: created job for {preset['description']}\n"
+            f"WorkTrackCAM: created job for {preset['description']}{stock_info}\n"
         )
     except Exception as e:
         FreeCAD.Console.PrintError(f"WorkTrackCAM: failed to create job: {e}\n")

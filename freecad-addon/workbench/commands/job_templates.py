@@ -112,7 +112,8 @@ class JobTemplateTaskPanel:
         FreeCADGui.Control.closeDialog()
 
         from workbench.commands.job_presets import create_job_for_machine
-        create_job_for_machine(template["machine"])
+        stock = template.get("stock") or None
+        create_job_for_machine(template["machine"], stock_override=stock if stock else None)
 
     def accept(self):
         FreeCADGui.Control.closeDialog()

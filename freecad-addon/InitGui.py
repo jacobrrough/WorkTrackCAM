@@ -46,6 +46,7 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import carvera_wcs_probe
         from workbench.commands import job_templates
         from workbench.commands import preferences_panel
+        from workbench.commands import gcode_validate
 
         # --- Toolbar: My Shop ---
         shop_cmds = [
@@ -99,7 +100,7 @@ class WorkTrackCAMWorkbench(Workbench):
             "CAM_DressupRampEntry",
             "CAM_DressupPathBoundary",
         ]
-        cam_post_cmds = ["CAM_Post", "CAM_Inspect"]
+        cam_post_cmds = ["CAM_Post", "CAM_Inspect", "WorkTrackCAM_GcodeValidate"]
         cam_sim_cmds = ["CAM_SimulatorGL"]
 
         # Register toolbars
