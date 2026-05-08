@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package format="1">
+  <name>WorkTrackCAM</name>
+  <description>Workshop-focused CAM workbench for Creality K2 Plus, Laguna Swift 5x10, and Makera Carvera machines</description>
+  <version>0.1.0</version>
+  <url type="repository">https://github.com/jacobrrough/WorkTrackCAM</url>
+  <author email="jacob@worktrack.cam">Jacob Rrough</author>
+  <maintainer email="jacob@worktrack.cam">Jacob Rrough</maintainer>
+  <license>MIT</license>
+  <freecadmin>1.0.0</freecadmin>
+  <depend>CAM</depend>
+
+  <content>
+    <workbench>
+      <classname>WorkTrackCAMWorkbench</classname>
+      <subdirectory>./</subdirectory>
+    </workbench>
+    <machine>
+      <subdirectory>machines</subdirectory>
+    </machine>
+  </content>
+</package>
