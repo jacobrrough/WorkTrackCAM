@@ -139,9 +139,12 @@ class CommandAtcSequencer:
     """Carvera ATC multi-tool sequencing."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "Carvera.svg"
         return {
             "MenuText": "ATC Sequencer",
             "ToolTip": "Configure multi-tool ATC sequences for Makera Carvera",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

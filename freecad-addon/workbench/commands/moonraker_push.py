@@ -190,9 +190,12 @@ class CommandMoonrakerPush:
     """Upload G-code to K2 Plus via Moonraker."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "K2Plus.svg"
         return {
             "MenuText": "Send to K2 Plus",
             "ToolTip": "Validate and upload G-code to Creality K2 Plus via Moonraker",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

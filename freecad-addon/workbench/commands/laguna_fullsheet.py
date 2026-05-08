@@ -140,9 +140,12 @@ class CommandFullSheet:
     """Laguna Swift 5x10 full-sheet stock preset wizard."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "LagunaSwift.svg"
         return {
             "MenuText": "Full-Sheet Stock",
             "ToolTip": "Select a standard sheet stock preset for Laguna Swift 5×10",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

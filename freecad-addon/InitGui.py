@@ -43,6 +43,7 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import laguna_fullsheet
         from workbench.commands import carvera_rotary_setup
         from workbench.commands import carvera_atc_sequencer
+        from workbench.commands import carvera_wcs_probe
         from workbench.commands import job_templates
 
         # --- Toolbar: My Shop ---
@@ -71,6 +72,7 @@ class WorkTrackCAMWorkbench(Workbench):
         carvera_cmds = [
             "WorkTrackCAM_RotarySetup",
             "WorkTrackCAM_AtcSequencer",
+            "WorkTrackCAM_WcsProbe",
         ]
 
         # --- Toolbar: CAM Operations (reuse FreeCAD CAM commands) ---

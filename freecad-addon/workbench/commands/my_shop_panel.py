@@ -1,37 +1,41 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Jacob Rrough
 
+import pathlib
+
 import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtWidgets
+
+_icon_dir = pathlib.Path(__file__).resolve().parent.parent / "icons"
 
 MACHINES = [
     {
         "id": "Laguna_Swift_5x10",
         "label": "Laguna Swift 5×10",
         "kind": "cnc",
-        "icon": ":/icons/daggers-crossed.svg",
+        "icon": str(_icon_dir / "LagunaSwift.svg"),
         "description": "3-axis CNC router — 1524×3048 mm, RichAuto A-series",
     },
     {
         "id": "Makera_Carvera_3axis",
         "label": "Makera Carvera",
         "kind": "cnc",
-        "icon": ":/icons/daggers-crossed.svg",
+        "icon": str(_icon_dir / "Carvera.svg"),
         "description": "Desktop CNC — 360×240×140 mm, ATC 6-slot",
     },
     {
         "id": "Makera_Carvera_4axis",
         "label": "Carvera 4th Axis",
         "kind": "cnc",
-        "icon": ":/icons/daggers-crossed.svg",
+        "icon": str(_icon_dir / "Carvera.svg"),
         "description": "4-axis rotary — 240×92 mm, harmonic drive",
     },
     {
         "id": "Creality_K2_Plus",
         "label": "Creality K2 Plus",
         "kind": "fdm",
-        "icon": ":/icons/daggers-crossed.svg",
+        "icon": str(_icon_dir / "K2Plus.svg"),
         "description": "FDM 3D printer — 350×350×350 mm, Klipper + Moonraker",
     },
 ]
@@ -97,6 +101,7 @@ class CommandMyShop:
         return {
             "MenuText": "My Shop",
             "ToolTip": "Select a machine from your shop to start a new CAM job",
+            "Pixmap": str(_icon_dir / "WorkTrackCAM.svg"),
         }
 
     def IsActive(self):

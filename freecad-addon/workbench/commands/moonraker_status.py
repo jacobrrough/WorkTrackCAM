@@ -165,9 +165,12 @@ class CommandMoonrakerStatus:
     """Monitor K2 Plus printer status via Moonraker."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "K2Plus.svg"
         return {
             "MenuText": "K2 Plus Status",
             "ToolTip": "Monitor Creality K2 Plus printer temperature and print progress",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

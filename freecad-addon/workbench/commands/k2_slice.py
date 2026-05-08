@@ -196,9 +196,12 @@ class CommandK2Slice:
     """Slice an STL for the Creality K2 Plus."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "K2Plus.svg"
         return {
             "MenuText": "Slice for K2 Plus",
             "ToolTip": "Slice an STL file using CuraEngine with K2 Plus presets",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

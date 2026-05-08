@@ -127,9 +127,12 @@ class CommandJobTemplates:
     """Load a pre-configured job template."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "WorkTrackCAM.svg"
         return {
             "MenuText": "Job Templates",
             "ToolTip": "Start a new job from a pre-configured template",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

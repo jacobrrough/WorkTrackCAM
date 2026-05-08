@@ -194,9 +194,12 @@ class CommandVacuumZones:
     """Laguna Swift 5x10 vacuum zone allocation."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "LagunaSwift.svg"
         return {
             "MenuText": "Vacuum Zones",
             "ToolTip": "Allocate vacuum table zones for Laguna Swift 5×10 stock placement",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

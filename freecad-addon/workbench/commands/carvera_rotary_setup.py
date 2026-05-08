@@ -179,9 +179,12 @@ class CommandRotarySetup:
     """Carvera 4th axis rotary job setup."""
 
     def GetResources(self):
+        import pathlib
+        icon = pathlib.Path(__file__).resolve().parent.parent / "icons" / "Carvera.svg"
         return {
             "MenuText": "4th Axis Setup",
             "ToolTip": "Set up a 4th axis rotary job for Makera Carvera",
+            "Pixmap": str(icon),
         }
 
     def IsActive(self):

@@ -5,7 +5,9 @@ import pathlib
 import FreeCAD
 import FreeCADGui
 
-_machines_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "machines"
+_addon_root = pathlib.Path(__file__).resolve().parent.parent.parent
+_machines_dir = _addon_root / "machines"
+_icon_dir = _addon_root / "workbench" / "icons"
 
 MACHINE_PRESETS = {
     "Laguna_Swift_5x10": {
@@ -87,6 +89,7 @@ class CommandNewJobLaguna:
         return {
             "MenuText": "New Laguna Job",
             "ToolTip": "Create a CAM job for Laguna Swift 5×10 (3-axis CNC router)",
+            "Pixmap": str(_icon_dir / "LagunaSwift.svg"),
         }
 
     def IsActive(self):
@@ -103,6 +106,7 @@ class CommandNewJobCarvera:
         return {
             "MenuText": "New Carvera Job",
             "ToolTip": "Create a CAM job for Makera Carvera (3-axis or 4-axis)",
+            "Pixmap": str(_icon_dir / "Carvera.svg"),
         }
 
     def IsActive(self):
@@ -119,6 +123,7 @@ class CommandNewJobK2:
         return {
             "MenuText": "New K2 Plus Print",
             "ToolTip": "Start an FDM print job for Creality K2 Plus (Klipper + Moonraker)",
+            "Pixmap": str(_icon_dir / "K2Plus.svg"),
         }
 
     def IsActive(self):
