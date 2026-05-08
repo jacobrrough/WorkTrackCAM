@@ -117,14 +117,22 @@ def validate_gcode(
     dialect: str = "generic",
     safe_z_mm: float = 25.0,
 ) -> SafetyReport:
-    """Run all G-code safety checks and return a combined report."""
+    """Run all G-code safety checks and return a combined report.
+
+    The 'generic' dialect (FDM printers) skips CNC-specific header and
+    end-program checks — FDM G-code doesn't use G21/G90/G17 preambles
+    or M5 spindle stop commands.
+    """
     combined = SafetyReport()
 
-    for check in [
-        check_header_invariants(gcode),
-        check_end_program(gcode, dialect),
-        check_safe_z_retract(gcode, safe_z_mm),
-    ]:
+    checks = []
+    if dialect != "generic":
+        checks.append(check_header_invariants(gcode))
+        checks.append(check_end_program(gcode, dialect))
+    if safe_z_mm > 0:
+        checks.append(check_safe_z_retract(gcode, safe_z_mm))
+
+    for check in checks:
         combined.violations.extend(check.violations)
         if not check.passed:
             combined.passed = False

@@ -81,5 +81,5 @@ class TestCombinedValidation:
         assert report.passed
 
     def test_empty_gcode_fails(self):
-        report = validate_gcode("", dialect="generic")
+        report = validate_gcode("", dialect="mach3")
         assert not report.passed
