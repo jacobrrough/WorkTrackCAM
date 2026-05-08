@@ -45,6 +45,7 @@ class WorkTrackCAMWorkbench(Workbench):
         from workbench.commands import carvera_atc_sequencer
         from workbench.commands import carvera_wcs_probe
         from workbench.commands import job_templates
+        from workbench.commands import preferences_panel
 
         # --- Toolbar: My Shop ---
         shop_cmds = [
@@ -53,6 +54,7 @@ class WorkTrackCAMWorkbench(Workbench):
             "WorkTrackCAM_NewJob_Laguna",
             "WorkTrackCAM_NewJob_Carvera",
             "WorkTrackCAM_NewJob_K2",
+            "WorkTrackCAM_Preferences",
         ]
 
         # --- Toolbar: K2 Plus FDM ---

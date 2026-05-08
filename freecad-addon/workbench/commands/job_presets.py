@@ -50,8 +50,14 @@ def create_job_for_machine(machine_id):
 
     if machine_id == "Creality_K2_Plus":
         FreeCAD.Console.PrintMessage(
-            "WorkTrackCAM: K2 Plus FDM workflow — slicer integration coming in Phase 3\n"
+            "WorkTrackCAM: opening K2 Plus slicer panel\n"
         )
+        try:
+            FreeCADGui.runCommand("WorkTrackCAM_K2Slice")
+        except Exception:
+            FreeCAD.Console.PrintWarning(
+                "WorkTrackCAM: K2 slice command not available — use K2 Plus toolbar\n"
+            )
         return
 
     # Load the machine configuration
