@@ -12,8 +12,8 @@ import {
   summarizeTempViolations,
   type GcodeTempSample,
   type GcodeTempValidationResult,
+  type FdmCapabilityFields,
 } from './gcode-temp-validator'
-import type { FdmCapabilityFields } from './cura-slice-defaults'
 import { machineProfileSchema } from './machine-schema'
 
 // Tight K2 Plus capability fixture used across the over-ceiling paths.

@@ -8,7 +8,6 @@ import {
   type DerivedContourCandidate
 } from '../../shared/cam-2d-derive'
 import { resolveManufactureSetupForCam } from '../../shared/cam-cut-params'
-import { mergeCuraSliceInvocationSettings } from '../../shared/cura-slice-defaults'
 import { MESH_IMPORT_FILE_EXTENSIONS } from '../../shared/mesh-import-formats'
 import type { ManufactureFile, ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
 import { emptyManufacture } from '../../shared/manufacture-schema'
@@ -232,67 +231,12 @@ export function ManufactureWorkspace({
 
   // ── FDM slice from operation ──────────────────────────────────────────────────
 
-  async function runFdmSliceFromOp(opIndex: number): Promise<void> {
-    if (!projectDir) return
-    const op = mfg.operations[opIndex]
-    if (!op || op.kind !== 'fdm_slice') return
-    const rel = op.sourceMesh?.trim()
-    if (!rel) {
-      onStatus?.('Set source mesh path (e.g. assets/model.stl) for this FDM operation.')
-      return
-    }
-    const settings = await fab.settingsGet()
-    if (!settings.curaEnginePath?.trim()) {
-      onStatus?.('Configure CuraEngine path under File → Settings.')
-      return
-    }
-    const sep = projectDir.includes('\\') ? '\\' : '/'
-    const stlPath = `${projectDir}${sep}${rel.replace(/\//g, sep)}`
-    const out = `${projectDir}${sep}output${sep}fdm_slice_${op.id}.gcode`
-    const curaEngineSettings = Object.fromEntries(mergeCuraSliceInvocationSettings(settings))
-
-    // Resolve active filament for temperature/fan/retraction settings
-    let filamentSettings: {
-      nozzleTempC: number; bedTempC: number; chamberTempC?: number
-      fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
-      retractionMm?: number; retractionSpeedMmPerSec?: number
-    } | undefined
-    if (settings.activeFilamentId) {
-      try {
-        const filaments = await fab.filamentsList()
-        const active = filaments.find(f => f.id === settings.activeFilamentId)
-        if (active) {
-          filamentSettings = {
-            nozzleTempC: active.printSettings.nozzleTempC,
-            bedTempC: active.printSettings.bedTempC,
-            chamberTempC: active.printSettings.chamberTempC,
-            fanSpeedPercent: active.printSettings.fanSpeedPercent,
-            fanSpeedFirstLayerPercent: active.printSettings.fanSpeedFirstLayerPercent,
-            retractionMm: active.printSettings.retractionMm,
-            retractionSpeedMmPerSec: active.printSettings.retractionSpeedMmPerSec
-          }
-        }
-      } catch { /* filament lookup is best-effort */ }
-    }
-
-    const r = await fab.sliceCura({
-      stlPath,
-      outPath: out,
-      curaEnginePath: settings.curaEnginePath,
-      definitionsPath: settings.curaDefinitionsPath,
-      definitionPath: settings.curaMachineDefinitionPath?.trim() || undefined,
-      slicePreset: settings.curaSlicePreset ?? 'balanced',
-      curaEngineSettings,
-      // [P2-K2-SLICE]/Cycle 6: K2 quality preset + filament settings
-      k2QualityPresetId: settings.k2QualityPresetId,
-      filamentSettings
-    })
-    if (!r.ok) {
-      onStatus?.(`FDM slice failed: ${r.stderr ?? 'unknown error'}`)
-      return
-    }
-    setLastSliceGcodePath(out)
-    onStatus?.(`FDM slice wrote ${out}`)
+  async function runFdmSliceFromOp(_opIndex: number): Promise<void> {
+    // Stubbed during the 2026-05-27 OrcaSlicer pivot. The previous CuraEngine
+    // path was deleted with the rest of the Cura stack; the OrcaSlicer
+    // replacement lands in the slicer-scaffold task and will reuse this
+    // function's signature and op-shape contract.
+    onStatus?.('FDM slicing temporarily disabled — OrcaSlicer integration in progress.')
   }
 
   // ── Setup mutations ───────────────────────────────────────────────────────────
