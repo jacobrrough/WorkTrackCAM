@@ -173,26 +173,25 @@ try {
     exit 1
 }
 
-# The portable zip contains a single top-level folder, typically named
-# OrcaSlicer_Windows_V2.3.2_portable/. Locate it dynamically rather than
-# hard-coding so a casing/naming change between releases doesn't break us.
-$InnerDirs = Get-ChildItem -Path $ExtractDir -Directory
-if ($InnerDirs.Count -ne 1) {
-    Write-Error "Expected exactly one top-level directory in zip; found $($InnerDirs.Count)."
-    Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
-    exit 1
-}
-$InnerDir = $InnerDirs[0].FullName
-
-# Locate the OrcaSlicer executable inside the inner folder. Upstream ships
-# it as 'OrcaSlicer.exe' (Pascal case) but we'll match case-insensitively
-# in case that ever changes.
-$ExeCandidates = Get-ChildItem -Path $InnerDir -Filter 'OrcaSlicer.exe' -File
+# The portable zip's layout has varied between releases. v2.3.2 extracts
+# FLAT (all DLLs + orca-slicer.exe at the top of the zip); older builds
+# wrapped everything in a single 'OrcaSlicer_Windows_V*_portable/' folder.
+# Handle both by searching recursively for the executable, then using its
+# parent directory as the source. Upstream sometimes ships the exe as
+# 'OrcaSlicer.exe' (Pascal case) and sometimes as 'orca-slicer.exe'
+# (lowercase, hyphenated -- the case the TS wrapper expects); we accept
+# both and case-insensitively.
+$ExeCandidates = Get-ChildItem -Path $ExtractDir -Recurse -File |
+    Where-Object { $_.Name -ieq 'OrcaSlicer.exe' -or $_.Name -ieq 'orca-slicer.exe' }
 if ($ExeCandidates.Count -lt 1) {
-    Write-Error "Could not find OrcaSlicer.exe in extracted folder $InnerDir."
+    Write-Error "Could not find OrcaSlicer.exe or orca-slicer.exe anywhere in extracted tree $ExtractDir."
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
+# Prefer the shallowest match (in case both names exist somewhere weird).
+$Exe = $ExeCandidates | Sort-Object { $_.FullName.Length } | Select-Object -First 1
+$InnerDir = $Exe.Directory.FullName
+$ExtractedExeName = $Exe.Name  # may be 'OrcaSlicer.exe' OR 'orca-slicer.exe'
 
 # --------------------------------------------------------------------------
 # Stage 4: replace the live PlatformDir atomically-ish.
@@ -211,17 +210,24 @@ if (Test-Path $PlatformDir) {
 New-Item -ItemType Directory -Path $PlatformDir -Force | Out-Null
 
 Write-Host "Copying extracted tree into $PlatformDir ..."
-# Copy contents, not the inner directory itself, so OrcaSlicer.exe ends up
+# Copy contents, not the inner directory itself, so the executable ends up
 # at the root of $PlatformDir alongside its DLLs.
 Copy-Item -Path (Join-Path $InnerDir '*') -Destination $PlatformDir -Recurse -Force
 
-# Rename the executable to the name the TS wrapper expects.
-$ExtractedExe = Join-Path $PlatformDir 'OrcaSlicer.exe'
-if (-not (Test-Path $ExtractedExe)) {
-    Write-Error "After copy, $ExtractedExe is missing - something went wrong."
-    exit 1
+# Ensure the executable lives at $BinaryPath (lowercase, hyphenated -- the
+# name the TS wrapper at src/main/slicer/orca-wrapper.ts:60 expects). If
+# upstream shipped it under that name already (e.g. v2.3.2), no rename;
+# otherwise move 'OrcaSlicer.exe' over.
+if (-not (Test-Path $BinaryPath)) {
+    $ExtractedExe = Join-Path $PlatformDir $ExtractedExeName
+    if (-not (Test-Path $ExtractedExe)) {
+        Write-Error "After copy, $ExtractedExe is missing - something went wrong."
+        exit 1
+    }
+    if ($ExtractedExe -ne $BinaryPath) {
+        Move-Item -Path $ExtractedExe -Destination $BinaryPath -Force
+    }
 }
-Move-Item -Path $ExtractedExe -Destination $BinaryPath -Force
 
 # Drop a VERSION file so the next run can detect what's installed.
 Set-Content -Path $VersionFile -Value $OrcaVersion -Encoding ASCII
