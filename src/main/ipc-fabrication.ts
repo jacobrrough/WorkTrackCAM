@@ -1105,7 +1105,12 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       const VALID_KINDS: ReadonlySet<CalibrationTestKind> = new Set([
         'temperature-tower',
         'flow-rate',
-        'pressure-advance'
+        'pressure-advance',
+        'retraction-tower',
+        'max-volumetric-flow',
+        'tolerance',
+        'cornering',
+        'vfa'
       ])
       if (typeof payload.kind !== 'string' || !VALID_KINDS.has(payload.kind as CalibrationTestKind)) {
         return { ok: false as const, error: 'invalid_kind', hint: `kind must be one of: ${[...VALID_KINDS].join(', ')}` }

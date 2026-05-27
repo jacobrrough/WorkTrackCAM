@@ -30,14 +30,16 @@ import { resolve } from 'node:path'
 import * as Mod from './k2-plus-tests'
 import {
   buildCalibrationGcode,
+  buildCorneringTestArgs,
   buildFlowRateArgs,
+  buildMaxVolumetricFlowArgs,
   buildPressureAdvanceArgs,
+  buildRetractionTowerArgs,
   buildTemperatureTowerArgs,
+  buildToleranceTestArgs,
+  buildVfaTestArgs,
   type CalibrationBuildResult,
-  type CalibrationTestKind,
-  type FlowRateParams,
-  type PressureAdvanceParams,
-  type TemperatureTowerParams
+  type CalibrationTestKind
 } from './k2-plus-tests'
 import { K2_PLUS_HARDWARE_CEILINGS } from '../../shared/k2-plus-slice-presets'
 
@@ -115,8 +117,25 @@ describe('A. Module shape', () => {
   })
 
   it('A3: declares the CalibrationTestKind discriminator', () => {
-    const kinds: CalibrationTestKind[] = ['temperature-tower', 'flow-rate', 'pressure-advance']
-    expect(kinds.length).toBe(3)
+    const kinds: CalibrationTestKind[] = [
+      'temperature-tower',
+      'flow-rate',
+      'pressure-advance',
+      'retraction-tower',
+      'max-volumetric-flow',
+      'tolerance',
+      'cornering',
+      'vfa'
+    ]
+    expect(kinds.length).toBe(8)
+  })
+
+  it('A4: exports the five Gap #4-ext builders', () => {
+    expect(typeof Mod.buildRetractionTowerArgs).toBe('function')
+    expect(typeof Mod.buildMaxVolumetricFlowArgs).toBe('function')
+    expect(typeof Mod.buildToleranceTestArgs).toBe('function')
+    expect(typeof Mod.buildCorneringTestArgs).toBe('function')
+    expect(typeof Mod.buildVfaTestArgs).toBe('function')
   })
 })
 
@@ -155,11 +174,16 @@ describe('B. SOURCE-text purity', () => {
 // ── C. K2 hardware-ceiling envelope enforcement (THE SAFETY WALL) ──────────
 
 describe('C. K2 hardware-ceiling envelope enforcement', () => {
-  // Build all three with defaults; the envelope MUST hold for every line.
+  // Build all EIGHT with defaults; the envelope MUST hold for every line.
   const allDefaults: CalibrationBuildResult[] = [
     buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
     buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-    buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
+    buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH }),
+    buildRetractionTowerArgs({ outputGcodePath: OUT_PATH }),
+    buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH }),
+    buildToleranceTestArgs({ outputGcodePath: OUT_PATH }),
+    buildCorneringTestArgs({ outputGcodePath: OUT_PATH }),
+    buildVfaTestArgs({ outputGcodePath: OUT_PATH })
   ]
 
   it('C1: every motion-line F-word stays under XY feed ceiling (mm/min)', () => {
@@ -243,12 +267,19 @@ describe('C. K2 hardware-ceiling envelope enforcement', () => {
 // ── D. Well-formedness (no NaN / Infinity / unfinished tokens) ─────────────
 
 describe('D. G-code well-formedness', () => {
+  const all = () => [
+    buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
+    buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
+    buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH }),
+    buildRetractionTowerArgs({ outputGcodePath: OUT_PATH }),
+    buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH }),
+    buildToleranceTestArgs({ outputGcodePath: OUT_PATH }),
+    buildCorneringTestArgs({ outputGcodePath: OUT_PATH }),
+    buildVfaTestArgs({ outputGcodePath: OUT_PATH })
+  ]
+
   it('D1: no line contains "NaN", "Infinity", "undefined", or "null"', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       for (const word of ['NaN', 'Infinity', 'undefined', 'null']) {
         expect(r.gcode, `${word} found in gcode`).not.toContain(word)
       }
@@ -256,11 +287,7 @@ describe('D. G-code well-formedness', () => {
   })
 
   it('D2: every G0/G1 line has at least one coordinate or E-word', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       const lines = r.gcode.split('\n')
       for (const raw of lines) {
         const trimmed = raw.trim()
@@ -272,12 +299,26 @@ describe('D. G-code well-formedness', () => {
   })
 
   it('D3: every gcode file ends with a newline', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       expect(r.gcode.endsWith('\n')).toBe(true)
+    }
+  })
+
+  it('D4: every emitted E-value is monotonically non-decreasing across G1 lines', () => {
+    // Defends Safety Rule 1: a stray negative-going E (other than firmware
+    // retract macros like G10/G11/SET_RETRACTION) would un-prime the
+    // extruder mid-print and produce gaps. Pure G1 E motions in our
+    // builders are accumulated extrusion — they must climb monotonically.
+    for (const r of all()) {
+      const motion = parseMotionLines(r.gcode)
+      let prevE: number | null = null
+      for (const m of motion) {
+        if (m.e == null) continue
+        if (prevE !== null) {
+          expect(m.e, `E went backwards on ${r.description} line ${m.lineNumber}: ${m.raw}`).toBeGreaterThanOrEqual(prevE)
+        }
+        prevE = m.e
+      }
     }
   })
 })
@@ -285,34 +326,33 @@ describe('D. G-code well-formedness', () => {
 // ── E. Required pre/post sequences in every test ───────────────────────────
 
 describe('E. Required pre/post sequences', () => {
+  const all = () => [
+    buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
+    buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
+    buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH }),
+    buildRetractionTowerArgs({ outputGcodePath: OUT_PATH }),
+    buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH }),
+    buildToleranceTestArgs({ outputGcodePath: OUT_PATH }),
+    buildCorneringTestArgs({ outputGcodePath: OUT_PATH }),
+    buildVfaTestArgs({ outputGcodePath: OUT_PATH })
+  ]
+
   it('E1: every test gcode includes START_PRINT and END_PRINT', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       expect(r.gcode).toMatch(/START_PRINT\s+EXTRUDER_TEMP=/)
       expect(r.gcode).toContain('END_PRINT')
     }
   })
 
   it('E2: every test sets absolute positioning and millimeters', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       expect(r.gcode).toMatch(/^G21/m)
       expect(r.gcode).toMatch(/^G90/m)
     }
   })
 
   it('E3: every test prints the adaptive-probing MIN/MAX coordinates Klipper expects', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       expect(r.gcode).toContain('; MINX = ')
       expect(r.gcode).toContain('; MINY = ')
       expect(r.gcode).toContain('; MAXX = ')
@@ -321,11 +361,7 @@ describe('E. Required pre/post sequences', () => {
   })
 
   it('E4: every test header tags the WorkTrackCAM provenance', () => {
-    for (const r of [
-      buildTemperatureTowerArgs({ outputGcodePath: OUT_PATH }),
-      buildFlowRateArgs({ outputGcodePath: OUT_PATH }),
-      buildPressureAdvanceArgs({ outputGcodePath: OUT_PATH })
-    ]) {
+    for (const r of all()) {
       expect(r.gcode).toContain('WorkTrackCAM K2 Plus Calibration')
     }
   })
@@ -429,6 +465,173 @@ describe('F. Pressure advance parameter handling', () => {
   })
 })
 
+describe('F. Retraction tower parameter handling', () => {
+  it('F14: default sweep is 0.0 -> 2.0 mm in 0.2 mm steps (11 bands)', () => {
+    const r = buildRetractionTowerArgs({ outputGcodePath: OUT_PATH })
+    // 0, 0.2, 0.4, ..., 2.0 = 11 bands
+    expect(r.description).toContain('11 bands')
+    expect(r.description).toContain('0')
+    expect(r.description).toContain('2')
+  })
+
+  it('F15: emits SET_RETRACTION per band + a reset to 0 at the END', () => {
+    const r = buildRetractionTowerArgs({ outputGcodePath: OUT_PATH })
+    const retLines = r.gcode.split('\n').filter((l) => l.startsWith('SET_RETRACTION'))
+    // 11 bands + 1 reset
+    expect(retLines.length).toBe(12)
+    expect(retLines[retLines.length - 1]).toMatch(/RETRACT_LENGTH=0(\s|$)/)
+  })
+
+  it('F16: rejects retraction values outside [0, 5 mm]', () => {
+    expect(() => buildRetractionTowerArgs({ outputGcodePath: OUT_PATH, endRetractMm: 6 })).toThrow(/safe range/)
+    expect(() => buildRetractionTowerArgs({ outputGcodePath: OUT_PATH, startRetractMm: -0.5 })).toThrow(/safe range/)
+  })
+
+  it('F17: rejects retraction speed past K2 E-feed ceiling', () => {
+    expect(() =>
+      buildRetractionTowerArgs({ outputGcodePath: OUT_PATH, retractSpeedMmPerSec: 500 })
+    ).toThrow()
+  })
+
+  it('F18: throws if sweep would produce more than 30 bands', () => {
+    expect(() =>
+      buildRetractionTowerArgs({
+        outputGcodePath: OUT_PATH,
+        startRetractMm: 0,
+        endRetractMm: 5,
+        stepRetractMm: 0.05
+      })
+    ).toThrow(/0 or > 30 bands/)
+  })
+})
+
+describe('F. Max volumetric flow parameter handling', () => {
+  it('F19: default sweep is 5 -> 30 mm^3/s in 2 mm^3/s steps (13 bands)', () => {
+    const r = buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH })
+    // 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29 = 13 bands (30 is not hit by step from 5)
+    expect(r.description).toContain('13 bands')
+    expect(r.description).toContain('mm^3/s')
+  })
+
+  it('F20: every band feedrate stays under K2 XY ceiling at default sweep', () => {
+    // Defense in depth: the builder's own assertFeedSafe must hold.
+    const r = buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH })
+    const motion = parseMotionLines(r.gcode)
+    const xyCeil = K2_PLUS_HARDWARE_CEILINGS.maxFeedrateXyMmPerSec * 60
+    for (const m of motion) {
+      if (m.feed == null) continue
+      if (m.x != null || m.y != null) {
+        expect(m.feed, `line ${m.lineNumber}: ${m.raw}`).toBeLessThanOrEqual(xyCeil)
+      }
+    }
+  })
+
+  it('F21: throws when endFlow forces XY past K2 ceiling', () => {
+    // At 0.2 * 0.4 mm extrusion, 47 mm^3/s -> 587.5 mm/s; bump to 60
+    // and we hit ~750 mm/s which the builder must reject.
+    expect(() =>
+      buildMaxVolumetricFlowArgs({
+        outputGcodePath: OUT_PATH,
+        startFlowMmCubePerSec: 5,
+        endFlowMmCubePerSec: 60,
+        stepFlowMmCubePerSec: 5
+      })
+    ).toThrow(/ceiling/)
+  })
+
+  it('F22: rejects bands count out of range', () => {
+    expect(() =>
+      buildMaxVolumetricFlowArgs({
+        outputGcodePath: OUT_PATH,
+        startFlowMmCubePerSec: 1,
+        endFlowMmCubePerSec: 50,
+        stepFlowMmCubePerSec: 0.5
+      })
+    ).toThrow(/0 or > 40 bands/)
+  })
+
+  it('F23: rejects out-of-range filament density', () => {
+    expect(() => buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH, filamentDensity: 0 })).toThrow()
+    expect(() => buildMaxVolumetricFlowArgs({ outputGcodePath: OUT_PATH, filamentDensity: 10 })).toThrow()
+  })
+})
+
+describe('F. Tolerance test parameter handling', () => {
+  it('F24: default cube is 20 mm with 4 peg/hole pairs', () => {
+    const r = buildToleranceTestArgs({ outputGcodePath: OUT_PATH })
+    expect(r.description).toContain('20x20')
+    expect(r.description).toContain('4 peg/hole pairs')
+  })
+
+  it('F25: rejects degenerate / out-of-range cube + peg counts', () => {
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, cubeSizeMm: 5 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, cubeSizeMm: 100 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, pegHoleCount: 1 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, pegHoleCount: 20 })).toThrow()
+  })
+
+  it('F26: rejects out-of-range hole base diameter + clearance step', () => {
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, holeBaseDiameterMm: 1 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, holeBaseDiameterMm: 20 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, clearanceStepMm: 0 })).toThrow()
+    expect(() => buildToleranceTestArgs({ outputGcodePath: OUT_PATH, clearanceStepMm: 1 })).toThrow()
+  })
+})
+
+describe('F. Cornering / SCV parameter handling', () => {
+  it('F27: default sweep is 4 -> 9 mm/s in 1 mm/s steps (6 bands)', () => {
+    const r = buildCorneringTestArgs({ outputGcodePath: OUT_PATH })
+    // 4, 5, 6, 7, 8, 9 = 6 bands
+    expect(r.description).toContain('6 bands')
+    expect(r.description).toContain('mm/s')
+  })
+
+  it('F28: emits SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY per band + a reset to 5 on END', () => {
+    const r = buildCorneringTestArgs({ outputGcodePath: OUT_PATH })
+    const scvLines = r.gcode
+      .split('\n')
+      .filter((l) => l.startsWith('SET_VELOCITY_LIMIT'))
+    // 6 bands + 1 reset
+    expect(scvLines.length).toBe(7)
+    expect(scvLines[scvLines.length - 1]).toContain('SQUARE_CORNER_VELOCITY=5')
+  })
+
+  it('F29: rejects SCV past K2 ceiling (9 mm/s)', () => {
+    expect(() => buildCorneringTestArgs({ outputGcodePath: OUT_PATH, endScvMmPerSec: 12 })).toThrow(/safe range/)
+    expect(() => buildCorneringTestArgs({ outputGcodePath: OUT_PATH, startScvMmPerSec: 0 })).toThrow(/safe range/)
+  })
+
+  it('F30: rejects print speed past K2 XY ceiling', () => {
+    expect(() =>
+      buildCorneringTestArgs({ outputGcodePath: OUT_PATH, printSpeedMmPerSec: 800 })
+    ).toThrow(/safe range/)
+  })
+
+  it('F31: rejects square size out of safe range', () => {
+    expect(() => buildCorneringTestArgs({ outputGcodePath: OUT_PATH, squareSizeMm: 10 })).toThrow()
+    expect(() => buildCorneringTestArgs({ outputGcodePath: OUT_PATH, squareSizeMm: 200 })).toThrow()
+  })
+})
+
+describe('F. VFA parameter handling', () => {
+  it('F32: default is 30 mm OD tube, 50 mm tall, 60 mm/s wall', () => {
+    const r = buildVfaTestArgs({ outputGcodePath: OUT_PATH })
+    expect(r.description).toContain('30 mm OD')
+    expect(r.description).toContain('50 mm tall')
+    expect(r.description).toContain('60 mm/s')
+  })
+
+  it('F33: rejects out-of-range tube dimensions + wall speed', () => {
+    expect(() => buildVfaTestArgs({ outputGcodePath: OUT_PATH, tubeDiameterMm: 5 })).toThrow()
+    expect(() => buildVfaTestArgs({ outputGcodePath: OUT_PATH, tubeDiameterMm: 200 })).toThrow()
+    expect(() => buildVfaTestArgs({ outputGcodePath: OUT_PATH, tubeHeightMm: 10 })).toThrow()
+    expect(() => buildVfaTestArgs({ outputGcodePath: OUT_PATH, tubeHeightMm: 500 })).toThrow()
+    expect(() =>
+      buildVfaTestArgs({ outputGcodePath: OUT_PATH, wallSpeedMmPerSec: 800 })
+    ).toThrow(/safe range/)
+  })
+})
+
 // ── G. Dispatcher ──────────────────────────────────────────────────────────
 
 describe('G. buildCalibrationGcode dispatcher', () => {
@@ -454,5 +657,45 @@ describe('G. buildCalibrationGcode dispatcher', () => {
       params: { outputGcodePath: OUT_PATH }
     })
     expect(r.description).toMatch(/Pressure advance/)
+  })
+
+  it('G4: routes retraction-tower', () => {
+    const r = buildCalibrationGcode({
+      kind: 'retraction-tower',
+      params: { outputGcodePath: OUT_PATH }
+    })
+    expect(r.description).toMatch(/Retraction tower/)
+  })
+
+  it('G5: routes max-volumetric-flow', () => {
+    const r = buildCalibrationGcode({
+      kind: 'max-volumetric-flow',
+      params: { outputGcodePath: OUT_PATH }
+    })
+    expect(r.description).toMatch(/Max volumetric flow/)
+  })
+
+  it('G6: routes tolerance', () => {
+    const r = buildCalibrationGcode({
+      kind: 'tolerance',
+      params: { outputGcodePath: OUT_PATH }
+    })
+    expect(r.description).toMatch(/Tolerance/)
+  })
+
+  it('G7: routes cornering', () => {
+    const r = buildCalibrationGcode({
+      kind: 'cornering',
+      params: { outputGcodePath: OUT_PATH }
+    })
+    expect(r.description).toMatch(/Cornering/)
+  })
+
+  it('G8: routes vfa', () => {
+    const r = buildCalibrationGcode({
+      kind: 'vfa',
+      params: { outputGcodePath: OUT_PATH }
+    })
+    expect(r.description).toMatch(/VFA/)
   })
 })

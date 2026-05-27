@@ -391,6 +391,72 @@ export type Api = {
           bedTempC?: number
         }
       }
+    | {
+        kind: 'retraction-tower'
+        params: {
+          outputGcodePath: string
+          startRetractMm?: number
+          endRetractMm?: number
+          stepRetractMm?: number
+          bandHeightMm?: number
+          pillarGapMm?: number
+          pillarSizeMm?: number
+          retractSpeedMmPerSec?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
+    | {
+        kind: 'max-volumetric-flow'
+        params: {
+          outputGcodePath: string
+          startFlowMmCubePerSec?: number
+          endFlowMmCubePerSec?: number
+          stepFlowMmCubePerSec?: number
+          bandHeightMm?: number
+          tubeDiameterMm?: number
+          nozzleTempC?: number
+          bedTempC?: number
+          filamentDensity?: number
+        }
+      }
+    | {
+        kind: 'tolerance'
+        params: {
+          outputGcodePath: string
+          cubeSizeMm?: number
+          pegHoleCount?: number
+          holeBaseDiameterMm?: number
+          clearanceStepMm?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
+    | {
+        kind: 'cornering'
+        params: {
+          outputGcodePath: string
+          startScvMmPerSec?: number
+          endScvMmPerSec?: number
+          stepScvMmPerSec?: number
+          bandHeightMm?: number
+          squareSizeMm?: number
+          printSpeedMmPerSec?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
+    | {
+        kind: 'vfa'
+        params: {
+          outputGcodePath: string
+          tubeDiameterMm?: number
+          tubeHeightMm?: number
+          wallSpeedMmPerSec?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
   ) => Promise<
     | { ok: true; outputGcodePath: string; description: string; args: string[] }
     | { ok: false; error: string; hint?: string }

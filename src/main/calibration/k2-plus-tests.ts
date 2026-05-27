@@ -31,7 +31,7 @@
  * the same machine-side safety net (probe + preheat + park) and read like
  * a normal print job to the K2's Fluidd / Moonraker file picker.
  *
- * THREE CALIBRATION TESTS
+ * EIGHT CALIBRATION TESTS
  * -----------------------
  *
  * 1. Temperature tower — five 6 mm tall print segments, each at a
@@ -50,6 +50,37 @@
  *    Default range for the K2 Plus direct-drive: 0.000 -> 0.060 in
  *    0.010 steps (the K2's tuned PA usually lands ~0.020 - 0.040 per
  *    Klipper docs https://www.klipper3d.org/Pressure_Advance.html).
+ *
+ * 4. Retraction tower — two square pillars separated by ~30 mm with the
+ *    slicer filling the gap with travel moves. Sweep retraction distance
+ *    0.0 -> 2.0 mm in 0.2 mm steps via Klipper's runtime firmware
+ *    retract macro `SET_RETRACTION RETRACT_LENGTH=...`. Operator looks
+ *    at stringing in the gap and picks the shortest distance that gives
+ *    a clean inter-pillar field.
+ *
+ * 5. Max volumetric flow — single-wall tube extruded at progressively
+ *    increasing volumetric flow rate (mm³/s). Operator looks for the
+ *    onset of under-extrusion / poor surface to set the per-filament
+ *    `filament_max_volumetric_speed`. Default sweep 5 -> 30 mm³/s in
+ *    2 mm³/s steps.
+ *
+ * 6. Tolerance / dimensional accuracy — calibration cube (known X/Y/Z)
+ *    plus a row of peg + matching hole pairs at known +0.0 / +0.1 / +0.2
+ *    / +0.3 mm clearance. Operator measures cube dims with calipers,
+ *    nominates an XY scaling factor, and uses the tightest peg/hole pair
+ *    that slips together to dial in printer-specific hole compensation.
+ *
+ * 7. Cornering / jerk — square traced at varying Klipper
+ *    `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=...` settings. Sweep
+ *    SCV 4 -> 9 mm/s in 1 mm/s steps (9 mm/s is the K2 ceiling). Operator
+ *    looks for ringing artifacts; picks the highest SCV with no visible
+ *    ghosting. RESETS SCV to a safe default on END so the test does not
+ *    pollute the next job.
+ *
+ * 8. VFA (vertical fine artifacts) — tall single-walled tube at modest
+ *    constant speed (default 60 mm/s, 50 mm tall) used to diagnose
+ *    Z-banding, XY-belt resonance, and microstep issues. Operator looks
+ *    for visible ribs / waves on the wall.
  *
  * USAGE
  * -----
@@ -125,6 +156,115 @@ export type PressureAdvanceParams = {
   stepPa?: number
   /** Length of each test line in mm. Default 60. */
   lineLengthMm?: number
+  /** Nozzle temperature in deg C. Default 215 (PLA). */
+  nozzleTempC?: number
+  /** Bed temperature in deg C. Default 60 (PLA). */
+  bedTempC?: number
+}
+
+/** Retraction tower (Klipper SET_RETRACTION) two-pillar stringing test. */
+export type RetractionTowerParams = {
+  /** Absolute output path where the .gcode will be written. */
+  outputGcodePath: string
+  /** Starting retraction distance (mm). Default 0.0. */
+  startRetractMm?: number
+  /** Ending retraction distance (mm). Default 2.0. */
+  endRetractMm?: number
+  /** Step size (mm). Default 0.2 (=> 11 segments at default range). */
+  stepRetractMm?: number
+  /** Per-band stack height (mm). Default 5 mm (each retraction value gets 5 mm Z). */
+  bandHeightMm?: number
+  /** Gap between the two pillars (mm). Default 30. */
+  pillarGapMm?: number
+  /** Pillar edge length (mm). Default 10. */
+  pillarSizeMm?: number
+  /** Retraction speed (mm/s). Default 40 (K2 direct-drive standard). */
+  retractSpeedMmPerSec?: number
+  /** Nozzle temperature in deg C. Default 215 (PLA). */
+  nozzleTempC?: number
+  /** Bed temperature in deg C. Default 60 (PLA). */
+  bedTempC?: number
+}
+
+/** Max volumetric flow tube test. */
+export type MaxVolumetricFlowParams = {
+  /** Absolute output path where the .gcode will be written. */
+  outputGcodePath: string
+  /** Starting volumetric flow rate (mm^3/s). Default 5. */
+  startFlowMmCubePerSec?: number
+  /** Ending volumetric flow rate (mm^3/s). Default 30. */
+  endFlowMmCubePerSec?: number
+  /** Step size (mm^3/s). Default 2 (=> 13 bands at default range). */
+  stepFlowMmCubePerSec?: number
+  /** Per-band stack height (mm). Default 5 mm. */
+  bandHeightMm?: number
+  /** Tube outer diameter (mm). Default 30. */
+  tubeDiameterMm?: number
+  /** Nozzle temperature in deg C. Default 215 (PLA). */
+  nozzleTempC?: number
+  /** Bed temperature in deg C. Default 60 (PLA). */
+  bedTempC?: number
+  /**
+   * Filament density (g/cm^3). Default 1.24 (PLA). Carried for documentation
+   * and the header comment only -- the volumetric calculation uses filament
+   * cross-section area so density does not enter the speed math.
+   */
+  filamentDensity?: number
+}
+
+/** Tolerance / dimensional accuracy cube + peg-hole pairs. */
+export type ToleranceTestParams = {
+  /** Absolute output path where the .gcode will be written. */
+  outputGcodePath: string
+  /** Reference cube edge length (mm). Default 20. */
+  cubeSizeMm?: number
+  /** Number of peg/hole pairs in the comb. Default 4. */
+  pegHoleCount?: number
+  /**
+   * Base hole diameter (mm). The first hole matches a peg of this exact
+   * diameter; subsequent holes step up by +0.1 mm each. Default 4.0 mm.
+   */
+  holeBaseDiameterMm?: number
+  /** Per-pair clearance step (mm). Default 0.1. */
+  clearanceStepMm?: number
+  /** Nozzle temperature in deg C. Default 215 (PLA). */
+  nozzleTempC?: number
+  /** Bed temperature in deg C. Default 60 (PLA). */
+  bedTempC?: number
+}
+
+/** Cornering / square-corner-velocity (input shaping headroom) sweep. */
+export type CorneringTestParams = {
+  /** Absolute output path where the .gcode will be written. */
+  outputGcodePath: string
+  /** Starting SCV in mm/s. Default 4. */
+  startScvMmPerSec?: number
+  /** Ending SCV in mm/s. Default 9 (K2 ceiling -- maxJerkXyMmPerSec). */
+  endScvMmPerSec?: number
+  /** Step size (mm/s). Default 1 (=> 6 bands at default range). */
+  stepScvMmPerSec?: number
+  /** Per-band stack height (mm). Default 5 mm. */
+  bandHeightMm?: number
+  /** Square edge length (mm). Default 40. */
+  squareSizeMm?: number
+  /** Print speed for the square sides (mm/s). Default 150. */
+  printSpeedMmPerSec?: number
+  /** Nozzle temperature in deg C. Default 215 (PLA). */
+  nozzleTempC?: number
+  /** Bed temperature in deg C. Default 60 (PLA). */
+  bedTempC?: number
+}
+
+/** Vertical fine artifacts (Z-banding / belt-resonance) tall tube. */
+export type VfaTestParams = {
+  /** Absolute output path where the .gcode will be written. */
+  outputGcodePath: string
+  /** Tube outer diameter (mm). Default 30. */
+  tubeDiameterMm?: number
+  /** Tube height (mm). Default 50. */
+  tubeHeightMm?: number
+  /** Wall print speed (mm/s). Default 60. */
+  wallSpeedMmPerSec?: number
   /** Nozzle temperature in deg C. Default 215 (PLA). */
   nozzleTempC?: number
   /** Bed temperature in deg C. Default 60 (PLA). */
@@ -679,14 +819,885 @@ export function buildPressureAdvanceArgs(params: PressureAdvanceParams): Calibra
   }
 }
 
+// ── 4. Retraction tower (Klipper SET_RETRACTION) ─────────────────────────
+
+/**
+ * Build a retraction-tower calibration program.
+ *
+ * Prints two small square pillars separated by a configurable gap. The
+ * print head travels back and forth between the pillars between every
+ * trace -- if the retraction distance is too low, the head drools
+ * filament across the gap (visible stringing). The Klipper firmware
+ * retraction macro `SET_RETRACTION RETRACT_LENGTH=<mm>` is issued at the
+ * start of each band so each Z-stack samples a different retraction
+ * value. Operator picks the SHORTEST distance that produces a clean
+ * inter-pillar field (over-retraction slows the print and risks heat
+ * creep on direct-drive K2 hotends).
+ *
+ * Default sweep: 0.0 -> 2.0 mm in 0.2 mm steps (11 bands × 5 mm = 55 mm
+ * tall tower). Retraction speed default 40 mm/s (K2 direct-drive); the
+ * builder asserts it stays under the K2 E-feedrate ceiling.
+ *
+ * SAFETY AUDIT (CLAUDE.md "Safety Rule 1"):
+ *   - All XY feedrates <= 9000 mm/min (150 mm/s) << 600 mm/s K2 ceiling
+ *   - All Z feedrates  <= 600  mm/min (10 mm/s)  << 30  mm/s K2 ceiling
+ *   - Retraction E-feed asserted via assertFeedSafe('e')
+ *   - Nozzle / bed via assertTempSafe (PLA defaults)
+ *   - SET_RETRACTION is reset to 0 at the END so the test does not
+ *     pollute the operator's next print
+ *   - E values are monotonically non-decreasing (positive extrusion +
+ *     negative retraction tracked as separate state, never NaN/Inf)
+ */
+export function buildRetractionTowerArgs(params: RetractionTowerParams): CalibrationBuildResult {
+  const start = params.startRetractMm ?? 0.0
+  const end = params.endRetractMm ?? 2.0
+  const step = params.stepRetractMm ?? 0.2
+  const bandH = params.bandHeightMm ?? 5
+  const gap = params.pillarGapMm ?? 30
+  const pillarSize = params.pillarSizeMm ?? 10
+  const retractSpeedMmPerSec = params.retractSpeedMmPerSec ?? 40
+  const nozzle = params.nozzleTempC ?? 215
+  const bed = params.bedTempC ?? 60
+  if (step <= 0) throw new Error('Calibration generator: retraction-tower step must be positive')
+  if (end < start) throw new Error('Calibration generator: retraction-tower end < start')
+  if (start < 0 || end > 5) {
+    // 5 mm hard ceiling -- on a K2 direct-drive nothing past ~2 mm is
+    // useful, and longer retracts risk grinding the filament path.
+    throw new Error('Calibration generator: retraction values out of safe range (0..5 mm)')
+  }
+  if (bandH <= 0 || bandH > 20) throw new Error('Calibration generator: band height out of safe range (1..20 mm)')
+  if (gap < 10 || gap > 200) throw new Error('Calibration generator: pillar gap out of safe range (10..200 mm)')
+  if (pillarSize < 5 || pillarSize > 30) {
+    throw new Error('Calibration generator: pillar size out of safe range (5..30 mm)')
+  }
+  if (retractSpeedMmPerSec <= 0 || retractSpeedMmPerSec > K2_PLUS_HARDWARE_CEILINGS.maxFeedrateEMmPerSec) {
+    throw new Error(`Calibration generator: retraction speed must be > 0 and <= ${K2_PLUS_HARDWARE_CEILINGS.maxFeedrateEMmPerSec} mm/s`)
+  }
+  assertTempSafe(nozzle, 'nozzle')
+  assertTempSafe(bed, 'bed')
+
+  const bands: number[] = []
+  for (let r = start; r <= end + 1e-9; r += step) bands.push(Math.round(r * 100) / 100)
+  if (bands.length === 0 || bands.length > 30) {
+    throw new Error('Calibration generator: retraction sweep produced 0 or > 30 bands')
+  }
+
+  const cx = 175
+  const cy = 175
+  const halfGap = gap / 2
+  const halfPillar = pillarSize / 2
+  // Two pillars sit on the +X / -X side of bed-center
+  const pillar1Cx = cx - halfGap - halfPillar
+  const pillar2Cx = cx + halfGap + halfPillar
+  const printAreaMinX = pillar1Cx - halfPillar - 4
+  const printAreaMinY = cy - halfPillar - 4
+  const printAreaMaxX = pillar2Cx + halfPillar + 4
+  const printAreaMaxY = cy + halfPillar + 4
+
+  const layerHeight = 0.2
+  const lineWidth = 0.4
+  const printFeedXy = 1800 // 30 mm/s
+  const travelFeedXy = 9000 // 150 mm/s
+  const zFeed = 600 // 10 mm/s
+  const eFeedMmMin = retractSpeedMmPerSec * 60
+  assertFeedSafe(printFeedXy, 'xy')
+  assertFeedSafe(travelFeedXy, 'xy')
+  assertFeedSafe(zFeed, 'z')
+  assertFeedSafe(eFeedMmMin, 'e')
+
+  const filamentDia = 1.75
+  const filamentArea = Math.PI * (filamentDia / 2) ** 2
+  const ePerMm = (layerHeight * lineWidth) / filamentArea
+
+  const lines: string[] = [
+    ...headerComment(`Retraction tower ${fmtNum(start, 2)}-${fmtNum(end, 2)} mm, step ${fmtNum(step, 2)} mm`),
+    `; ${bands.length} bands, ${bandH} mm tall each, two ${pillarSize} mm pillars at ${gap} mm gap`,
+    `; Klipper SET_RETRACTION RETRACT_LENGTH=<mm> issued per band; reset to 0 on END`,
+    `; Inspect stringing in the gap; pick the SHORTEST retraction with a clean field.`,
+    '',
+    ...k2StartSequence({
+      nozzleTempC: nozzle,
+      bedTempC: bed,
+      printAreaMinX,
+      printAreaMinY,
+      printAreaMaxX,
+      printAreaMaxY
+    }),
+    ''
+  ]
+
+  function pillarCorners(centerX: number): [number, number][] {
+    return [
+      [centerX - halfPillar, cy - halfPillar],
+      [centerX + halfPillar, cy - halfPillar],
+      [centerX + halfPillar, cy + halfPillar],
+      [centerX - halfPillar, cy + halfPillar]
+    ]
+  }
+
+  let currentZ = layerHeight
+  let eAcc = 0
+  for (let b = 0; b < bands.length; b++) {
+    const rDist = bands[b]!
+    lines.push(`; ── Band ${b + 1}/${bands.length}: RETRACT_LENGTH = ${fmtNum(rDist, 2)} mm ──`)
+    lines.push(`SET_RETRACTION RETRACT_LENGTH=${fmtNum(rDist, 2)} RETRACT_SPEED=${fmtNum(retractSpeedMmPerSec, 1)} UNRETRACT_SPEED=${fmtNum(retractSpeedMmPerSec, 1)}`)
+    const layersInBand = Math.round(bandH / layerHeight)
+    for (let l = 0; l < layersInBand; l++) {
+      for (const center of [pillar1Cx, pillar2Cx]) {
+        const corners = pillarCorners(center)
+        lines.push(`G0 X${fmtNum(corners[0]![0])} Y${fmtNum(corners[0]![1])} Z${fmtNum(currentZ)} F${travelFeedXy}`)
+        // Klipper firmware-retract on travel: emit G10 before travel, G11 on arrival.
+        // The Klipper retract macro applies the SET_RETRACTION distance.
+        for (let c = 1; c <= 4; c++) {
+          const [tx, ty] = corners[c % 4]!
+          eAcc += pillarSize * ePerMm
+          lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${printFeedXy}`)
+        }
+        // Retract + travel away (the next iteration's G0 acts as the bridge over the gap)
+        lines.push('G10') // firmware retract -- honors SET_RETRACTION
+      }
+      // Un-retract on return to the first pillar for the next layer
+      lines.push('G11')
+      currentZ += layerHeight
+    }
+    lines.push('')
+  }
+
+  // Reset SET_RETRACTION so the test doesn't pollute later prints
+  lines.push('SET_RETRACTION RETRACT_LENGTH=0 RETRACT_SPEED=40 UNRETRACT_SPEED=40')
+  lines.push(`G0 Z${fmtNum(currentZ + 5)} F${zFeed}`)
+  lines.push(...k2EndSequence())
+
+  const gcode = lines.join('\n') + '\n'
+  const description =
+    `Retraction tower: ${bands.length} bands from ${fmtNum(start, 2)} to ${fmtNum(end, 2)} mm ` +
+    `(step ${fmtNum(step, 2)} mm), two ${pillarSize} mm pillars at ${gap} mm gap, ${bandH} mm per band.`
+
+  return {
+    args: [
+      'k2-plus-calibration',
+      '--test',
+      'retraction-tower',
+      '--start-retract',
+      String(start),
+      '--end-retract',
+      String(end),
+      '--step-retract',
+      String(step),
+      '--band-height',
+      String(bandH),
+      '--pillar-gap',
+      String(gap),
+      '--pillar-size',
+      String(pillarSize),
+      '--retract-speed',
+      String(retractSpeedMmPerSec),
+      '--nozzle-temp',
+      String(nozzle),
+      '--bed-temp',
+      String(bed),
+      '--output',
+      params.outputGcodePath
+    ],
+    outputGcodePath: params.outputGcodePath,
+    description,
+    gcode
+  }
+}
+
+// ── 5. Max volumetric flow ────────────────────────────────────────────────
+
+/**
+ * Build a max-volumetric-flow calibration program.
+ *
+ * Prints a tall single-walled tube where each Z-band extrudes at a
+ * progressively-higher volumetric flow rate (mm^3/s). Operator inspects
+ * the wall for the onset of under-extrusion (rough surface, gaps) and
+ * picks the highest flow rate the hot-end can sustain. The result feeds
+ * `filament_max_volumetric_speed` per filament profile.
+ *
+ * Default sweep: 5 -> 30 mm^3/s in 2 mm^3/s steps (13 bands × 5 mm =
+ * 65 mm tall tube). The builder converts volumetric flow to a print
+ * feedrate via `f_mmpermin = (Q_mm3s / extrusion_area) * 60` where
+ * extrusion_area = layer_height * line_width. The resulting XY feedrate
+ * is then asserted against the K2 ceiling -- a 30 mm^3/s top-end at
+ * 0.2 x 0.4 mm extrusion is 375 mm/s, well under the 600 mm/s K2 ceiling.
+ *
+ * SAFETY AUDIT (CLAUDE.md "Safety Rule 1"):
+ *   - Every per-band XY feed run through assertFeedSafe('xy') -- the
+ *     builder THROWS at generation time if any computed feed exceeds
+ *     the K2 ceiling (e.g. someone bumps endFlow past 47 mm^3/s, the
+ *     resulting >600 mm/s XY rate is rejected here)
+ *   - Z, E feeds checked too
+ *   - Nozzle / bed via assertTempSafe (PLA defaults)
+ *   - filamentDensity is purely documentary -- it never enters the
+ *     feedrate math, so a misparameter cannot ship unsafe G-code
+ */
+export function buildMaxVolumetricFlowArgs(params: MaxVolumetricFlowParams): CalibrationBuildResult {
+  const startQ = params.startFlowMmCubePerSec ?? 5
+  const endQ = params.endFlowMmCubePerSec ?? 30
+  const stepQ = params.stepFlowMmCubePerSec ?? 2
+  const bandH = params.bandHeightMm ?? 5
+  const tubeDia = params.tubeDiameterMm ?? 30
+  const nozzle = params.nozzleTempC ?? 215
+  const bed = params.bedTempC ?? 60
+  const density = params.filamentDensity ?? 1.24
+  if (stepQ <= 0) throw new Error('Calibration generator: max-vol-flow step must be positive')
+  if (endQ < startQ) throw new Error('Calibration generator: max-vol-flow end < start')
+  if (startQ <= 0 || endQ > 60) {
+    // 60 mm^3/s is more than any commercial hot-end can sustain; well past
+    // anything sensible for a K2 with stock or high-flow hotend.
+    throw new Error('Calibration generator: max-vol-flow values out of safe range (0..60 mm^3/s)')
+  }
+  if (bandH <= 0 || bandH > 20) throw new Error('Calibration generator: band height out of safe range (1..20 mm)')
+  if (tubeDia < 15 || tubeDia > 80) throw new Error('Calibration generator: tube diameter out of safe range (15..80 mm)')
+  if (density <= 0 || density > 5) throw new Error('Calibration generator: filament density out of safe range (0..5 g/cm^3)')
+  assertTempSafe(nozzle, 'nozzle')
+  assertTempSafe(bed, 'bed')
+
+  const bands: number[] = []
+  for (let q = startQ; q <= endQ + 1e-9; q += stepQ) bands.push(Math.round(q * 10) / 10)
+  if (bands.length === 0 || bands.length > 40) {
+    throw new Error('Calibration generator: max-vol-flow sweep produced 0 or > 40 bands')
+  }
+
+  const cx = 175
+  const cy = 175
+  const radius = tubeDia / 2
+  const printAreaMinX = cx - radius - 4
+  const printAreaMinY = cy - radius - 4
+  const printAreaMaxX = cx + radius + 4
+  const printAreaMaxY = cy + radius + 4
+
+  const layerHeight = 0.2
+  const lineWidth = 0.4
+  const extrusionAreaMm2 = layerHeight * lineWidth // mm^2 per mm of travel
+  const travelFeedXy = 9000 // 150 mm/s
+  const zFeed = 600 // 10 mm/s
+  assertFeedSafe(travelFeedXy, 'xy')
+  assertFeedSafe(zFeed, 'z')
+
+  const filamentDia = 1.75
+  const filamentArea = Math.PI * (filamentDia / 2) ** 2
+  const ePerMm = extrusionAreaMm2 / filamentArea
+
+  // Approximate the circle as a regular polygon (60 sides @ 30 mm dia => ~1.5 mm chord)
+  const segments = Math.max(36, Math.min(120, Math.round(tubeDia * 2)))
+  function tubePoint(i: number): [number, number] {
+    const theta = (i / segments) * Math.PI * 2
+    return [cx + radius * Math.cos(theta), cy + radius * Math.sin(theta)]
+  }
+
+  const lines: string[] = [
+    ...headerComment(`Max volumetric flow ${fmtNum(startQ, 1)}-${fmtNum(endQ, 1)} mm^3/s, step ${fmtNum(stepQ, 1)}`),
+    `; ${bands.length} bands, ${bandH} mm tall each, tube OD ${tubeDia} mm`,
+    `; Filament: density ${fmtNum(density, 2)} g/cm^3 (documentary)`,
+    `; Operator: inspect the wall for the onset of under-extrusion;`,
+    `; pick the highest flow with a clean surface for filament_max_volumetric_speed.`,
+    '',
+    ...k2StartSequence({
+      nozzleTempC: nozzle,
+      bedTempC: bed,
+      printAreaMinX,
+      printAreaMinY,
+      printAreaMaxX,
+      printAreaMaxY
+    }),
+    ''
+  ]
+
+  let currentZ = layerHeight
+  let eAcc = 0
+  for (let b = 0; b < bands.length; b++) {
+    const Q = bands[b]!
+    // Compute the XY feedrate that achieves this volumetric flow at the
+    // current extrusion area. v_mmps = Q / area.
+    const vMmps = Q / extrusionAreaMm2
+    const fXyMmMin = vMmps * 60
+    // The wall MUST stay under the K2 XY ceiling. If it doesn't, the
+    // builder throws and CI catches it before shipping.
+    assertFeedSafe(fXyMmMin, 'xy')
+    // And the implied E-feedrate at that speed must stay under the E ceiling too.
+    const eFeedMmMin = vMmps * ePerMm * 60
+    if (eFeedMmMin > K2_PLUS_HARDWARE_CEILINGS.maxFeedrateEMmPerSec * 60) {
+      throw new Error(`Calibration generator: max-vol-flow band ${Q} mm^3/s requires E-feed ${fmtNum(eFeedMmMin, 1)} > K2 ceiling`)
+    }
+
+    lines.push(`; ── Band ${b + 1}/${bands.length}: Q = ${fmtNum(Q, 1)} mm^3/s (XY feed ${fmtNum(fXyMmMin, 0)} mm/min) ──`)
+    const layersInBand = Math.round(bandH / layerHeight)
+    for (let l = 0; l < layersInBand; l++) {
+      // Travel to seam start
+      const [sx, sy] = tubePoint(0)
+      lines.push(`G0 X${fmtNum(sx)} Y${fmtNum(sy)} Z${fmtNum(currentZ)} F${travelFeedXy}`)
+      // Trace the polygon as one Z-layer
+      for (let s = 1; s <= segments; s++) {
+        const [tx, ty] = tubePoint(s % segments)
+        const chord = Math.hypot(tx - sx, ty - sy)
+        eAcc += chord * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${fmtNum(fXyMmMin, 0)}`)
+      }
+      currentZ += layerHeight
+    }
+    lines.push('')
+  }
+
+  lines.push(`G0 Z${fmtNum(currentZ + 5)} F${zFeed}`)
+  lines.push(...k2EndSequence())
+
+  const gcode = lines.join('\n') + '\n'
+  const description =
+    `Max volumetric flow: ${bands.length} bands from ${fmtNum(startQ, 1)} to ${fmtNum(endQ, 1)} mm^3/s ` +
+    `(step ${fmtNum(stepQ, 1)}), ${tubeDia} mm tube, ${bandH} mm per band at ${nozzle} C.`
+
+  return {
+    args: [
+      'k2-plus-calibration',
+      '--test',
+      'max-volumetric-flow',
+      '--start-flow',
+      String(startQ),
+      '--end-flow',
+      String(endQ),
+      '--step-flow',
+      String(stepQ),
+      '--band-height',
+      String(bandH),
+      '--tube-diameter',
+      String(tubeDia),
+      '--nozzle-temp',
+      String(nozzle),
+      '--bed-temp',
+      String(bed),
+      '--filament-density',
+      String(density),
+      '--output',
+      params.outputGcodePath
+    ],
+    outputGcodePath: params.outputGcodePath,
+    description,
+    gcode
+  }
+}
+
+// ── 6. Tolerance / dimensional accuracy ───────────────────────────────────
+
+/**
+ * Build a tolerance (dimensional accuracy) calibration program.
+ *
+ * Prints a calibration cube of known edge length plus a row of peg +
+ * matching hole pairs at known clearances (e.g. +0.0, +0.1, +0.2, +0.3
+ * mm). Operator measures the cube dims with calipers (target = nominal)
+ * and slips each peg into its mating hole; the smallest clearance that
+ * still slip-fits is the printer's effective XY hole compensation.
+ *
+ * The cube is a 4-walled hollow box (no top/bottom skin -- the operator
+ * just needs the outer shell for caliper measurement). The peg + hole
+ * comb prints alongside the cube in the same Z-band so a single print
+ * yields all data.
+ *
+ * SAFETY AUDIT (CLAUDE.md "Safety Rule 1"):
+ *   - All XY feedrates fixed at 1800 mm/min (30 mm/s) -- well under K2 600 mm/s
+ *   - Z feed at 600 mm/min (10 mm/s) << 30 mm/s K2 ceiling
+ *   - assertFeedSafe / assertTempSafe applied
+ *   - Peg + hole counts bounded so no run-away pattern can flood the bed
+ */
+export function buildToleranceTestArgs(params: ToleranceTestParams): CalibrationBuildResult {
+  const cubeMm = params.cubeSizeMm ?? 20
+  const pegCount = params.pegHoleCount ?? 4
+  const holeBaseDia = params.holeBaseDiameterMm ?? 4.0
+  const clearanceStep = params.clearanceStepMm ?? 0.1
+  const nozzle = params.nozzleTempC ?? 215
+  const bed = params.bedTempC ?? 60
+  if (cubeMm < 10 || cubeMm > 60) throw new Error('Calibration generator: cube size out of safe range (10..60 mm)')
+  if (pegCount < 2 || pegCount > 8) throw new Error('Calibration generator: peg/hole count out of safe range (2..8)')
+  if (holeBaseDia < 2 || holeBaseDia > 10) {
+    throw new Error('Calibration generator: hole base diameter out of safe range (2..10 mm)')
+  }
+  if (clearanceStep <= 0 || clearanceStep > 0.5) {
+    throw new Error('Calibration generator: clearance step out of safe range (0..0.5 mm)')
+  }
+  assertTempSafe(nozzle, 'nozzle')
+  assertTempSafe(bed, 'bed')
+
+  const cubeHeight = Math.min(cubeMm, 10) // cap so the print stays short
+  const layerHeight = 0.2
+  const lineWidth = 0.4
+  const cubeWalls = 2 // double-wall for accurate caliper measurement
+  const pegHeight = Math.min(6, cubeHeight)
+  const pegPitch = holeBaseDia + 4 // mm center-to-center
+  const combLength = pegCount * pegPitch
+  // Cube on the left, peg/hole comb to the right
+  const cubeCx = 130
+  const cubeCy = 175
+  const halfCube = cubeMm / 2
+  const combStartX = 180
+  const combY = 175
+  const printAreaMinX = cubeCx - halfCube - 4
+  const printAreaMinY = combY - holeBaseDia - 4
+  const printAreaMaxX = combStartX + combLength + 4
+  const printAreaMaxY = combY + holeBaseDia + 4
+
+  const printFeedXy = 1800 // 30 mm/s
+  const travelFeedXy = 9000 // 150 mm/s
+  const zFeed = 600 // 10 mm/s
+  assertFeedSafe(printFeedXy, 'xy')
+  assertFeedSafe(travelFeedXy, 'xy')
+  assertFeedSafe(zFeed, 'z')
+
+  const filamentDia = 1.75
+  const filamentArea = Math.PI * (filamentDia / 2) ** 2
+  const ePerMm = (layerHeight * lineWidth) / filamentArea
+
+  const lines: string[] = [
+    ...headerComment(`Tolerance: ${cubeMm} mm cube + ${pegCount} peg/hole pairs`),
+    `; Cube: ${cubeMm} x ${cubeMm} x ${cubeHeight} mm, ${cubeWalls} walls; measure X/Y/Z with calipers.`,
+    `; Peg/hole comb: base diameter ${fmtNum(holeBaseDia, 2)} mm, +${fmtNum(clearanceStep, 2)} mm per pair (${pegCount} pairs)`,
+    `; Operator: slip each peg into its mating hole; smallest slip-fit clearance = your XY hole compensation.`,
+    '',
+    ...k2StartSequence({
+      nozzleTempC: nozzle,
+      bedTempC: bed,
+      printAreaMinX,
+      printAreaMinY,
+      printAreaMaxX,
+      printAreaMaxY
+    }),
+    ''
+  ]
+
+  function cubeCorners(wallOffset: number): [number, number][] {
+    const off = wallOffset * lineWidth
+    return [
+      [cubeCx - halfCube + off, cubeCy - halfCube + off],
+      [cubeCx + halfCube - off, cubeCy - halfCube + off],
+      [cubeCx + halfCube - off, cubeCy + halfCube - off],
+      [cubeCx - halfCube + off, cubeCy + halfCube - off]
+    ]
+  }
+
+  // ── Cube ───────────────────────────────────────────────────────────
+  const cubeLayers = Math.round(cubeHeight / layerHeight)
+  let z = layerHeight
+  let eAcc = 0
+  for (let l = 0; l < cubeLayers; l++) {
+    for (let w = 0; w < cubeWalls; w++) {
+      const corners = cubeCorners(w)
+      lines.push(`G0 X${fmtNum(corners[0]![0])} Y${fmtNum(corners[0]![1])} Z${fmtNum(z)} F${travelFeedXy}`)
+      const side = cubeMm - 2 * w * lineWidth
+      for (let c = 1; c <= 4; c++) {
+        const [tx, ty] = corners[c % 4]!
+        eAcc += side * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${printFeedXy}`)
+      }
+    }
+    z += layerHeight
+  }
+
+  // ── Peg + hole comb ────────────────────────────────────────────────
+  // Each pair: a solid peg (small concentric circle, infill-traced) and
+  // a hole-bearing block (a ring around the hole). We approximate
+  // circles as 24-side polygons for compact output.
+  const pegLayers = Math.round(pegHeight / layerHeight)
+  function ringPoints(centerX: number, centerY: number, dia: number, segments: number = 24): [number, number][] {
+    const r = dia / 2
+    const out: [number, number][] = []
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * Math.PI * 2
+      out.push([centerX + r * Math.cos(theta), centerY + r * Math.sin(theta)])
+    }
+    return out
+  }
+
+  let zPeg = layerHeight
+  for (let l = 0; l < pegLayers; l++) {
+    for (let p = 0; p < pegCount; p++) {
+      const clearance = p * clearanceStep
+      const pegDia = holeBaseDia
+      const holeDia = holeBaseDia + clearance
+      const holeBlockDia = holeBaseDia + 4 // outer wall of the hole's block
+      // Pegs along combY-3, hole blocks along combY+3 for separation
+      const pegX = combStartX + p * pegPitch
+      const holeX = combStartX + p * pegPitch
+      // Peg outline (single perimeter)
+      const pegRing = ringPoints(pegX, combY - 5, pegDia, 24)
+      lines.push(`G0 X${fmtNum(pegRing[0]![0])} Y${fmtNum(pegRing[0]![1])} Z${fmtNum(zPeg)} F${travelFeedXy}`)
+      for (let s = 1; s < pegRing.length; s++) {
+        const [tx, ty] = pegRing[s]!
+        const chord = Math.hypot(tx - pegRing[s - 1]![0], ty - pegRing[s - 1]![1])
+        eAcc += chord * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${printFeedXy}`)
+      }
+      // Hole-block: outer ring + inner ring (the hole)
+      const outerRing = ringPoints(holeX, combY + 5, holeBlockDia, 24)
+      const innerRing = ringPoints(holeX, combY + 5, holeDia, 24)
+      lines.push(`G0 X${fmtNum(outerRing[0]![0])} Y${fmtNum(outerRing[0]![1])} Z${fmtNum(zPeg)} F${travelFeedXy}`)
+      for (let s = 1; s < outerRing.length; s++) {
+        const [tx, ty] = outerRing[s]!
+        const chord = Math.hypot(tx - outerRing[s - 1]![0], ty - outerRing[s - 1]![1])
+        eAcc += chord * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${printFeedXy}`)
+      }
+      lines.push(`G0 X${fmtNum(innerRing[0]![0])} Y${fmtNum(innerRing[0]![1])} Z${fmtNum(zPeg)} F${travelFeedXy}`)
+      for (let s = 1; s < innerRing.length; s++) {
+        const [tx, ty] = innerRing[s]!
+        const chord = Math.hypot(tx - innerRing[s - 1]![0], ty - innerRing[s - 1]![1])
+        eAcc += chord * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${printFeedXy}`)
+      }
+    }
+    zPeg += layerHeight
+  }
+
+  lines.push(`G0 Z${fmtNum(Math.max(z, zPeg) + 5)} F${zFeed}`)
+  lines.push(...k2EndSequence())
+
+  const gcode = lines.join('\n') + '\n'
+  const description =
+    `Tolerance: ${cubeMm}x${cubeMm}x${cubeHeight} mm cube + ${pegCount} peg/hole pairs ` +
+    `(base ${fmtNum(holeBaseDia, 2)} mm, step ${fmtNum(clearanceStep, 2)} mm) at ${nozzle} C.`
+
+  return {
+    args: [
+      'k2-plus-calibration',
+      '--test',
+      'tolerance',
+      '--cube-size',
+      String(cubeMm),
+      '--peg-hole-count',
+      String(pegCount),
+      '--hole-base-diameter',
+      String(holeBaseDia),
+      '--clearance-step',
+      String(clearanceStep),
+      '--nozzle-temp',
+      String(nozzle),
+      '--bed-temp',
+      String(bed),
+      '--output',
+      params.outputGcodePath
+    ],
+    outputGcodePath: params.outputGcodePath,
+    description,
+    gcode
+  }
+}
+
+// ── 7. Cornering / SCV (square_corner_velocity) ──────────────────────────
+
+/**
+ * Build a Klipper square-corner-velocity (cornering / "jerk") test.
+ *
+ * Prints a square at multiple Z-bands, switching the Klipper
+ * `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=<mm/s>` setting between
+ * bands. Operator inspects the corners of each band for ghosting /
+ * ringing artifacts and picks the highest SCV where the corners stay
+ * clean. SCV is the K2 Plus's input-shaping headroom dial: higher = less
+ * acceleration penalty at corners, but risks ringing if pushed past the
+ * carriage's resonance budget.
+ *
+ * Default sweep: SCV 4 -> 9 mm/s in 1 mm/s steps. 9 mm/s is the K2
+ * ceiling per `K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec`. The print
+ * speed during the square trace defaults to 150 mm/s.
+ *
+ * SAFETY AUDIT (CLAUDE.md "Safety Rule 1"):
+ *   - All XY feedrates <= 9000 mm/min (150 mm/s) << 600 mm/s K2 ceiling
+ *   - Z feed <= 600 mm/min << 30 mm/s ceiling
+ *   - Every SCV value asserted <= K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec (9 mm/s)
+ *   - SCV is RESET to a safe default (5 mm/s, Klipper standard) on END
+ *     so the test does NOT pollute the operator's next job
+ *   - Nozzle / bed via assertTempSafe (PLA defaults)
+ */
+export function buildCorneringTestArgs(params: CorneringTestParams): CalibrationBuildResult {
+  const startScv = params.startScvMmPerSec ?? 4
+  const endScv = params.endScvMmPerSec ?? K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec
+  const stepScv = params.stepScvMmPerSec ?? 1
+  const bandH = params.bandHeightMm ?? 5
+  const squareMm = params.squareSizeMm ?? 40
+  const printSpeedMmPerSec = params.printSpeedMmPerSec ?? 150
+  const nozzle = params.nozzleTempC ?? 215
+  const bed = params.bedTempC ?? 60
+  if (stepScv <= 0) throw new Error('Calibration generator: cornering step must be positive')
+  if (endScv < startScv) throw new Error('Calibration generator: cornering end < start')
+  if (startScv <= 0 || endScv > K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec) {
+    throw new Error(`Calibration generator: SCV values out of safe range (0..${K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec} mm/s, K2 ceiling)`)
+  }
+  if (bandH <= 0 || bandH > 20) throw new Error('Calibration generator: band height out of safe range (1..20 mm)')
+  if (squareMm < 20 || squareMm > 100) throw new Error('Calibration generator: square size out of safe range (20..100 mm)')
+  if (printSpeedMmPerSec <= 0 || printSpeedMmPerSec > K2_PLUS_HARDWARE_CEILINGS.maxFeedrateXyMmPerSec) {
+    throw new Error(`Calibration generator: print speed out of safe range (0..${K2_PLUS_HARDWARE_CEILINGS.maxFeedrateXyMmPerSec} mm/s)`)
+  }
+  assertTempSafe(nozzle, 'nozzle')
+  assertTempSafe(bed, 'bed')
+
+  const bands: number[] = []
+  for (let v = startScv; v <= endScv + 1e-9; v += stepScv) bands.push(Math.round(v * 100) / 100)
+  if (bands.length === 0 || bands.length > 20) {
+    throw new Error('Calibration generator: cornering sweep produced 0 or > 20 bands')
+  }
+  // Defense-in-depth: every emitted band must be <= the K2 SCV ceiling.
+  for (const b of bands) {
+    if (b > K2_PLUS_HARDWARE_CEILINGS.maxJerkXyMmPerSec) {
+      throw new Error(`Calibration generator: SCV band ${b} mm/s exceeds K2 ceiling`)
+    }
+  }
+
+  const cx = 175
+  const cy = 175
+  const halfSquare = squareMm / 2
+  const printAreaMinX = cx - halfSquare - 4
+  const printAreaMinY = cy - halfSquare - 4
+  const printAreaMaxX = cx + halfSquare + 4
+  const printAreaMaxY = cy + halfSquare + 4
+
+  const layerHeight = 0.2
+  const lineWidth = 0.4
+  const printFeedXy = printSpeedMmPerSec * 60
+  const travelFeedXy = 9000 // 150 mm/s
+  const zFeed = 600 // 10 mm/s
+  assertFeedSafe(printFeedXy, 'xy')
+  assertFeedSafe(travelFeedXy, 'xy')
+  assertFeedSafe(zFeed, 'z')
+
+  const filamentDia = 1.75
+  const filamentArea = Math.PI * (filamentDia / 2) ** 2
+  const ePerMm = (layerHeight * lineWidth) / filamentArea
+
+  const lines: string[] = [
+    ...headerComment(`Cornering / SCV ${fmtNum(startScv, 1)}-${fmtNum(endScv, 1)} mm/s, step ${fmtNum(stepScv, 1)} mm/s`),
+    `; ${bands.length} bands, ${bandH} mm tall each, ${squareMm} mm square at ${printSpeedMmPerSec} mm/s`,
+    `; Klipper SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=<mm/s> issued per band`,
+    `; SCV reset to 5 mm/s (Klipper default) on END so this test does not pollute later jobs`,
+    `; Operator: inspect corners under raking light; pick the highest SCV with NO visible ghosting.`,
+    '',
+    ...k2StartSequence({
+      nozzleTempC: nozzle,
+      bedTempC: bed,
+      printAreaMinX,
+      printAreaMinY,
+      printAreaMaxX,
+      printAreaMaxY
+    }),
+    ''
+  ]
+
+  const corners: [number, number][] = [
+    [cx - halfSquare, cy - halfSquare],
+    [cx + halfSquare, cy - halfSquare],
+    [cx + halfSquare, cy + halfSquare],
+    [cx - halfSquare, cy + halfSquare]
+  ]
+
+  let currentZ = layerHeight
+  let eAcc = 0
+  for (let b = 0; b < bands.length; b++) {
+    const scv = bands[b]!
+    lines.push(`; ── Band ${b + 1}/${bands.length}: SCV = ${fmtNum(scv, 2)} mm/s ──`)
+    lines.push(`SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=${fmtNum(scv, 2)}`)
+    const layersInBand = Math.round(bandH / layerHeight)
+    for (let l = 0; l < layersInBand; l++) {
+      lines.push(`G0 X${fmtNum(corners[0]![0])} Y${fmtNum(corners[0]![1])} Z${fmtNum(currentZ)} F${travelFeedXy}`)
+      for (let c = 1; c <= 4; c++) {
+        const [tx, ty] = corners[c % 4]!
+        eAcc += squareMm * ePerMm
+        lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${fmtNum(printFeedXy, 0)}`)
+      }
+      currentZ += layerHeight
+    }
+    lines.push('')
+  }
+
+  // CRITICAL: reset SCV to Klipper standard (5 mm/s) so the operator's
+  // next print isn't running with whatever the last band set. This is
+  // the same "reset before END" pattern the PA test uses.
+  lines.push('SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=5.00')
+  lines.push(`G0 Z${fmtNum(currentZ + 5)} F${zFeed}`)
+  lines.push(...k2EndSequence())
+
+  const gcode = lines.join('\n') + '\n'
+  const description =
+    `Cornering: ${bands.length} bands from ${fmtNum(startScv, 1)} to ${fmtNum(endScv, 1)} mm/s ` +
+    `(step ${fmtNum(stepScv, 1)}), ${squareMm} mm square at ${printSpeedMmPerSec} mm/s.`
+
+  return {
+    args: [
+      'k2-plus-calibration',
+      '--test',
+      'cornering',
+      '--start-scv',
+      String(startScv),
+      '--end-scv',
+      String(endScv),
+      '--step-scv',
+      String(stepScv),
+      '--band-height',
+      String(bandH),
+      '--square-size',
+      String(squareMm),
+      '--print-speed',
+      String(printSpeedMmPerSec),
+      '--nozzle-temp',
+      String(nozzle),
+      '--bed-temp',
+      String(bed),
+      '--output',
+      params.outputGcodePath
+    ],
+    outputGcodePath: params.outputGcodePath,
+    description,
+    gcode
+  }
+}
+
+// ── 8. VFA (vertical fine artifacts) ──────────────────────────────────────
+
+/**
+ * Build a vertical-fine-artifacts (VFA) calibration program.
+ *
+ * Prints a tall single-walled tube at a modest constant speed. The
+ * operator inspects the wall for Z-banding, XY-belt resonance ripples,
+ * or microstep artifacts. Useful as a diagnostic when surface quality
+ * degrades after a belt swap, motor change, or firmware retune.
+ *
+ * Defaults: 30 mm OD tube, 50 mm tall, 60 mm/s wall speed. The single
+ * constant speed deliberately avoids any acceleration or speed change
+ * artifacts -- whatever shows on the wall is structural (mechanical or
+ * electrical), not toolpath-induced.
+ *
+ * SAFETY AUDIT (CLAUDE.md "Safety Rule 1"):
+ *   - XY feed = wallSpeed * 60, asserted <= K2 600 mm/s ceiling
+ *   - Z feed at 600 mm/min (10 mm/s) << 30 mm/s K2 ceiling
+ *   - assertFeedSafe / assertTempSafe applied
+ *   - Tube height capped at 100 mm; tube diameter at 80 mm; wall speed
+ *     at the K2 XY ceiling
+ */
+export function buildVfaTestArgs(params: VfaTestParams): CalibrationBuildResult {
+  const tubeDia = params.tubeDiameterMm ?? 30
+  const tubeH = params.tubeHeightMm ?? 50
+  const wallSpeedMmPerSec = params.wallSpeedMmPerSec ?? 60
+  const nozzle = params.nozzleTempC ?? 215
+  const bed = params.bedTempC ?? 60
+  if (tubeDia < 15 || tubeDia > 80) throw new Error('Calibration generator: tube diameter out of safe range (15..80 mm)')
+  if (tubeH < 20 || tubeH > 100) throw new Error('Calibration generator: tube height out of safe range (20..100 mm)')
+  if (wallSpeedMmPerSec <= 0 || wallSpeedMmPerSec > K2_PLUS_HARDWARE_CEILINGS.maxFeedrateXyMmPerSec) {
+    throw new Error(`Calibration generator: wall speed out of safe range (0..${K2_PLUS_HARDWARE_CEILINGS.maxFeedrateXyMmPerSec} mm/s)`)
+  }
+  assertTempSafe(nozzle, 'nozzle')
+  assertTempSafe(bed, 'bed')
+
+  const cx = 175
+  const cy = 175
+  const radius = tubeDia / 2
+  const printAreaMinX = cx - radius - 4
+  const printAreaMinY = cy - radius - 4
+  const printAreaMaxX = cx + radius + 4
+  const printAreaMaxY = cy + radius + 4
+
+  const layerHeight = 0.2
+  const lineWidth = 0.4
+  const printFeedXy = wallSpeedMmPerSec * 60
+  const travelFeedXy = 9000 // 150 mm/s
+  const zFeed = 600 // 10 mm/s
+  assertFeedSafe(printFeedXy, 'xy')
+  assertFeedSafe(travelFeedXy, 'xy')
+  assertFeedSafe(zFeed, 'z')
+
+  const filamentDia = 1.75
+  const filamentArea = Math.PI * (filamentDia / 2) ** 2
+  const ePerMm = (layerHeight * lineWidth) / filamentArea
+
+  // Approximate the tube as a regular polygon. Use enough segments that
+  // chord-length artifacts don't masquerade as VFA on the wall.
+  const segments = Math.max(60, Math.min(180, Math.round(tubeDia * 3)))
+  function tubePoint(i: number): [number, number] {
+    const theta = (i / segments) * Math.PI * 2
+    return [cx + radius * Math.cos(theta), cy + radius * Math.sin(theta)]
+  }
+
+  const lines: string[] = [
+    ...headerComment(`VFA tall tube: OD ${tubeDia} mm, ${tubeH} mm tall, ${wallSpeedMmPerSec} mm/s wall`),
+    `; Constant-speed single wall; any wall artifact is structural (mechanical / electrical), not toolpath.`,
+    `; Operator: inspect for Z-banding, belt resonance ripples, microstep artifacts.`,
+    '',
+    ...k2StartSequence({
+      nozzleTempC: nozzle,
+      bedTempC: bed,
+      printAreaMinX,
+      printAreaMinY,
+      printAreaMaxX,
+      printAreaMaxY
+    }),
+    ''
+  ]
+
+  const layers = Math.round(tubeH / layerHeight)
+  let z = layerHeight
+  let eAcc = 0
+  for (let l = 0; l < layers; l++) {
+    const [sx, sy] = tubePoint(0)
+    lines.push(`G0 X${fmtNum(sx)} Y${fmtNum(sy)} Z${fmtNum(z)} F${travelFeedXy}`)
+    let prev: [number, number] = [sx, sy]
+    for (let s = 1; s <= segments; s++) {
+      const [tx, ty] = tubePoint(s % segments)
+      const chord = Math.hypot(tx - prev[0], ty - prev[1])
+      eAcc += chord * ePerMm
+      lines.push(`G1 X${fmtNum(tx)} Y${fmtNum(ty)} E${fmtNum(eAcc, 4)} F${fmtNum(printFeedXy, 0)}`)
+      prev = [tx, ty]
+    }
+    z += layerHeight
+  }
+
+  lines.push(`G0 Z${fmtNum(z + 5)} F${zFeed}`)
+  lines.push(...k2EndSequence())
+
+  const gcode = lines.join('\n') + '\n'
+  const description =
+    `VFA tall tube: ${tubeDia} mm OD x ${tubeH} mm tall at ${wallSpeedMmPerSec} mm/s, ${nozzle} C.`
+
+  return {
+    args: [
+      'k2-plus-calibration',
+      '--test',
+      'vfa',
+      '--tube-diameter',
+      String(tubeDia),
+      '--tube-height',
+      String(tubeH),
+      '--wall-speed',
+      String(wallSpeedMmPerSec),
+      '--nozzle-temp',
+      String(nozzle),
+      '--bed-temp',
+      String(bed),
+      '--output',
+      params.outputGcodePath
+    ],
+    outputGcodePath: params.outputGcodePath,
+    description,
+    gcode
+  }
+}
+
 // ── Public dispatch types (for the IPC handler) ──────────────────────────
 
-export type CalibrationTestKind = 'temperature-tower' | 'flow-rate' | 'pressure-advance'
+export type CalibrationTestKind =
+  | 'temperature-tower'
+  | 'flow-rate'
+  | 'pressure-advance'
+  | 'retraction-tower'
+  | 'max-volumetric-flow'
+  | 'tolerance'
+  | 'cornering'
+  | 'vfa'
 
 export type CalibrationGeneratePayload =
   | { kind: 'temperature-tower'; params: TemperatureTowerParams }
   | { kind: 'flow-rate'; params: FlowRateParams }
   | { kind: 'pressure-advance'; params: PressureAdvanceParams }
+  | { kind: 'retraction-tower'; params: RetractionTowerParams }
+  | { kind: 'max-volumetric-flow'; params: MaxVolumetricFlowParams }
+  | { kind: 'tolerance'; params: ToleranceTestParams }
+  | { kind: 'cornering'; params: CorneringTestParams }
+  | { kind: 'vfa'; params: VfaTestParams }
 
 /**
  * Pure dispatcher: pick the right builder for the requested test kind.
@@ -701,6 +1712,16 @@ export function buildCalibrationGcode(payload: CalibrationGeneratePayload): Cali
       return buildFlowRateArgs(payload.params)
     case 'pressure-advance':
       return buildPressureAdvanceArgs(payload.params)
+    case 'retraction-tower':
+      return buildRetractionTowerArgs(payload.params)
+    case 'max-volumetric-flow':
+      return buildMaxVolumetricFlowArgs(payload.params)
+    case 'tolerance':
+      return buildToleranceTestArgs(payload.params)
+    case 'cornering':
+      return buildCorneringTestArgs(payload.params)
+    case 'vfa':
+      return buildVfaTestArgs(payload.params)
     default: {
       // Exhaustiveness check
       const _exhaustive: never = payload

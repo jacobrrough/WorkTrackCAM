@@ -89,13 +89,24 @@ describe('A. ipc-fabrication registers calibration:generate', () => {
     expect(handlerBody).toMatch(/mkdir\(dirname\(/)
   })
 
-  it('A6: handler covers all three calibration kinds', () => {
+  it('A6: handler covers all three v1 calibration kinds', () => {
     const start = IPC_SRC.search(/ipcMain\.handle\(\s*'calibration:generate'/)
     expect(start).toBeGreaterThan(-1)
     const handlerBody = IPC_SRC.slice(start)
     expect(handlerBody).toContain('temperature-tower')
     expect(handlerBody).toContain('flow-rate')
     expect(handlerBody).toContain('pressure-advance')
+  })
+
+  it('A7: handler covers the five Gap #4-ext calibration kinds', () => {
+    const start = IPC_SRC.search(/ipcMain\.handle\(\s*'calibration:generate'/)
+    expect(start).toBeGreaterThan(-1)
+    const handlerBody = IPC_SRC.slice(start)
+    expect(handlerBody).toContain('retraction-tower')
+    expect(handlerBody).toContain('max-volumetric-flow')
+    expect(handlerBody).toContain('tolerance')
+    expect(handlerBody).toContain('cornering')
+    expect(handlerBody).toContain('vfa')
   })
 })
 
@@ -112,10 +123,18 @@ describe('B. preload/index.ts wires calibrationGenerate', () => {
     )
   })
 
-  it('B3: preload type covers all three calibration kinds in the discriminated union', () => {
+  it('B3: preload type covers all three v1 calibration kinds in the discriminated union', () => {
     expect(PRELOAD_SRC).toContain("kind: 'temperature-tower'")
     expect(PRELOAD_SRC).toContain("kind: 'flow-rate'")
     expect(PRELOAD_SRC).toContain("kind: 'pressure-advance'")
+  })
+
+  it('B4: preload type covers the five Gap #4-ext calibration kinds', () => {
+    expect(PRELOAD_SRC).toContain("kind: 'retraction-tower'")
+    expect(PRELOAD_SRC).toContain("kind: 'max-volumetric-flow'")
+    expect(PRELOAD_SRC).toContain("kind: 'tolerance'")
+    expect(PRELOAD_SRC).toContain("kind: 'cornering'")
+    expect(PRELOAD_SRC).toContain("kind: 'vfa'")
   })
 })
 
@@ -126,10 +145,18 @@ describe('C. shop-types.ts declares calibrationGenerate on window.fab', () => {
     expect(SHOP_TYPES_SRC).toContain('calibrationGenerate: (payload')
   })
 
-  it('C2: window.fab calibrationGenerate covers all three kinds', () => {
+  it('C2: window.fab calibrationGenerate covers all three v1 kinds', () => {
     expect(SHOP_TYPES_SRC).toContain("kind: 'temperature-tower'")
     expect(SHOP_TYPES_SRC).toContain("kind: 'flow-rate'")
     expect(SHOP_TYPES_SRC).toContain("kind: 'pressure-advance'")
+  })
+
+  it('C3: window.fab calibrationGenerate covers the five Gap #4-ext kinds', () => {
+    expect(SHOP_TYPES_SRC).toContain("kind: 'retraction-tower'")
+    expect(SHOP_TYPES_SRC).toContain("kind: 'max-volumetric-flow'")
+    expect(SHOP_TYPES_SRC).toContain("kind: 'tolerance'")
+    expect(SHOP_TYPES_SRC).toContain("kind: 'cornering'")
+    expect(SHOP_TYPES_SRC).toContain("kind: 'vfa'")
   })
 })
 
@@ -163,10 +190,18 @@ describe('D. ManufactureWorkspace mounts the CalibrationPanel', () => {
     expect(PANEL_SRC).toContain('K2 Plus only')
   })
 
-  it('D6: CalibrationPanel calls window.fab.calibrationGenerate for all three kinds', () => {
+  it('D6: CalibrationPanel calls window.fab.calibrationGenerate for all three v1 kinds', () => {
     expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'temperature-tower'/)
     expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'flow-rate'/)
     expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'pressure-advance'/)
+  })
+
+  it('D6b: CalibrationPanel calls window.fab.calibrationGenerate for the five Gap #4-ext kinds', () => {
+    expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'retraction-tower'/)
+    expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'max-volumetric-flow'/)
+    expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'tolerance'/)
+    expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'cornering'/)
+    expect(PANEL_SRC).toMatch(/calibrationGenerate\(\{[\s\S]+kind:\s*'vfa'/)
   })
 
   it('D7: CalibrationPanel reuses moonrakerPush for "Send to K2 Plus"', () => {
