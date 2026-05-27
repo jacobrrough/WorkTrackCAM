@@ -18,7 +18,7 @@ import https from 'node:https'
 import { basename } from 'node:path'
 import { URL } from 'node:url'
 
-import type { FdmCapabilityFields } from '../shared/cura-slice-defaults'
+import type { FdmCapabilityFields } from '../shared/gcode-temp-validator'
 import { readGcodeHeaderText } from './gcode-header-read'
 import {
   summarizeTempViolations,

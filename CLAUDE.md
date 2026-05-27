@@ -124,11 +124,15 @@ npm run build         # Full production build
 ```
 
 ## Architecture Quick Reference
-- `src/main/` — Electron main process, IPC handlers, file I/O, sidecar bridge
+- `src/main/` — Electron main process, IPC handlers, file I/O
+- `src/main/sidecar/python-bridge.ts` — typed JSON-RPC client that spawns and talks to the Python sidecar
+- `src/main/slicer/orca-wrapper.ts` — OrcaSlicer CLI wrapper (`buildOrcaArgs` + `runOrcaSlice`)
 - `src/renderer/src/` — React UI components, CSS, Three.js viewport
 - `src/preload/` — Electron preload (IPC bridge)
 - `src/shared/` — Zod schemas, type definitions
-- `engines/cam/` — Python CAM sidecar: `ocl_toolpath.py` (OpenCAMLib waterline/raster/adaptive_waterline)
+- `src/shared/sidecar-protocol.ts` — wire types + `isSidecarResponse` guard (kept in sync with engines/sidecar/main.py)
+- `engines/sidecar/` — Python sidecar (JSON-RPC over stdin/stdout): `main.py` request loop, `cad_handlers.py` (CadQuery), `cam_handlers.py` (OpenCAMLib)
+- `engines/cam/ocl_toolpath.py` — standalone OpenCAMLib runner (still used by `src/main/cam-runner.ts`; migrates into the sidecar later)
 - `engines/mesh/`, `engines/occt/` — mesh + STEP I/O helpers (consolidating into CadQuery)
 - `engines/requirements.txt` — CadQuery + OpenCAMLib + numpy + trimesh
 - `resources/machines/` — Machine profiles (YAML/JSON) — Creality K2 Plus, Laguna Swift 5x10, Makera Carvera (3-axis + 4-axis)

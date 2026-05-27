@@ -24,8 +24,7 @@ import {
   generateCarveraZProbe
 } from '../shared/carvera-zeroing'
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
-import type { FdmCapabilityFields } from '../shared/cura-slice-defaults'
-import type { GcodeTempSample } from '../shared/gcode-temp-validator'
+import type { FdmCapabilityFields, GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
   deleteUserMachine,
   getMachineById,
@@ -37,7 +36,23 @@ import {
 } from './machines'
 import { loadMachineToolLibrary, saveMachineToolLibrary } from './machine-tool-library'
 import { getResourcesRoot } from './paths'
-import { sliceWithCuraEngine, stageStlForProject } from './slicer'
+// 2026-05-27 pivot: slicer.ts (CuraEngine) was deleted; OrcaSlicer wires in
+// under task #7. The slice:cura IPC handler was removed; stageStlForProject
+// is inlined below.
+import { copyFile, mkdir as mkdirFs } from 'node:fs/promises'
+
+/**
+ * Copy an STL into a project's assets/ directory. Inlined from the deleted
+ * slicer.ts. Returns the absolute destination path.
+ */
+async function stageStlForProject(projectDir: string, sourceStlPath: string): Promise<string> {
+  const assets = join(projectDir, 'assets')
+  await mkdirFs(assets, { recursive: true })
+  const base = sourceStlPath.split(/[/\\]/).pop() ?? 'model.stl'
+  const dest = join(assets, base)
+  await copyFile(sourceStlPath, dest)
+  return dest
+}
 import {
   inferToolRecordsFromFileBuffer,
   mergeToolLibraries,
@@ -242,44 +257,9 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     }
   )
 
-  ipcMain.handle(
-    'slice:cura',
-    async (
-      _e,
-      payload: {
-        stlPath: string
-        outPath: string
-        curaEnginePath: string
-        definitionsPath?: string
-        definitionPath?: string
-        slicePreset?: string | null
-        curaEngineSettings?: Record<string, string>
-        /** K2 Plus quality preset id. Roadmap: [P2-K2-SLICE]/Cycle 6. */
-        k2QualityPresetId?: 'standard' | 'high_speed'
-        filamentSettings?: {
-          nozzleTempC: number; bedTempC: number; chamberTempC?: number
-          fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
-          retractionMm?: number; retractionSpeedMmPerSec?: number
-        }
-      }
-    ) => {
-      // Validate executable path before spawning
-      if (!isPythonPathSafe(payload.curaEnginePath)) {
-        return { ok: false, stderr: 'Invalid CuraEngine path: contains shell metacharacters.' }
-      }
-      return sliceWithCuraEngine({
-        curaEnginePath: payload.curaEnginePath,
-        inputStlPath: payload.stlPath,
-        outputGcodePath: payload.outPath,
-        definitionPath: payload.definitionPath,
-        curaDefinitionsPath: payload.definitionsPath,
-        slicePreset: payload.slicePreset,
-        curaEngineSettings: payload.curaEngineSettings,
-        k2QualityPresetId: payload.k2QualityPresetId,
-        filamentSettings: payload.filamentSettings
-      })
-    }
-  )
+  // 2026-05-27 pivot: 'slice:cura' IPC handler removed alongside the
+  // CuraEngine bundle. The OrcaSlicer-backed 'slice:orca' handler lands
+  // under task #7 (Bundle OrcaSlicer CLI + wrapper for K2 Plus).
 
   ipcMain.handle(
     'cam:run',

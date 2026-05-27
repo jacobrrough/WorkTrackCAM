@@ -1,14 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
-  CURA_SLICE_PRESETS,
-  CURA_SLICE_PRESET_IDS,
-  mergeCuraSliceInvocationSettings,
-  parseCuraSliceProfilesJson,
-  resolveCuraSliceParams,
-  type CuraSlicePresetId
-} from '../../shared/cura-slice-defaults'
-import {
   K2_PLUS_QUALITY_PRESET_IDS,
   K2_PLUS_SLICE_PRESETS,
   type K2PlusQualityPresetId
@@ -97,264 +89,23 @@ export type ManufactureAuxPanelsProps = {
   lastSliceGcodePath?: string | null
 }
 
-export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
-  const readiness = evaluateManufactureReadiness({
-    project: p.project,
-    settings: p.settings,
-    machines: p.machines,
-    manufacture: p.manufacture
-  })
-  const preset = (p.settings?.curaSlicePreset ?? 'balanced') as CuraSlicePresetId
-  const active = resolveCuraSliceParams(preset)
-  const namedProfiles = parseCuraSliceProfilesJson(p.settings?.curaSliceProfilesJson)
-  const mergedMap = mergeCuraSliceInvocationSettings(p.settings ?? null)
-  const mergedPreview = [...mergedMap.entries()]
-    .map(([k, v]) => `${k}=${v}`)
-    .sort()
-    .slice(0, 24)
-    .join(', ')
-  const activeProfileId = p.settings?.curaActiveSliceProfileId ?? ''
-  // Phase 2 [P2-K2-SLICE]/Cycle 6: K2 Plus quality preset picker is
-  // only meaningful when the active machine is a K2 Plus (an FDM
-  // printer in the three-machine cohort). Other machines hide the
-  // selector entirely.
-  const isFdm = p.activeMachine?.kind === 'fdm'
-  const isK2Plus = isFdm
-  const k2QualityPresetId: K2PlusQualityPresetId =
-    p.settings?.k2QualityPresetId ?? 'standard'
-
-  const [filaments, setFilaments] = useState<FilamentRecord[]>([])
-  useEffect(() => {
-    if (!isFdm) return
-    window.fab.filamentsList().then(setFilaments).catch(() => {})
-  }, [isFdm])
-
-  // Phase 2 [P2-K2-PUSH]/Cycle 349: K2 Plus "Send to Printer" surface.
-  // Uploads the most recent sliced G-code at `p.lastSliceGcodePath`
-  // to the printer at `settings.moonrakerUrl` via the existing
-  // `moonraker:push` IPC. Status messages flow through `p.onStatus`
-  // (the same channel the Carvera upload uses), and the busy state
-  // disables the button so a double-click cannot launch two uploads.
-  const moonrakerUrl = p.settings?.moonrakerUrl?.trim() ?? ''
-  const sendCandidatePath = p.lastSliceGcodePath?.trim() ?? ''
-  const canSendToK2 =
-    isK2Plus && sendCandidatePath.length > 0 && moonrakerUrl.length > 0
-  const [k2SendBusy, setK2SendBusy] = useState(false)
-  async function sendToK2Plus(): Promise<void> {
-    if (!canSendToK2 || k2SendBusy) return
-    setK2SendBusy(true)
-    try {
-      const payload = buildMoonrakerPushPayload(
-        {
-          gcodeOut: sendCandidatePath,
-          printerUrl: moonrakerUrl,
-          machineId: p.activeMachine?.id ?? null
-        },
-        { startAfterUpload: true }
-      )
-      p.onStatus?.('Uploading to K2 Plus…')
-      const r = await window.fab.moonrakerPush(payload)
-      if (r.ok) {
-        p.onStatus?.(
-          `Started on K2 Plus: ${r.filename ?? sendCandidatePath.split(/[\\/]/).pop()}`
-        )
-      } else {
-        p.onStatus?.(formatMoonrakerPushFailure(r))
-      }
-    } catch (e) {
-      p.onStatus?.(e instanceof Error ? e.message : String(e))
-    } finally {
-      setK2SendBusy(false)
-    }
-  }
-
+export function SliceManufacturePanel(_p: ManufactureAuxPanelsProps): ReactNode {
+  // 2026-05-27 pivot: CuraEngine-based slice panel was deleted. The OrcaSlicer
+  // replacement (Orca presets, K2 Plus filament picker, Send-to-K2 Moonraker
+  // push wiring) lands under task #9 — Migrate React UI to new IPC surface.
   return (
     <section className="panel workspace-util-panel" aria-labelledby="mfg-slice-heading">
-      <h2 id="mfg-slice-heading">FDM slice (K2 Plus profile)</h2>
+      <h2 id="mfg-slice-heading">FDM slice (K2 Plus)</h2>
       <p className="msg util-panel-intro">
-        Uses CuraEngine with the bundled <code>resources/slicer/creality_k2_plus.def.json</code>. Pick a{' '}
-        <strong>filament</strong> and <strong>quality preset</strong> below. Temperature and fan settings are applied
-        from the selected filament material.
+        OrcaSlicer integration in progress. The K2 Plus FDM pipeline (slice
+        presets, filament picker, Moonraker push) is being rewired on top of
+        the bundled OrcaSlicer CLI; this panel returns when the new IPC
+        surface lands.
       </p>
-
-      {isFdm && filaments.length > 0 && (
-        <FilamentPicker
-          filaments={filaments}
-          activeFilamentId={p.settings?.activeFilamentId}
-          onSelect={(id) => void p.onSaveSettingsField({ activeFilamentId: id })}
-          machineMaxNozzleTempC={p.activeMachine?.maxNozzleTempC}
-          machineMaxBedTempC={p.activeMachine?.maxBedTempC}
-        />
-      )}
-
-      <div className="row">
-        <label htmlFor="mfg-slice-preset">
-          Slice preset
-          <select
-            id="mfg-slice-preset"
-            value={preset}
-            onChange={(e) => void p.onSaveSettingsField({ curaSlicePreset: e.target.value as CuraSlicePresetId })}
-          >
-            {CURA_SLICE_PRESET_IDS.map((id) => (
-              <option key={id} value={id}>
-                {id}
-                {id === 'balanced' ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label htmlFor="mfg-slice-named-profile">
-          Named profile
-          <select
-            id="mfg-slice-named-profile"
-            value={activeProfileId}
-            onChange={(e) =>
-              void p.onSaveSettingsField({
-                curaActiveSliceProfileId: e.target.value.trim() ? e.target.value : undefined
-              })
-            }
-          >
-            <option value="">— none —</option>
-            {namedProfiles.map((pr) => (
-              <option key={pr.id} value={pr.id}>
-                {pr.label} ({pr.id})
-              </option>
-            ))}
-          </select>
-        </label>
-        {isK2Plus ? (
-          <label htmlFor="mfg-k2-quality-preset" data-testid="k2-quality-preset-picker">
-            K2 Plus quality preset
-            <select
-              id="mfg-k2-quality-preset"
-              value={k2QualityPresetId}
-              onChange={(e) =>
-                void p.onSaveSettingsField({
-                  k2QualityPresetId: e.target.value as K2PlusQualityPresetId
-                })
-              }
-            >
-              {K2_PLUS_QUALITY_PRESET_IDS.map((id) => (
-                <option key={id} value={id}>
-                  {K2_PLUS_SLICE_PRESETS[id].label}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <p className="msg msg-row-flex">
-          Base preset (when no profile): layer <strong>{active.layerHeightMm}</strong> mm, line{' '}
-          <strong>{active.lineWidthMm}</strong> mm, <strong>{active.wallLineCount}</strong> walls,{' '}
-          <strong>{active.infillSparseDensity}%</strong> sparse infill. Raw bundles:{' '}
-          <code>{JSON.stringify(CURA_SLICE_PRESETS.balanced)}</code> (balanced),{' '}
-          <code>{JSON.stringify(CURA_SLICE_PRESETS.draft)}</code> (draft),{' '}
-          <code>{JSON.stringify(CURA_SLICE_PRESETS.fine)}</code> (fine).
-        </p>
-      </div>
-      <p className="msg util-panel-intro">
-        <strong>Effective CuraEngine `-s` preview</strong> (first keys, sorted):{' '}
-        <code className="code-break-all">{mergedPreview || '(preset only)'}</code>
-        {mergedMap.size > 24 ? ` … +${mergedMap.size - 24} more` : null}
-      </p>
-      <p className="msg">
-        G-code is <strong>unverified</strong> for your printer until you confirm profiles, temperatures, and limits —{' '}
-        see <code>docs/MACHINES.md</code>.
-      </p>
-      <h3 className="subh util-section-heading" id="mfg-slice-run-heading">
-        Run slice
-      </h3>
-      <button type="button" className="primary" onClick={() => void p.onRunSlice()} aria-describedby="mfg-slice-run-heading">
-        Slice STL…
-      </button>
-      {!readiness.canSlice ? (
-        <div className="msg manufacture-op-hint">
-          <p>{readiness.issues.find((i) => i.id === 'settings_cura_missing')?.message ?? 'Slice preflight not ready.'}</p>
-          <div className="row">
-            <button type="button" className="secondary" onClick={() => p.onGoSettings()}>
-              Open Settings
-            </button>
-            <button type="button" className="secondary" onClick={() => p.onGoProject()}>
-              Open Project tab
-            </button>
-          </div>
-        </div>
-      ) : null}
-      {!p.sliceOut?.trim() ? (
-        <p className="msg util-output-placeholder" role="status">
-          No Cura output yet. Add an STL on the <strong>File → Project</strong> tab, then run <strong>Slice STL…</strong>.
-        </p>
-      ) : null}
-      {p.sliceOut?.trim() ? (
-        <>
-          <h3 className="subh util-section-heading" id="mfg-slice-output-heading">
-            Output
-          </h3>
-          {(() => {
-            const fdmLayerSummary = summarizeFdmGcodeLayers(p.sliceOut ?? '')
-            const line = formatFdmLayerSummaryHuman(fdmLayerSummary)
-            return line ? (
-              <p className="msg util-panel-intro" role="status">
-                {line}
-              </p>
-            ) : null
-          })()}
-          <p className="sr-only" role="status" aria-live="polite">
-            Slice output updated, showing {countVisibleLines(p.sliceOut.slice(0, SLICE_PREVIEW))} lines.
-          </p>
-          <pre className="code" tabIndex={0} aria-labelledby="mfg-slice-output-heading">
-            {p.sliceOut.slice(0, SLICE_PREVIEW)}
-            {p.sliceOut.length > SLICE_PREVIEW ? '\n…' : ''}
-          </pre>
-        </>
-      ) : null}
-      {isK2Plus ? (
-        <section
-          className="util-k2-send"
-          data-testid="k2-send-to-printer-section"
-          aria-labelledby="mfg-k2-send-heading"
-        >
-          <h3 className="subh util-section-heading" id="mfg-k2-send-heading">
-            Send to K2 Plus
-          </h3>
-          <p className="msg util-panel-intro">
-            Uploads the most recent sliced <code>.gcode</code> to the printer's Moonraker API and starts the print.
-            Configure <strong>File → Settings → moonrakerUrl</strong> (e.g. <code>http://k2plus.local</code> or
-            <code>http://192.168.1.50:7125</code>).
-          </p>
-          <button
-            type="button"
-            className="primary"
-            data-testid="k2-send-to-printer-button"
-            disabled={!canSendToK2 || k2SendBusy}
-            onClick={() => void sendToK2Plus()}
-            title={
-              !isK2Plus
-                ? 'Active machine is not a K2 Plus FDM printer'
-                : sendCandidatePath.length === 0
-                  ? 'Run Slice STL… first to produce a .gcode file'
-                  : moonrakerUrl.length === 0
-                    ? 'Set moonrakerUrl in File → Settings'
-                    : k2SendBusy
-                      ? 'Upload in progress'
-                      : 'Upload sliced G-code to the K2 Plus and start the print'
-            }
-          >
-            {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
-          </button>
-          {!canSendToK2 ? (
-            <p className="msg msg--muted util-panel-intro" role="status">
-              {sendCandidatePath.length === 0
-                ? 'Slice an FDM operation to enable Send.'
-                : moonrakerUrl.length === 0
-                  ? 'Add a Moonraker URL in File → Settings to enable Send.'
-                  : 'Send is unavailable.'}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
     </section>
   )
 }
+
 
 export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   const readiness = evaluateManufactureReadiness({
