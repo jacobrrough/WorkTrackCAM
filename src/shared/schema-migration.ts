@@ -180,20 +180,41 @@ export function buildMigrationPipeline<TLatest>(
 // ─── Concrete migration helpers for WorkTrackCAM schemas ──────────────────
 
 /**
- * Manufacture file v1 -> v2 migration template.
- * Activating this requires:
- * 1. Define ManufactureFileV2 schema
- * 2. Widen manufactureFileSchema to accept version: 1 | 2
- * 3. Wire into parseManufactureFile()
+ * Manufacture file v1 -> v2 migration (Gap #7 v1: multi-plate / multi-job project).
  *
- * This exported function demonstrates the pattern and is used in tests.
+ * v1 shape: `{ version: 1, setups, operations }` — single-plate.
+ * v2 shape: `{ version: 2, setups, operations, plates: Plate[] }` — plates carry
+ *            per-plate Setup + Op bundles. The legacy top-level `setups` and
+ *            `operations` are cleared to empty arrays and the original content
+ *            is moved into a single `Default plate` at `plates[0]`.
+ *
+ * This guarantees existing saved projects open seamlessly — the user sees one
+ * "Default plate" tab containing everything they had before, and can then add
+ * more plates via the `+` button in the new `PlateTabs` strip.
+ *
+ * Wired into `manufactureMigrationPipeline` in `src/main/ipc-fabrication.ts`.
  */
 export function migrateManufactureV1toV2(
   v1: { version: 1; setups: unknown[]; operations: unknown[] }
-): { version: 2; setups: unknown[]; operations: unknown[]; migratedAt: string } {
+): {
+  version: 2
+  setups: unknown[]
+  operations: unknown[]
+  plates: { id: string; label: string; setups: unknown[]; operations: unknown[] }[]
+  migratedAt: string
+} {
   return {
-    ...v1,
     version: 2,
+    setups: [],
+    operations: [],
+    plates: [
+      {
+        id: 'plate-default',
+        label: 'Default plate',
+        setups: v1.setups,
+        operations: v1.operations
+      }
+    ],
     // v2 adds a migratedAt timestamp for audit trail
     migratedAt: new Date().toISOString()
   }

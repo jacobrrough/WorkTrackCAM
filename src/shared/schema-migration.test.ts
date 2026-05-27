@@ -113,21 +113,31 @@ describe('buildMigrationPipeline', () => {
 })
 
 describe('migrateManufactureV1toV2', () => {
-  it('bumps version to 2 and adds migratedAt', () => {
+  it('bumps version to 2, wraps legacy setups+ops into a Default plate, and adds migratedAt', () => {
     const v1 = { version: 1 as const, setups: [{ id: 's1' }], operations: [{ id: 'op1' }] }
     const v2 = migrateManufactureV1toV2(v1)
     expect(v2.version).toBe(2)
-    expect(v2.setups).toEqual([{ id: 's1' }])
-    expect(v2.operations).toEqual([{ id: 'op1' }])
+    // Top-level setups/operations cleared (kept as empty arrays for back-compat)
+    expect(v2.setups).toEqual([])
+    expect(v2.operations).toEqual([])
+    // Legacy content moved into plates[0]
+    expect(v2.plates).toHaveLength(1)
+    expect(v2.plates[0]!.id).toBe('plate-default')
+    expect(v2.plates[0]!.label).toBe('Default plate')
+    expect(v2.plates[0]!.setups).toEqual([{ id: 's1' }])
+    expect(v2.plates[0]!.operations).toEqual([{ id: 'op1' }])
     expect(v2.migratedAt).toBeDefined()
     expect(() => new Date(v2.migratedAt).toISOString()).not.toThrow()
   })
 
-  it('preserves all v1 data', () => {
+  it('preserves all v1 data (empty in, single empty default plate out)', () => {
     const v1 = { version: 1 as const, setups: [], operations: [] }
     const v2 = migrateManufactureV1toV2(v1)
     expect(v2.setups).toEqual([])
     expect(v2.operations).toEqual([])
+    expect(v2.plates).toHaveLength(1)
+    expect(v2.plates[0]!.setups).toEqual([])
+    expect(v2.plates[0]!.operations).toEqual([])
   })
 })
 

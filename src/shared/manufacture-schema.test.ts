@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  createDefaultPlate,
+  DEFAULT_PLATE_ID,
+  emptyManufacture,
   isManufactureCncOperationKind,
   jsonSafeValueSchema,
   manufactureFileSchema,
   manufactureOperationSchema,
   parseManufactureFile,
+  plateSchema,
   stockSchema,
+  upgradeManufactureV1toV2,
   type ManufactureOperationKind
 } from './manufacture-schema'
 
@@ -309,7 +314,9 @@ describe('5-axis operation kinds', () => {
 })
 
 describe('parseManufactureFile', () => {
-  it('parses valid v1 data', () => {
+  it('parses valid v1 data (migrated to v2 with one Default plate)', () => {
+    // Gap #7 v1: parseManufactureFile now auto-migrates v1 inputs to v2 by
+    // wrapping the legacy top-level setups + operations into plates[0].
     const result = parseManufactureFile({
       version: 1,
       setups: [{ id: 's1', label: 'Setup 1', machineId: 'mill-1' }],
@@ -318,12 +325,17 @@ describe('parseManufactureFile', () => {
         { id: 'op2', kind: 'cnc_contour', label: 'Finish contour' }
       ]
     })
-    expect(result.version).toBe(1)
-    expect(result.setups).toHaveLength(1)
-    expect(result.operations).toHaveLength(2)
-    expect(result.setups[0]!.id).toBe('s1')
-    expect(result.operations[0]!.kind).toBe('cnc_parallel')
-    expect(result.operations[1]!.kind).toBe('cnc_contour')
+    expect(result.version).toBe(2)
+    expect(result.plates).toHaveLength(1)
+    expect(result.plates![0]!.label).toBe('Default plate')
+    expect(result.plates![0]!.setups).toHaveLength(1)
+    expect(result.plates![0]!.operations).toHaveLength(2)
+    expect(result.plates![0]!.setups[0]!.id).toBe('s1')
+    expect(result.plates![0]!.operations[0]!.kind).toBe('cnc_parallel')
+    expect(result.plates![0]!.operations[1]!.kind).toBe('cnc_contour')
+    // Top-level cleared on migration (back-compat fields)
+    expect(result.setups).toEqual([])
+    expect(result.operations).toEqual([])
   })
 
   it('rejects invalid data (missing required fields)', () => {
@@ -392,10 +404,11 @@ describe('parseManufactureFile', () => {
       setups: [],
       operations: allKinds.map((kind, i) => ({ id: `op${i}`, kind, label: `Op ${kind}` }))
     })
-    expect(result.operations.map((o) => o.kind)).toEqual(allKinds)
+    // Gap #7 v1: v1 inputs migrate to v2 with operations under plates[0]
+    expect(result.plates![0]!.operations.map((o) => o.kind)).toEqual(allKinds)
   })
 
-  it('handles extra unknown fields gracefully (strips them)', () => {
+  it('handles extra unknown fields gracefully (strips them, then migrates to v2)', () => {
     const result = parseManufactureFile({
       version: 1,
       setups: [
@@ -416,12 +429,14 @@ describe('parseManufactureFile', () => {
       ],
       extraTopLevel: true
     })
-    expect(result.version).toBe(1)
-    expect(result.setups).toHaveLength(1)
-    expect(result.operations).toHaveLength(1)
+    // Gap #7 v1: v1 inputs migrate to v2; the migrated content lives in plates[0]
+    expect(result.version).toBe(2)
+    expect(result.plates).toHaveLength(1)
+    expect(result.plates![0]!.setups).toHaveLength(1)
+    expect(result.plates![0]!.operations).toHaveLength(1)
     // Unknown fields should be stripped by Zod's default behavior
-    expect('unknownFieldOnSetup' in result.setups[0]!).toBe(false)
-    expect('unknownFieldOnOp' in result.operations[0]!).toBe(false)
+    expect('unknownFieldOnSetup' in result.plates![0]!.setups[0]!).toBe(false)
+    expect('unknownFieldOnOp' in result.plates![0]!.operations[0]!).toBe(false)
     expect('extraTopLevel' in result).toBe(false)
   })
 })
@@ -594,5 +609,204 @@ describe('schema .describe() introspection', () => {
     const kindField = manufactureOperationSchema.shape.kind
     expect(kindField.description).toBeDefined()
     expect(kindField.description).toContain('strategy')
+  })
+})
+
+// --- Gap #7 v1: multi-plate / multi-job project ---
+
+describe('plateSchema (Gap #7 v1)', () => {
+  it('parses a minimal plate (id + label only -- setups/operations default to [])', () => {
+    const p = plateSchema.parse({ id: 'p1', label: 'My plate' })
+    expect(p.id).toBe('p1')
+    expect(p.label).toBe('My plate')
+    expect(p.setups).toEqual([])
+    expect(p.operations).toEqual([])
+  })
+
+  it('parses a plate with setups + operations', () => {
+    const p = plateSchema.parse({
+      id: 'p1',
+      label: 'K2 calib 1',
+      setups: [{ id: 's1', label: 'S1', machineId: 'creality-k2-plus' }],
+      operations: [{ id: 'op1', kind: 'fdm_slice', label: 'Slice' }]
+    })
+    expect(p.setups).toHaveLength(1)
+    expect(p.operations).toHaveLength(1)
+  })
+
+  it('trims id and label, rejects empty', () => {
+    const p = plateSchema.parse({ id: '  p1  ', label: '  Plate  ' })
+    expect(p.id).toBe('p1')
+    expect(p.label).toBe('Plate')
+    expect(() => plateSchema.parse({ id: '', label: 'L' })).toThrow()
+    expect(() => plateSchema.parse({ id: 'p1', label: '   ' })).toThrow()
+  })
+
+  it('accepts optional createdAt timestamp', () => {
+    const ts = '2026-05-27T12:00:00.000Z'
+    const p = plateSchema.parse({ id: 'p1', label: 'P', createdAt: ts })
+    expect(p.createdAt).toBe(ts)
+  })
+})
+
+describe('manufactureFileSchema v2 plates field (Gap #7 v1)', () => {
+  it('parses a v2 file with one plate', () => {
+    const m = manufactureFileSchema.parse({
+      version: 2,
+      setups: [],
+      operations: [],
+      plates: [
+        {
+          id: 'plate-default',
+          label: 'Default plate',
+          setups: [{ id: 's1', label: 'S1', machineId: 'creality-k2-plus' }],
+          operations: [{ id: 'op1', kind: 'fdm_slice', label: 'Slice K2' }]
+        }
+      ]
+    })
+    expect(m.version).toBe(2)
+    expect(m.plates).toBeDefined()
+    expect(m.plates).toHaveLength(1)
+    expect(m.plates![0]!.id).toBe('plate-default')
+    expect(m.plates![0]!.setups).toHaveLength(1)
+    expect(m.plates![0]!.operations).toHaveLength(1)
+  })
+
+  it('parses a v2 file with multiple plates (calibration batch)', () => {
+    const m = manufactureFileSchema.parse({
+      version: 2,
+      setups: [],
+      operations: [],
+      plates: Array.from({ length: 5 }, (_, i) => ({
+        id: `plate-${i}`,
+        label: `Calib ${i + 1}`,
+        setups: [],
+        operations: []
+      }))
+    })
+    expect(m.plates).toHaveLength(5)
+  })
+
+  it('parses a v2 file WITHOUT plates (optional -- schema additivity)', () => {
+    // Additivity: a v2 file with only top-level setups/operations and no
+    // plates array must parse so existing savers (pre-plate UI) still work.
+    const m = manufactureFileSchema.parse({ version: 2, setups: [], operations: [] })
+    expect(m.version).toBe(2)
+    expect(m.plates).toBeUndefined()
+  })
+
+  it('still parses a legacy v1 file unchanged (no plates field, no migration here)', () => {
+    // Additivity: the v1 shape is still accepted at the raw schema level --
+    // callers that do not go through parseManufactureFile keep working.
+    const m = manufactureFileSchema.parse({
+      version: 1,
+      setups: [{ id: 's1', label: 'S1', machineId: 'mill-1' }],
+      operations: [{ id: 'op1', kind: 'cnc_parallel', label: 'Op' }]
+    })
+    expect(m.version).toBe(1)
+    expect(m.plates).toBeUndefined()
+  })
+})
+
+describe('createDefaultPlate / DEFAULT_PLATE_ID (Gap #7 v1)', () => {
+  it('emits a stable default plate id', () => {
+    expect(DEFAULT_PLATE_ID).toBe('plate-default')
+    const p = createDefaultPlate()
+    expect(p.id).toBe(DEFAULT_PLATE_ID)
+    expect(p.label).toBe('Default plate')
+    expect(p.setups).toEqual([])
+    expect(p.operations).toEqual([])
+  })
+})
+
+describe('emptyManufacture v2 default (Gap #7 v1)', () => {
+  it('returns a v2 file with exactly one default plate', () => {
+    const m = emptyManufacture()
+    expect(m.version).toBe(2)
+    expect(m.setups).toEqual([])
+    expect(m.operations).toEqual([])
+    expect(m.plates).toHaveLength(1)
+    expect(m.plates![0]!.id).toBe(DEFAULT_PLATE_ID)
+    expect(m.plates![0]!.label).toBe('Default plate')
+  })
+
+  it('round-trips through manufactureFileSchema.parse', () => {
+    const m = emptyManufacture()
+    const reparsed = manufactureFileSchema.parse(JSON.parse(JSON.stringify(m)))
+    expect(reparsed.version).toBe(2)
+    expect(reparsed.plates).toHaveLength(1)
+  })
+})
+
+describe('parseManufactureFile v1 -> v2 inline migration (Gap #7 v1)', () => {
+  it('migrates a v1 file with legacy setups+operations into plates[0]', () => {
+    const v1Payload = {
+      version: 1,
+      setups: [{ id: 's1', label: 'S1', machineId: 'creality-k2-plus' }],
+      operations: [{ id: 'op1', kind: 'fdm_slice', label: 'Slice' }]
+    }
+    const result = parseManufactureFile(v1Payload)
+    expect(result.version).toBe(2)
+    // Legacy content lives in plates[0]
+    expect(result.plates).toHaveLength(1)
+    expect(result.plates![0]!.label).toBe('Default plate')
+    expect(result.plates![0]!.setups).toHaveLength(1)
+    expect(result.plates![0]!.setups[0]!.id).toBe('s1')
+    expect(result.plates![0]!.operations).toHaveLength(1)
+    expect(result.plates![0]!.operations[0]!.kind).toBe('fdm_slice')
+    // Top-level cleared
+    expect(result.setups).toEqual([])
+    expect(result.operations).toEqual([])
+  })
+
+  it('passes a v2 file through unchanged', () => {
+    const v2Payload = {
+      version: 2 as const,
+      setups: [],
+      operations: [],
+      plates: [
+        {
+          id: 'plate-a',
+          label: 'A',
+          setups: [{ id: 's-a', label: 'S A', machineId: 'laguna-swift-5x10' }],
+          operations: [{ id: 'op-a', kind: 'cnc_contour', label: 'Outline' }]
+        }
+      ]
+    }
+    const result = parseManufactureFile(v2Payload)
+    expect(result.version).toBe(2)
+    expect(result.plates).toHaveLength(1)
+    expect(result.plates![0]!.id).toBe('plate-a')
+    expect(result.plates![0]!.setups[0]!.machineId).toBe('laguna-swift-5x10')
+  })
+
+  it('migrates an empty v1 file into a single empty default plate', () => {
+    const result = parseManufactureFile({ version: 1, setups: [], operations: [] })
+    expect(result.version).toBe(2)
+    expect(result.plates).toHaveLength(1)
+    expect(result.plates![0]!.id).toBe('plate-default')
+    expect(result.plates![0]!.setups).toEqual([])
+    expect(result.plates![0]!.operations).toEqual([])
+  })
+})
+
+describe('upgradeManufactureV1toV2 (Gap #7 v1)', () => {
+  it('produces the same v2 shape as parseManufactureFile for v1 input', () => {
+    const v1 = manufactureFileSchema.parse({
+      version: 1,
+      setups: [{ id: 's1', label: 'S1', machineId: 'm1' }],
+      operations: [{ id: 'op1', kind: 'cnc_parallel', label: 'O1' }]
+    })
+    const v2 = upgradeManufactureV1toV2(v1)
+    expect(v2.version).toBe(2)
+    expect(v2.plates).toHaveLength(1)
+    expect(v2.plates![0]!.setups).toHaveLength(1)
+    expect(v2.plates![0]!.operations).toHaveLength(1)
+  })
+
+  it('is identity for an already-v2 file', () => {
+    const v2 = emptyManufacture()
+    const result = upgradeManufactureV1toV2(v2)
+    expect(result).toBe(v2)
   })
 })

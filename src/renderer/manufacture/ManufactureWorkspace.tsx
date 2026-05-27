@@ -27,6 +27,16 @@ import { CalibrationPanel } from './CalibrationPanel'
 import { ManufactureSetupStrip } from './ManufactureSetupStrip'
 import { ManufactureCamSimulationPanel } from './ManufactureCamSimulationPanel'
 import { ManufactureSubTabStrip } from './ManufactureSubTabStrip'
+import { PlateTabs } from './PlateTabs'
+import {
+  addPlate as addPlateState,
+  getActivePlate,
+  getPlates,
+  removePlate as removePlateState,
+  renamePlate as renamePlateState,
+  updateActivePlate,
+  viewMfgAsActivePlate
+} from './plate-state'
 import { MakeraFunctionsPanel } from './MakeraFunctionsPanel'
 import { CamProgressBar } from './CamProgressBar'
 import { ToolChangeTimeline } from './ToolChangeTimeline'
@@ -109,6 +119,14 @@ export function ManufactureWorkspace({
   onAfterMeshImport
 }: Props) {
   const [mfg, setMfg] = useState<ManufactureFile>(() => emptyManufacture())
+  // Gap #7 v1 — active plate id. Initialized lazily so emptyManufacture() always
+  // produces a single plate the renderer can show. Updated whenever the underlying
+  // mfg is loaded from disk (see useEffect below) and whenever the user clicks
+  // the PlateTabs +, x, or rename controls.
+  const [activePlateId, setActivePlateId] = useState<string | null>(() => {
+    const initial = emptyManufacture()
+    return initial.plates?.[0]?.id ?? null
+  })
   const [contourCandidates, setContourCandidates] = useState<DerivedContourCandidate[]>([])
   const [nowTickMs, setNowTickMs] = useState<number>(() => Date.now())
   const [opFilter, setOpFilter] = useState<ManufactureOpFilter>(() => readPersistedManufactureOpFilter('all'))
@@ -129,14 +147,30 @@ export function ManufactureWorkspace({
   const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
   const fab = window.fab
 
+  /**
+   * Gap #7 v1 — "effective" manufacture file projected onto the active plate.
+   *
+   * The existing setup/op list components (`MakeraFunctionsPanel`,
+   * `ManufactureOperationList`, `ManufactureSetupList`,
+   * `ManufactureCamSimulationPanel`, etc.) all read `mfg.setups` / `mfg.operations`
+   * at the top level — they predate the plate concept. To avoid touching every
+   * consumer this cycle, we synthesize an mfg whose top-level setups + operations
+   * mirror the active plate's content. Writes still route back into the active
+   * plate via the helpers in `plate-state.ts`.
+   */
+  const effectiveMfg = useMemo(
+    () => viewMfgAsActivePlate(mfg, activePlateId),
+    [mfg, activePlateId]
+  )
+
   const meshRelPathsForStaleCheck = useMemo(() => {
     const u = new Set<string>()
-    for (const op of mfg.operations) {
+    for (const op of effectiveMfg.operations) {
       const sm = op.sourceMesh?.trim().replace(/^[\\/]+/, '')
       if (sm) u.add(sm)
     }
     return [...u].sort()
-  }, [mfg.operations])
+  }, [effectiveMfg.operations])
 
   const [camStaleMeshRelativePaths, setCamStaleMeshRelativePaths] = useState<string[]>([])
 
@@ -144,22 +178,33 @@ export function ManufactureWorkspace({
 
   useEffect(() => {
     setSelectedOpIndex((i) => {
-      if (mfg.operations.length === 0) return 0
-      return Math.min(Math.max(0, i), mfg.operations.length - 1)
+      if (effectiveMfg.operations.length === 0) return 0
+      return Math.min(Math.max(0, i), effectiveMfg.operations.length - 1)
     })
-  }, [mfg.operations.length])
+  }, [effectiveMfg.operations.length])
 
   useEffect(() => {
     if (!projectDir) {
-      setMfg(emptyManufacture())
+      const empty = emptyManufacture()
+      setMfg(empty)
+      setActivePlateId(empty.plates?.[0]?.id ?? null)
       return
     }
     void fab
       .manufactureLoad(projectDir)
-      .then(setMfg)
+      .then((loaded) => {
+        setMfg(loaded)
+        // Gap #7 v1: snap the active plate to the first plate of the loaded mfg.
+        // Falls back to null when (defensively) plates is missing — the PlateTabs
+        // strip itself synthesizes a Default plate via plate-state.getPlates.
+        const plates = getPlates(loaded)
+        setActivePlateId(plates[0]?.id ?? null)
+      })
       .catch((e) => {
         onStatus?.(e instanceof Error ? e.message : String(e))
-        setMfg(emptyManufacture())
+        const empty = emptyManufacture()
+        setMfg(empty)
+        setActivePlateId(empty.plates?.[0]?.id ?? null)
       })
   }, [fab, projectDir])
 
@@ -251,7 +296,7 @@ export function ManufactureWorkspace({
       onStatus?.('Open a project before running an FDM slice.')
       return
     }
-    const op = mfg.operations[opIndex]
+    const op = effectiveMfg.operations[opIndex]
     if (!op || op.kind !== 'fdm_slice') {
       onStatus?.('Selected operation is not an FDM slice.')
       return
@@ -285,36 +330,43 @@ export function ManufactureWorkspace({
 
   function addSetup(): void {
     const id = crypto.randomUUID()
+    const activePlate = getActivePlate(mfg, activePlateId)
     const st: ManufactureSetup = {
       id,
-      label: `Setup ${mfg.setups.length + 1}`,
+      label: `Setup ${activePlate.setups.length + 1}`,
       machineId: machines[0]?.id ?? 'laguna-swift-5x10',
       workCoordinateIndex: 1,
       stock: { kind: 'box', x: 200, y: 200, z: 25 }
     }
-    setMfg((m) => ({ ...m, setups: [...m.setups, st] }))
+    setMfg((m) => updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: [...p.setups, st] })))
   }
 
   function updateSetup(i: number, patch: Partial<ManufactureSetup>): void {
-    setMfg((m) => {
-      const setups = [...m.setups]
-      setups[i] = { ...setups[i]!, ...patch }
-      return { ...m, setups }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const setups = [...p.setups]
+        setups[i] = { ...setups[i]!, ...patch }
+        return { ...p, setups }
+      })
+    )
   }
 
   function updateSetupStock(i: number, patch: Partial<NonNullable<ManufactureSetup['stock']>>): void {
-    setMfg((m) => {
-      const setups = [...m.setups]
-      const cur = setups[i]!
-      const stock = { kind: 'box' as const, x: 200, y: 200, z: 25, ...cur.stock, ...patch }
-      setups[i] = { ...cur, stock }
-      return { ...m, setups }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const setups = [...p.setups]
+        const cur = setups[i]!
+        const stock = { kind: 'box' as const, x: 200, y: 200, z: 25, ...cur.stock, ...patch }
+        setups[i] = { ...cur, stock }
+        return { ...p, setups }
+      })
+    )
   }
 
   function removeSetup(i: number): void {
-    setMfg((m) => ({ ...m, setups: m.setups.filter((_, j) => j !== i) }))
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: p.setups.filter((_, j) => j !== i) }))
+    )
   }
 
   function updateSetupWcsOrigin(si: number, point: WcsOriginPoint): void {
@@ -326,38 +378,50 @@ export function ManufactureWorkspace({
   }
 
   function updateSetupMaterialType(si: number, mat: StockMaterialType | undefined): void {
-    setMfg((m) => {
-      const setups = [...m.setups]
-      const cur = setups[si]!
-      const stock = { kind: 'box' as const, x: 200, y: 200, z: 25, ...cur.stock, materialType: mat }
-      setups[si] = { ...cur, stock }
-      return { ...m, setups }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const setups = [...p.setups]
+        const cur = setups[si]!
+        const stock = { kind: 'box' as const, x: 200, y: 200, z: 25, ...cur.stock, materialType: mat }
+        setups[si] = { ...cur, stock }
+        return { ...p, setups }
+      })
+    )
   }
 
   // ── Operation mutations ───────────────────────────────────────────────────────
 
   function addOp(): void {
     const id = crypto.randomUUID()
+    const activePlate = getActivePlate(mfg, activePlateId)
     const op: ManufactureOperation = {
       id,
       kind: 'cnc_parallel',
-      label: `Op ${mfg.operations.length + 1}`,
+      label: `Op ${activePlate.operations.length + 1}`,
       sourceMesh: 'assets/design-sample.stl'
     }
-    setMfg((m) => ({ ...m, operations: [...m.operations, op] }))
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => ({ ...p, operations: [...p.operations, op] }))
+    )
   }
 
   function updateOp(i: number, patch: Partial<ManufactureOperation>): void {
-    setMfg((m) => {
-      const ops = [...m.operations]
-      ops[i] = { ...ops[i]!, ...patch }
-      return { ...m, operations: ops }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const ops = [...p.operations]
+        ops[i] = { ...ops[i]!, ...patch }
+        return { ...p, operations: ops }
+      })
+    )
   }
 
   function removeOp(i: number): void {
-    setMfg((m) => ({ ...m, operations: m.operations.filter((_, j) => j !== i) }))
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => ({
+        ...p,
+        operations: p.operations.filter((_, j) => j !== i)
+      }))
+    )
   }
 
   /**
@@ -385,51 +449,57 @@ export function ManufactureWorkspace({
     yMm: number
     rotationDeg: 0 | 90 | 180 | 270
   }>): void {
-    setMfg((m) => {
-      const byId = new Map(placements.map((p) => [p.partId, p]))
-      const ops = m.operations.map((op) => {
-        const p = byId.get(op.id)
-        if (!p) return op
-        if (op.kind !== 'cnc_contour') return op
-        const baseParams: Record<string, unknown> = { ...(op.params ?? {}) }
-        baseParams.placementXMm = p.xMm
-        baseParams.placementYMm = p.yMm
-        baseParams.placementRotationDeg = p.rotationDeg
-        baseParams.placementNestVersion = 'v1'
-        return { ...op, params: baseParams }
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (plate) => {
+        const byId = new Map(placements.map((pl) => [pl.partId, pl]))
+        const ops = plate.operations.map((op) => {
+          const pl = byId.get(op.id)
+          if (!pl) return op
+          if (op.kind !== 'cnc_contour') return op
+          const baseParams: Record<string, unknown> = { ...(op.params ?? {}) }
+          baseParams.placementXMm = pl.xMm
+          baseParams.placementYMm = pl.yMm
+          baseParams.placementRotationDeg = pl.rotationDeg
+          baseParams.placementNestVersion = 'v1'
+          return { ...op, params: baseParams }
+        })
+        return { ...plate, operations: ops }
       })
-      return { ...m, operations: ops }
-    })
+    )
   }
 
   function moveOpUp(i: number): void {
     if (i <= 0) return
-    setMfg((m) => {
-      const ops = [...m.operations]
-      const tmp = ops[i - 1]!
-      ops[i - 1] = ops[i]!
-      ops[i] = tmp
-      return { ...m, operations: ops }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const ops = [...p.operations]
+        const tmp = ops[i - 1]!
+        ops[i - 1] = ops[i]!
+        ops[i] = tmp
+        return { ...p, operations: ops }
+      })
+    )
     setSelectedOpIndex((prev) => (prev === i ? i - 1 : prev === i - 1 ? i : prev))
   }
 
   function moveOpDown(i: number): void {
-    setMfg((m) => {
-      if (i >= m.operations.length - 1) return m
-      const ops = [...m.operations]
-      const tmp = ops[i + 1]!
-      ops[i + 1] = ops[i]!
-      ops[i] = tmp
-      return { ...m, operations: ops }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        if (i >= p.operations.length - 1) return p
+        const ops = [...p.operations]
+        const tmp = ops[i + 1]!
+        ops[i + 1] = ops[i]!
+        ops[i] = tmp
+        return { ...p, operations: ops }
+      })
+    )
     setSelectedOpIndex((prev) => (prev === i ? i + 1 : prev === i + 1 ? i : prev))
   }
 
   // ── Operation parameter helpers ───────────────────────────────────────────────
 
   function setToolDiameterMm(i: number, raw: string): void {
-    const op = mfg.operations[i]!
+    const op = effectiveMfg.operations[i]!
     const base: Record<string, unknown> = { ...(op.params ?? {}) }
     const t = raw.trim()
     if (t === '') {
@@ -443,7 +513,7 @@ export function ManufactureWorkspace({
   }
 
   function setToolFromLibrary(i: number, toolId: string): void {
-    const op = mfg.operations[i]!
+    const op = effectiveMfg.operations[i]!
     const base: Record<string, unknown> = { ...(op.params ?? {}) }
     if (!toolId) {
       delete base.toolId
@@ -462,7 +532,7 @@ export function ManufactureWorkspace({
   }
 
   function setCutParam(i: number, key: string, raw: string, mode: 'nonzero' | 'positive' | 'nonnegative'): void {
-    const op = mfg.operations[i]!
+    const op = effectiveMfg.operations[i]!
     const base: Record<string, unknown> = { ...(op.params ?? {}) }
     const t = raw.trim()
     if (t === '') {
@@ -487,7 +557,7 @@ export function ManufactureWorkspace({
   }
 
   function setGeometryJson(i: number, key: 'contourPoints' | 'drillPoints', raw: string): void {
-    const op = mfg.operations[i]!
+    const op = effectiveMfg.operations[i]!
     const base: Record<string, unknown> = { ...(op.params ?? {}) }
     const t = raw.trim()
     if (t === '') {
@@ -508,7 +578,7 @@ export function ManufactureWorkspace({
 
   async function deriveOpGeometryFromSketch(i: number): Promise<void> {
     if (!projectDir) return
-    const op = mfg.operations[i]
+    const op = effectiveMfg.operations[i]
     if (!op) return
     const d = await fab.designLoad(projectDir)
     if (!d) {
@@ -574,7 +644,7 @@ export function ManufactureWorkspace({
 
   // ── Derived / computed values ─────────────────────────────────────────────────
 
-  const readinessCounts = mfg.operations.reduce(
+  const readinessCounts = effectiveMfg.operations.reduce(
     (acc, op) => {
       const r = opReadiness(op, contourCandidates).label
       acc[r] = (acc[r] ?? 0) + 1
@@ -586,7 +656,7 @@ export function ManufactureWorkspace({
     >
   )
 
-  const filteredOps = mfg.operations.filter((op) => {
+  const filteredOps = effectiveMfg.operations.filter((op) => {
     const label = opReadiness(op, contourCandidates).label
     if (actionableOnly) return label === 'missing geometry' || label === 'stale geometry'
     if (opFilter === 'all') return true
@@ -631,7 +701,7 @@ export function ManufactureWorkspace({
     }
   }
 
-  const camMachine = resolveManufactureCamMachine(mfg, machines)
+  const camMachine = resolveManufactureCamMachine(effectiveMfg, machines)
 
   const camRunCncMachineId = useMemo(() => {
     const cnc = machines.filter((m) => m.kind === 'cnc')
@@ -641,15 +711,15 @@ export function ManufactureWorkspace({
   }, [machines, activeMachineId])
 
   const camResolvedSetup = useMemo(
-    () => resolveManufactureSetupForCam(mfg, camRunCncMachineId),
-    [mfg, camRunCncMachineId]
+    () => resolveManufactureSetupForCam(effectiveMfg, camRunCncMachineId),
+    [effectiveMfg, camRunCncMachineId]
   )
 
   const camResolvedSetupIdx = useMemo(() => {
     if (!camResolvedSetup) return 0
-    const i = mfg.setups.findIndex((s) => s.id === camResolvedSetup.id)
+    const i = effectiveMfg.setups.findIndex((s) => s.id === camResolvedSetup.id)
     return i >= 0 ? i : 0
-  }, [mfg.setups, camResolvedSetup])
+  }, [effectiveMfg.setups, camResolvedSetup])
 
   const camResolvedMachineName = useMemo(() => {
     if (!camResolvedSetup) return undefined
@@ -668,7 +738,7 @@ export function ManufactureWorkspace({
    */
   const lagunaSheetSizeMm = useMemo<{ widthMm: number | null; heightMm: number | null }>(() => {
     if (activeMachineId !== 'laguna-swift-5x10') return { widthMm: null, heightMm: null }
-    const lagunaSetup = mfg.setups.find((s) => s.machineId === 'laguna-swift-5x10')
+    const lagunaSetup = effectiveMfg.setups.find((s) => s.machineId === 'laguna-swift-5x10')
     if (!lagunaSetup?.stock || lagunaSetup.stock.kind !== 'box') {
       return { widthMm: null, heightMm: null }
     }
@@ -676,7 +746,7 @@ export function ManufactureWorkspace({
       widthMm: typeof lagunaSetup.stock.x === 'number' ? lagunaSetup.stock.x : null,
       heightMm: typeof lagunaSetup.stock.y === 'number' ? lagunaSetup.stock.y : null
     }
-  }, [mfg.setups, activeMachineId])
+  }, [effectiveMfg.setups, activeMachineId])
 
   /** CNC profile for CAM simulation envelope (same id logic as Make → Generate CAM). */
   const camSimMachine = useMemo(
@@ -712,17 +782,19 @@ export function ManufactureWorkspace({
       onStatus?.(r.error + (r.detail ? ` — ${r.detail}` : ''))
       return
     }
-    if (mfg.operations.length === 0) {
+    if (effectiveMfg.operations.length === 0) {
       onStatus?.('Add an operation first, then import a mesh to bind it.')
       return
     }
     const relPath = r.relativePath.replace(/\\/g, '/')
-    setMfg((m) => {
-      const idx = Math.min(selectedOpIndex, m.operations.length - 1)
-      const ops = [...m.operations]
-      ops[idx] = { ...ops[idx]!, sourceMesh: relPath }
-      return { ...m, operations: ops }
-    })
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => {
+        const idx = Math.min(selectedOpIndex, p.operations.length - 1)
+        const ops = [...p.operations]
+        ops[idx] = { ...ops[idx]!, sourceMesh: relPath }
+        return { ...p, operations: ops }
+      })
+    )
     onStatus?.(`Imported mesh → ${relPath}`)
     await onAfterMeshImport?.()
   }
@@ -744,11 +816,11 @@ export function ManufactureWorkspace({
     } catch {
       /* optional */
     }
-    const rel = mfg.operations.find((o) => o.sourceMesh?.trim())?.sourceMesh?.trim() ?? null
+    const rel = effectiveMfg.operations.find((o) => o.sourceMesh?.trim())?.sourceMesh?.trim() ?? null
     const stlAbs = rel ? `${projectDir}${sep}${rel.replace(/\//g, sep)}` : null
     const job = buildSetupSheetJobFromManufacture({
       projectName: name,
-      mfg,
+      mfg: effectiveMfg,
       camMachineId: camRunCncMachineId,
       gcodePath,
       sourceStlPath: stlAbs
@@ -776,7 +848,7 @@ export function ManufactureWorkspace({
 
   async function fitStockFromPartOnSetup(setupIndex: number): Promise<void> {
     if (!projectDir) return
-    const op = mfg.operations[selectedOpIndex]
+    const op = effectiveMfg.operations[selectedOpIndex]
     const rel = op?.sourceMesh?.trim()
     if (!rel) {
       onStatus?.('Select an operation with a source mesh (.stl) first.')
@@ -816,7 +888,7 @@ export function ManufactureWorkspace({
   async function handleRunCam(): Promise<void> {
     setCamRunning(true)
     try {
-      await onRunCam({ mfg, selectedOpIndex })
+      await onRunCam({ mfg: effectiveMfg, selectedOpIndex })
     } finally {
       setCamRunning(false)
     }
@@ -858,7 +930,7 @@ export function ManufactureWorkspace({
     onImportTools,
     onImportToolLibraryFromFile,
     onMigrateProjectToolsToMachine,
-    manufacture: mfg,
+    manufacture: effectiveMfg,
     onGoSettings,
     onGoProject,
     onStatus,
@@ -880,21 +952,21 @@ export function ManufactureWorkspace({
       >
         {/* -- MAKERA-STYLE FUNCTIONS PANEL (far left) -- */}
         <MakeraFunctionsPanel
-          mfg={mfg}
+          mfg={effectiveMfg}
           selectedSetupIndex={selectedSetupIndex}
           selectedOpIndex={selectedOpIndex}
           onSelectSetup={(si) => setSelectedSetupIndex(si)}
           onAddSetup={addSetup}
           onRemoveSetup={removeSetup}
           onSelectOp={setSelectedOpIndex}
-          onToggleSuppressed={(i) => updateOp(i, { suppressed: !mfg.operations[i]?.suppressed })}
+          onToggleSuppressed={(i) => updateOp(i, { suppressed: !effectiveMfg.operations[i]?.suppressed })}
           onAddOp={addOp}
           onRemoveOp={removeOp}
           onMoveOpUp={moveOpUp}
           onMoveOpDown={moveOpDown}
           opStatus={(op) => opStatusForPanel(op, contourCandidates)}
           assetStlPaths={assetStlOptions}
-          currentSourceMesh={mfg.operations[selectedOpIndex]?.sourceMesh?.trim()}
+          currentSourceMesh={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim()}
         />
 
         <div className="manufacture-plan-viewport-col">
@@ -914,13 +986,13 @@ export function ManufactureWorkspace({
           </div>
           <ManufactureCamSimulationPanel
             projectDir={projectDir}
-            mfg={mfg}
+            mfg={effectiveMfg}
             tools={tools ?? null}
             machine={camSimMachine}
             layout="workspace"
             stockSetupIndex={camResolvedSetupIdx}
-            previewMeshRelativePath={mfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
-            previewOperation={mfg.operations[selectedOpIndex] ?? null}
+            previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
+            previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
             camOut={camOut}
             camStaleMeshRelativePaths={camStaleMeshRelativePaths}
           />
@@ -951,12 +1023,12 @@ export function ManufactureWorkspace({
         Any generated G-code is <strong>unverified</strong> until you check posts, units, and clearances for your machine (
         <code>docs/MACHINES.md</code>).
       </p>
-      {mfg.setups.length === 0 && !camResolvedSetup ? (
+      {effectiveMfg.setups.length === 0 && !camResolvedSetup ? (
         <p className="msg msg--muted">Add a setup so work offset and stock context are defined for CAM.</p>
       ) : null}
 
       <ManufacturePlanToolbar
-        operations={mfg.operations}
+        operations={effectiveMfg.operations}
         selectedOpIndex={selectedOpIndex}
         camResolvedSetupIdx={camResolvedSetupIdx}
         camResolvedSetup={camResolvedSetup}
@@ -973,7 +1045,7 @@ export function ManufactureWorkspace({
       />
 
       <ManufactureSetupList
-        setups={mfg.setups}
+        setups={effectiveMfg.setups}
         machines={machines}
         onUpdateSetup={updateSetup}
         onUpdateSetupStock={updateSetupStock}
@@ -982,7 +1054,7 @@ export function ManufactureWorkspace({
 
       <LagunaNestingPanel
         activeMachineId={activeMachineId}
-        operations={mfg.operations}
+        operations={effectiveMfg.operations}
         sheetWidthMm={lagunaSheetSizeMm.widthMm}
         sheetHeightMm={lagunaSheetSizeMm.heightMm}
         onApplyPlacements={applyNestingPlacements}
@@ -990,12 +1062,12 @@ export function ManufactureWorkspace({
       />
 
       <ToolChangeTimeline
-        operations={mfg.operations}
+        operations={effectiveMfg.operations}
         tools={tools?.tools ?? projectTools?.tools ?? machineTools?.tools ?? []}
       />
 
       <ManufactureOperationList
-        operations={mfg.operations}
+        operations={effectiveMfg.operations}
         filteredOps={filteredOps}
         selectedOpIndex={selectedOpIndex}
         contourCandidates={contourCandidates}
@@ -1025,10 +1097,62 @@ export function ManufactureWorkspace({
     </div>
     )
 
+  // ── Plate Tabs handlers (Gap #7 v1) ──────────────────────────────────────────
+  //
+  // No new IPC: plates are part of `manufacture.json` saved via the existing
+  // `manufacture:save`. The renderer never persists plate state directly —
+  // changes flow back to disk on the next `save()` call.
+
+  function handleAddPlate(): void {
+    setMfg((m) => {
+      const { mfg: next, newPlateId } = addPlateState(m)
+      setActivePlateId(newPlateId)
+      // Reset op-selection to top of the new (empty) plate so we don't show
+      // a stale index into a different plate's operations list.
+      setSelectedOpIndex(0)
+      setSelectedSetupIndex(0)
+      return next
+    })
+  }
+
+  function handleRemovePlate(plateId: string): void {
+    setMfg((m) => {
+      const { mfg: next, nextActivePlateId } = removePlateState(m, plateId)
+      setActivePlateId(nextActivePlateId)
+      // Op selection bounds change with the new active plate — clamp to 0
+      // and let the existing useEffect re-clamp once effectiveMfg updates.
+      setSelectedOpIndex(0)
+      setSelectedSetupIndex(0)
+      return next
+    })
+  }
+
+  function handleRenamePlate(plateId: string, newLabel: string): void {
+    setMfg((m) => renamePlateState(m, plateId, newLabel))
+  }
+
+  function handleSelectPlate(plateId: string): void {
+    setActivePlateId(plateId)
+    // Reset op/setup selection — indices are per-plate and can be out of
+    // bounds across plates with different op counts.
+    setSelectedOpIndex(0)
+    setSelectedSetupIndex(0)
+  }
+
+  const platesForStrip = useMemo(() => getPlates(mfg), [mfg])
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="manufacture-workspace-wrap">
+      <PlateTabs
+        plates={platesForStrip}
+        activePlateId={activePlateId}
+        onSelectPlate={handleSelectPlate}
+        onAddPlate={handleAddPlate}
+        onRemovePlate={handleRemovePlate}
+        onRenamePlate={handleRenamePlate}
+      />
       <ManufactureSubTabStrip tab={panelTab} onChange={onPanelTabChange} />
       <CamProgressBar running={camRunning} onCancel={() => void handleCamCancel()} />
       <div
@@ -1041,7 +1165,7 @@ export function ManufactureWorkspace({
         ) : panelTab === 'setup' ? (
           <ManufactureSetupTab
             projectDir={projectDir}
-            mfg={mfg}
+            mfg={effectiveMfg}
             machines={machines}
             selectedSetupIndex={selectedSetupIndex}
             selectedOpIndex={selectedOpIndex}
@@ -1073,13 +1197,13 @@ export function ManufactureWorkspace({
               {projectDir ? (
                 <ManufactureCamSimulationPanel
                   projectDir={projectDir}
-                  mfg={mfg}
+                  mfg={effectiveMfg}
                   tools={tools ?? null}
                   machine={camSimMachine}
                   layout="workspace"
                   stockSetupIndex={camResolvedSetupIdx}
-                  previewMeshRelativePath={mfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
-                  previewOperation={mfg.operations[selectedOpIndex] ?? null}
+                  previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
+                  previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
                   camOut={camOut}
                   camStaleMeshRelativePaths={camStaleMeshRelativePaths}
                 />

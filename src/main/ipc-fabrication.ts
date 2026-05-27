@@ -72,7 +72,7 @@ import {
   type ManufactureFile,
   type ManufactureSetup
 } from '../shared/manufacture-schema'
-import { buildMigrationPipeline } from '../shared/schema-migration'
+import { buildMigrationPipeline, migrateManufactureV1toV2 } from '../shared/schema-migration'
 import { toolLibraryFileSchema, type ToolLibraryFile } from '../shared/tool-schema'
 import { ZodError } from 'zod'
 import type { MainIpcWindowContext } from './ipc-context'
@@ -103,12 +103,27 @@ export type { MainIpcWindowContext } from './ipc-context'
 /**
  * Migration pipeline for manufacture.json files.
  *
- * Currently v1-only (identity). When a v2 schema is added:
- *   1. Import migrateManufactureV1toV2 from schema-migration
- *   2. Add the step: { fromVersion: 1, toVersion: 2, migrate: migrateManufactureV1toV2 }
- *   3. Widen manufactureFileSchema.version to accept 2
+ * v1 -> v2 (Gap #7: multi-plate / multi-job project):
+ *   - Legacy `setups` + `operations` are auto-wrapped into a single
+ *     `Default plate` at `plates[0]` so existing saved projects open seamlessly.
+ *   - Top-level `setups` + `operations` are cleared to empty arrays on v2 but
+ *     remain present for back-compat (see `migrateManufactureV1toV2`).
+ *
+ * To add v2 -> v3 later: append `{ fromVersion: 2, toVersion: 3, migrate: ... }`.
  */
-const manufactureMigrationPipeline = buildMigrationPipeline<ManufactureFile>([], 1)
+const manufactureMigrationPipeline = buildMigrationPipeline<ManufactureFile>(
+  [
+    {
+      fromVersion: 1,
+      toVersion: 2,
+      migrate: (data: unknown) =>
+        migrateManufactureV1toV2(
+          data as { version: 1; setups: unknown[]; operations: unknown[] }
+        )
+    }
+  ],
+  1
+)
 
 /** Tracks the AbortController for any currently running cam:run operation. */
 let activeCamController: AbortController | null = null

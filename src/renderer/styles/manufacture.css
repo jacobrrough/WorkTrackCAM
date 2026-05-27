@@ -1191,3 +1191,106 @@
   font-size: 0.6rem;
   opacity: 0.7;
 }
+
+
+/* ── Plate Tabs (Gap #7 v1: multi-plate / multi-job project) ─────────────── */
+.plate-tabs-strip-outer {
+  /* Slightly different visual weight from the manufacture sub-tab strip so
+     plates feel like a "primary" axis above the existing Plan/Setup/CAM tabs. */
+  background: var(--bg0);
+}
+.plate-tabs-strip {
+  gap: 0;
+  padding: 0 6px;
+  height: 32px;
+}
+.plate-tab-wrap {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  border-right: 1px solid var(--border);
+}
+.plate-tab-wrap:first-child {
+  border-left: 1px solid var(--border);
+}
+.plate-tab {
+  padding: 4px 10px 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--txt2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast),
+    background var(--transition-fast);
+  font-family: var(--font);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.plate-tab:hover {
+  color: var(--txt0);
+  background: var(--bg1);
+}
+.plate-tab.active,
+.plate-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--bg1);
+}
+.plate-tab-label {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.plate-tab-close {
+  padding: 0 6px;
+  margin-right: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--txt2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  border-radius: 3px;
+}
+.plate-tab-close:hover {
+  color: var(--accent);
+  background: var(--bg2);
+}
+.plate-tab-add {
+  padding: 4px 10px;
+  margin-left: 4px;
+  font-size: 14px;
+  color: var(--txt2);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  font-family: var(--font);
+}
+.plate-tab-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.plate-tab-add-label {
+  font-size: 11px;
+}
+.plate-tab-edit-input {
+  padding: 2px 6px;
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--txt0);
+  background: var(--bg2);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  width: 140px;
+  margin: 0 4px;
+}

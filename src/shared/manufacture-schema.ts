@@ -403,10 +403,66 @@ export const manufactureOperationSchema = z.object({
     .describe('Strategy-specific operation parameters (validated at runtime per operation kind)')
 })
 
+/**
+ * Plate — a self-contained Setup + Operation bundle (Gap #7 v1).
+ *
+ * Both OrcaSlicer and Bambu Studio center their FDM workflow on plates; CNC has
+ * the same idea (a "job" = one plate). A project file can carry multiple plates
+ * so the user can prototype, e.g., 5 K2 calibration tests in one session without
+ * switching projects. Each plate has its own `setups` + `operations` arrays —
+ * the underlying CAM runners and post-processors consume those arrays per plate
+ * exactly as they did pre-plate (Safety Rule 1: G-code emission unchanged).
+ *
+ * v1 scope (this cycle): the plate concept exists in the file format, the
+ * renderer has a tab strip to switch between plates, and migration auto-wraps
+ * legacy top-level setups+operations into `plates[0]`. Future cycles add
+ * batch-slice-all-plates, copy-op-across-plates, and per-plate Moonraker push
+ * queueing.
+ */
+export const plateSchema = z.object({
+  id: z.string().trim().min(1).describe('Unique plate identifier'),
+  label: z.string().trim().min(1).describe('Human-readable plate label shown in the tab strip'),
+  createdAt: z.string().optional().describe('ISO timestamp when the plate was first created'),
+  setups: z.array(setupSchema).default([]).describe('Per-plate manufacturing setups'),
+  operations: z
+    .array(manufactureOperationSchema)
+    .default([])
+    .describe('Per-plate ordered list of manufacturing operations')
+})
+
+export type Plate = z.infer<typeof plateSchema>
+
+/**
+ * Manufacture file schema.
+ *
+ * v1: `{ version: 1, setups, operations }` — single-plate, no `plates` field.
+ * v2: `{ version: 2, setups, operations, plates: Plate[] }` — `plates` carries
+ *     the active per-plate bundles. Top-level `setups` + `operations` are
+ *     retained as empty arrays in v2 (kept for back-compat with the IPC
+ *     surface and any reader that has not been migrated to read from `plates`).
+ *     The renderer / CAM runners prefer `plates` when present.
+ *
+ * Both versions are accepted by the schema so a v1 file on disk parses without
+ * a migration round-trip — the migration pipeline (`buildMigrationPipeline`,
+ * see `src/shared/schema-migration.ts`) is the canonical path invoked by
+ * `ipc-fabrication.ts` on load.
+ */
 export const manufactureFileSchema = z.object({
-  version: z.literal(1).describe('Schema version for migration support'),
+  version: z
+    .union([z.literal(1), z.literal(2)])
+    .describe('Schema version for migration support (1 = pre-plate, 2 = plates[])'),
   setups: z.array(setupSchema).default([]).describe('Manufacturing setups (machine, stock, WCS)'),
-  operations: z.array(manufactureOperationSchema).default([]).describe('Ordered list of manufacturing operations')
+  operations: z
+    .array(manufactureOperationSchema)
+    .default([])
+    .describe('Ordered list of manufacturing operations'),
+  /**
+   * v2 plates. Optional so v1 files (which never had this field) and minimal
+   * v2 files parse cleanly. When present and non-empty, the renderer treats
+   * `plates` as the source of truth and `setups`/`operations` at the top
+   * level as a deprecated mirror.
+   */
+  plates: z.array(plateSchema).optional().describe('v2: per-plate Setup + Operation bundles')
 })
 
 export type ManufactureFile = z.infer<typeof manufactureFileSchema>
@@ -421,27 +477,79 @@ export function isManufactureCncOperationKind(kind: ManufactureOperationKind): b
   return kind.startsWith('cnc_')
 }
 
-export function emptyManufacture(): ManufactureFile {
-  return { version: 1, setups: [], operations: [] }
+/** Stable default-plate id used when migrating v1 files and bootstrapping new v2 files. */
+export const DEFAULT_PLATE_ID = 'plate-default'
+
+/** Construct a fresh empty default plate (id-stable for tests + migration). */
+export function createDefaultPlate(): Plate {
+  return {
+    id: DEFAULT_PLATE_ID,
+    label: 'Default plate',
+    setups: [],
+    operations: []
+  }
 }
 
-/** Current canonical schema version. Bump when adding v2 migrations. */
-const MANUFACTURE_CURRENT_VERSION = 1
+/**
+ * Build an empty v2 manufacture file containing one default plate.
+ *
+ * v2 invariant: at least one plate exists in `plates` so the renderer has
+ * something to render in the new tab strip. The top-level `setups`/`operations`
+ * arrays are kept empty for back-compat (see `manufactureFileSchema` doc).
+ */
+export function emptyManufacture(): ManufactureFile {
+  return {
+    version: 2,
+    setups: [],
+    operations: [],
+    plates: [createDefaultPlate()]
+  }
+}
+
+/** Current canonical schema version (Gap #7 v1: bumped to 2 for plates). */
+const MANUFACTURE_CURRENT_VERSION = 2
 
 /**
  * Parse and migrate a manufacture.json payload.
  *
- * Currently v1 -> v1 (identity), but the infrastructure is in place so that
- * a future v2 only needs:
- *   1. Widen the incoming version literal to `z.union([z.literal(1), z.literal(2)])`
- *   2. Add a `migrateV1toV2()` function
- *   3. Bump MANUFACTURE_CURRENT_VERSION
+ * Accepts both v1 and v2 shapes. v1 inputs are auto-wrapped into a v2 with one
+ * `Default plate` containing the legacy top-level setups + operations. v2 inputs
+ * pass through after schema validation.
  *
- * Follows the same pattern as `parseAssemblyFile()` in assembly-schema.ts.
+ * For the canonical IPC migration path see `manufactureMigrationPipeline` in
+ * `src/main/ipc-fabrication.ts` — it uses `buildMigrationPipeline` from
+ * `src/shared/schema-migration.ts`.
  */
 export function parseManufactureFile(raw: unknown): ManufactureFile {
   const parsed = manufactureFileSchema.parse(raw)
-  // Future: if (parsed.version !== MANUFACTURE_CURRENT_VERSION) return migrateToLatest(parsed)
-  void MANUFACTURE_CURRENT_VERSION // referenced to prevent unused-variable lint
-  return parsed
+  if (parsed.version === MANUFACTURE_CURRENT_VERSION) return parsed
+  // v1 -> v2 inline migration so direct callers (tests, legacy paths) get a v2.
+  return upgradeManufactureV1toV2(parsed)
+}
+
+/**
+ * Inline v1 -> v2 upgrade used by `parseManufactureFile`.
+ *
+ * Wraps the legacy top-level setups + operations into a single default plate.
+ * If both arrays are empty, still emits a single empty plate so the renderer
+ * always has at least one tab to show.
+ *
+ * Top-level setups + operations are kept (cleared to empty) for back-compat —
+ * any IPC surface that still reads from the top level sees `[]` and falls
+ * through to the plate-aware path.
+ */
+export function upgradeManufactureV1toV2(v1: ManufactureFile): ManufactureFile {
+  if (v1.version === 2) return v1
+  const legacyPlate: Plate = {
+    id: DEFAULT_PLATE_ID,
+    label: 'Default plate',
+    setups: v1.setups,
+    operations: v1.operations
+  }
+  return {
+    version: 2,
+    setups: [],
+    operations: [],
+    plates: [legacyPlate]
+  }
 }
