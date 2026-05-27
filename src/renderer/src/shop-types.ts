@@ -248,6 +248,32 @@ export declare const window: Window & {
       | { ok: true; outputGcodePath: string; description: string; args: string[] }
       | { ok: false; error: string; hint?: string }
     >
+    /**
+     * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md): Laguna true-shape nesting v1.
+     * Returns placements that the renderer writes back onto each cnc_contour
+     * op's `params.placement` field. No G-code is emitted by this call.
+     */
+    nestingNestPolygons: (payload: {
+      parts: ReadonlyArray<{ id: string; points: ReadonlyArray<readonly [number, number]> }>
+      sheet: { widthMm: number; heightMm: number; marginMm?: number }
+      opts?: {
+        snapMm?: number
+        partMarginMm?: number
+        allowedRotations?: ReadonlyArray<0 | 90 | 180 | 270>
+      }
+    }) => Promise<
+      | {
+          ok: true
+          result: {
+            placements: Array<{ partId: string; xMm: number; yMm: number; rotationDeg: 0 | 90 | 180 | 270 }>
+            unplaced: string[]
+            utilizationPct: number
+            sheetUsedAreaMm2: number
+            totalPartAreaMm2: number
+          }
+        }
+      | { ok: false; error: string; hint?: string }
+    >
   }
 }
 

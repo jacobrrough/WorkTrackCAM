@@ -253,7 +253,8 @@ describe('ipc-fabrication', () => {
       'setup:autoAssignWcs',
       'setup:validate',
       'setup:suggestFlip',
-      'probe:generate'
+      'probe:generate',
+      'nesting:nest-polygons'
     ]
 
     for (const ch of expectedChannels) {
@@ -406,6 +407,39 @@ describe('ipc-fabrication', () => {
     if (result.ok) {
       expect(typeof result.gcode).toBe('string')
       expect(result.gcode.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('nesting:nest-polygons rejects malformed payload', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const r1 = await handler({}, null)
+    expect(r1).toMatchObject({ ok: false, error: 'invalid_payload' })
+    const r2 = await handler({}, { parts: 'oops', sheet: { widthMm: 100, heightMm: 100 } })
+    expect(r2).toMatchObject({ ok: false, error: 'invalid_parts' })
+    const r3 = await handler({}, { parts: [], sheet: null })
+    expect(r3).toMatchObject({ ok: false, error: 'invalid_sheet' })
+  })
+
+  it('nesting:nest-polygons returns placements + utilization for valid input', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const result = await handler(
+      {},
+      {
+        parts: [
+          { id: 'p1', points: [[-20, -20], [20, -20], [20, 20], [-20, 20]] }
+        ],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { partMarginMm: 0, snapMm: 5 }
+      }
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.placements).toHaveLength(1)
+      expect(result.result.placements[0].partId).toBe('p1')
+      expect(result.result.unplaced).toEqual([])
+      expect(result.result.utilizationPct).toBeCloseTo(16, 5)
     }
   })
 

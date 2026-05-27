@@ -32,6 +32,12 @@ import type {
   WizardCopySampleRequest,
   WizardCopySampleResult
 } from '../shared/first-launch-wizard-contract'
+import type {
+  NestOptions,
+  NestResult,
+  Polygon as NestPolygon,
+  SheetSpec
+} from '../main/nesting/true-shape-v1'
 
 export type Api = {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -461,6 +467,19 @@ export type Api = {
     | { ok: true; outputGcodePath: string; description: string; args: string[] }
     | { ok: false; error: string; hint?: string }
   >
+
+  /**
+   * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md): Laguna true-shape nesting v1.
+   * Pure planning call — no G-code is emitted. The renderer collects polygons
+   * from cnc_contour ops, calls this with the sheet spec, then writes the
+   * resulting placements back onto each op's `params.placement` field for the
+   * post-processor to consume. Laguna-only in the UI.
+   */
+  nestingNestPolygons: (payload: {
+    parts: ReadonlyArray<NestPolygon>
+    sheet: SheetSpec
+    opts?: NestOptions
+  }) => Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }>
 }
 
 const api: Api = {
@@ -609,6 +628,9 @@ const api: Api = {
 
   // K2 Plus Calibration Suite
   calibrationGenerate: (payload) => ipcRenderer.invoke('calibration:generate', payload),
+
+  // Laguna true-shape nesting v1 (Gap #9)
+  nestingNestPolygons: (payload) => ipcRenderer.invoke('nesting:nest-polygons', payload),
 }
 
 contextBridge.exposeInMainWorld('fab', api)

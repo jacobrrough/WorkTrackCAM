@@ -41,6 +41,7 @@ import { ManufactureOperationList } from './ManufactureOperationList'
 import { ManufactureSetupList } from './ManufactureSetupList'
 import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
+import { LagunaNestingPanel } from './LagunaNestingPanel'
 
 
 type Props = {
@@ -359,6 +360,48 @@ export function ManufactureWorkspace({
     setMfg((m) => ({ ...m, operations: m.operations.filter((_, j) => j !== i) }))
   }
 
+  /**
+   * Gap #9 — Laguna nesting: apply the placements returned from the
+   * `nesting:nest-polygons` handler back onto each matching cnc_contour op.
+   *
+   * Schema constraint: `op.params` values must be `JsonSafeValue`
+   * (number | string | boolean | null | JsonSafeValue[]) — no plain objects.
+   * To stay additive (existing saved projects parse cleanly), the placement
+   * is stored as four scalar fields on `params`:
+   *
+   *   placementXMm:        number     — sheet-coordinate X offset (mm)
+   *   placementYMm:        number     — sheet-coordinate Y offset (mm)
+   *   placementRotationDeg: number    — 0 | 90 | 180 | 270
+   *   placementNestVersion: string    — 'v1' (lets v2 layouts diff later)
+   *
+   * Downstream CAM runners + post-processors can read these fields to offset
+   * the contour toolpath; ops without these fields are emitted at origin as
+   * before. Safety Rule 1: no G-code is emitted here — placements only.
+   * Only cnc_contour ops are touched; other op kinds pass through unchanged.
+   */
+  function applyNestingPlacements(placements: ReadonlyArray<{
+    partId: string
+    xMm: number
+    yMm: number
+    rotationDeg: 0 | 90 | 180 | 270
+  }>): void {
+    setMfg((m) => {
+      const byId = new Map(placements.map((p) => [p.partId, p]))
+      const ops = m.operations.map((op) => {
+        const p = byId.get(op.id)
+        if (!p) return op
+        if (op.kind !== 'cnc_contour') return op
+        const baseParams: Record<string, unknown> = { ...(op.params ?? {}) }
+        baseParams.placementXMm = p.xMm
+        baseParams.placementYMm = p.yMm
+        baseParams.placementRotationDeg = p.rotationDeg
+        baseParams.placementNestVersion = 'v1'
+        return { ...op, params: baseParams }
+      })
+      return { ...m, operations: ops }
+    })
+  }
+
   function moveOpUp(i: number): void {
     if (i <= 0) return
     setMfg((m) => {
@@ -617,6 +660,23 @@ export function ManufactureWorkspace({
     () => machines.find((x) => x.id === project?.activeMachineId),
     [machines, project?.activeMachineId]
   )
+
+  /**
+   * Gap #9 — Laguna sheet size derived from the first setup whose machineId
+   * matches the active Laguna profile. Falls back to null so the panel uses
+   * the canonical 1524 × 3048 mm default. Only the box stock kind has X/Y.
+   */
+  const lagunaSheetSizeMm = useMemo<{ widthMm: number | null; heightMm: number | null }>(() => {
+    if (activeMachineId !== 'laguna-swift-5x10') return { widthMm: null, heightMm: null }
+    const lagunaSetup = mfg.setups.find((s) => s.machineId === 'laguna-swift-5x10')
+    if (!lagunaSetup?.stock || lagunaSetup.stock.kind !== 'box') {
+      return { widthMm: null, heightMm: null }
+    }
+    return {
+      widthMm: typeof lagunaSetup.stock.x === 'number' ? lagunaSetup.stock.x : null,
+      heightMm: typeof lagunaSetup.stock.y === 'number' ? lagunaSetup.stock.y : null
+    }
+  }, [mfg.setups, activeMachineId])
 
   /** CNC profile for CAM simulation envelope (same id logic as Make → Generate CAM). */
   const camSimMachine = useMemo(
@@ -918,6 +978,15 @@ export function ManufactureWorkspace({
         onUpdateSetup={updateSetup}
         onUpdateSetupStock={updateSetupStock}
         onRemoveSetup={removeSetup}
+      />
+
+      <LagunaNestingPanel
+        activeMachineId={activeMachineId}
+        operations={mfg.operations}
+        sheetWidthMm={lagunaSheetSizeMm.widthMm}
+        sheetHeightMm={lagunaSheetSizeMm.heightMm}
+        onApplyPlacements={applyNestingPlacements}
+        onStatus={onStatus}
       />
 
       <ToolChangeTimeline

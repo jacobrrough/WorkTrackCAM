@@ -89,6 +89,13 @@ import {
   type CalibrationGeneratePayload,
   type CalibrationTestKind
 } from './calibration/k2-plus-tests'
+import {
+  nestPolygonsOnSheet,
+  type NestOptions,
+  type NestResult,
+  type Polygon,
+  type SheetSpec
+} from './nesting/true-shape-v1'
 
 export type { MainIpcWindowContext } from './ipc-context'
 
@@ -1140,6 +1147,45 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         return { ok: false as const, error: 'calibration_failed', hint: msg }
+      }
+    }
+  )
+
+  // ── True-shape nesting (v1, Laguna only) ─────────────────────────────────
+  // Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md). The renderer's "Nest parts on
+  // stock" button (Laguna-only) calls this with an array of closed 2D
+  // polygons (one per cnc_contour op) and the sheet spec from the Laguna
+  // stock. Returns Placement[] which the renderer then writes back onto
+  // each op's `params.placement` field.
+  //
+  // Safety Rule 1 (G-code is sacred): this handler returns placements only.
+  // It does NOT emit G-code; the existing CAM runner + post-processors
+  // consume the placement when generating the toolpath.
+  ipcMain.handle(
+    'nesting:nest-polygons',
+    async (
+      _e,
+      payload: {
+        parts: ReadonlyArray<Polygon>
+        sheet: SheetSpec
+        opts?: NestOptions
+      }
+    ): Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }> => {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false as const, error: 'invalid_payload', hint: 'nesting:nest-polygons requires { parts, sheet, opts? }' }
+      }
+      if (!Array.isArray(payload.parts)) {
+        return { ok: false as const, error: 'invalid_parts', hint: 'parts must be an array of polygons' }
+      }
+      if (!payload.sheet || typeof payload.sheet !== 'object') {
+        return { ok: false as const, error: 'invalid_sheet', hint: 'sheet must be { widthMm, heightMm, marginMm? }' }
+      }
+      try {
+        const result = nestPolygonsOnSheet(payload.parts, payload.sheet, payload.opts)
+        return { ok: true as const, result }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return { ok: false as const, error: 'nesting_failed', hint: msg }
       }
     }
   )
