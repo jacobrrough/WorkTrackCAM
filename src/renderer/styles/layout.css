@@ -297,7 +297,7 @@
   background: var(--accent-dim);
 }
 
-/* ── App Menubar (FreeCAD Mode) ───────────────────────────────── */
+/* ── App Menubar ──────────────────────────────────────────────── */
 .app-menubar {
   display: flex;
   align-items: center;

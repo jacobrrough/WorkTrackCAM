@@ -20,7 +20,7 @@ const VALID_MFG_PANEL: ReadonlySet<ManufacturePanelTab> = new Set(['plan', 'setu
 
 const MFG_PANEL_TAB_KEY = 'ufs_manufacture_panel_tab'
 
-/** Left combo view: model tree vs tasks (FreeCAD-style). */
+/** Left combo view: model tree vs tasks. */
 export type PersistedComboViewTab = 'model' | 'tasks'
 
 const VALID_COMBO_TAB: ReadonlySet<PersistedComboViewTab> = new Set(['model', 'tasks'])
