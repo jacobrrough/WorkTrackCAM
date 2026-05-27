@@ -38,6 +38,14 @@ build/
 .claude/commands/*
 !.claude/commands/*.md
 
+# OrcaSlicer bundled binaries — produced by scripts/bundle-orca-slicer.ps1
+# and shipped via electron-builder `extraResources`. The portable build is
+# ~150 MB extracted and must NOT live in git. Profiles (resources/orca-slicer/profiles/)
+# ARE source-tracked.
+resources/orca-slicer/win32-x64/
+resources/orca-slicer/darwin-arm64/
+resources/orca-slicer/linux-x64/
+
 # Temp / log files
 *.log
 *.tmp
