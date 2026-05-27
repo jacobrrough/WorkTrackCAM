@@ -49,6 +49,18 @@ export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
         keysWin: 'F5 or Ctrl+Enter',
         keysMac: 'F5 or ⌘↩',
         context: 'Jobs view only; disabled while a generation is running'
+      },
+      {
+        action: 'Undo last change',
+        keysWin: 'Ctrl+Z',
+        keysMac: '⌘Z',
+        context: 'Ignored while focus is in a text field'
+      },
+      {
+        action: 'Redo last undone change',
+        keysWin: 'Ctrl+Y or Ctrl+Shift+Z',
+        keysMac: '⌘⇧Z',
+        context: 'Ignored while focus is in a text field'
       }
     ]
   },
@@ -175,5 +187,32 @@ export function matchesSaveProject(e: KeyboardEvent): boolean {
 export function matchesGenerate(e: KeyboardEvent): boolean {
   if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) return true
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'Enter') return true
+  return false
+}
+
+/**
+ * Undo (Ctrl+Z / ⌘Z). The bare Ctrl+Z (no Shift, no Alt) is the universal
+ * industry-standard undo binding (Fusion 360, OrcaSlicer, every IDE, every
+ * web app). Ctrl+Shift+Z is reserved for `matchesRedo`.
+ */
+export function matchesUndo(e: KeyboardEvent): boolean {
+  return (
+    !!(e.ctrlKey || e.metaKey) &&
+    !e.shiftKey &&
+    !e.altKey &&
+    e.key.toLowerCase() === 'z'
+  )
+}
+
+/**
+ * Redo (Ctrl+Y or Ctrl+Shift+Z / ⌘⇧Z). Both bindings are industry standard:
+ * Ctrl+Y comes from Windows/Office, Ctrl+Shift+Z comes from macOS/Adobe.
+ * Most pro CAD apps (Fusion 360, SolidWorks, Mastercam) accept either.
+ */
+export function matchesRedo(e: KeyboardEvent): boolean {
+  if (!(e.ctrlKey || e.metaKey)) return false
+  if (e.altKey) return false
+  if (!e.shiftKey && e.key.toLowerCase() === 'y') return true
+  if (e.shiftKey && e.key.toLowerCase() === 'z') return true
   return false
 }

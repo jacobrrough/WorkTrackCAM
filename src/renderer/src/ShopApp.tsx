@@ -1247,6 +1247,13 @@ function ShopAppInner(): React.ReactElement {
       }
       if (r.ok) {
         pushToast('ok', `Sent: ${r.filename}`)
+        // Quick-win bundle (undo/redo + K2 thumbnail + Klipper header):
+        // surface any non-fatal slicer-header warnings (typically the
+        // missing-thumbnail nudge) as a soft warn toast so the operator
+        // knows the upload landed AND knows what to fix in the next slice.
+        if (r.warnings && r.warnings.length > 0) {
+          for (const w of r.warnings) pushToast('warn', w)
+        }
       } else {
         // [ID-0088] Render rejections as a two-line toast so the long-form
         // detail (typical: "M109 targets 400 C but exceeds the nozzle

@@ -298,26 +298,30 @@ describe('[ID-0226] D) source-text whitelist', () => {
     expect(SRC).toMatch(/mgr\.on\('change', onStoreChange\)/)
   })
 
-  it('keyboard handler uses both ctrlKey OR metaKey (cross-OS Cmd/Ctrl)', () => {
-    expect(SRC).toMatch(/const mod = e\.ctrlKey \|\| e\.metaKey/)
+  it('keyboard handler delegates Cmd/Ctrl detection to matchesUndo / matchesRedo', () => {
+    // Post-refactor: the hook dispatches via the central shortcut catalog so
+    // the in-app shortcut reference and the runtime stay in lock-step.
+    expect(SRC).toMatch(/matchesUndo\(e\)/)
+    expect(SRC).toMatch(/matchesRedo\(e\)/)
   })
 
-  it('keyboard handler skips when target is INPUT / TEXTAREA / SELECT', () => {
-    expect(SRC).toMatch(/tag === 'INPUT' \|\| tag === 'TEXTAREA' \|\| tag === 'SELECT'/)
+  it('keyboard handler skips typable targets via the shared `isTypableKeyboardTarget` helper', () => {
+    expect(SRC).toMatch(/isTypableKeyboardTarget\(e\.target\)/)
   })
 
-  it('keyboard handler skips when target is contentEditable', () => {
-    expect(SRC).toMatch(/isContentEditable/)
+  it('Undo branch calls mgr.undo() after matchesUndo()', () => {
+    expect(SRC).toMatch(/matchesUndo\(e\)[\s\S]{0,120}mgr\.undo\(\)/)
   })
 
-  it('Ctrl/Cmd + z (no shift) triggers undo via mgr.undo()', () => {
-    expect(SRC).toMatch(/e\.key === 'z' && !e\.shiftKey/)
-    expect(SRC).toMatch(/mgr\.undo\(\)/)
+  it('Redo branch calls mgr.redo() after matchesRedo()', () => {
+    expect(SRC).toMatch(/matchesRedo\(e\)[\s\S]{0,120}mgr\.redo\(\)/)
   })
 
-  it('Ctrl/Cmd + Shift + z OR Ctrl/Cmd + y triggers redo via mgr.redo()', () => {
-    expect(SRC).toMatch(/\(e\.key === 'z' && e\.shiftKey\) \|\| \(e\.key === 'y'\)/)
-    expect(SRC).toMatch(/mgr\.redo\(\)/)
+  it('imports the matchesUndo / matchesRedo / isTypableKeyboardTarget helpers from the shortcut catalog', () => {
+    expect(SRC).toMatch(/from '\.\.\/\.\.\/shared\/app-keyboard-shortcuts'/)
+    expect(SRC).toMatch(/matchesUndo/)
+    expect(SRC).toMatch(/matchesRedo/)
+    expect(SRC).toMatch(/isTypableKeyboardTarget/)
   })
 
   it('keyboard handler calls preventDefault on a matched shortcut', () => {

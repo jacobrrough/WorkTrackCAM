@@ -5,6 +5,11 @@
  * whenever the undo/redo state changes.
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import {
+  isTypableKeyboardTarget,
+  matchesRedo,
+  matchesUndo,
+} from '../../shared/app-keyboard-shortcuts'
 import { UndoManager } from './undo-manager'
 import type { UndoableCommand, HistoryEntry } from './undo-manager'
 
@@ -75,21 +80,18 @@ export function useUndo(): UseUndoReturn {
 
   const snap = useSyncExternalStore(subscribe, getSnapshot)
 
-  // Keyboard bindings
+  // Keyboard bindings — dispatch via the central shortcut catalog
+  // (`matchesUndo` / `matchesRedo`) so the in-app shortcut reference and
+  // the runtime stay in lock-step. The matchers handle the
+  // Ctrl/Cmd, Shift, Alt and key-case logic; this hook just filters out
+  // typable targets and prevents the browser default.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      // Skip when user is typing in an input/textarea/contenteditable
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if ((e.target as HTMLElement)?.isContentEditable) return
-
-      const mod = e.ctrlKey || e.metaKey
-      if (!mod) return
-
-      if (e.key === 'z' && !e.shiftKey) {
+      if (isTypableKeyboardTarget(e.target)) return
+      if (matchesUndo(e)) {
         e.preventDefault()
         mgr.undo()
-      } else if ((e.key === 'z' && e.shiftKey) || (e.key === 'y')) {
+      } else if (matchesRedo(e)) {
         e.preventDefault()
         mgr.redo()
       }

@@ -158,8 +158,13 @@ describe('moonraker-push PIN B -- SOURCE-text purity', () => {
   it('B2: SOURCE UTF-16 length (.length) is exactly 18558', () => {
     expect(SOURCE_TEXT.length).toBe(18558)
   })
-  it('B3: SOURCE_LINES split-by-LF length is 523 (522 LF newlines + trailing-empty)', () => {
-    expect(SOURCE_LINES).toHaveLength(523)
+  it('B3: SOURCE_LINES split-by-LF length matches the on-disk line count (post quick-win-bundle warning/header-health additions)', () => {
+    // Updated post-bundle: file now carries the
+    // `checkGcodeHeaderHealth` + thumbnail-warning wiring, which adds
+    // both an import line + a documentation block + the `warnings[]`
+    // assembly path. Reflect the new shape so any FUTURE drift is still
+    // pinned.
+    expect(SOURCE_LINES).toHaveLength(587)
     expect(SOURCE_LINES[SOURCE_LINES.length - 1]).toBe('')
   })
   it('B4: SOURCE has zero CRLF sequences (LF-only line endings)', () => {

@@ -7,7 +7,9 @@ import {
   matchesGenerate,
   matchesKeyboardShortcutsReference,
   matchesOpenProject,
-  matchesSaveProject
+  matchesRedo,
+  matchesSaveProject,
+  matchesUndo
 } from './app-keyboard-shortcuts'
 
 describe('app-keyboard-shortcuts', () => {
@@ -106,6 +108,60 @@ describe('app-keyboard-shortcuts', () => {
     expect(matchesGenerate(mk('F4'))).toBe(false)
     expect(matchesGenerate(mk('F6'))).toBe(false)
     expect(matchesGenerate(mk(' ', true))).toBe(false)
+  })
+
+  it('matchesUndo — Ctrl+Z and Cmd+Z, rejects Shift/Alt and other keys', () => {
+    const mk = (overrides: Partial<KeyboardEvent>) =>
+      ({
+        key: 'z',
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...overrides
+      }) as KeyboardEvent
+    expect(matchesUndo(mk({ ctrlKey: true }))).toBe(true)
+    expect(matchesUndo(mk({ metaKey: true }))).toBe(true)
+    expect(matchesUndo(mk({ ctrlKey: true, key: 'Z' }))).toBe(true)
+    // Ctrl+Shift+Z is the redo binding, NOT undo.
+    expect(matchesUndo(mk({ ctrlKey: true, shiftKey: true }))).toBe(false)
+    expect(matchesUndo(mk({ ctrlKey: true, altKey: true }))).toBe(false)
+    expect(matchesUndo(mk({ key: 'z' }))).toBe(false) // bare z
+    expect(matchesUndo(mk({ ctrlKey: true, key: 'y' }))).toBe(false) // redo key
+  })
+
+  it('matchesRedo — Ctrl+Y, Cmd+Y, Ctrl+Shift+Z, Cmd+Shift+Z; rejects Ctrl+Z and Alt', () => {
+    const mk = (overrides: Partial<KeyboardEvent>) =>
+      ({
+        key: 'y',
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...overrides
+      }) as KeyboardEvent
+    expect(matchesRedo(mk({ ctrlKey: true }))).toBe(true)
+    expect(matchesRedo(mk({ metaKey: true }))).toBe(true)
+    expect(matchesRedo(mk({ ctrlKey: true, shiftKey: true, key: 'z' }))).toBe(true)
+    expect(matchesRedo(mk({ metaKey: true, shiftKey: true, key: 'Z' }))).toBe(true)
+    // bare Ctrl+Z is undo, not redo
+    expect(matchesRedo(mk({ ctrlKey: true, key: 'z' }))).toBe(false)
+    expect(matchesRedo(mk({ ctrlKey: true, altKey: true }))).toBe(false)
+    expect(matchesRedo(mk({ key: 'y' }))).toBe(false) // bare y
+    expect(matchesRedo(mk({ ctrlKey: true, shiftKey: true, key: 'y' }))).toBe(false)
+  })
+
+  it('global group includes Undo and Redo entries', () => {
+    const globalGroup = APP_KEYBOARD_SHORTCUT_GROUPS.find(g => g.id === 'global')
+    expect(globalGroup).toBeDefined()
+    const actions = globalGroup!.rows.map(r => r.action)
+    expect(actions.some(a => /undo/i.test(a))).toBe(true)
+    expect(actions.some(a => /redo/i.test(a))).toBe(true)
+    const undoRow = globalGroup!.rows.find(r => /undo/i.test(r.action))
+    const redoRow = globalGroup!.rows.find(r => /redo/i.test(r.action))
+    expect(undoRow!.keysWin).toContain('Ctrl+Z')
+    expect(redoRow!.keysWin).toContain('Ctrl+Y')
+    expect(redoRow!.keysWin).toContain('Ctrl+Shift+Z')
   })
 
   it('isTypableKeyboardTarget rejects non-elements', () => {

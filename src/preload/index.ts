@@ -213,6 +213,29 @@ export type Api = {
          * change.
          */
         tempValidation?: { samples?: readonly GcodeTempSample[] }
+        /**
+         * Quick-win bundle (undo/redo + K2 thumbnail + Klipper header):
+         * non-fatal advisory warnings the main-process parser emitted
+         * (typical: "no '; thumbnail begin' block detected ..."). Upload
+         * still succeeded; renderer should soft-toast each entry.
+         */
+        warnings?: readonly string[]
+        /**
+         * Quick-win bundle: structured `GcodeHeaderHealth` snapshot so the
+         * renderer can render a badge before Send. Optional shape -- main
+         * process only populates when the bounded header read succeeded.
+         */
+        headerHealth?: {
+          ok: boolean
+          missingFields: readonly string[]
+          fields: {
+            timeSeconds?: number
+            filament?: { mm?: number; grams?: number }
+            layerCount?: number
+            thumbnail?: { widthPx: number; heightPx: number; bytes: number }
+          }
+          summary: string
+        }
       }
     | {
         ok: false

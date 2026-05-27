@@ -20,6 +20,7 @@ import { URL } from 'node:url'
 
 import type { FdmCapabilityFields } from '../shared/gcode-temp-validator'
 import { readGcodeHeaderText } from './gcode-header-read'
+import { checkGcodeHeaderHealth, hasThumbnailBlock, type GcodeHeaderHealth } from '../shared/gcode-header-health'
 import {
   summarizeTempViolations,
   validateGcodeFileTemps,
@@ -64,6 +65,17 @@ export type MoonrakerPushResult =
       uploadedPath: string
       printStarted: boolean
       printerUrl: string
+      /**
+       * Optional non-fatal warnings collected during the upload. The Mainsail
+       * / Fluidd file picker on the K2 Plus uses embedded slicer header
+       * fields (estimated time, filament use, layer count, thumbnail PNG)
+       * for its preview surface; when any of those are missing the upload
+       * still succeeds but the printer file list shows less info. Quick-win
+       * bundle: undo/redo + K2 thumbnail + Klipper header.
+       */
+      warnings?: string[]
+      /** Header health result, populated whenever the header was parsed. */
+      headerHealth?: GcodeHeaderHealth
     }
   | {
       ok: false
@@ -332,17 +344,30 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
   // reads only the first 128 KiB rather than `readFileSync`-ing the entire
   // file. Avoids a full-file UTF-8 decode + string allocation on jobs where
   // the gcode is tens or hundreds of megabytes.
-  if (machineCapabilities != null) {
-    let gcodeText: string
-    try {
-      gcodeText = readGcodeHeaderText(gcodePath)
-    } catch (e) {
+  //
+  // Quick-win bundle (undo/redo + K2 thumbnail + Klipper header): the same
+  // bounded header text feeds the advisory `checkGcodeHeaderHealth` call so
+  // we can warn (non-fatal) when Mainsail/Fluidd will show a plain filename
+  // in the K2 Plus picker because the thumbnail or other metadata fields
+  // are missing.
+  const warnings: string[] = []
+  let headerHealth: GcodeHeaderHealth | undefined
+  let gcodeText: string | null = null
+  try {
+    gcodeText = readGcodeHeaderText(gcodePath)
+  } catch (e) {
+    if (machineCapabilities != null) {
       return {
         ok: false,
         error: 'G-code file unreadable — cannot pre-validate temperatures.',
         detail: e instanceof Error ? e.message : String(e)
       }
     }
+    // Without caps, header parsing is advisory-only -- swallow and skip.
+    gcodeText = null
+  }
+
+  if (machineCapabilities != null && gcodeText != null) {
     const tempValidation = validateGcodeFileTemps(gcodeText, machineCapabilities)
     if (!tempValidation.ok) {
       const summary = summarizeTempViolations(tempValidation)
@@ -353,6 +378,29 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
           summary ??
           `One or more heat targets in ${filename} exceed the active machine profile's declared ceilings.`,
         tempValidation
+      }
+    }
+  }
+
+  if (gcodeText != null) {
+    headerHealth = checkGcodeHeaderHealth(gcodeText)
+    if (!hasThumbnailBlock(gcodeText)) {
+      warnings.push(
+        `${filename}: no '; thumbnail begin' block detected in the G-code header. ` +
+          'The upload will still work, but Mainsail/Fluidd will show a plain filename in the K2 Plus file picker. ' +
+          "Re-slice with OrcaSlicer's `thumbnails` setting enabled (already set in the WorkTrackCAM K2 profile)."
+      )
+    }
+    if (headerHealth.missingFields.length > 0 && headerHealth.missingFields.length < 4) {
+      // 4 == every field missing -> the file is almost certainly a non-slicer
+      // CNC G-code that we should not nag about. Anything less than total
+      // absence is worth surfacing.
+      const nonThumbnail = headerHealth.missingFields.filter((f) => f !== 'thumbnail')
+      if (nonThumbnail.length > 0) {
+        warnings.push(
+          `${filename}: slicer header is missing ${nonThumbnail.join(', ')}. ` +
+            'Mainsail/Fluidd will show less detail in the file picker (still uploads OK).',
+        )
       }
     }
   }
@@ -386,7 +434,15 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
   const uploadedPath = parseUploadedPath(uploadResult.body, filename)
 
   if (!startAfterUpload) {
-    return { ok: true, filename, uploadedPath, printStarted: false, printerUrl }
+    return {
+      ok: true,
+      filename,
+      uploadedPath,
+      printStarted: false,
+      printerUrl,
+      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(headerHealth != null ? { headerHealth } : {})
+    }
   }
 
   // Start print
@@ -415,7 +471,15 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
     }
   }
 
-  return { ok: true, filename, uploadedPath, printStarted: true, printerUrl }
+  return {
+    ok: true,
+    filename,
+    uploadedPath,
+    printStarted: true,
+    printerUrl,
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(headerHealth != null ? { headerHealth } : {})
+  }
 }
 
 /**

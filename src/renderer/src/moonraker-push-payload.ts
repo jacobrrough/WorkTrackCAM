@@ -32,6 +32,7 @@
  */
 
 import type { GcodeTempSample } from '../../shared/gcode-temp-validator'
+import type { GcodeHeaderHealth } from '../../shared/gcode-header-health'
 import { formatFdmTempPreview } from '../../shared/fdm-temp-preview'
 
 /**
@@ -82,6 +83,21 @@ export type MoonrakerPushResult = {
   tempValidation?: {
     samples?: readonly GcodeTempSample[]
   }
+  /**
+   * Quick-win bundle (undo/redo + K2 thumbnail + Klipper header):
+   * non-fatal advisory warnings produced by the K2 thumbnail / Klipper
+   * header parser. When present on the success path the renderer can
+   * surface a soft "info" toast so the operator knows the upload went
+   * through but Mainsail/Fluidd will show less metadata in the picker.
+   * The upload is NEVER blocked on these warnings.
+   */
+  warnings?: string[]
+  /**
+   * Quick-win bundle: structured `GcodeHeaderHealth` snapshot so the
+   * renderer can render a badge before Send (estimated time, filament
+   * use, layer count, thumbnail metadata).
+   */
+  headerHealth?: GcodeHeaderHealth
 }
 
 /**
