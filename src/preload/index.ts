@@ -99,18 +99,24 @@ export type Api = {
    * Returns an unsubscribe function. Events are forwarded from main via `cam:progress`.
    */
   onCamProgress: (callback: (event: CamProgressEvent) => void) => () => void
-  sliceCura: (payload: {
-    stlPath: string; outPath: string; curaEnginePath: string
-    definitionsPath?: string; definitionPath?: string
-    slicePreset?: string | null; curaEngineSettings?: Record<string, string>
-    /** K2 Plus quality preset id. Roadmap: [P2-K2-SLICE]/Cycle 6. */
-    k2QualityPresetId?: 'standard' | 'high_speed'
-    filamentSettings?: {
-      nozzleTempC: number; bedTempC: number; chamberTempC?: number
-      fanSpeedPercent: number; fanSpeedFirstLayerPercent?: number
-      retractionMm?: number; retractionSpeedMmPerSec?: number
-    }
-  }) => Promise<{ ok: boolean; stderr?: string; stdout?: string }>
+  /**
+   * 2026-05-27 OrcaSlicer pivot (task #9). Bridges the renderer's K2 Plus
+   * slice button to the bundled OrcaSlicer CLI via the `slice:orca` IPC
+   * handler. Profile .ini files are resolved in the main process from
+   * `resources/orca-slicer/profiles/{machines,process,filament}` based
+   * on the supplied `machineId` + `qualityPresetId` + `filamentId`.
+   */
+  sliceOrca: (payload: {
+    stlPath: string
+    outPath: string
+    machineId: string
+    qualityPresetId?: 'standard' | 'high_speed'
+    filamentId?: string
+    overrides?: Record<string, string | number>
+  }) => Promise<
+    | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
+    | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
+  >
 
   // ── Manufacture file ─────────────────────────────────────────────────────
   manufactureLoad: (projectDir: string) => Promise<ManufactureFile>
@@ -358,7 +364,7 @@ const api: Api = {
     ipcRenderer.on('cam:progress', handler)
     return () => { ipcRenderer.removeListener('cam:progress', handler) }
   },
-  sliceCura: (payload) => ipcRenderer.invoke('slice:cura', payload),
+  sliceOrca: (payload) => ipcRenderer.invoke('slice:orca', payload),
 
   // Manufacture file
   manufactureLoad: (projectDir) => ipcRenderer.invoke('manufacture:load', projectDir),

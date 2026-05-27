@@ -24,6 +24,7 @@ import {
   generateCarveraZProbe
 } from '../shared/carvera-zeroing'
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
+import { runOrcaSlice } from './slicer/orca-wrapper'
 import type { FdmCapabilityFields, GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
   deleteUserMachine,
@@ -36,9 +37,10 @@ import {
 } from './machines'
 import { loadMachineToolLibrary, saveMachineToolLibrary } from './machine-tool-library'
 import { getResourcesRoot } from './paths'
-// 2026-05-27 pivot: slicer.ts (CuraEngine) was deleted; OrcaSlicer wires in
-// under task #7. The slice:cura IPC handler was removed; stageStlForProject
-// is inlined below.
+// 2026-05-27 pivot: slicer.ts (CuraEngine) was deleted; the OrcaSlicer-backed
+// `slice:orca` IPC handler below replaces it (task #9). The previous
+// `slice:cura` handler is gone; `stageStlForProject` is inlined here so the
+// renderer's STL-staging IPC keeps working without the deleted slicer.ts shim.
 import { copyFile, mkdir as mkdirFs } from 'node:fs/promises'
 
 /**
@@ -257,9 +259,100 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     }
   )
 
-  // 2026-05-27 pivot: 'slice:cura' IPC handler removed alongside the
-  // CuraEngine bundle. The OrcaSlicer-backed 'slice:orca' handler lands
-  // under task #7 (Bundle OrcaSlicer CLI + wrapper for K2 Plus).
+  // 2026-05-27 pivot: 'slice:cura' IPC handler was removed alongside the
+  // CuraEngine bundle. The OrcaSlicer replacement lives below as
+  // 'slice:orca' (task #9). The renderer reaches it via the preload
+  // `sliceOrca` bridge. Profile .ini files are resolved relative to
+  // `resources/orca-slicer/profiles/`; the bundle itself ships separately
+  // (`Follow-up — Bundle the OrcaSlicer binary` per PR #9 description).
+  ipcMain.handle(
+    'slice:orca',
+    async (
+      _e,
+      payload: {
+        stlPath: string
+        outPath: string
+        machineId: string
+        qualityPresetId?: 'standard' | 'high_speed'
+        filamentId?: string
+        overrides?: Record<string, string | number>
+      }
+    ): Promise<
+      | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
+      | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
+    > => {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false as const, error: 'invalid_payload', hint: "slice:orca requires { stlPath, outPath, machineId, ... }" }
+      }
+      if (typeof payload.stlPath !== 'string' || payload.stlPath.length === 0) {
+        return { ok: false as const, error: 'missing_stl_path' }
+      }
+      if (typeof payload.outPath !== 'string' || payload.outPath.length === 0) {
+        return { ok: false as const, error: 'missing_out_path' }
+      }
+      if (typeof payload.machineId !== 'string' || payload.machineId.length === 0) {
+        return { ok: false as const, error: 'missing_machine_id' }
+      }
+      // Null-byte rejection -- mirrors the pattern in `fs:readBase64`. The
+      // renderer is the only IPC caller; absolute paths under the project
+      // tree are expected. Full path-root containment is not enforced here
+      // because the project root is not part of the payload (matches
+      // sibling handlers `stl:stage`, `stl:transformForCam`, `cam:run`).
+      if (payload.stlPath.includes('\0') || payload.outPath.includes('\0')) {
+        return { ok: false as const, error: 'invalid_path' }
+      }
+      const machine = await getMachineById(payload.machineId)
+      if (!machine || machine.kind !== 'fdm') {
+        return {
+          ok: false as const,
+          error: 'not_fdm_machine',
+          hint: 'slice:orca requires an FDM machine profile (e.g. Creality K2 Plus). Select an FDM machine in Manufacture.'
+        }
+      }
+      const appRoot = app.getAppPath()
+      const profilesDir = join(appRoot, 'resources', 'orca-slicer', 'profiles')
+      const qualityPresetId = payload.qualityPresetId ?? 'standard'
+      const filamentId =
+        typeof payload.filamentId === 'string' && payload.filamentId.length > 0
+          ? payload.filamentId
+          : 'pla-generic'
+      const machineProfileIni = join(profilesDir, 'machines', `${payload.machineId}.ini`)
+      const processProfileIni = join(profilesDir, 'process', `${qualityPresetId}.ini`)
+      const filamentProfileIni = join(profilesDir, 'filament', `${filamentId}.ini`)
+      try {
+        const result = await runOrcaSlice(appRoot, {
+          inputPath: payload.stlPath,
+          outputGcodePath: payload.outPath,
+          machineProfileIni,
+          processProfileIni,
+          filamentProfileIni,
+          ...(payload.overrides ? { overrides: payload.overrides } : {})
+        })
+        if (!result.ok) {
+          return {
+            ok: false as const,
+            error: 'orca_slice_failed',
+            hint: result.stderr.trim() || `OrcaSlicer exited with code ${result.exitCode}`,
+            stdout: result.stdout,
+            stderr: result.stderr
+          }
+        }
+        return {
+          ok: true as const,
+          outputGcodePath: result.outputGcodePath,
+          stdout: result.stdout,
+          stderr: result.stderr
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return {
+          ok: false as const,
+          error: 'orca_unavailable',
+          hint: msg
+        }
+      }
+    }
+  )
 
   ipcMain.handle(
     'cam:run',

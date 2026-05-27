@@ -231,12 +231,52 @@ export function ManufactureWorkspace({
 
   // ── FDM slice from operation ──────────────────────────────────────────────────
 
-  async function runFdmSliceFromOp(_opIndex: number): Promise<void> {
-    // Stubbed during the 2026-05-27 OrcaSlicer pivot. The previous CuraEngine
-    // path was deleted with the rest of the Cura stack; the OrcaSlicer
-    // replacement lands in the slicer-scaffold task and will reuse this
-    // function's signature and op-shape contract.
-    onStatus?.('FDM slicing temporarily disabled — OrcaSlicer integration in progress.')
+  /**
+   * 2026-05-27 OrcaSlicer pivot (task #9). Calls the new `slice:orca`
+   * IPC handler with the active machine + K2 quality preset from
+   * settings. On success records the absolute output path in
+   * `lastSliceGcodePath` so the SliceManufacturePanel's Send-to-K2
+   * button (Phase 2 [P2-K2-PUSH]/Cycle 349) has a concrete file to
+   * push to Moonraker.
+   *
+   * Op-shape contract preserved from the pre-pivot CuraEngine path:
+   *   - Op must be `kind === 'fdm_slice'`.
+   *   - Op must declare a `sourceMesh` (project-relative path).
+   *   - Output lands at `<projectDir>/output/slice.gcode`.
+   */
+  async function runFdmSliceFromOp(opIndex: number): Promise<void> {
+    if (!projectDir) {
+      onStatus?.('Open a project before running an FDM slice.')
+      return
+    }
+    const op = mfg.operations[opIndex]
+    if (!op || op.kind !== 'fdm_slice') {
+      onStatus?.('Selected operation is not an FDM slice.')
+      return
+    }
+    if (!activeMachineId) {
+      onStatus?.('Select an FDM machine before running an FDM slice.')
+      return
+    }
+    if (!op.sourceMesh || op.sourceMesh.trim().length === 0) {
+      onStatus?.('Operation is missing a source mesh.')
+      return
+    }
+    const stlPath = `${projectDir}/${op.sourceMesh}`
+    const out = `${projectDir}/output/slice.gcode`
+    const r = await fab.sliceOrca({
+      stlPath,
+      outPath: out,
+      machineId: activeMachineId,
+      qualityPresetId: settings?.k2QualityPresetId,
+      filamentId: settings?.activeFilamentId
+    })
+    if (r.ok) {
+      setLastSliceGcodePath(out)
+      onStatus?.(`Sliced via OrcaSlicer → ${out}`)
+    } else {
+      onStatus?.(`Slice failed (${r.error})${r.hint ? `: ${r.hint}` : ''}`)
+    }
   }
 
   // ── Setup mutations ───────────────────────────────────────────────────────────

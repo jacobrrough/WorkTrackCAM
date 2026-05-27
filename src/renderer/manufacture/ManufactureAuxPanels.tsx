@@ -12,7 +12,6 @@ import {
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import { buildCamSimulationPreview } from '../../shared/cam-simulation-preview'
-import { formatFdmLayerSummaryHuman, summarizeFdmGcodeLayers } from '../../shared/fdm-gcode-layer-summary'
 import { CamLastRunHint } from '../utilities/CamLastRunHint'
 import { evaluateManufactureReadiness } from '../../shared/manufacture-readiness'
 import type { ManufactureFile } from '../../shared/manufacture-schema'
@@ -20,7 +19,6 @@ import { CarveraSetupPanel } from './CarveraSetupPanel'
 import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
 
-const SLICE_PREVIEW = 8000
 const CAM_PREVIEW = 8000
 const countVisibleLines = (text: string): number => text.split(/\r?\n/).length
 
@@ -89,19 +87,136 @@ export type ManufactureAuxPanelsProps = {
   lastSliceGcodePath?: string | null
 }
 
-export function SliceManufacturePanel(_p: ManufactureAuxPanelsProps): ReactNode {
-  // 2026-05-27 pivot: CuraEngine-based slice panel was deleted. The OrcaSlicer
-  // replacement (Orca presets, K2 Plus filament picker, Send-to-K2 Moonraker
-  // push wiring) lands under task #9 — Migrate React UI to new IPC surface.
+/**
+ * FDM slicing + printer push surface for the K2 Plus.
+ *
+ * 2026-05-27 OrcaSlicer pivot (task #9): the legacy CuraEngine flow was
+ * deleted; this panel is rebuilt on top of the new `slice:orca` IPC and
+ * keeps the [P2-K2-PUSH]/Cycle 349 Send-to-K2 button + the [P2-K2-SLICE]/
+ * Cycle 6 K2 Plus quality preset picker on disk.
+ *
+ * Surfaces (gated on the active machine):
+ *   - Filament picker (FDM machines): chooses the active filament for the
+ *     next slice. The picker is purely visual today — the slice IPC reads
+ *     `settings.activeFilamentId` directly. Selecting here updates local
+ *     state for immediate visual feedback.
+ *   - K2 Plus quality preset picker (K2 Plus only): `standard` or
+ *     `high_speed`, persisted via `onSaveSettingsField`. Drives the
+ *     `qualityPresetId` field of the `slice:orca` payload.
+ *   - Send to K2 Plus button (K2 Plus only): uploads the most recent
+ *     successfully-sliced G-code (`lastSliceGcodePath`) to the printer
+ *     via the existing `moonraker:push` handler. NEVER fabricates a path
+ *     from `sliceOut` text — only the on-disk write path is pushed
+ *     because Moonraker requires a real file payload upstream of the
+ *     upload boundary.
+ */
+export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
+  const isFdm = p.activeMachine?.kind === 'fdm'
+  const isK2Plus = p.activeMachine?.id === 'creality-k2-plus'
+  const k2QualityPresetId = p.settings?.k2QualityPresetId ?? 'standard'
+  const moonrakerUrl = p.settings?.moonrakerUrl?.trim() ?? ''
+  const sendCandidatePath = p.lastSliceGcodePath?.trim() ?? ''
+  const canSendToK2 = isK2Plus && sendCandidatePath.length > 0 && moonrakerUrl.length > 0
+
+  const [k2SendBusy, setK2SendBusy] = useState(false)
+  const [filaments, setFilaments] = useState<FilamentRecord[]>([])
+  const [activeFilamentId, setActiveFilamentId] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (!isFdm) return
+    void window.fab
+      .filamentsList()
+      .then(setFilaments)
+      .catch(() => setFilaments([]))
+  }, [isFdm])
+
+  async function sendToK2Plus(): Promise<void> {
+    if (!canSendToK2 || k2SendBusy) return
+    setK2SendBusy(true)
+    try {
+      const payload = buildMoonrakerPushPayload(
+        {
+          gcodeOut: sendCandidatePath,
+          printerUrl: moonrakerUrl,
+          machineId: p.activeMachine?.id ?? null
+        },
+        { startAfterUpload: true }
+      )
+      const r = await window.fab.moonrakerPush(payload)
+      if (r.ok) {
+        p.onStatus?.(`Started on K2 Plus: ${r.filename ?? sendCandidatePath}`)
+      } else {
+        p.onStatus?.(formatMoonrakerPushFailure(r))
+      }
+    } finally {
+      setK2SendBusy(false)
+    }
+  }
+
   return (
     <section className="panel workspace-util-panel" aria-labelledby="mfg-slice-heading">
-      <h2 id="mfg-slice-heading">FDM slice (K2 Plus)</h2>
-      <p className="msg util-panel-intro">
-        OrcaSlicer integration in progress. The K2 Plus FDM pipeline (slice
-        presets, filament picker, Moonraker push) is being rewired on top of
-        the bundled OrcaSlicer CLI; this panel returns when the new IPC
-        surface lands.
-      </p>
+      <h2 id="mfg-slice-heading">FDM slice (K2 Plus profile)</h2>
+      {isFdm ? (
+        <FilamentPicker
+          filaments={filaments}
+          activeFilamentId={activeFilamentId}
+          onSelect={setActiveFilamentId}
+          machineMaxNozzleTempC={p.activeMachine?.maxNozzleTempC}
+          machineMaxBedTempC={p.activeMachine?.maxBedTempC}
+        />
+      ) : null}
+      {isK2Plus ? (
+        <label htmlFor="mfg-k2-quality-preset" className="util-panel-control">
+          <span>K2 Plus quality preset</span>
+          <select
+            id="mfg-k2-quality-preset"
+            data-testid="k2-quality-preset-picker"
+            value={k2QualityPresetId}
+            onChange={(e) =>
+              p.onSaveSettingsField({
+                k2QualityPresetId: e.target.value as K2PlusQualityPresetId
+              })
+            }
+          >
+            {K2_PLUS_QUALITY_PRESET_IDS.map((id) => (
+              <option key={id} value={id} title={K2_PLUS_SLICE_PRESETS[id].description}>
+                {K2_PLUS_SLICE_PRESETS[id].label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {isK2Plus ? (
+        <section
+          className="k2-send-section"
+          data-testid="k2-send-to-printer-section"
+          aria-labelledby="k2-send-heading"
+        >
+          <h3 id="k2-send-heading">Send to K2 Plus</h3>
+          {sendCandidatePath.length === 0 ? (
+            <p className="msg">Slice an FDM operation to enable Send.</p>
+          ) : null}
+          {moonrakerUrl.length === 0 ? (
+            <p className="msg">Add a Moonraker URL in File → Settings to enable Send.</p>
+          ) : null}
+          <button
+            type="button"
+            data-testid="k2-send-to-printer-button"
+            disabled={!canSendToK2 || k2SendBusy}
+            onClick={() => void sendToK2Plus()}
+          >
+            {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
+          </button>
+        </section>
+      ) : null}
+      {p.sliceOut.trim().length > 0 ? (
+        <div className="msg util-panel-intro">
+          <small>
+            Last slice ({countVisibleLines(p.sliceOut)} log lines):{' '}
+            <code>{p.sliceOut.split(/\r?\n/).slice(-1)[0] ?? ''}</code>
+          </small>
+        </div>
+      ) : null}
     </section>
   )
 }

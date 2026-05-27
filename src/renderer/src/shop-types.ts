@@ -77,10 +77,21 @@ export declare const window: Window & {
       }
     }) => Promise<{ ok: boolean; gcode?: string; error?: string; hint?: string; usedEngine?: string; warnings?: string[] }>
     readTextFile: (filePath: string) => Promise<string>
-    sliceCura: (payload: {
-      stlPath: string; outPath: string; curaEnginePath: string
-      slicePreset?: string | null
-    }) => Promise<{ ok: boolean; stderr?: string }>
+    /**
+     * 2026-05-27 OrcaSlicer pivot (task #9). Replaces the deleted
+     * `sliceCura` bridge. Calls the `slice:orca` IPC handler.
+     */
+    sliceOrca: (payload: {
+      stlPath: string
+      outPath: string
+      machineId: string
+      qualityPresetId?: 'standard' | 'high_speed'
+      filamentId?: string
+      overrides?: Record<string, string | number>
+    }) => Promise<
+      | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
+      | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
+    >
     toolsRead: (dir: string) => Promise<ToolLibraryFile>
     toolsSave: (dir: string, lib: ToolLibraryFile) => Promise<void>
     toolsImport: (dir: string, payload: { kind: 'csv' | 'json' | 'fusion' | 'fusion_csv'; content: string }) => Promise<ToolLibraryFile>

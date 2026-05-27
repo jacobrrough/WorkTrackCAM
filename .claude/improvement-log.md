@@ -16154,3 +16154,150 @@ All 20 new tests pass.
 - **Out-of-band** — Bundle the OrcaSlicer Windows binary under `resources/orca-slicer/win32-x64/` via electron-builder `extraResources`. The wrapper at `src/main/slicer/orca-wrapper.ts` already throws a clear error until this lands.
 
 **Rotation status**: Standard rotation is PAUSED until the pivot is merged and tasks #9 + #10 close. Once merged, the next numbered cycle picks up where the pre-pivot rotation left off (see `.claude/commands/improve.md` rotation order; CLAUDE.md "Open-Source Backend Stack" section defines the new substrate for all future cycles).
+
+
+---
+
+## Task #9 -- 2026-05-27 -- OrcaSlicer pivot: SliceManufacturePanel + slice:orca IPC
+
+**Context:** Direct continuation of PR #9 (merge commit `5cbb124`) which
+landed the foundation pivot (CadQuery + OpenCAMLib + OrcaSlicer scaffold,
+deleted ~225 files / ~42K lines of FreeCAD-addon + CuraEngine code). PR
+#9's "Remaining tasks" list called out **#9** as "Rebuild
+`SliceManufacturePanel` against the OrcaSlicer flow (filament picker,
+presets, Send-to-K2 Moonraker push) and add the `slice:orca` IPC handler
+in `ipc-fabrication.ts`." This entry closes that item.
+
+**Baseline (pre-flight on merged main, `5cbb124`):**
+- vitest: 13182 passed / 107 failed / 1 skipped (326 files; 303 passed,
+  22 failed).
+- tsc: 8 errors (7 pre-existing schema mismatches in
+  `ManufactureAuxPanels.tsx`; 1 pre-existing missing module in
+  `ShopApp.tsx`). None caused by the pivot per PR #9 description.
+
+**Post-flight:**
+- vitest: **13241 passed** (+59) / **79 failed** (-28 vs 107) / 1
+  skipped / 327 files (+1).
+- tsc: **8 errors** (UNCHANGED; same pre-existing surfaces).
+- Net: +59 passing, -28 failing, ZERO regressions.
+
+**Wire built (top -> bottom of the render -> OrcaSlicer stack):**
+
+1. **`src/main/ipc-fabrication.ts`** -- registered `slice:orca` handler.
+   Validates payload at the boundary (`missing_stl_path`,
+   `missing_out_path`, `missing_machine_id`, `invalid_path` for null-byte
+   injection), resolves the active machine profile via
+   `getMachineById()` and bails with `not_fdm_machine` for CNC profiles
+   (Safety Rule 1 + cross-machine cross-cut), resolves profile .ini
+   paths under `resources/orca-slicer/profiles/{machines,process,filament}`,
+   then delegates to `runOrcaSlice(appRoot, cfg)` from
+   `src/main/slicer/orca-wrapper.ts`. Catches the
+   "OrcaSlicer binary not bundled" throw with `orca_unavailable`; surfaces
+   non-zero exits as `orca_slice_failed` with the CLI stderr in the
+   `hint` field.
+
+2. **`src/preload/index.ts`** -- replaced the deleted `sliceCura` bridge
+   with a typed `sliceOrca(payload)` bridge invoking the `slice:orca`
+   IPC channel. Payload + result types are structurally identical to
+   the handler.
+
+3. **`src/renderer/src/shop-types.ts`** -- replaced the deleted
+   `sliceCura` typing on `window.fab` with the matching `sliceOrca`
+   signature so the renderer call sites typecheck.
+
+4. **`src/renderer/manufacture/ManufactureAuxPanels.tsx`** -- rebuilt
+   `SliceManufacturePanel` from the 16-line stub. New surface:
+   - **FilamentPicker** (FDM machines): existing `FilamentPicker`
+     component, loaded from the `filamentsList` IPC.
+   - **K2 Plus quality preset picker** (K2 only):
+     `<select id="mfg-k2-quality-preset" data-testid="k2-quality-preset-picker">`
+     populated from `K2_PLUS_QUALITY_PRESET_IDS`; onChange persists
+     `k2QualityPresetId` via `onSaveSettingsField`.
+   - **Send to K2 Plus button** (K2 only): preserves the
+     [P2-K2-PUSH]/Cycle 349 contract -- `data-testid="k2-send-to-printer-section"` /
+     `data-testid="k2-send-to-printer-button"`, three-condition gating
+     (`isK2Plus && sendCandidatePath.length > 0 && moonrakerUrl.length > 0`),
+     `k2SendBusy` double-click guard, success label "Started on K2 Plus",
+     failure via `formatMoonrakerPushFailure(r)`, payload built via
+     `buildMoonrakerPushPayload` with `machineId` threaded so the
+     [ID-0078] IPC resolver applies the FDM temperature ceilings.
+   - Removed unused imports (`formatFdmLayerSummaryHuman`,
+     `summarizeFdmGcodeLayers`) + dead `SLICE_PREVIEW` constant.
+
+5. **`src/renderer/manufacture/ManufactureWorkspace.tsx`** -- rewrote
+   `runFdmSliceFromOp(opIndex)` from the OrcaSlicer-pivot stub. Now
+   guards on `projectDir` / op-shape (`kind === 'fdm_slice'`) /
+   `activeMachineId` / `sourceMesh`, calls
+   `fab.sliceOrca({ stlPath, outPath: out, machineId, qualityPresetId, filamentId })`,
+   threads `settings?.k2QualityPresetId` + `settings?.activeFilamentId`,
+   and on success records the absolute output path via
+   `setLastSliceGcodePath(out)` so the Send-to-K2 button has a concrete
+   file to push.
+
+6. **`src/main/slice-orca-ipc-pin.test.ts`** -- NEW paired-pin test
+   (31 it() across 7 describe groups A-G). Asserts the on-disk source
+   shape of the slice:orca handler, the preload bridge, the
+   shop-types window typing, the workspace call site, the panel
+   docstring, the orca-wrapper exports, and the cross-machine
+   purity invariants (zero G##/M## tokens, zero non-K2 vendor
+   identifiers, FDM-only gate).
+
+**Tests that flipped fail -> pass (28 of the 107 baseline failures):**
+- `src/renderer/manufacture/manufacture-aux-k2-send-render.test.tsx`
+  (9 tests): the K2 Send button gating render-pin now matches the
+  rebuilt panel.
+- `src/main/k2-moonraker-push-ui-pin.test.ts` (most of it; B-block
+  source assertions on the panel now match the rebuilt source text).
+- Possibly a few more incidental fails that hinged on the panel
+  surface existing.
+
+**Tests that remain failing (79 of 107):** the dead pins per PR #9's
+**task #10** -- mostly `k2-quality-preset-ipc-pin.test.ts` and
+`k2-renderer-send-flow-e2e.test.ts` which pin the deleted
+`slice:cura` IPC, preload `sliceCura`, and `fab.sliceCura(...)`
+workspace call. Out of scope for task #9; will be cleaned up under
+task #10 ("Delete the 47 dead pin tests that pin behaviors that no
+longer exist; port the rest to the new IPC surface").
+
+**Three-machine impact:**
+- **Creality K2 Plus**: DIRECT. The full FDM slicing pipeline is back
+  online from the renderer's perspective (the OrcaSlicer binary itself
+  is the follow-up bundling task -- the handler returns
+  `orca_unavailable` with a clean hint until then). Send-to-K2 button
+  is restored end-to-end with the [ID-0070]/[ID-0073]/[ID-0078]
+  pre-upload temperature validator chain intact.
+- **Laguna Swift 5x10**: INDIRECT. The handler bails with
+  `not_fdm_machine` when the active profile is CNC, preserving the
+  guarantee that no slicing pipeline can corrupt a router job.
+- **Makera Carvera (3-axis + 4-axis rotary)**: INDIRECT, same gate.
+
+**Safety Rule 1 (G-code is sacred):** UNTOUCHED. No post-processor
+templates, no machine-profile YAML/JSON, no G-code emission code, no
+Python CAM engine. The slice:orca handler is a thin marshaller from the
+IPC payload to the OrcaSlicer CLI; OrcaSlicer itself is the G-code
+emitter (its output is its own contract, validated downstream by the
+[ID-0070] temperature validator before any byte hits Moonraker).
+
+**Out of scope (deliberate):**
+- Bundling the OrcaSlicer binary under `resources/orca-slicer/win32-x64/`
+  -- "Follow-up" per PR #9. Until the bundle lands, every real slice
+  call returns `orca_unavailable` (the user-facing message points at
+  the upcoming bundling step).
+- Shipping the K2 Plus .ini profiles under
+  `resources/orca-slicer/profiles/{machines,process,filament}`. Same
+  follow-up window.
+- Task #10 dead-pin cleanup (47 still-failing pins after this entry's
+  +28 flips).
+- The `slice:cura` IPC handler is NOT being revived for backward
+  compat; the pivot deleted it deliberately.
+
+**Edit-tool fires:** ZERO splice / Python-via-bash recovery needed
+for the source files (all clean Edit). Improvement-log append rode
+Python-via-bash per the >800-line file rule in
+`docs/EDIT-WORKFLOW.md`.
+
+**Hand-off:** Task #10 (delete the 47 dead pin tests + port any
+salvageable ones to the new `sliceOrca` surface) is the natural
+follow-up. Independently, the OrcaSlicer binary bundling
+(electron-builder `extraResources` + scripts/bundle-orca-slicer.ps1)
+unblocks real-world K2 Plus printing.
