@@ -16082,3 +16082,40 @@ items are now in the roadmap NEXT-UP / CANDIDATE-NEXT-PHASE.
 **Safety Rule 1 status**: No post-processor templates or G-code emission code was touched in this pivot. resources/posts/ is preserved as-is. The deletion of CuraEngine binary only affects FDM slicing (not CNC G-code generation).
 
 **Next session**: Pick up #6 (scaffold Python sidecar) — bundle a CPython 3.11 runtime in resources/python/, vendor cadquery + opencamlib wheels, write a JSON-RPC server (engines/sidecar/main.py) that the Electron main process can spawn and converse with.
+
+
+---
+
+## Pivot Stage 2 — Backend scaffold (2026-05-27, same day as Stage 1)
+
+**Scope**: Constructive follow-up to the Stage 1 deletions. Not a numbered rotation cycle.
+
+**Trigger**: User said "KEEP GOING" after the Stage 1 commit summary.
+
+**Deliverables**:
+- **Python sidecar** (engines/sidecar/) — JSON-RPC over stdin/stdout, dispatch table built once at startup. main.py is the request loop (ping, cad.*, cam.* namespaces, shutdown). cad_handlers.py exposes import_step + tessellate as CadQuery scaffolds with strict param validation; cam_handlers.py exposes run_toolpath mirroring the validated config keys from the retained ocl_toolpath.py.
+- **TypeScript bridge** (src/main/sidecar/python-bridge.ts) — PythonBridge class with start()/call(method, params, opts)/stop(). Tagged errors (python_spawn_failed, bridge_closed, bridge_timeout, sidecar_error, bad_response). Concurrent in-flight calls routed by monotonic id; per-call timeoutMs + AbortSignal supported.
+- **Shared protocol** (src/shared/sidecar-protocol.ts) — SidecarRequest, SidecarResponse, method-specific param/result aliases, isSidecarResponse type guard. Kept structurally in sync with main.py.
+- **OrcaSlicer wrapper** (src/main/slicer/orca-wrapper.ts) — replaces the deleted CuraEngine slicer.ts. buildOrcaArgs() is pure (testable). runOrcaSlice() uses the existing spawnBounded primitive. resolveOrcaInstall() throws a clear error when the binary is not yet bundled (current dev state).
+
+**Tests added (+20)**:
+- src/shared/sidecar-protocol.test.ts — 8 isSidecarResponse cases.
+- src/main/slicer/orca-wrapper.test.ts — 7 buildOrcaArgs cases (argv order, --set thread, override types, --load order, missing-binary error).
+- src/main/sidecar/python-bridge.test.ts — 5 INTEGRATION tests against the real sidecar via `python -m engines.sidecar.main`. Skips cleanly if Python is not on PATH. Covers ping handshake, unknown_method routing, bad param surfacing, concurrent id routing, bridge_closed after stop().
+
+All 20 new tests pass.
+
+**Trailing CuraEngine cleanup (finished task #4)**:
+- src/main/ipc-fabrication.ts: FdmCapabilityFields import redirected to gcode-temp-validator.ts; the slice:cura IPC handler removed; stageStlForProject inlined (9-line helper).
+- src/main/moonraker-push.ts: same FdmCapabilityFields redirect.
+- src/renderer/manufacture/ManufactureAuxPanels.tsx: the ~260-line CuraEngine-coupled SliceManufacturePanel replaced with a stub. The OrcaSlicer-backed UI (filament picker, presets, Send-to-K2 Moonraker push) lands under task #9.
+
+**Typecheck status**: 8 errors remain, all PRE-EXISTING schema mismatches in ManufactureAuxPanels.tsx + missing preset-launch-plan in ShopApp.tsx. The Stage 1 implicit-any errors from the deleted deprecated block are gone.
+
+**Test status**: 13,182 passed / 107 failed / 1 skipped (326 files). The 47 failures-vs-Stage 1 are pre-existing pin tests pinning deleted code paths (slice:cura IPC, Cura def files, FDM passthrough, K2 send UI). Tracked under task #10 (Rewrite tests for new backend) — these are bookkeeping, not regressions caused by the scaffold.
+
+**Tasks completed in this stage**: #4, #6, #7, #8. Remaining: #9 (React UI migration to new IPC), #10 (rewrite/delete dead pin tests).
+
+**Next session**: Pick up task #9. Concretely: rebuild SliceManufacturePanel against the OrcaSlicer flow (filament picker + a small set of Orca presets + Send-to-K2), add the slice:orca IPC handler in ipc-fabrication.ts, and migrate any other panels that referenced sliceCura. Then task #10: delete pin tests for behaviors that no longer exist, port the rest to the new IPC surface.
+
+**Safety Rule 1 status**: No post templates or G-code emission code touched in this stage either.
