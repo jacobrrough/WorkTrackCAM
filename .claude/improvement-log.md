@@ -16119,3 +16119,38 @@ All 20 new tests pass.
 **Next session**: Pick up task #9. Concretely: rebuild SliceManufacturePanel against the OrcaSlicer flow (filament picker + a small set of Orca presets + Send-to-K2), add the slice:orca IPC handler in ipc-fabrication.ts, and migrate any other panels that referenced sliceCura. Then task #10: delete pin tests for behaviors that no longer exist, port the rest to the new IPC surface.
 
 **Safety Rule 1 status**: No post templates or G-code emission code touched in this stage either.
+
+
+---
+
+## Pivot Stage 3 — PR #9 opened (2026-05-27, same day as Stage 1 + Stage 2)
+
+**Scope**: Wraps the pivot into a reviewable pull request. Not a numbered rotation cycle.
+
+**PR**: [#9 — Foundation pivot: standalone Electron app on CadQuery + OpenCAMLib + OrcaSlicer](https://github.com/jacobrrough/WorkTrackCAM/pull/9)
+
+**Branch**: `claude/jolly-joliot-f6f9dd` → `main`
+
+**Commit sequence (6 commits, oldest → newest)**:
+1. `70c4e8c` — Cut: delete `freecad-addon/` + root cruft (80 files)
+2. `d463f8d` — Drop FreeCAD-style comments in `layout.css` and `workspaceMemory.ts`
+3. `abf8926` — Cut: remove CuraEngine + custom CAM strategies (144 files, ~35K lines)
+4. `d6cd92e` — Update CLAUDE.md, improvement-log, and unbreak cura-import typecheck
+5. `2d43b3b` — Scaffold backend: Python sidecar + TS bridge + OrcaSlicer wrapper (+1,113 lines, +20 tests)
+6. `91b1b39` — improvement-log: append Stage 2 entry (backend scaffold)
+
+(This Stage 3 entry itself is a follow-up commit and is NOT part of PR #9's commit range as opened — it appends post-PR-open for log continuity.)
+
+**Net diff**: ~225 files deleted (~42K lines removed) + 9 new files / 1,113 lines added across `engines/sidecar/`, `src/main/sidecar/`, `src/main/slicer/`, `src/shared/sidecar-protocol.ts`.
+
+**Final state at PR-open**:
+- `npm run typecheck` → 8 errors, all PRE-EXISTING (ManufactureAuxPanels.tsx schema mismatches + ShopApp.tsx missing `preset-launch-plan`). NONE are caused by the pivot.
+- `npm test` → 13,182 pass / 107 fail / 1 skip (326 files). The 20 new scaffold tests pass. The 47 net-new failures vs. pre-pivot are all pre-existing pin tests pinning deleted code paths — task #10 bookkeeping, not regressions.
+- Safety Rule 1: no post templates or G-code emission code touched in any of the three stages.
+
+**Hand-off for next session**:
+- **Task #9** — React UI migration: rebuild `SliceManufacturePanel` against the OrcaSlicer flow (filament picker, OrcaSlicer presets, Send-to-K2 Moonraker push), add `slice:orca` IPC handler in `ipc-fabrication.ts`. The Moonraker push path (`src/main/moonraker-push.ts`) is preserved and ready to consume Orca output.
+- **Task #10** — Delete the 47 dead pin tests (most are in `src/main/` and pin behaviors like `slice:cura`, `cura-bundled-paths`, K2 send UI that no longer exist). Port the rest to the new IPC surface.
+- **Out-of-band** — Bundle the OrcaSlicer Windows binary under `resources/orca-slicer/win32-x64/` via electron-builder `extraResources`. The wrapper at `src/main/slicer/orca-wrapper.ts` already throws a clear error until this lands.
+
+**Rotation status**: Standard rotation is PAUSED until the pivot is merged and tasks #9 + #10 close. Once merged, the next numbered cycle picks up where the pre-pivot rotation left off (see `.claude/commands/improve.md` rotation order; CLAUDE.md "Open-Source Backend Stack" section defines the new substrate for all future cycles).
