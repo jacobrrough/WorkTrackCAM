@@ -100,10 +100,10 @@ vi.mock('./paths', async (importOriginal) => {
   }
 })
 
-vi.mock('./slicer', () => ({
-  sliceWithCuraEngine: vi.fn(),
-  stageStlForProject: vi.fn()
-}))
+// Task #10 post-pivot: `./slicer` was deleted along with CuraEngine.
+// The mock factory is left out so any accidental re-import of the
+// missing module surfaces immediately. `stageStlForProject` (the only
+// surviving caller from this mock) moved into ipc-fabrication.ts.
 
 vi.mock('./tools-import', () => ({
   inferToolRecordsFromFileBuffer: vi.fn().mockReturnValue([]),
@@ -211,7 +211,7 @@ describe('ipc-fabrication', () => {
       'machines:exportUser',
       'stl:stage',
       'stl:transformForCam',
-      'slice:cura',
+      // 'slice:cura' removed in PR #9 / Task #10 -- foundation pivot to OrcaSlicer.
       'cam:run',
       'cam:cancel',
       'tools:read',

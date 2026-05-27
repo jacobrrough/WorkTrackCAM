@@ -137,21 +137,12 @@ describe('MoonrakerPreviewBanner ShopApp.tsx wire-up -- [ID-0072] Cycle 95 integ
     })
   })
 
-  describe('3. Mount gate -- view === jobs AND isFdm', () => {
-    it('mounts the banner only when view === jobs AND isFdm (the FDM-only K2 path)', () => {
-      // The mount gate combines a string equality on `view` with the
-      // boolean `isFdm` derived from `getMachineMode(sessionMachine)
-      // === 'fdm'`. Both halves are required: the K2 fab drawer is the
-      // ONLY drawer that surfaces a Moonraker push button, and the
-      // banner above that button is meaningless for the Laguna router
-      // and the Carvera 4-axis (no nozzle/bed/chamber on those).
-      const gate = "view === 'jobs' && isFdm"
-      expect(countSubstring(SHOP_APP_SRC, gate)).toBeGreaterThanOrEqual(1)
-      // The literal MOUNT block ties the gate to the banner JSX.
-      expect(SHOP_APP_SRC).toContain(
-        "{view === 'jobs' && isFdm && (\n        <MoonrakerPreviewBanner samples={moonrakerPreviewSamples} />\n      )}"
-      )
-    })
+  describe('3. Mount gate -- isFdm', () => {
+    // Task #10 post-pivot: the `view === 'jobs'` half of the gate was removed
+    // when SliceManufacturePanel was rebuilt for OrcaSlicer (PR #10). The
+    // banner now mounts whenever `isFdm` is true. Pin trimmed to the surviving
+    // single-condition gate; the multi-condition assertion was deleted because
+    // its production-side string literal no longer exists in ShopApp.tsx.
 
     it('declares isFdm via getMachineMode === fdm comparison (not a regex on machine name)', () => {
       // Pin the derivation source so a future cycle that
