@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-export type NavSection = 'jobs' | 'tools' | 'library' | 'settings' | 'myshop' | null
+export type NavSection = 'jobs' | 'tools' | 'workshop' | 'library' | 'settings' | 'myshop' | null
 
 interface NavRailProps {
   active: NavSection
@@ -12,9 +12,13 @@ interface NavRailProps {
 const ITEMS: { id: NavSection; icon: string; label: string; shortcut?: string }[] = [
   { id: 'jobs',     icon: '\u{1F4CB}', label: 'Jobs',     shortcut: '1' },
   { id: 'tools',    icon: '\u{1F527}', label: 'Tools',    shortcut: '2' },
-  { id: 'myshop',   icon: '\u{1F3ED}', label: 'My Shop',  shortcut: '3' },
-  { id: 'library',  icon: '\u{1F4DA}', label: 'Library',  shortcut: '4' },
-  { id: 'settings', icon: '⚙',    label: 'Settings',  shortcut: '5' },
+  // Workshop dashboard (Gap #10) — consolidates per-machine status,
+  // last outcome, and quick action for the three target machines into
+  // one top-level view reachable in a single click from anywhere.
+  { id: 'workshop', icon: '\u{1F4CA}', label: 'Workshop', shortcut: '3' },
+  { id: 'myshop',   icon: '\u{1F3ED}', label: 'My Shop',  shortcut: '4' },
+  { id: 'library',  icon: '\u{1F4DA}', label: 'Library',  shortcut: '5' },
+  { id: 'settings', icon: '⚙',    label: 'Settings',  shortcut: '6' },
 ]
 
 export function NavRail({ active, onSelect, jobCount, opCount }: NavRailProps): React.ReactElement {

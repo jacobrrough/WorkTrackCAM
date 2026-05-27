@@ -88,6 +88,10 @@ import { AppStatusBar } from './AppStatusBar'
 import type { MyShopPreset, MyShopMachineId } from './environments/my-shop-presets'
 import { composePresetLaunchPlan } from './environments/preset-launch-plan'
 import { ENVIRONMENTS } from './environments/registry'
+// Gap #10 (docs/COMPETITIVE-GAP-ANALYSIS.md): consolidated workshop
+// dashboard surfacing per-machine status, last outcome, and one quick
+// action per machine. Mounts when navSection === 'workshop'.
+import { WorkshopDashboard } from '../dashboard/WorkshopDashboard'
 
 // ── Context providers ────────────────────────────────────────────────────────
 import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
@@ -761,7 +765,14 @@ function ShopAppInner(): React.ReactElement {
   // path on every push.
   const [recentProjects, setRecentProjects] = useState<readonly string[]>([])
 
-  // Load existing recent-projects on first mount.
+  // Configured Moonraker base URL (Settings → Network & Printers). The
+  // Workshop dashboard (Gap #10) consumes this for live K2 status polling
+  // and for gating the "Send latest slice" quick action. `null` means
+  // the operator hasn't set one up yet — the K2 card surfaces job-derived
+  // status only and the quick action is disabled.
+  const [moonrakerUrl, setMoonrakerUrl] = useState<string | null>(null)
+
+  // Load existing recent-projects + moonraker URL on first mount.
   useEffect(() => {
     void (async () => {
       try {
@@ -774,6 +785,8 @@ function ShopAppInner(): React.ReactElement {
           }
           setRecentProjects(cleaned.slice(0, 5))
         }
+        const url = (s as { moonrakerUrl?: unknown }).moonrakerUrl
+        setMoonrakerUrl(typeof url === 'string' && url.length > 0 ? url : null)
       } catch { /* settings unavailable — render empty MRU */ }
     })()
   }, [])
@@ -1875,6 +1888,61 @@ function ShopAppInner(): React.ReactElement {
           opCount={activeJob?.operations.length ?? 0}
         />
 
+        {/*
+          Gap #10 — Workshop dashboard (top-level "what is each machine
+          doing right now" view). Mounted as the SOLE workspace content
+          when active, so the dashboard owns the full width between the
+          NavRail and the right edge. The 5-second Moonraker poll lives
+          inside the dashboard's useEffect and is cleaned up by the
+          effect's return when this branch unmounts.
+        */}
+        {navSection === 'workshop' && (
+          <div className="cc-workshop-panel" style={{ flex: 1, overflow: 'auto' }}>
+            <ErrorBoundary label="Workshop Dashboard" severity="panel">
+              <WorkshopDashboard
+                jobs={jobs}
+                moonrakerUrl={moonrakerUrl}
+                currentMachineId={sessionMachine?.id ?? null}
+                onSendLatestSlice={(slicePath) => {
+                  // Switch the active job to the K2 job whose gcodeOut
+                  // matches the slice path before invoking the existing
+                  // `sendToPrinter` flow. That keeps the safety gates
+                  // (`assessGcodeForExportSafety`, FDM temp validator)
+                  // running against the right machine profile, which is
+                  // resolved from `activeJob.machineId` downstream.
+                  const targetJob = jobs.find((j) => j.gcodeOut === slicePath)
+                  if (targetJob) {
+                    setActiveJobId(targetJob.id)
+                    // Allow the activeJob state to settle before the
+                    // safety gates read it; a microtask is enough.
+                    void Promise.resolve().then(() => void sendToPrinter())
+                  } else {
+                    pushToast('warn', 'Could not locate the K2 job for that slice. Open it under Jobs and Send from there.')
+                  }
+                }}
+                onOpenSetupSheet={(job) => {
+                  // Same pattern — re-route the active job to the Laguna
+                  // job so `openSetupSheet` (which reads from activeJob)
+                  // generates against the correct job.
+                  setActiveJobId(job.id)
+                  void Promise.resolve().then(() => void openSetupSheet())
+                }}
+                onSendToCarvera={() => {
+                  // Carvera CLI upload requires a connection-mode pick
+                  // (auto / wifi / usb) which lives in the Makera CAM
+                  // Manufacture panel today. From the dashboard we surface
+                  // a toast pointing the operator there rather than
+                  // duplicating the connection picker on the card.
+                  pushToast(
+                    'warn',
+                    'Send to Carvera: open the Makera CAM environment → Manufacture → CAM panel to pick the connection (auto / wifi / usb) and upload.'
+                  )
+                }}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
+
         {navSection === 'jobs' && (
           <div className="cc-nav-panel" style={{ width: `${leftPanelWidth}px` }}>
             <ErrorBoundary label="Operations Panel" severity="panel">
@@ -1969,62 +2037,72 @@ function ShopAppInner(): React.ReactElement {
           </div>
         )}
 
-        {/* Central column: viewport + sequencer */}
-        <div className="cc-center-col">
-          <ErrorBoundary label="3D Viewport" severity="panel">
-            <ViewportArea
-              job={activeJob} mode={mode} onUpdateJob={updateJob} onToast={pushToast}
-              modelSize={modelSize} setModelSize={setModelSize}
-              gcodeGeneration={gcodeGeneration}
-            />
-          </ErrorBoundary>
+        {/*
+          Central column + property panel: the model-centric workspace.
+          Hidden when the Workshop dashboard owns the workspace area so
+          the dashboard reads as the single "what is each machine doing"
+          surface (Gap #10) without competing with the 3D viewport.
+        */}
+        {navSection !== 'workshop' && (
+          <>
+            {/* Central column: viewport + sequencer */}
+            <div className="cc-center-col">
+              <ErrorBoundary label="3D Viewport" severity="panel">
+                <ViewportArea
+                  job={activeJob} mode={mode} onUpdateJob={updateJob} onToast={pushToast}
+                  modelSize={modelSize} setModelSize={setModelSize}
+                  gcodeGeneration={gcodeGeneration}
+                />
+              </ErrorBoundary>
 
-          <OpSequencer
-            operations={activeJob?.operations ?? []}
-            selectedOpId={selectedOpId}
-            onSelectOp={setSelectedOpId}
-            onAddOp={addOp}
-            onRemoveOp={removeOp}
-            mode={mode}
-            running={running}
-            disabled={!activeJob}
-          />
+              <OpSequencer
+                operations={activeJob?.operations ?? []}
+                selectedOpId={selectedOpId}
+                onSelectOp={setSelectedOpId}
+                onAddOp={addOp}
+                onRemoveOp={removeOp}
+                mode={mode}
+                running={running}
+                disabled={!activeJob}
+              />
 
-          {logOpen && (
-            <div className="shop-log" role="region" aria-label="Output log">
-              <div className="shop-log-bar">
-                <span className="shop-log-title">Output Log</span>
-                {running && <span className="spinner spinner--sm ml-8" aria-label="Processing" />}
-                <div className="flex-spacer" />
-                <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
-                <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'✕'}</button>
-              </div>
-              {running && <div className="progress-bar progress-bar--indeterminate" role="progressbar" aria-label="Generation in progress"><div className="progress-bar__fill" /></div>}
-              <div className="shop-log-body" aria-live="polite">
-                {log.map((l, i) => (
-                  <div key={i} className={`shop-log-line${l.includes('✕') ? ' log-line--error' : l.includes('✓') ? ' log-line--ok' : ''}`}>
-                    {l}
+              {logOpen && (
+                <div className="shop-log" role="region" aria-label="Output log">
+                  <div className="shop-log-bar">
+                    <span className="shop-log-title">Output Log</span>
+                    {running && <span className="spinner spinner--sm ml-8" aria-label="Processing" />}
+                    <div className="flex-spacer" />
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Clear log" onClick={() => setLog([])}>Clear</button>
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label="Close log" onClick={() => setLogOpen(false)}>{'✕'}</button>
                   </div>
-                ))}
-              </div>
+                  {running && <div className="progress-bar progress-bar--indeterminate" role="progressbar" aria-label="Generation in progress"><div className="progress-bar__fill" /></div>}
+                  <div className="shop-log-body" aria-live="polite">
+                    {log.map((l, i) => (
+                      <div key={i} className={`shop-log-line${l.includes('✕') ? ' log-line--error' : l.includes('✓') ? ' log-line--ok' : ''}`}>
+                        {l}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        <PropertyPanel
-          activeJob={activeJob}
-          mode={mode}
-          isFdm={isFdm}
-          sessionMachine={sessionMachine}
-          materials={materials}
-          machineTools={machineTools}
-          selectedOpId={selectedOpId}
-          onUpdateJob={updateJob}
-          onUpdateOpParams={updateOpParams}
-          onApplyMaterial={applyMaterial}
-          collapsed={propCollapsed}
-          onToggle={() => setPropCollapsed(c => !c)}
-        />
+            <PropertyPanel
+              activeJob={activeJob}
+              mode={mode}
+              isFdm={isFdm}
+              sessionMachine={sessionMachine}
+              materials={materials}
+              machineTools={machineTools}
+              selectedOpId={selectedOpId}
+              onUpdateJob={updateJob}
+              onUpdateOpParams={updateOpParams}
+              onApplyMaterial={applyMaterial}
+              collapsed={propCollapsed}
+              onToggle={() => setPropCollapsed(c => !c)}
+            />
+          </>
+        )}
       </div>
 
       <AppStatusBar
