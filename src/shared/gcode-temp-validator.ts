@@ -46,7 +46,22 @@
  * the Cycle 24 entry in `.claude/improvement-log.md`).
  */
 
-import type { FdmCapabilityFields } from './cura-slice-defaults'
+/**
+ * Structural subset of an FDM machine profile's firmware-ceiling fields.
+ * Inlined here after the cura-slice-defaults.ts module was deleted in the
+ * 2026-05-27 OrcaSlicer pivot; this validator is slicer-agnostic and only
+ * needs the temperature ceilings.
+ */
+export type FdmCapabilityFields = {
+  /** Firmware-enforced nozzle temperature ceiling in deg C. K2 Plus: 350. */
+  maxNozzleTempC?: number
+  /** Firmware-enforced bed temperature ceiling in deg C. K2 Plus: 120. */
+  maxBedTempC?: number
+  /**
+   * Heated-build-chamber target in deg C. Absent means "no heated chamber".
+   */
+  chamberTempC?: number
+}
 
 /** One heat-target command parsed from the gcode stream. */
 export type GcodeTempSample = {

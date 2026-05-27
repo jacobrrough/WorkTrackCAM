@@ -1,7 +1,14 @@
 # WorkTrackCAM — Project Rules
 
 ## Identity
-Professional CAM/FDM slicing desktop app (Electron, React 19, TypeScript, Three.js, Python CAM engines). Target quality: Fusion 360 / Mastercam / SolidCAM.
+Professional CAM/FDM slicing desktop app (Electron, React 19, TypeScript, Three.js). Target quality: Fusion 360 / Mastercam / SolidCAM. **Standalone app — NOT a FreeCAD addon.**
+
+## Open-Source Backend Stack (post-2026-05-27 pivot)
+The user explicitly switched the foundation to mature open-source libraries bundled inside the standalone Electron app. Do NOT reintroduce a FreeCAD addon path or revive deleted custom CAM/CuraEngine code.
+- **CadQuery** (Apache 2) — parametric B-rep CAD on OpenCascade. Python sidecar.
+- **OpenCAMLib** (LGPL) — drop-cutter / push-cutter / waterline toolpath generation. Python.
+- **OrcaSlicer** (AGPL) — bundled CLI for K2 Plus FDM slicing. Replaces the deleted CuraEngine bundle.
+- The user **never sees** these libraries — they're internal bundled dependencies. The product is WorkTrackCAM.
 
 ## USER CONTEXT — TARGET MACHINES (MUST BE FOLLOWED 100%)
 The owner (Jacob, Palmdale, CA) operates ONLY the three machines below. All development — slicer profiles, CAM strategies, post-processors, machine profiles, UI defaults, validation rules, test fixtures — MUST be perfected for these three machines FIRST. Ignore every other machine, controller, or firmware target until these three are flawless. Do NOT add speculative support for machines not on this list.
@@ -50,7 +57,7 @@ The owner (Jacob, Palmdale, CA) operates ONLY the three machines below. All deve
 - Stay strictly inside these three machines for every cycle. Do NOT add support for any other machine. Do NOT bloat the UI with "generic" options. Output must be production-ready for the user's daily workflow.
 
 ### Machine-Specific Priorities
-- **Creality K2 Plus**: Prioritize Moonraker direct-push upload, Cura-style slicing with K2-optimized profiles (high-speed, chamber heater control, input shaping, power-loss recovery, RFID filament, auto-leveling, CFS multi-color).
+- **Creality K2 Plus**: Prioritize Moonraker direct-push upload, OrcaSlicer-driven slicing with K2-optimized profiles (high-speed, chamber heater control, input shaping, power-loss recovery, RFID filament, auto-leveling, CFS multi-color).
 - **Laguna Swift 5x10**: Large-bed workflows, vacuum zone (6-zone) support, full-sheet stock presets, RichAuto A-series G-code dialect compliance, spindle warm-up/cool-down, dust-collection M-codes.
 - **Makera Carvera + 4th Axis**: Dedicated 4-axis toolpaths, correct rotary origin handling (X offset to rotary headstock, Y=0), simultaneous 4-axis simulation, correct rotation direction in posts, auto probing/leveling, ATC logic.
 
@@ -117,12 +124,17 @@ npm run build         # Full production build
 ```
 
 ## Architecture Quick Reference
-- `src/main/` — Electron main process, IPC handlers, file I/O
-- `src/renderer/src/` — React UI components, CSS
+- `src/main/` — Electron main process, IPC handlers, file I/O, sidecar bridge
+- `src/renderer/src/` — React UI components, CSS, Three.js viewport
 - `src/preload/` — Electron preload (IPC bridge)
-- `src/shared/` — Zod schemas, CAM math, type definitions
-- `engines/cam/` — Python CAM engine (13 strategies)
-- `resources/` — Machine profiles (YAML), post templates (Handlebars), materials
+- `src/shared/` — Zod schemas, type definitions
+- `engines/cam/` — Python CAM sidecar: `ocl_toolpath.py` (OpenCAMLib waterline/raster/adaptive_waterline)
+- `engines/mesh/`, `engines/occt/` — mesh + STEP I/O helpers (consolidating into CadQuery)
+- `engines/requirements.txt` — CadQuery + OpenCAMLib + numpy + trimesh
+- `resources/machines/` — Machine profiles (YAML/JSON) — Creality K2 Plus, Laguna Swift 5x10, Makera Carvera (3-axis + 4-axis)
+- `resources/posts/` — Handlebars post-processor templates per controller/dialect
+- `resources/materials/` — Material/feed-rate data
+- `resources/orca-slicer/` — (planned) bundled OrcaSlicer CLI for K2 Plus FDM
 - `.claude/improvement-log.md` — Improvement cycle history (source of truth)
 - `.claude/commands/improve.md` — Full improvement cycle playbook
 - `docs/EDIT-WORKFLOW.md` — Python-via-bash edit workflow + splice-recovery marker-uniqueness checklist ([ID-0089], [ID-0095])

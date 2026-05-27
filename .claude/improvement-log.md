@@ -16029,3 +16029,56 @@ rotation per `.claude/daily-plans/2026-04-30.md` Section 22 directive.
 Pulls `[ID-0288]` (post-processing, cam-setup-defaults paired-pin) for
 Cycle 216. The new `[ID-0013-orchestrator]` and `[ID-0294]` post-fix
 items are now in the roadmap NEXT-UP / CANDIDATE-NEXT-PHASE.
+
+
+---
+
+## Pivot — Foundation switch to CadQuery + OpenCAMLib + OrcaSlicer (2026-05-27)
+
+**Scope**: This is NOT a numbered rotation cycle — it is a major architecture pivot mandated by the user. Default rotation resumes after the new backend scaffold lands.
+
+**Trigger**: User explicitly said "completely switch gears on this app, find a fully open source high quality 3D CAD/CAM software we can integrate into our app and use it as a foundation we can build off of. Then clean up the codebase." Followed up with "DONT WANT TO DO A FREECAD ADDON I WANT A STANDALONE APP".
+
+**Backend choices (from AskUserQuestion)**:
+- CAD: **CadQuery** (Apache 2) — parametric B-rep on OpenCascade, Python sidecar
+- CAM: **OpenCAMLib** (LGPL) — drop-cutter / push-cutter / waterline, Python
+- FDM slicing: **OrcaSlicer** (AGPL) — bundled CLI for K2 Plus
+- Shell: standalone Electron + React (NOT a FreeCAD addon)
+- Cleanup posture: "cut hard — delete anything the new backend replaces"
+
+**Baseline (pre-pivot)**:
+- npm test → 13,601 passed, 36 failed, 3 skipped (332 files, 9 failed files)
+- npm run typecheck → ~8 pre-existing errors in ManufactureAuxPanels.tsx + ShopApp.tsx
+
+**Deletions (3 commits, ~225 files / ~42K lines)**:
+- Commit 70c4e8c: freecad-addon/ (68 files) + root-level cruft (_check.test.ts, _render_test_tmp.mjs, _tmp_dryrun.test.ts, dump-laguna.mjs, dump-test-violation.mjs, fihfpx1b, lvmnxy36, __probe__/, BLOCKED-*.md, SANDBOX-BLOCKED-*.md)
+- Commit d463f8d: FreeCAD-style comments cleaned from layout.css + workspaceMemory.ts
+- Commit abf8926: engines/cam/advanced/ (21), engines/cam/toolpath_engine/ (37), resources/slicer/bin/ (48MB CuraEngine bundle), resources/slicer/*.def.json (Cura defs), src/main/cura-bundled-*.ts (3), src/main/slicer*.ts (5), src/shared/cura-slice-defaults*.ts (3), scripts/sandbox-bootstrap.mjs, scripts/commit-bundled-snapshot.{sh,ps1}, src/shared/test-script-includes-pytest-pin.test.ts
+
+**Retained as seed code**:
+- engines/cam/ocl_toolpath.py + smoke_ocl_toolpath.py — working OpenCAMLib integration (waterline / adaptive_waterline / raster) with clean JSON IPC contract via src/main/cam-runner.ts.
+
+**Updates**:
+- CLAUDE.md: new "Open-Source Backend Stack" section, updated K2 Plus machine-specific priorities (CuraEngine → OrcaSlicer), updated Architecture Quick Reference.
+- engines/cam/README.md: rewritten to describe CadQuery + OCL stack, dropped advanced/ and toolpath_engine/ sections.
+- engines/requirements.txt: cadquery + opencamlib promoted to required deps.
+- package.json: dropped test:python, pretest:python, bootstrap:python (pytest target deleted).
+- src/shared/gcode-temp-validator.ts: inlined the FdmCapabilityFields type that used to live in the deleted cura-slice-defaults.ts (slicer-agnostic — temp ceilings).
+- src/renderer/manufacture/ManufactureWorkspace.tsx: runFdmSliceFromOp body stubbed (was Cura-coupled); OrcaSlicer rewires it under task #7.
+
+**Post-pivot baseline**:
+- npm test → 13,200 passed, 60 failed, 1 skipped (323 files, 18 failed files). The −401 passed delta is deleted tests; the +24 failed is broken imports referencing deleted slicer.ts (moonraker-push.ts, ipc-fabrication.ts, etc.).
+- npm run typecheck → 9 errors, all pre-existing ManufactureAuxPanels.tsx schema mismatches + ShopApp.tsx missing preset-launch-plan (NOT caused by the pivot — the cura-slice-defaults import errors I caused are resolved).
+
+**Remaining tasks (tracked in TaskList)**:
+- #4 trailing: rewire moonraker-push.ts, ipc-fabrication.ts, gcode-temp-validator.ts once OrcaSlicer scaffold exists
+- #6: scaffold Python sidecar (CadQuery + OCL JSON-RPC over stdin/stdout)
+- #7: bundle OrcaSlicer CLI + wrapper for K2 Plus
+- #8: wire IPC bridge between Electron main and Python sidecar
+- #9: migrate React UI panels to new IPC surface
+- #10: rewrite tests for new backend
+- #11: this entry + CLAUDE.md update (DONE)
+
+**Safety Rule 1 status**: No post-processor templates or G-code emission code was touched in this pivot. resources/posts/ is preserved as-is. The deletion of CuraEngine binary only affects FDM slicing (not CNC G-code generation).
+
+**Next session**: Pick up #6 (scaffold Python sidecar) — bundle a CPython 3.11 runtime in resources/python/, vendor cadquery + opencamlib wheels, write a JSON-RPC server (engines/sidecar/main.py) that the Electron main process can spawn and converse with.

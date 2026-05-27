@@ -71,9 +71,9 @@ import {
   summarizeTempViolations,
   type GcodeTempSample,
   type GcodeTempViolation,
-  type GcodeTempValidationResult
+  type GcodeTempValidationResult,
+  type FdmCapabilityFields
 } from './gcode-temp-validator'
-import type { FdmCapabilityFields } from './cura-slice-defaults'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -713,8 +713,8 @@ describe('K. three-machine path realism', () => {
 // L. Source-text whitelist
 // ---------------------------------------------------------------------------
 describe('L. gcode-temp-validator.ts source-text whitelist', () => {
-  it('imports FdmCapabilityFields type from cura-slice-defaults', () => {
-    expect(SRC).toContain("import type { FdmCapabilityFields } from './cura-slice-defaults'")
+  it('defines FdmCapabilityFields type inline (post-pivot, cura-slice-defaults removed)', () => {
+    expect(SRC).toContain('export type FdmCapabilityFields = {')
   })
 
   it('declares the 4 documented exported function names', () => {
