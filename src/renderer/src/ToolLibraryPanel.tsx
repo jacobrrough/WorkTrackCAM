@@ -17,13 +17,23 @@ import {
   createDefaultTool,
   validateTool,
   duplicateTool,
+  buildAtcSlotMap,
+  isCarveraMachineId,
   TOOL_TYPE_LABELS,
   TOOL_TYPE_ICONS,
   TOOL_TYPES,
+  MATERIAL_FAMILIES,
+  MATERIAL_FAMILY_LABELS,
+  MATERIAL_CATEGORY_TO_FAMILY,
+  DEFAULT_DIAMETER_BINS,
+  resolvePresetCategory,
+  type DiameterBin,
+  type MaterialFamily,
   type ToolSortKey,
   type SortDirection,
   type ToolFilters
 } from './tool-library-utils'
+import type { MaterialCategory } from '../../shared/material-schema'
 import { ToolWearBadge } from '../manufacture/ToolWearBadge'
 
 // ── Electron API bridge ──────────────────────────────────────────────────────
@@ -65,9 +75,12 @@ export function ToolLibraryPanel({
 
   // ── Local state ──────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState<ToolRecord['type'] | 'all'>('all')
-  const [diameterMin, setDiameterMin] = useState('')
-  const [diameterMax, setDiameterMax] = useState('')
+  // Type filter: multi-select chip set. Empty = "all types".
+  const [typeChips, setTypeChips] = useState<ReadonlySet<ToolRecord['type']>>(() => new Set())
+  // Diameter chip selection by bin id. Empty = no diameter constraint.
+  const [diameterBinIds, setDiameterBinIds] = useState<ReadonlySet<string>>(() => new Set())
+  // Material-preset family chips. Empty = no material constraint.
+  const [materialFamilies, setMaterialFamilies] = useState<ReadonlySet<MaterialFamily>>(() => new Set())
   const [sortBy, setSortBy] = useState<ToolSortKey>('name')
   const [sortDir, setSortDir] = useState<SortDirection>('asc')
   const [editingTool, setEditingTool] = useState<ToolRecord | null>(null)
@@ -75,6 +88,64 @@ export function ToolLibraryPanel({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: ContextMenuEntry[] } | null>(null)
 
   // ── Derived data ─────────────────────────────────────────────────────────
+
+  /** Currently-selected MachineProfile, if any. */
+  const activeMachine = useMemo(
+    () => machines.find(m => m.id === selectedMachineId) ?? null,
+    [machines, selectedMachineId]
+  )
+
+  /**
+   * Carvera-specific ATC visibility. Per CLAUDE.md §3, only the Makera
+   * Carvera carries an automatic tool changer in the My-Shop cohort.
+   * `atcSlotCount` is the source of truth from the machine profile;
+   * fall back to 6 for the 3-axis Carvera if the field is missing.
+   */
+  const showAtcGrid = useMemo(() => {
+    if (!activeMachine || !isCarveraMachineId(activeMachine.id)) return false
+    // 4-axis Carvera physically can't load ATC, but the schema still tracks
+    // pre-staged assignments — surface the grid so users can prep tools.
+    return true
+  }, [activeMachine])
+
+  const atcSlotCount = useMemo(
+    () => activeMachine?.atcSlotCount ?? (isCarveraMachineId(activeMachine?.id) ? 6 : 0),
+    [activeMachine]
+  )
+
+  const atcEntries = useMemo(
+    () => showAtcGrid ? buildAtcSlotMap(tools, atcSlotCount) : [],
+    [showAtcGrid, tools, atcSlotCount]
+  )
+
+  /**
+   * Materialise the resolved [bin, range] payload from the selected chip
+   * ids. Two separate min/max are passed down to `filterTools`; the
+   * overall band is the union of each selected bin's bounds.
+   */
+  const diameterRange = useMemo<{ min?: number; max?: number }>(() => {
+    if (diameterBinIds.size === 0) return {}
+    const bins: DiameterBin[] = DEFAULT_DIAMETER_BINS.filter(b => diameterBinIds.has(b.id))
+    if (bins.length === 0) return {}
+    return {
+      min: Math.min(...bins.map(b => b.min)),
+      max: Math.max(...bins.map(b => b.max))
+    }
+  }, [diameterBinIds])
+
+  /**
+   * Expand the user's coarse "Aluminum / Steel / Wood / Plastic" chip
+   * selection into the canonical MaterialCategory list that
+   * `filterTools` understands.
+   */
+  const materialCategories = useMemo<MaterialCategory[]>(() => {
+    if (materialFamilies.size === 0) return []
+    const out: MaterialCategory[] = []
+    for (const [cat, fam] of Object.entries(MATERIAL_CATEGORY_TO_FAMILY) as [MaterialCategory, MaterialFamily][]) {
+      if (materialFamilies.has(fam)) out.push(cat)
+    }
+    return out
+  }, [materialFamilies])
 
   const processedTools = useMemo(() => {
     let result: ToolRecord[] = tools
@@ -84,18 +155,17 @@ export function ToolLibraryPanel({
 
     // 2. Structured filters
     const filters: ToolFilters = {}
-    if (typeFilter !== 'all') filters.types = [typeFilter]
-    const dMin = parseFloat(diameterMin)
-    const dMax = parseFloat(diameterMax)
-    if (!isNaN(dMin) && dMin > 0) filters.diameterMin = dMin
-    if (!isNaN(dMax) && dMax > 0) filters.diameterMax = dMax
+    if (typeChips.size > 0) filters.types = Array.from(typeChips)
+    if (diameterRange.min != null) filters.diameterMin = diameterRange.min
+    if (diameterRange.max != null) filters.diameterMax = diameterRange.max
+    if (materialCategories.length > 0) filters.materialPresetCategories = materialCategories
     result = filterTools(result, filters)
 
     // 3. Sort
     result = sortTools(result, sortBy, sortDir)
 
     return result
-  }, [tools, searchQuery, typeFilter, diameterMin, diameterMax, sortBy, sortDir])
+  }, [tools, searchQuery, typeChips, diameterRange, materialCategories, sortBy, sortDir])
 
   // ── Persistence helpers ──────────────────────────────────────────────────
 
@@ -215,7 +285,99 @@ export function ToolLibraryPanel({
   const sortIndicator = (key: ToolSortKey): string =>
     sortBy === key ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : ''
 
-  const hasActiveFilters = searchQuery !== '' || typeFilter !== 'all' || diameterMin !== '' || diameterMax !== ''
+  const hasActiveFilters = searchQuery !== ''
+    || typeChips.size > 0
+    || diameterBinIds.size > 0
+    || materialFamilies.size > 0
+
+  const clearAllFilters = useCallback(() => {
+    setSearchQuery('')
+    setTypeChips(new Set())
+    setDiameterBinIds(new Set())
+    setMaterialFamilies(new Set())
+  }, [])
+
+  // \u2500\u2500 Chip-toggle helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // Generic toggle for any Set-backed chip group. Keeps the chip handlers
+  // tiny and avoids spreading the same useState callback into the JSX.
+  const toggleInSet = useCallback(<T,>(prev: ReadonlySet<T>, value: T): ReadonlySet<T> => {
+    const next = new Set(prev)
+    if (next.has(value)) next.delete(value)
+    else next.add(value)
+    return next
+  }, [])
+
+  const toggleType = useCallback((t: ToolRecord['type']) => {
+    setTypeChips(prev => toggleInSet(prev, t))
+  }, [toggleInSet])
+
+  const toggleDiameterBin = useCallback((id: string) => {
+    setDiameterBinIds(prev => toggleInSet(prev, id))
+  }, [toggleInSet])
+
+  const toggleMaterialFamily = useCallback((f: MaterialFamily) => {
+    setMaterialFamilies(prev => toggleInSet(prev, f))
+  }, [toggleInSet])
+
+  /** Pre-compute the bin id each tool falls into, so we can show counts. */
+  const binCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const bin of DEFAULT_DIAMETER_BINS) counts.set(bin.id, 0)
+    for (const t of tools) {
+      for (const bin of DEFAULT_DIAMETER_BINS) {
+        if (t.diameterMm >= bin.min && t.diameterMm <= bin.max) {
+          counts.set(bin.id, (counts.get(bin.id) ?? 0) + 1)
+          break
+        }
+      }
+    }
+    return counts
+  }, [tools])
+
+  /** Pre-compute the family count per family chip. */
+  const familyCounts = useMemo(() => {
+    const counts = new Map<MaterialFamily, number>()
+    for (const f of MATERIAL_FAMILIES) counts.set(f, 0)
+    for (const t of tools) {
+      const seen = new Set<MaterialFamily>()
+      for (const p of t.materialPresets ?? []) {
+        if (p.enabled === false) continue
+        const cat = resolvePresetCategory(p.materialType)
+        if (cat == null) continue
+        const fam = MATERIAL_CATEGORY_TO_FAMILY[cat]
+        if (!seen.has(fam)) {
+          counts.set(fam, (counts.get(fam) ?? 0) + 1)
+          seen.add(fam)
+        }
+      }
+    }
+    return counts
+  }, [tools])
+
+  /**
+   * ATC slot grid click handler. Opens the inline edit form pre-loaded
+   * with the slot's current occupant \u2014 or, when the slot is empty,
+   * surfaces a context menu listing the unassigned library tools so the
+   * user can click-to-pick. Drag-to-reassign is intentionally deferred to
+   * a follow-up cycle (see report).
+   */
+  const handleSlotClick = useCallback((e: React.MouseEvent, slot: number, tool: ToolRecord | undefined) => {
+    if (tool) {
+      // Slot is occupied \u2014 open the inline editor on that tool.
+      handleEdit(tool)
+      return
+    }
+    // Empty slot \u2014 show a context menu listing unassigned tools.
+    const unassigned = tools.filter(t => t.toolSlot == null)
+    const items: ContextMenuEntry[] = unassigned.length === 0
+      ? [{ id: 'empty', label: 'No unassigned tools', action: () => {} }]
+      : unassigned.slice(0, 25).map(t => ({
+          id: `assign-${t.id}`,
+          label: `${t.name}  \u00D8${t.diameterMm} mm`,
+          action: () => void handleSlotChange(t, slot)
+        }))
+    setCtxMenu({ x: e.clientX, y: e.clientY, items })
+  }, [tools, handleEdit, handleSlotChange])
 
   // ── Edit form field updater ────────────────────────────────────────────
 
@@ -258,61 +420,130 @@ export function ToolLibraryPanel({
         <input
           className="lib-search-input"
           type="search"
-          placeholder="Search by name, diameter, type, material\u2026"
+          placeholder="Search by name, diameter, type, material, notes\u2026"
           aria-label="Search tools"
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
         />
-        <select
-          className="tb-select tlp-type-select"
-          aria-label="Filter by tool type"
-          value={typeFilter}
-          onChange={e => setTypeFilter(e.target.value as ToolRecord['type'] | 'all')}
-        >
-          <option value="all">All Types</option>
-          {TOOL_TYPES.map(t => (
-            <option key={t} value={t}>{TOOL_TYPE_LABELS[t]}</option>
-          ))}
-        </select>
-        <input
-          className="tlp-diameter-input"
-          type="number"
-          min="0"
-          step="0.1"
-          placeholder="\u00D8 min"
-          aria-label="Minimum diameter filter"
-          value={diameterMin}
-          onChange={e => setDiameterMin(e.target.value)}
-        />
-        <input
-          className="tlp-diameter-input"
-          type="number"
-          min="0"
-          step="0.1"
-          placeholder="\u00D8 max"
-          aria-label="Maximum diameter filter"
-          value={diameterMax}
-          onChange={e => setDiameterMax(e.target.value)}
-        />
         {hasActiveFilters && (
-          <span className="lib-count-hint">
+          <span className="lib-count-hint" aria-live="polite">
             {processedTools.length} of {tools.length}
           </span>
         )}
         {hasActiveFilters && (
           <button type="button"
             className="btn btn-ghost btn-xs tlp-clear-btn"
-            onClick={() => {
-              setSearchQuery('')
-              setTypeFilter('all')
-              setDiameterMin('')
-              setDiameterMax('')
-            }}
+            onClick={clearAllFilters}
           >
-            Clear
+            Clear filters
           </button>
         )}
       </div>
+
+      {/* Chip filter groups: Type, Diameter, Material preset */}
+      <div className="tlp-chip-groups" role="region" aria-label="Tool filter chips">
+        <div className="tlp-chip-group" role="group" aria-label="Filter by tool type">
+          <span className="tlp-chip-group-label">Type</span>
+          {TOOL_TYPES.map(t => {
+            const active = typeChips.has(t)
+            return (
+              <button type="button"
+                key={t}
+                className={`tlp-chip${active ? ' tlp-chip--active' : ''}`}
+                aria-pressed={active}
+                title={TOOL_TYPE_LABELS[t]}
+                onClick={() => toggleType(t)}
+              >
+                <span className="tlp-chip-icon" aria-hidden="true">{TOOL_TYPE_ICONS[t]}</span>
+                {TOOL_TYPE_LABELS[t]}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="tlp-chip-group" role="group" aria-label="Filter by diameter range">
+          <span className="tlp-chip-group-label">\u00D8</span>
+          {DEFAULT_DIAMETER_BINS.map(bin => {
+            const active = diameterBinIds.has(bin.id)
+            const count = binCounts.get(bin.id) ?? 0
+            return (
+              <button type="button"
+                key={bin.id}
+                className={`tlp-chip${active ? ' tlp-chip--active' : ''}`}
+                aria-pressed={active}
+                title={`Diameter ${bin.label} \u2014 ${count} tool${count === 1 ? '' : 's'}`}
+                onClick={() => toggleDiameterBin(bin.id)}
+              >
+                {bin.label}
+                <span className="tlp-chip-count" aria-hidden="true">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="tlp-chip-group" role="group" aria-label="Filter by material preset family">
+          <span className="tlp-chip-group-label">Material</span>
+          {MATERIAL_FAMILIES.map(f => {
+            const active = materialFamilies.has(f)
+            const count = familyCounts.get(f) ?? 0
+            return (
+              <button type="button"
+                key={f}
+                className={`tlp-chip${active ? ' tlp-chip--active' : ''}${count === 0 ? ' tlp-chip--empty' : ''}`}
+                aria-pressed={active}
+                title={`Tools with a ${MATERIAL_FAMILY_LABELS[f]} preset \u2014 ${count}`}
+                onClick={() => toggleMaterialFamily(f)}
+              >
+                {MATERIAL_FAMILY_LABELS[f]}
+                <span className="tlp-chip-count" aria-hidden="true">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ATC slot grid (Carvera only) */}
+      {showAtcGrid && atcSlotCount > 0 && (
+        <section
+          className="tlp-atc-grid"
+          aria-labelledby="tlp-atc-grid-heading"
+          data-testid="tlp-atc-grid"
+        >
+          <div className="tlp-atc-grid-header">
+            <h3 id="tlp-atc-grid-heading" className="tlp-atc-grid-title">
+              ATC slots ({activeMachine?.name})
+            </h3>
+            <p className="tlp-atc-grid-hint">
+              Click an occupied slot to edit the tool \u00B7 click an empty slot to assign one.
+            </p>
+          </div>
+          <div className="tlp-atc-slot-grid" role="grid" aria-label="Carvera ATC slot grid">
+            {atcEntries.map(entry => (
+              <button type="button"
+                key={entry.slot}
+                role="gridcell"
+                className={`tlp-atc-slot${entry.tool ? ' tlp-atc-slot--filled' : ' tlp-atc-slot--empty'}`}
+                aria-label={entry.tool
+                  ? `Slot ${entry.slot}: ${entry.tool.name}, \u00D8${entry.tool.diameterMm} mm`
+                  : `Slot ${entry.slot}: empty`}
+                onClick={(e) => handleSlotClick(e, entry.slot, entry.tool)}
+              >
+                <span className="tlp-atc-slot-number">T{entry.slot}</span>
+                {entry.tool ? (
+                  <>
+                    <span className="tlp-atc-slot-name" title={entry.tool.name}>{entry.tool.name}</span>
+                    <span className="tlp-atc-slot-meta">
+                      \u00D8{entry.tool.diameterMm}mm{' \u00B7 '}{TOOL_TYPE_LABELS[entry.tool.type] ?? entry.tool.type}
+                    </span>
+                  </>
+                ) : (
+                  <span className="tlp-atc-slot-empty-label">Empty</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ── Sort bar ───────────────────────────────────────────────────── */}
       <div className="tlp-sort-bar">

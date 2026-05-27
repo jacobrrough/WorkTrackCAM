@@ -10,6 +10,15 @@ import {
   TOOL_TYPE_LABELS,
   TOOL_TYPE_ICONS,
   TOOL_TYPES,
+  MATERIAL_FAMILIES,
+  MATERIAL_FAMILY_LABELS,
+  MATERIAL_CATEGORY_TO_FAMILY,
+  DEFAULT_DIAMETER_BINS,
+  resolvePresetCategory,
+  resolvePresetFamily,
+  findDiameterBin,
+  isCarveraMachineId,
+  buildAtcSlotMap,
   type ToolFilters
 } from './tool-library-utils'
 
@@ -465,5 +474,225 @@ describe('metadata exports', () => {
     expect(TOOL_TYPES).toContain('corn')
     expect(TOOL_TYPES).toContain('other')
     expect(TOOL_TYPES).toHaveLength(10)
+  })
+})
+
+// ── Material preset filter + family resolution ───────────────────────────────
+
+describe('resolvePresetCategory', () => {
+  it('returns undefined for empty / blank input', () => {
+    expect(resolvePresetCategory('')).toBeUndefined()
+    expect(resolvePresetCategory('   ')).toBeUndefined()
+  })
+
+  it('returns the canonical enum value when passed the enum key', () => {
+    expect(resolvePresetCategory('aluminum_6061')).toBe('aluminum_6061')
+    expect(resolvePresetCategory('hardwood')).toBe('hardwood')
+    expect(resolvePresetCategory('mdf')).toBe('mdf')
+  })
+
+  it('matches user-facing label substrings', () => {
+    expect(resolvePresetCategory('Aluminum 6061')).toBe('aluminum_6061')
+    expect(resolvePresetCategory('PLYWOOD')).toBe('plywood')
+  })
+
+  it('falls back to heuristic family keywords for free-text values', () => {
+    expect(resolvePresetCategory('Aluminum 7075 T6')).toBe('aluminum_6061')
+    expect(resolvePresetCategory('Mild steel plate')).toBe('steel_mild')
+    expect(resolvePresetCategory('Some hardwood')).toBe('hardwood')
+    expect(resolvePresetCategory('Plastic block')).toBe('acrylic')
+  })
+
+  it('returns undefined for unclassifiable strings', () => {
+    expect(resolvePresetCategory('xyz nonsense')).toBeUndefined()
+  })
+})
+
+describe('resolvePresetFamily', () => {
+  it('returns the matching family for a canonical category', () => {
+    expect(resolvePresetFamily('aluminum_6061')).toBe('aluminum')
+    expect(resolvePresetFamily('hardwood')).toBe('wood')
+    expect(resolvePresetFamily('acrylic')).toBe('plastic')
+    expect(resolvePresetFamily('steel_mild')).toBe('steel')
+  })
+
+  it('returns undefined when the input cannot be classified', () => {
+    expect(resolvePresetFamily('xyz')).toBeUndefined()
+  })
+})
+
+describe('filterTools — materialPresetCategories', () => {
+  const TOOLS: ToolRecord[] = [
+    makeTool({
+      id: 'alu-bit',
+      name: 'Aluminum-only bit',
+      materialPresets: [{ materialType: 'aluminum_6061', enabled: true }]
+    }),
+    makeTool({
+      id: 'wood-bit',
+      name: 'Wood bit',
+      materialPresets: [{ materialType: 'hardwood', enabled: true }]
+    }),
+    makeTool({
+      id: 'multi-bit',
+      name: 'Multi-material bit',
+      materialPresets: [
+        { materialType: 'aluminum_6061', enabled: true },
+        { materialType: 'acrylic', enabled: true }
+      ]
+    }),
+    makeTool({
+      id: 'no-preset-bit',
+      name: 'Bit without presets'
+    }),
+    makeTool({
+      id: 'disabled-preset',
+      name: 'Disabled aluminum preset',
+      materialPresets: [{ materialType: 'aluminum_6061', enabled: false }]
+    })
+  ]
+
+  it('returns all tools when the filter is empty', () => {
+    const r = filterTools(TOOLS, { materialPresetCategories: [] })
+    expect(r).toHaveLength(TOOLS.length)
+  })
+
+  it('filters to only tools with an aluminum preset', () => {
+    const r = filterTools(TOOLS, { materialPresetCategories: ['aluminum_6061'] })
+    expect(r.map(t => t.id).sort()).toEqual(['alu-bit', 'multi-bit'])
+  })
+
+  it('treats disabled presets as absent', () => {
+    const r = filterTools(TOOLS, { materialPresetCategories: ['aluminum_6061'] })
+    expect(r.some(t => t.id === 'disabled-preset')).toBe(false)
+  })
+
+  it('matches any of the requested categories (OR within filter)', () => {
+    const r = filterTools(TOOLS, { materialPresetCategories: ['hardwood', 'acrylic'] })
+    expect(r.map(t => t.id).sort()).toEqual(['multi-bit', 'wood-bit'])
+  })
+
+  it('excludes tools without any presets', () => {
+    const r = filterTools(TOOLS, { materialPresetCategories: ['aluminum_6061'] })
+    expect(r.some(t => t.id === 'no-preset-bit')).toBe(false)
+  })
+})
+
+// ── Diameter bins ────────────────────────────────────────────────────────────
+
+describe('DEFAULT_DIAMETER_BINS', () => {
+  it('exposes 5 bins covering 0 to 1000 mm', () => {
+    expect(DEFAULT_DIAMETER_BINS).toHaveLength(5)
+    expect(DEFAULT_DIAMETER_BINS[0].min).toBe(0)
+    expect(DEFAULT_DIAMETER_BINS[DEFAULT_DIAMETER_BINS.length - 1].max).toBeGreaterThanOrEqual(1000)
+  })
+
+  it('uses unique stable ids', () => {
+    const ids = DEFAULT_DIAMETER_BINS.map(b => b.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('bins are monotonically increasing without gaps', () => {
+    for (let i = 1; i < DEFAULT_DIAMETER_BINS.length; i++) {
+      expect(DEFAULT_DIAMETER_BINS[i].min).toBeGreaterThan(DEFAULT_DIAMETER_BINS[i - 1].max - 1)
+    }
+  })
+})
+
+describe('findDiameterBin', () => {
+  it('finds the bin a diameter falls into', () => {
+    expect(findDiameterBin(0)?.id).toBe('bin-micro')
+    expect(findDiameterBin(3)?.id).toBe('bin-micro')
+    expect(findDiameterBin(6)?.id).toBe('bin-small')
+    expect(findDiameterBin(6.35)?.id).toBe('bin-medium')
+    expect(findDiameterBin(50)?.id).toBe('bin-face')
+  })
+
+  it('returns undefined for negative diameters', () => {
+    expect(findDiameterBin(-1)).toBeUndefined()
+  })
+})
+
+// ── Carvera ATC helpers ──────────────────────────────────────────────────────
+
+describe('isCarveraMachineId', () => {
+  it('returns true for both Carvera ids', () => {
+    expect(isCarveraMachineId('makera-carvera-3axis')).toBe(true)
+    expect(isCarveraMachineId('makera-carvera-4axis')).toBe(true)
+  })
+
+  it('returns false for the other My-Shop machines', () => {
+    expect(isCarveraMachineId('creality-k2-plus')).toBe(false)
+    expect(isCarveraMachineId('laguna-swift-5x10')).toBe(false)
+  })
+
+  it('returns false for nullish or non-string input', () => {
+    expect(isCarveraMachineId(null)).toBe(false)
+    expect(isCarveraMachineId(undefined)).toBe(false)
+    expect(isCarveraMachineId('')).toBe(false)
+  })
+})
+
+describe('buildAtcSlotMap', () => {
+  const TOOLS: ToolRecord[] = [
+    makeTool({ id: 'a', name: '1/4 Endmill', toolSlot: 1 }),
+    makeTool({ id: 'b', name: '1/8 Ball', toolSlot: 3 }),
+    makeTool({ id: 'c', name: 'V-bit', toolSlot: 6 }),
+    makeTool({ id: 'd', name: 'Unassigned' }) // no slot
+  ]
+
+  it('builds slots 1..slotCount in order', () => {
+    const entries = buildAtcSlotMap(TOOLS, 6)
+    expect(entries.map(e => e.slot)).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('assigns the right tool to each slot', () => {
+    const entries = buildAtcSlotMap(TOOLS, 6)
+    expect(entries[0].tool?.id).toBe('a')
+    expect(entries[2].tool?.id).toBe('b')
+    expect(entries[5].tool?.id).toBe('c')
+  })
+
+  it('returns undefined for empty slots', () => {
+    const entries = buildAtcSlotMap(TOOLS, 6)
+    expect(entries[1].tool).toBeUndefined()
+    expect(entries[3].tool).toBeUndefined()
+    expect(entries[4].tool).toBeUndefined()
+  })
+
+  it('ignores tools with slot numbers outside the range', () => {
+    const tools = [makeTool({ id: 'oob', toolSlot: 9 as 1 | 2 | 3 | 4 | 5 | 6 })]
+    const entries = buildAtcSlotMap(tools, 6)
+    expect(entries.every(e => e.tool == null)).toBe(true)
+  })
+
+  it('keeps the first tool when two records claim the same slot', () => {
+    const tools = [
+      makeTool({ id: 'first', toolSlot: 2 }),
+      makeTool({ id: 'second', toolSlot: 2 })
+    ]
+    const entries = buildAtcSlotMap(tools, 6)
+    expect(entries[1].tool?.id).toBe('first')
+  })
+
+  it('produces exactly `slotCount` entries', () => {
+    expect(buildAtcSlotMap(TOOLS, 6)).toHaveLength(6)
+    expect(buildAtcSlotMap(TOOLS, 4)).toHaveLength(4)
+  })
+})
+
+// ── Family metadata ──────────────────────────────────────────────────────────
+
+describe('MATERIAL_FAMILIES metadata', () => {
+  it('has a label for every family', () => {
+    for (const f of MATERIAL_FAMILIES) {
+      expect(MATERIAL_FAMILY_LABELS[f]).toBeTruthy()
+    }
+  })
+
+  it('every material category maps to one of the families', () => {
+    for (const [, fam] of Object.entries(MATERIAL_CATEGORY_TO_FAMILY)) {
+      expect(MATERIAL_FAMILIES).toContain(fam)
+    }
   })
 })

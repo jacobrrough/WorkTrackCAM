@@ -3353,6 +3353,164 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
   margin-top: 10px;
 }
 
+/* ── Chip filter groups ───────────────────────────────────────────── */
+.tlp-chip-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 8px;
+  flex-shrink: 0;
+}
+.tlp-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.tlp-chip-group-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--txt2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  min-width: 56px;
+}
+.tlp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--txt1);
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+  font-family: inherit;
+}
+.tlp-chip:hover {
+  border-color: var(--accent);
+  color: var(--txt0);
+}
+.tlp-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tlp-chip--active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tlp-chip--empty {
+  opacity: 0.55;
+}
+.tlp-chip-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.tlp-chip-count {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--txt2);
+  background: var(--bg1);
+  border-radius: 8px;
+  padding: 0 5px;
+  min-width: 14px;
+  text-align: center;
+}
+.tlp-chip--active .tlp-chip-count {
+  background: var(--bg0);
+  color: var(--accent);
+}
+
+/* ── ATC slot grid (Makera Carvera) ───────────────────────────────── */
+.tlp-atc-grid {
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.tlp-atc-grid-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.tlp-atc-grid-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--txt0);
+  margin: 0;
+}
+.tlp-atc-grid-hint {
+  font-size: 0.65rem;
+  color: var(--txt2);
+  margin: 0;
+}
+.tlp-atc-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.tlp-atc-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 10px;
+  min-height: 52px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--txt1);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.1s, background 0.1s;
+}
+.tlp-atc-slot:hover {
+  border-color: var(--accent);
+  background: var(--bg2);
+}
+.tlp-atc-slot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tlp-atc-slot--filled {
+  border-left: 3px solid var(--accent);
+}
+.tlp-atc-slot--empty {
+  border-style: dashed;
+  opacity: 0.7;
+}
+.tlp-atc-slot-number {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.tlp-atc-slot-name {
+  font-size: 0.78rem;
+  color: var(--txt0);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.tlp-atc-slot-meta {
+  font-size: 0.6rem;
+  color: var(--txt2);
+}
+.tlp-atc-slot-empty-label {
+  font-size: 0.65rem;
+  color: var(--txt2);
+  font-style: italic;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    POST-PROCESSOR EDITOR
    ═══════════════════════════════════════════════════════════════════════════ */

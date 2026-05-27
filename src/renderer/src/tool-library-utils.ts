@@ -7,6 +7,11 @@
 import { z } from 'zod'
 import { toolRecordSchema } from '../../shared/tool-schema'
 import type { ToolRecord } from '../../shared/tool-schema'
+import {
+  materialCategoryEnum,
+  MATERIAL_CATEGORY_LABELS,
+  type MaterialCategory
+} from '../../shared/material-schema'
 
 // ── Tool type metadata ───────────────────────────────────────────────────────
 
@@ -82,6 +87,14 @@ export interface ToolFilters {
   fluteCount?: number
   /** Case-insensitive substring match on tool material field. */
   material?: string
+  /**
+   * Only keep tools that carry at least one enabled material preset whose
+   * `materialType` belongs to one of these high-level categories. Tools
+   * with no presets are excluded. Empty / undefined = no filtering on
+   * material presets. Used by the Fusion-style "Material preset" chip
+   * picker on the tool library panel.
+   */
+  materialPresetCategories?: MaterialCategory[]
 }
 
 /**
@@ -95,8 +108,140 @@ export function filterTools(tools: readonly ToolRecord[], filters: ToolFilters):
     if (filters.diameterMax != null && t.diameterMm > filters.diameterMax) return false
     if (filters.fluteCount != null && t.fluteCount !== filters.fluteCount) return false
     if (filters.material && !(t.material ?? '').toLowerCase().includes(filters.material.toLowerCase())) return false
+    if (filters.materialPresetCategories && filters.materialPresetCategories.length > 0) {
+      const cats = filters.materialPresetCategories
+      const presets = t.materialPresets ?? []
+      const matches = presets.some(p => {
+        if (p.enabled === false) return false
+        const cat = resolvePresetCategory(p.materialType)
+        return cat != null && cats.includes(cat)
+      })
+      if (!matches) return false
+    }
     return true
   })
+}
+
+// ── Material-preset category resolution ──────────────────────────────────────
+
+/**
+ * Coarse family grouping used by the tool-library "Material preset" chip
+ * picker. Maps every `MaterialCategory` to one of five user-facing buckets
+ * so users can filter by "Aluminum" without ticking every aluminum sub-
+ * category individually.
+ */
+export type MaterialFamily = 'aluminum' | 'steel' | 'wood' | 'plastic' | 'other'
+
+export const MATERIAL_FAMILIES: MaterialFamily[] = ['aluminum', 'steel', 'wood', 'plastic', 'other']
+
+export const MATERIAL_FAMILY_LABELS: Record<MaterialFamily, string> = {
+  aluminum: 'Aluminum',
+  steel:    'Steel',
+  wood:     'Wood',
+  plastic:  'Plastic',
+  other:    'Other'
+}
+
+/** Maps every canonical material category onto its coarse family bucket. */
+export const MATERIAL_CATEGORY_TO_FAMILY: Record<MaterialCategory, MaterialFamily> = {
+  softwood:      'wood',
+  hardwood:      'wood',
+  mdf:           'wood',
+  plywood:       'wood',
+  aluminum_6061: 'aluminum',
+  aluminum_cast: 'aluminum',
+  steel_mild:    'steel',
+  steel_tool:    'steel',
+  stainless:     'steel',
+  brass:         'other',
+  copper:        'other',
+  acrylic:       'plastic',
+  hdpe:          'plastic',
+  pvc:           'plastic',
+  delrin:        'plastic',
+  foam:          'other',
+  carbon_fiber:  'other',
+  other:         'other'
+}
+
+const VALID_CATEGORIES = new Set<string>(materialCategoryEnum.options)
+
+/**
+ * Best-effort resolution of a preset `materialType` string to a canonical
+ * MaterialCategory. Exact match first (presets stored with category keys
+ * land here); otherwise a substring sniff so legacy free-text presets like
+ * "Aluminum 6061-T6" or "Hardwood (Oak)" still bucket correctly. Returns
+ * undefined when the string can't be classified.
+ */
+export function resolvePresetCategory(materialType: string): MaterialCategory | undefined {
+  const trimmed = materialType.trim().toLowerCase()
+  if (trimmed === '') return undefined
+  // Exact canonical key (e.g. "aluminum_6061")
+  if (VALID_CATEGORIES.has(trimmed)) return trimmed as MaterialCategory
+  // Substring sniff over the user-facing labels
+  for (const cat of materialCategoryEnum.options) {
+    const label = MATERIAL_CATEGORY_LABELS[cat].toLowerCase()
+    if (trimmed.includes(label) || label.includes(trimmed)) return cat
+  }
+  // Heuristic family keywords for free-text legacy values
+  if (trimmed.includes('alum')) return 'aluminum_6061'
+  if (trimmed.includes('steel')) return 'steel_mild'
+  if (trimmed.includes('wood')) return 'hardwood'
+  if (trimmed.includes('plastic')) return 'acrylic'
+  return undefined
+}
+
+/**
+ * Resolve a preset `materialType` string straight to its coarse family
+ * bucket. Returns undefined when the input can't be classified — callers
+ * should treat that as "unknown family" rather than coercing to 'other'.
+ */
+export function resolvePresetFamily(materialType: string): MaterialFamily | undefined {
+  const cat = resolvePresetCategory(materialType)
+  return cat != null ? MATERIAL_CATEGORY_TO_FAMILY[cat] : undefined
+}
+
+// ── Diameter bins ────────────────────────────────────────────────────────────
+
+/**
+ * A single diameter chip bin. `min` is inclusive, `max` is exclusive
+ * except for the final bin which is inclusive on both ends so the largest
+ * fixture diameter still lands in a bin.
+ */
+export interface DiameterBin {
+  /** Stable id used as the chip's React key. */
+  id: string
+  /** Short human label, e.g. "0-3 mm". */
+  label: string
+  /** Inclusive lower bound, mm. */
+  min: number
+  /** Inclusive upper bound, mm (matches `filterTools` semantics). */
+  max: number
+}
+
+/**
+ * Default diameter chip bins covering the cutter ranges across all three
+ * target machines (Carvera ER-11 micro-tooling up to Laguna ER-20 face
+ * mills). Tuned to the typical Carvera + Laguna fixture catalog.
+ */
+export const DEFAULT_DIAMETER_BINS: DiameterBin[] = [
+  { id: 'bin-micro',  label: '0–3 mm',    min: 0,    max: 3    },
+  { id: 'bin-small',  label: '3–6 mm',    min: 3.01, max: 6    },
+  { id: 'bin-medium', label: '6–12 mm',   min: 6.01, max: 12   },
+  { id: 'bin-large',  label: '12–25 mm',  min: 12.01, max: 25  },
+  { id: 'bin-face',   label: '25+ mm',    min: 25.01, max: 1000 }
+]
+
+/**
+ * Find the bin whose [min, max] range contains the given diameter. Returns
+ * undefined when the diameter sits outside every bin (shouldn't happen for
+ * the default set since the final bin runs to 1000 mm).
+ */
+export function findDiameterBin(
+  diameterMm: number,
+  bins: readonly DiameterBin[] = DEFAULT_DIAMETER_BINS
+): DiameterBin | undefined {
+  return bins.find(b => diameterMm >= b.min && diameterMm <= b.max)
 }
 
 // ── Sort ─────────────────────────────────────────────────────────────────────
@@ -215,6 +360,51 @@ export function validateTool(tool: unknown): ToolValidationResult {
 }
 
 // ── Duplicate ────────────────────────────────────────────────────────────────
+
+// ── Carvera ATC support ──────────────────────────────────────────────────────
+
+/**
+ * Returns true when the given machine id is one of the Makera Carvera
+ * profiles bundled in `resources/machines/`. Used by the tool library UI
+ * to gate the ATC slot grid on the only ATC-equipped machine in the
+ * My-Shop-Only cohort.
+ *
+ * Per CLAUDE.md §3: Carvera 3-axis has 6 ATC slots; Carvera 4-axis has
+ * NO ATC (the rotary attachment occupies the bay) — but the slot grid
+ * still surfaces tool→slot assignments stored on the records so users
+ * can pre-stage assignments for a future 3-axis swap.
+ */
+export function isCarveraMachineId(machineId: string | null | undefined): boolean {
+  if (typeof machineId !== 'string') return false
+  return machineId === 'makera-carvera-3axis' || machineId === 'makera-carvera-4axis'
+}
+
+/**
+ * Build the slot-to-tool map for an ATC slot grid. Each output entry
+ * carries the slot number (1..slotCount) and the tool currently assigned
+ * to that slot (or undefined for empty slots). When two tools claim the
+ * same slot — should never happen because `handleSlotChange` clears
+ * conflicts — the first tool wins.
+ */
+export interface AtcSlotEntry {
+  slot: number
+  tool: ToolRecord | undefined
+}
+
+export function buildAtcSlotMap(
+  tools: readonly ToolRecord[],
+  slotCount: number
+): AtcSlotEntry[] {
+  const map = new Map<number, ToolRecord>()
+  for (const t of tools) {
+    if (typeof t.toolSlot === 'number' && t.toolSlot >= 1 && t.toolSlot <= slotCount) {
+      if (!map.has(t.toolSlot)) map.set(t.toolSlot, t)
+    }
+  }
+  const entries: AtcSlotEntry[] = []
+  for (let s = 1; s <= slotCount; s++) entries.push({ slot: s, tool: map.get(s) })
+  return entries
+}
 
 /**
  * Deep-clone a tool record, assigning a fresh ID and prefixing the name.
