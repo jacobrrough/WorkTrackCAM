@@ -168,8 +168,44 @@ describe('appSettingsSchema', () => {
     expect(appSettingsSchema.parse({ theme: 'light' }).theme).toBe('light')
   })
 
+  it('accepts the system theme value (post-Settings-rebuild)', () => {
+    // Real Settings view added `system` as a first-class theme option that defers
+    // to the OS prefers-color-scheme. Existing stored `dark` / `light` settings
+    // must continue to parse (covered by the prior test).
+    expect(appSettingsSchema.parse({ theme: 'system' }).theme).toBe('system')
+  })
+
   it('rejects invalid theme values', () => {
     expect(() => appSettingsSchema.parse({ theme: 'blue' })).toThrow()
+  })
+
+  it('accepts the additive units / defaultMachineId / moonrakerApiKey fields', () => {
+    // Real Settings view rebuild — every new field on appSettingsSchema MUST be
+    // optional so existing saved settings continue to parse (CLAUDE.md schema
+    // additions-are-additive gate). This test pins the new contract.
+    const parsed = appSettingsSchema.parse({
+      units: 'mm',
+      defaultMachineId: 'creality_k2_plus',
+      moonrakerApiKey: 'abc123'
+    })
+    expect(parsed.units).toBe('mm')
+    expect(parsed.defaultMachineId).toBe('creality_k2_plus')
+    expect(parsed.moonrakerApiKey).toBe('abc123')
+  })
+
+  it('accepts inch as a valid units value', () => {
+    expect(appSettingsSchema.parse({ units: 'inch' }).units).toBe('inch')
+  })
+
+  it('rejects invalid units values', () => {
+    expect(() => appSettingsSchema.parse({ units: 'cubits' })).toThrow()
+  })
+
+  it('omits new optional fields by default (no surprise defaults)', () => {
+    const empty = appSettingsSchema.parse({})
+    expect(empty.units).toBeUndefined()
+    expect(empty.defaultMachineId).toBeUndefined()
+    expect(empty.moonrakerApiKey).toBeUndefined()
   })
 
   it('accepts valid curaSlicePreset values', () => {

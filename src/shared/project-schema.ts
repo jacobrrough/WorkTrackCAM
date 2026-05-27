@@ -89,7 +89,27 @@ export const appSettingsSchema = z.object({
   projectsRoot: z.string().optional(),
   /** Most recently opened project folders (absolute paths), newest first. */
   recentProjectPaths: z.array(z.string()).optional().default([]),
-  theme: z.enum(['dark', 'light']).default('dark'),
+  /**
+   * UI theme. `system` defers to the OS prefers-color-scheme; persists as a hint
+   * to the renderer which flips a `data-theme` attribute on the root. Existing
+   * stored settings with `dark` / `light` continue to parse unchanged.
+   * Roadmap: real consumer wiring lands with the theme-flip cycle; this field is
+   * persisted today and read by `SettingsView.tsx` for the General subsection.
+   */
+  theme: z.enum(['dark', 'light', 'system']).default('dark'),
+  /**
+   * Display unit hint for the General subsection of Settings. The renderer
+   * formats lengths in this unit; the backend G-code emitters are unchanged
+   * (machine profile dialects own units). Optional + additive — absent means
+   * `mm` (CLAUDE.md K2 / Laguna / Carvera default).
+   */
+  units: z.enum(['mm', 'inch']).optional(),
+  /**
+   * Default machine id for new projects. When set, the splash screen / project
+   * creator pre-selects this id. Must match a `machinesList()` id at runtime;
+   * unknown ids fall through to the existing `lastMachineId` behavior.
+   */
+  defaultMachineId: z.string().optional(),
   /**
    * WorkTrackCAM: default post template filename under `resources/posts` for **New machine draft**
    * in File → Settings → Machine Manager. Empty/unset falls back to `grbl-mm.gcode.hbs`.
@@ -131,6 +151,13 @@ export const appSettingsSchema = z.object({
    * request fires. Roadmap: Phase 2 [P2-K2-PUSH].
    */
   moonrakerUrl: z.string().optional(),
+  /**
+   * Optional Moonraker API key. When present, the renderer sends it as the
+   * `X-Api-Key` header on push/status requests for printers configured with
+   * Moonraker `[authorization]`. Empty/absent means anonymous (default K2 Plus
+   * out-of-the-box configuration). Stored verbatim; not encrypted on disk.
+   */
+  moonrakerApiKey: z.string().optional(),
   /**
    * Laguna Swift 5x10 active vacuum zones (1..6) for full-sheet jobs.
    * The Laguna table is split into six T-slot vacuum zones in a 2x3

@@ -117,6 +117,13 @@ export type Api = {
     | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
     | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
   >
+  /**
+   * Settings-panel helper — reports whether the bundled OrcaSlicer CLI binary
+   * is present at the expected platform path. Pure filesystem check; no
+   * subprocess spawn. Used by the Real Settings view (Paths subsection) to
+   * render "Bundled" vs "Not bundled — run scripts/bundle-orca-slicer.ps1".
+   */
+  slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
 
   // ── Manufacture file ─────────────────────────────────────────────────────
   manufactureLoad: (projectDir: string) => Promise<ManufactureFile>
@@ -388,6 +395,7 @@ const api: Api = {
     return () => { ipcRenderer.removeListener('cam:progress', handler) }
   },
   sliceOrca: (payload) => ipcRenderer.invoke('slice:orca', payload),
+  slicerOrcaStatus: () => ipcRenderer.invoke('slicer:orcaStatus'),
 
   // Manufacture file
   manufactureLoad: (projectDir) => ipcRenderer.invoke('manufacture:load', projectDir),

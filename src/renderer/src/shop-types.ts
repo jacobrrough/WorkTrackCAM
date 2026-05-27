@@ -92,6 +92,12 @@ export declare const window: Window & {
       | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
       | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
     >
+    /**
+     * Pure filesystem check — does the bundled OrcaSlicer binary exist at the
+     * expected platform path? Used by Settings → Paths and any
+     * &quot;is FDM slicing available?&quot; preflight UI. No subprocess spawn.
+     */
+    slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
     toolsRead: (dir: string) => Promise<ToolLibraryFile>
     toolsSave: (dir: string, lib: ToolLibraryFile) => Promise<void>
     toolsImport: (dir: string, payload: { kind: 'csv' | 'json' | 'fusion' | 'fusion_csv'; content: string }) => Promise<ToolLibraryFile>
@@ -118,7 +124,7 @@ export declare const window: Window & {
        */
       machineId?: string
     }) => Promise<{ ok: boolean; filename?: string; error?: string; detail?: string }>
-    moonrakerStatus: (url: string) => Promise<{ ok: boolean; state?: string; filename?: string; progress?: number; etaSeconds?: number; error?: string }>
+    moonrakerStatus: (url: string) => Promise<{ ok: boolean; state?: string; rawState?: string; filename?: string; progress?: number; etaSeconds?: number; error?: string }>
     moonrakerCancel: (url: string) => Promise<{ ok: boolean; error?: string }>
     materialsList: () => Promise<MaterialRecord[]>
     materialsSave: (record: MaterialRecord) => Promise<MaterialRecord>

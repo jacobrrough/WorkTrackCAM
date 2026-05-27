@@ -354,6 +354,27 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     }
   )
 
+  /**
+   * Settings-panel helper — reports whether the OrcaSlicer CLI binary is
+   * actually bundled at the expected platform path. Pure existsSync check;
+   * no subprocess spawn. Used by the Real Settings view (Paths subsection)
+   * to render "Bundled" vs "Not bundled" with the script hint.
+   */
+  ipcMain.handle('slicer:orcaStatus', async () => {
+    const appRoot = app.getAppPath()
+    const platformDir =
+      process.platform === 'win32'
+        ? 'win32-x64'
+        : process.platform === 'darwin'
+        ? 'darwin-arm64'
+        : 'linux-x64'
+    const binName = process.platform === 'win32' ? 'orca-slicer.exe' : 'orca-slicer'
+    const expectedPath = join(appRoot, 'resources', 'orca-slicer', platformDir, binName)
+    let bundled = false
+    try { bundled = statSync(expectedPath).isFile() } catch { bundled = false }
+    return { bundled, expectedPath, platform: process.platform }
+  })
+
   ipcMain.handle(
     'cam:run',
     async (_e, payload: unknown) => {

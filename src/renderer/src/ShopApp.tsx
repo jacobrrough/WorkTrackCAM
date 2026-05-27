@@ -684,6 +684,44 @@ function ShopAppInner(): React.ReactElement {
   >(undefined)
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
+  // Recent-project MRU for the EnvironmentSplash. Persisted to
+  // `appSettings.recentProjectPaths` (already in the schema; see
+  // `src/shared/project-schema.ts`). Capped at 5 and de-duped by absolute
+  // path on every push.
+  const [recentProjects, setRecentProjects] = useState<readonly string[]>([])
+
+  // Load existing recent-projects on first mount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await fab().settingsGet()
+        const arr = (s as { recentProjectPaths?: unknown }).recentProjectPaths
+        if (Array.isArray(arr)) {
+          const cleaned: string[] = []
+          for (const p of arr) {
+            if (typeof p === 'string' && p.length > 0) cleaned.push(p)
+          }
+          setRecentProjects(cleaned.slice(0, 5))
+        }
+      } catch { /* settings unavailable — render empty MRU */ }
+    })()
+  }, [])
+
+  /**
+   * Push a project path onto the front of the MRU, dedupe by absolute path,
+   * cap at 5, and persist via the existing `settings:set` IPC. Called from
+   * `loadProjectFile` (file-open path) and from the EnvironmentSplash
+   * recent-project-click handler so the just-opened path bubbles to the top.
+   */
+  const pushRecentProject = useCallback(async (path: string): Promise<void> => {
+    if (!path || typeof path !== 'string') return
+    const next = [path, ...recentProjects.filter(p => p !== path)].slice(0, 5)
+    setRecentProjects(next)
+    try {
+      await fab().settingsSet({ recentProjectPaths: next })
+    } catch { /* persistence is best-effort */ }
+  }, [recentProjects])
+
   const { execute: undoExec } = useUndo()
 
   // Set onboarding on first mount
@@ -1031,6 +1069,16 @@ function ShopAppInner(): React.ReactElement {
       [{ name: 'Fab Session', extensions: ['fabsession', 'json'] }]
     )
     if (!p) return
+    await loadProjectFromPath(p)
+  }
+
+  /**
+   * Shared implementation of "open a .fabsession at `path`". Used by the
+   * Open dialog flow (`loadProjectFile`) and the EnvironmentSplash recent-
+   * projects MRU. On success, pushes `path` onto the MRU so a re-click
+   * surfaces it as &quot;most recent&quot;.
+   */
+  const loadProjectFromPath = useCallback(async (p: string): Promise<void> => {
     try {
       const raw = await fab().fsReadBase64(p)
       const text = atob(raw)
@@ -1039,8 +1087,12 @@ function ShopAppInner(): React.ReactElement {
       setJobs(loadedJobs)
       setActiveJobId(loadedJobs.find(j => j.id === loadedActiveId)?.id ?? loadedJobs[0]?.id ?? null)
       pushToast('ok', `Loaded ${loadedJobs.length} job(s)`)
-    } catch (e) { pushToast('err', formatErrorForToast(e instanceof Error ? e.message : String(e), 'Load failed')) }
-  }
+      // Only push to MRU on a successful load — never log failed paths.
+      void pushRecentProject(p)
+    } catch (e) {
+      pushToast('err', formatErrorForToast(e instanceof Error ? e.message : String(e), 'Load failed'))
+    }
+  }, [pushToast, pushRecentProject])
 
   const generate = async (): Promise<void> => {
     if (!activeJob) {
@@ -1611,6 +1663,8 @@ function ShopAppInner(): React.ReactElement {
             lastMachineId={lastMachineId}
             onSelect={(_env, machine) => { void handleMachineSelect(machine) }}
             onAddMachine={() => setSplashLibOpen(true)}
+            recentProjects={recentProjects}
+            onOpenRecent={(p) => { void loadProjectFromPath(p) }}
           />
         )}
         {splashLibOpen && (

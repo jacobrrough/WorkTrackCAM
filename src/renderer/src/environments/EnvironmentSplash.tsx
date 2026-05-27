@@ -24,13 +24,28 @@ export interface EnvironmentSplashProps {
   onSelect: (env: ShopEnvironment, machine: MachineProfile) => void
   /** Called when the user wants to open the Library drawer to add/import a machine. */
   onAddMachine: () => void
+  /**
+   * Most recently opened project paths (absolute), newest first. Rendered as
+   * clickable cards beneath the environment picker. Empty / undefined hides
+   * the section entirely on a fresh install, then shows an empty-state once
+   * the user has opened at least one file (handled by the parent).
+   */
+  recentProjects?: readonly string[]
+  /**
+   * Invoked when the user clicks one of the recent-project cards. The parent
+   * is responsible for actually loading the project file and re-pushing it
+   * onto the MRU so the click also marks it &quot;most recent&quot;.
+   */
+  onOpenRecent?: (path: string) => void
 }
 
 export function EnvironmentSplash({
   machines,
   lastMachineId,
   onSelect,
-  onAddMachine
+  onAddMachine,
+  recentProjects,
+  onOpenRecent
 }: EnvironmentSplashProps): React.ReactElement {
   // Pre-select the env that matches the last-used machine, defaulting to the
   // first env in the registry on a fresh install.
@@ -162,6 +177,44 @@ export function EnvironmentSplash({
           + Add or import a machine
         </button>
       </div>
+
+      {/* Recent projects MRU \u2014 bundled in the same splash so the user can */}
+      {/* jump straight into their last project without going through the */}
+      {/* env picker again. Hidden entirely if the parent doesn't supply */}
+      {/* the props (keeps the splash legacy-compatible). */}
+      {onOpenRecent && (
+        <section
+          className="env-splash__recents"
+          aria-labelledby="env-splash-recents-heading"
+        >
+          <h3 id="env-splash-recents-heading" className="env-splash__recents-title">
+            Recent projects
+          </h3>
+          {(!recentProjects || recentProjects.length === 0) ? (
+            <p className="env-splash__recents-empty">No recent projects</p>
+          ) : (
+            <ul className="env-splash__recents-list" role="list">
+              {recentProjects.slice(0, 5).map((path) => {
+                const base = path.split(/[\\/]/).pop() ?? path
+                return (
+                  <li key={path} className="env-splash__recents-item">
+                    <button
+                      type="button"
+                      className="env-splash__recents-card"
+                      onClick={() => onOpenRecent(path)}
+                      title={path}
+                      aria-label={`Open recent project ${base}`}
+                    >
+                      <span className="env-splash__recents-name">{base}</span>
+                      <span className="env-splash__recents-path">{path}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+      )}
     </div>
   )
 }
