@@ -152,6 +152,43 @@ export const machineProfileSchema = z.object({
     .positive()
     .optional()
     .describe('Vacuum zone count for zoned vacuum tables (e.g. Laguna Swift: 6)'),
+  /**
+   * CNC -- collet system designation (e.g. "ER-20", "ER-32"). Surfaced in
+   * the Laguna spec panel (ManufactureAuxPanels.tsx) so the operator can
+   * verify the correct collet is installed before a job runs. String per
+   * CLAUDE.md USER CONTEXT (Laguna Swift 5x10: ER-20 collet).
+   * Safety Rule 2: additive/optional; absent renders as "Not declared".
+   */
+  colletType: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('Collet system type (CNC). E.g. "ER-20", "ER-32". Displayed in the machine spec panel.'),
+  /**
+   * CNC -- seconds to dwell after spindle start (M3) for thermal/RPM
+   * stabilization. The post-processor emits `G4 P<sec>` after M3 when this
+   * value is set. Surfaced in the Laguna spec panel so the operator can
+   * see the configured warm-up duration. Safety Rule 2: additive/optional;
+   * absent means "no spindle warm-up dwell emitted by the post".
+   */
+  spindleWarmupDwellSec: z
+    .number()
+    .nonnegative()
+    .optional()
+    .describe('Seconds to dwell after M3 for spindle stabilization (CNC). Post emits G4 P<sec>.'),
+  /**
+   * CNC -- seconds to dwell after spindle stop (M5) for wind-down before
+   * program end / tool change. The post-processor emits `G4 P<sec>` after
+   * M5 when this value is set. Surfaced in the Laguna spec panel.
+   * Safety Rule 2: additive/optional; absent means "no spindle cool-down
+   * dwell emitted by the post".
+   */
+  spindleCooldownDwellSec: z
+    .number()
+    .nonnegative()
+    .optional()
+    .describe('Seconds to dwell after M5 for spindle wind-down (CNC). Post emits G4 P<sec>.'),
   safeRetractZMm: z
     .number()
     .positive()
