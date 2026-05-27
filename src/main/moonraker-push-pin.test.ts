@@ -79,9 +79,14 @@ const UNREACHABLE_BUDGET_MS = 600
 // ─── A. Module shape ─────────────────────────────────────────────────
 
 describe('moonraker-push PIN A -- module shape', () => {
-  it('A1: namespace exposes exactly 7 runtime exports', () => {
+  it('A1: namespace exposes exactly 8 runtime exports', () => {
+    // Updated post-CFS-v1: `buildUploadUrlForK2Cfs` is a pure URL-shape
+    // helper exported alongside the legacy parser helpers so a renderer
+    // test can verify the K2 CFS slot wire shape without booting the
+    // mock-Moonraker harness. See `moonraker-push.test.ts` "buildUploadUrlForK2Cfs".
     const runtime = Object.keys(M).sort()
     expect(runtime).toEqual([
+      'buildUploadUrlForK2Cfs',
       'moonrakerCancel',
       'moonrakerPause',
       'moonrakerPush',
@@ -125,12 +130,16 @@ describe('moonraker-push PIN A -- module shape', () => {
     expect(moonrakerCancel.name).toBe('moonrakerCancel')
     expect(moonrakerPause.name).toBe('moonrakerPause')
     expect(moonrakerResume.name).toBe('moonrakerResume')
+    // CFS v1: pure URL-shape helper for the K2 Plus CFS slot wire.
+    expect(M.buildUploadUrlForK2Cfs.name).toBe('buildUploadUrlForK2Cfs')
   })
   it('A11: namespace has no `default` export', () => {
     expect((M as Record<string, unknown>).default).toBeUndefined()
   })
-  it('A12: namespace size is exactly 7', () => {
-    expect(Object.keys(M).length).toBe(7)
+  it('A12: namespace size is exactly 8', () => {
+    // Updated post-CFS-v1: namespace size grew by 1 with the addition of
+    // `buildUploadUrlForK2Cfs`. See A1 for the full key set.
+    expect(Object.keys(M).length).toBe(8)
   })
   it('A13: namespace key-set is stable across consecutive Object.keys calls', () => {
     const a = Object.keys(M).sort()
@@ -152,19 +161,23 @@ describe('moonraker-push PIN A -- module shape', () => {
 // ─── B. SOURCE-text purity ───────────────────────────────────────────
 
 describe('moonraker-push PIN B -- SOURCE-text purity', () => {
-  it('B1: SOURCE byte-size is exactly 21534', () => {
-    expect(SOURCE_BYTES).toBe(21534)
+  it('B1: SOURCE byte-size is exactly 25435', () => {
+    // Updated post-CFS-v1 (+ Klipper PLR / adaptive-probing advisory
+    // warnings): file grew with the new `cfsSlotId` payload field, the
+    // pure `buildUploadUrlForK2Cfs` helper, the threading through
+    // `uploadFileMultipart` + `moonrakerPush`, and the two new advisory
+    // warning paths driven by `checkGcodeHeaderHealth.fields.has*`.
+    expect(SOURCE_BYTES).toBe(25435)
   })
-  it('B2: SOURCE UTF-16 length (.length) is exactly 21222', () => {
-    expect(SOURCE_TEXT.length).toBe(21222)
+  it('B2: SOURCE UTF-16 length (.length) is exactly 25123', () => {
+    // Updated post-CFS-v1. See B1 for context.
+    expect(SOURCE_TEXT.length).toBe(25123)
   })
-  it('B3: SOURCE_LINES split-by-LF length matches the on-disk line count (post quick-win-bundle warning/header-health additions)', () => {
-    // Updated post-bundle: file now carries the
-    // `checkGcodeHeaderHealth` + thumbnail-warning wiring, which adds
-    // both an import line + a documentation block + the `warnings[]`
-    // assembly path. Reflect the new shape so any FUTURE drift is still
-    // pinned.
-    expect(SOURCE_LINES).toHaveLength(587)
+  it('B3: SOURCE_LINES split-by-LF length matches the on-disk line count (post CFS-v1 + PLR/probe advisory additions)', () => {
+    // Updated post-CFS-v1 / PLR / adaptive-probing: file now carries
+    // the K2 CFS slot URL helper + the two new advisory warnings.
+    // Reflect the new shape so any FUTURE drift is still pinned.
+    expect(SOURCE_LINES).toHaveLength(680)
     expect(SOURCE_LINES[SOURCE_LINES.length - 1]).toBe('')
   })
   it('B4: SOURCE has zero CRLF sequences (LF-only line endings)', () => {
@@ -187,10 +200,12 @@ describe('moonraker-push PIN B -- SOURCE-text purity', () => {
   it('B9: SOURCE has zero @ts-expect-error comments', () => {
     expect(SOURCE_TEXT.includes('@ts-expect-error')).toBe(false)
   })
-  it('B10: SOURCE has exactly 11 top-level `\\nexport ` markers (4 types + 7 functions)', () => {
+  it('B10: SOURCE has exactly 12 top-level `\\nexport ` markers (4 types + 8 functions)', () => {
+    // Updated post-CFS-v1: added `buildUploadUrlForK2Cfs` (pure URL
+    // helper), bringing the export count from 11 to 12.
     const matches = SOURCE_TEXT.match(/\nexport /g)
     expect(matches).not.toBeNull()
-    expect(matches?.length).toBe(11)
+    expect(matches?.length).toBe(12)
   })
   it('B11: SOURCE has exactly 4 `export type ` declarations', () => {
     const matches = SOURCE_TEXT.match(/^export type /gm)
@@ -200,9 +215,12 @@ describe('moonraker-push PIN B -- SOURCE-text purity', () => {
     const matches = SOURCE_TEXT.match(/^export async function /gm)
     expect(matches?.length).toBe(5)
   })
-  it('B13: SOURCE has exactly 2 non-async `export function ` declarations (the parser helpers are sync)', () => {
+  it('B13: SOURCE has exactly 3 non-async `export function ` declarations (the parser helpers + CFS URL builder are sync)', () => {
+    // Updated post-CFS-v1: added `buildUploadUrlForK2Cfs` -- a pure
+    // synchronous URL helper -- bringing the sync export count from 2
+    // (parseMoonrakerStatusBody + parseUploadedPath) to 3.
     const allFn = (SOURCE_TEXT.match(/^export function /gm) ?? []).length
-    expect(allFn).toBe(2)
+    expect(allFn).toBe(3)
   })
   it('B14: SOURCE has exactly 1 internal helper `function makeRequest(`', () => {
     const matches = SOURCE_TEXT.match(/^function makeRequest\(/gm)
@@ -442,8 +460,12 @@ describe('moonraker-push PIN F -- default-timeout literal pins', () => {
 
 describe('moonraker-push PIN G -- endpoint URL literal pins', () => {
   it('G1: pins POST /server/files/upload (Moonraker virtual SD upload)', () => {
+    // Updated post-CFS-v1: `buildUploadUrlForK2Cfs` adds 4 more
+    // occurrences (helper docstring + helper body + caller comments)
+    // on top of the original 4 (uploadFileMultipart docs + body +
+    // moonrakerPush docs + parseUploadedPath docs).
     const matches = SOURCE_TEXT.match(/\/server\/files\/upload/g)
-    expect(matches?.length).toBe(4) // 1 docs + 1 url-build + 1 helper-doc + 1 endpoint
+    expect(matches?.length).toBe(8)
   })
   it('G2: pins POST /printer/print/start (start endpoint)', () => {
     const matches = SOURCE_TEXT.match(/\/printer\/print\/start/g)
@@ -689,8 +711,9 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K4: SOURCE_TEXT references moonraker.readthedocs.io (canonical Moonraker docs URL)', () => {
     expect(SOURCE_TEXT.includes('moonraker.readthedocs.io')).toBe(true)
   })
-  it('K5: SOURCE_BYTES is exactly 21534 (regression net for any silent byte drift)', () => {
-    expect(SOURCE_BYTES).toBe(21534)
+  it('K5: SOURCE_BYTES is exactly 25435 (regression net for any silent byte drift)', () => {
+    // Updated post-CFS-v1. See B1 docstring for the additions.
+    expect(SOURCE_BYTES).toBe(25435)
   })
   it('K6: SOURCE has 156 non-ASCII chars total (147 box-drawing + 8 em-dash + 1 arrow)', () => {
     let count = 0
@@ -744,8 +767,9 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K12: SOURCE provenance sentinel -- exact (lines, bytes, utf16Length) tuple', () => {
     // Triple sentinel: any silent rewrite that preserves byte-count but shifts
     // line-count or utf16-length will fail at least one of these.
-    expect(SOURCE_LINES.length).toBe(587)
-    expect(SOURCE_BYTES).toBe(21534)
-    expect(SOURCE_TEXT.length).toBe(21222)
+    // Updated post-CFS-v1. See B1 docstring for the additions.
+    expect(SOURCE_LINES.length).toBe(680)
+    expect(SOURCE_BYTES).toBe(25435)
+    expect(SOURCE_TEXT.length).toBe(25123)
   })
 })

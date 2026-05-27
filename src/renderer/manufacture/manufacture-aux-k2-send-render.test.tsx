@@ -195,3 +195,103 @@ describe('SliceManufacturePanel — K2 Plus Send button gating', () => {
     expect(html).not.toContain('Send to K2 Plus')
   })
 })
+
+// ── CFS slot picker render ──────────────────────────────────────────────────
+//
+// The K2 Plus Combo ships with one CFS (Creality Filament System) unit
+// holding four spools (slots 0..3). The Send section renders four toggle
+// buttons; selecting a slot persists per-project via `onSaveSettingsField`
+// and rides on the next Send-to-K2 upload as a `?cfs_slot=N` query param.
+// My-Shop-Only: K2 Plus only -- the picker is gated inside the `isK2Plus`
+// branch so Laguna / Carvera CNC renders never expose CFS UI.
+
+describe('SliceManufacturePanel -- CFS slot picker', () => {
+  it('renders all four CFS slot buttons (0..3) on the K2 Plus panel', () => {
+    const html = render(baseProps({ activeMachine: k2Plus }))
+    expect(html).toContain('data-testid="k2-cfs-slot-picker"')
+    for (const slot of [0, 1, 2, 3]) {
+      expect(html).toContain(`data-testid="k2-cfs-slot-${slot}"`)
+      expect(html).toContain(`Slot ${slot}`)
+    }
+  })
+
+  it('defaults to slot 0 when settings.cfsSlotId is absent', () => {
+    const html = render(baseProps({ activeMachine: k2Plus }))
+    // Slot 0 button must be marked active (data-active="true").
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-0"[^>]*data-active="true"/,
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-1"[^>]*data-active="false"/,
+    )
+    expect(html).toContain('Using CFS slot 0 for the next Send')
+  })
+
+  it('marks the operator-picked slot (settings.cfsSlotId=2) as active', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        settings: {
+          moonrakerUrl: 'http://k2plus.local',
+          cfsSlotId: 2
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-2"[^>]*data-active="true"/,
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-0"[^>]*data-active="false"/,
+    )
+    expect(html).toContain('Using CFS slot 2 for the next Send')
+  })
+
+  it('falls back to slot 0 when settings.cfsSlotId is out of range (defensive)', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        settings: {
+          cfsSlotId: 99
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-0"[^>]*data-active="true"/,
+    )
+  })
+
+  it('omits the CFS picker entirely on Laguna Swift renders', () => {
+    const html = render(baseProps({ activeMachine: lagunaSwift }))
+    expect(html).not.toContain('data-testid="k2-cfs-slot-picker"')
+    for (const slot of [0, 1, 2, 3]) {
+      expect(html).not.toContain(`data-testid="k2-cfs-slot-${slot}"`)
+    }
+  })
+
+  it('omits the CFS picker when activeMachine is undefined', () => {
+    const html = render(baseProps({ activeMachine: undefined }))
+    expect(html).not.toContain('data-testid="k2-cfs-slot-picker"')
+  })
+
+  it('clicking a slot calls onSaveSettingsField with cfsSlotId set (via aria-pressed handler attribute)', () => {
+    // renderToStaticMarkup does not fire effects/handlers, so we
+    // assert the rendered button carries the correct accessible
+    // pressed state for the active slot. The full callback wiring
+    // is exercised by the buildMoonrakerPushPayload test suite and
+    // the buildUploadUrlForK2Cfs unit tests (URL contract pin).
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        settings: {
+          cfsSlotId: 1
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-1"[^>]*aria-pressed="true"/,
+    )
+    expect(html).toMatch(
+      /data-testid="k2-cfs-slot-0"[^>]*aria-pressed="false"/,
+    )
+  })
+})

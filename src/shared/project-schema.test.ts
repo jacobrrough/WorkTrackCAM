@@ -284,4 +284,44 @@ describe('appSettingsSchema', () => {
       appSettingsSchema.parse({ carveraCliExtraArgsJson: 'bad json' })
     ).toThrow()
   })
+
+  // ── CFS multi-material v1 ─────────────────────────────────────────────────
+  // The Creality K2 Plus Combo ships with one CFS unit holding four spools
+  // (slots 0..3, zero-indexed to match Bambu AMS / OrcaSlicer's extruder
+  // index convention and the K2 wiki guide). The field is additive /
+  // optional so existing saved settings continue to parse unchanged.
+
+  it('accepts cfsSlotId=0 (first CFS spool, default)', () => {
+    const r = appSettingsSchema.parse({ cfsSlotId: 0 })
+    expect(r.cfsSlotId).toBe(0)
+  })
+
+  it('accepts cfsSlotId=3 (last CFS spool in a 4-spool unit)', () => {
+    const r = appSettingsSchema.parse({ cfsSlotId: 3 })
+    expect(r.cfsSlotId).toBe(3)
+  })
+
+  it('accepts every valid CFS slot id 0..3', () => {
+    for (const slot of [0, 1, 2, 3]) {
+      expect(appSettingsSchema.parse({ cfsSlotId: slot }).cfsSlotId).toBe(slot)
+    }
+  })
+
+  it('rejects negative cfsSlotId', () => {
+    expect(() => appSettingsSchema.parse({ cfsSlotId: -1 })).toThrow()
+  })
+
+  it('rejects cfsSlotId above the 4-spool CFS upper bound', () => {
+    expect(() => appSettingsSchema.parse({ cfsSlotId: 4 })).toThrow()
+    expect(() => appSettingsSchema.parse({ cfsSlotId: 99 })).toThrow()
+  })
+
+  it('rejects non-integer cfsSlotId', () => {
+    expect(() => appSettingsSchema.parse({ cfsSlotId: 1.5 })).toThrow()
+  })
+
+  it('treats missing cfsSlotId as undefined (additive optional)', () => {
+    const r = appSettingsSchema.parse({})
+    expect(r.cfsSlotId).toBeUndefined()
+  })
 })

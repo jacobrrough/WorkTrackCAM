@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { parseMoonrakerStatusBody, parseUploadedPath, moonrakerPause, moonrakerResume } from './moonraker-push'
+import {
+  buildUploadUrlForK2Cfs,
+  moonrakerPause,
+  moonrakerResume,
+  parseMoonrakerStatusBody,
+  parseUploadedPath,
+} from './moonraker-push'
 
 // ─── parseMoonrakerStatusBody ──────────────────────────────────────────────────
 
@@ -197,5 +203,91 @@ describe('moonrakerResume', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toBeDefined()
     expect(elapsed).toBeLessThan(600)
+  })
+})
+
+// ─── buildUploadUrlForK2Cfs ─────────────────────────────────────────────────
+//
+// Pure URL-shape contract. Lock down the exact form so a renderer test
+// can verify the wire shape without booting the mock-Moonraker harness.
+// Safety Rule 1: the slot id ONLY travels on the URL -- never on the
+// G-code bytes. Stock Moonraker ignores unknown query params on
+// `/server/files/upload`, so this is forward-compatible.
+
+describe('buildUploadUrlForK2Cfs', () => {
+  it('returns the base URL when cfsSlotId is undefined', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local')).toBe(
+      'http://k2plus.local/server/files/upload',
+    )
+  })
+
+  it('appends ?cfs_slot=0 when slot 0 is picked', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', 0)).toBe(
+      'http://k2plus.local/server/files/upload?cfs_slot=0',
+    )
+  })
+
+  it('appends ?cfs_slot=3 (max valid slot in a 4-spool CFS)', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', 3)).toBe(
+      'http://k2plus.local/server/files/upload?cfs_slot=3',
+    )
+  })
+
+  it('strips a trailing slash from the printer URL before composing', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local/', 1)).toBe(
+      'http://k2plus.local/server/files/upload?cfs_slot=1',
+    )
+  })
+
+  it('preserves an explicit port', () => {
+    expect(buildUploadUrlForK2Cfs('http://192.168.1.50:7125', 2)).toBe(
+      'http://192.168.1.50:7125/server/files/upload?cfs_slot=2',
+    )
+  })
+
+  it('omits the query param when slot is out of range (above)', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', 4)).toBe(
+      'http://k2plus.local/server/files/upload',
+    )
+  })
+
+  it('omits the query param when slot is negative', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', -1)).toBe(
+      'http://k2plus.local/server/files/upload',
+    )
+  })
+
+  it('omits the query param when slot is non-integer', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', 1.5)).toBe(
+      'http://k2plus.local/server/files/upload',
+    )
+  })
+
+  it('omits the query param when slot is NaN', () => {
+    expect(buildUploadUrlForK2Cfs('http://k2plus.local', Number.NaN)).toBe(
+      'http://k2plus.local/server/files/upload',
+    )
+  })
+
+  it('omits the query param when slot is Infinity', () => {
+    expect(
+      buildUploadUrlForK2Cfs('http://k2plus.local', Number.POSITIVE_INFINITY),
+    ).toBe('http://k2plus.local/server/files/upload')
+  })
+
+  it('Safety Rule 2: pre-CFS URL shape is byte-identical when slot is absent', () => {
+    // Pre-CFS shape pin -- guarantees existing call sites that never
+    // pass a slot id see zero behavior change.
+    expect(buildUploadUrlForK2Cfs('http://192.168.1.50')).toBe(
+      'http://192.168.1.50/server/files/upload',
+    )
+  })
+
+  it('every valid slot 0..3 produces a distinct URL', () => {
+    const seen = new Set<string>()
+    for (const slot of [0, 1, 2, 3]) {
+      seen.add(buildUploadUrlForK2Cfs('http://k2plus.local', slot))
+    }
+    expect(seen.size).toBe(4)
   })
 })

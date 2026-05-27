@@ -589,10 +589,11 @@ describe('[ID-0211] source-text whitelist', () => {
   it('Safety-Rule-2 framing appears in the headers of all four functions (or shared types)', () => {
     const matches = SRC.match(/Safety Rule 2/g)
     expect(matches).not.toBeNull()
-    // 4 explicit "Safety Rule 2" mentions across the file -- one in
+    // 5 explicit "Safety Rule 2" mentions across the file -- one in
     // build-payload, one in [ID-0072] preview-append, one in [ID-0088]
-    // split header, one in legacy round-trip framing.
-    expect(matches!.length).toBe(4)
+    // split header, one in legacy round-trip framing, and one in the
+    // CFS v1 docstring covering the additive `cfsSlotId` field.
+    expect(matches!.length).toBe(5)
   })
 
   it('ID-0080 tag appears exactly 3 times (1 file header + 1 type header + 1 helper header)', () => {

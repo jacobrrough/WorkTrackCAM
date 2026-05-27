@@ -152,6 +152,100 @@ describe('buildMoonrakerPushPayload — [ID-0080] end-to-end K2 Plus shape', () 
   })
 })
 
+// ── CFS multi-material v1 ────────────────────────────────────────────────────
+//
+// The Creality K2 Plus CFS (Creality Filament System) holds four spools
+// (slots 0..3). When the operator picks a slot in the Send-to-K2 area, the
+// renderer threads `cfsSlotId` through the payload builder so the
+// main-process push appends `?cfs_slot=N` to the upload URL. Safety Rule 1
+// (G-code is sacred): the slot id NEVER touches the G-code bytes.
+
+describe('buildMoonrakerPushPayload — CFS slot threading', () => {
+  it('includes cfsSlotId=0 (default first-spool pick)', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: 0 }))
+    expect(out.cfsSlotId).toBe(0)
+  })
+
+  it('includes cfsSlotId=3 (last spool in a 4-spool CFS unit)', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: 3 }))
+    expect(out.cfsSlotId).toBe(3)
+  })
+
+  it('includes every valid CFS slot 0..3', () => {
+    for (const slot of [0, 1, 2, 3]) {
+      const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: slot }))
+      expect(out.cfsSlotId).toBe(slot)
+    }
+  })
+
+  it('omits cfsSlotId when absent on the job (Safety Rule 2 -- additive)', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: undefined }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when null', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: null }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when out of range (>3)', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: 4 }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when negative', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: -1 }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when non-integer', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: 1.5 }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when NaN', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: Number.NaN }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('omits cfsSlotId when Infinity', () => {
+    const out = buildMoonrakerPushPayload(mkJob({ cfsSlotId: Number.POSITIVE_INFINITY }))
+    expect('cfsSlotId' in out).toBe(false)
+  })
+
+  it('Safety Rule 2: pre-CFS payload shape is byte-identical when cfsSlotId is absent', () => {
+    const out = buildMoonrakerPushPayload({
+      gcodeOut: '/tmp/out.gcode',
+      printerUrl: 'http://k2.local',
+      machineId: null
+    })
+    expect(out).toEqual({
+      gcodePath: '/tmp/out.gcode',
+      printerUrl: 'http://k2.local',
+      startAfterUpload: true
+    })
+  })
+
+  it('end-to-end K2 Plus shape with CFS slot 2 picked', () => {
+    const out: MoonrakerPushPayload = buildMoonrakerPushPayload(
+      {
+        gcodeOut: '/home/me/WorkTrackCAM/out/part.gcode',
+        printerUrl: 'http://192.168.1.50',
+        machineId: 'creality-k2-plus',
+        cfsSlotId: 2
+      },
+      { startAfterUpload: true }
+    )
+    expect(out).toEqual({
+      gcodePath: '/home/me/WorkTrackCAM/out/part.gcode',
+      printerUrl: 'http://192.168.1.50',
+      startAfterUpload: true,
+      machineId: 'creality-k2-plus',
+      cfsSlotId: 2
+    })
+  })
+})
+
 describe('formatMoonrakerPushFailure — [ID-0080] detail surfacing', () => {
   it('returns "error: detail" when both fields are non-empty', () => {
     const r: MoonrakerPushResult = {

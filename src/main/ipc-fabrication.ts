@@ -143,6 +143,14 @@ export type MoonrakerPushIpcPayload = {
   timeoutMs?: number
   machineId?: string
   machineCapabilities?: FdmCapabilityFields | null
+  /**
+   * Creality K2 Plus CFS slot id (0..3). When supplied, the main-process
+   * push appends `?cfs_slot=N` to the `/server/files/upload` URL so a
+   * printer-side Klipper macro / future Moonraker plugin can read the
+   * slot the operator picked. Safety Rule 1: this NEVER mutates the
+   * G-code bytes -- it only travels on the URL. Additive / optional.
+   */
+  cfsSlotId?: number
 }
 
 /**
@@ -192,6 +200,7 @@ export async function resolveMoonrakerPushCapabilities(
   startAfterUpload?: boolean
   timeoutMs?: number
   machineCapabilities?: FdmCapabilityFields | null
+  cfsSlotId?: number
 }> {
   const { machineId, machineCapabilities, ...rest } = payload
   // Rule 1: explicit override wins (including explicit null).
@@ -211,7 +220,9 @@ export async function resolveMoonrakerPushCapabilities(
       // behavior so a transient FS error cannot block a valid print.
     }
   }
-  // Rule 3: neither hook produced caps; omit the field entirely.
+  // Rule 3: neither hook produced caps; omit the field entirely. The
+  // CFS slot id (if any) rides along in `rest` regardless of capability
+  // resolution -- it is independent of the temperature-ceiling pipeline.
   return rest
 }
 
@@ -857,6 +868,14 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
          * for callers that already have capabilities in hand.
          */
         machineCapabilities?: FdmCapabilityFields | null
+        /**
+         * Optional K2 Plus CFS slot id (0..3). When supplied, the main-
+         * process push appends `?cfs_slot=N` to the upload URL so a
+         * printer-side Klipper macro / future Moonraker plugin can read
+         * the slot the operator picked. Safety Rule 1: never mutates
+         * G-code bytes. Additive / optional.
+         */
+        cfsSlotId?: number
       }
     ) => {
       const resolved = await resolveMoonrakerPushCapabilities(payload)

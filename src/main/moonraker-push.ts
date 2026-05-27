@@ -56,6 +56,27 @@ export type MoonrakerPushPayload = {
    * produce the exact pre-[ID-0073] upload behavior.
    */
   machineCapabilities?: FdmCapabilityFields | null
+  /**
+   * Creality K2 Plus CFS (Creality Filament System) slot id (0..3).
+   * When supplied AND in range, `moonrakerPush` appends `?cfs_slot=N`
+   * to the `/server/files/upload` URL so a printer-side Klipper macro
+   * (or future Moonraker plugin) can read the slot the operator picked
+   * in the K2 Send section. Out-of-range / non-integer / non-finite
+   * values are dropped silently (the upload still succeeds without the
+   * hint). Stock Moonraker ignores unknown query params on
+   * `/server/files/upload`, so this is forward-compatible AND
+   * non-blocking on pre-CFS firmware -- the upload still succeeds
+   * either way.
+   *
+   * Safety Rule 1 (G-code is sacred): never mutates the G-code bytes;
+   * the slot id only travels on the URL.
+   *
+   * My-Shop-Only: K2 Plus only. The two CNC profiles in the cohort have
+   * no CFS concept and the renderer never sets this field on those
+   * flows; gating lives on the renderer side via the `isK2Plus` panel
+   * branch in `SliceManufacturePanel`.
+   */
+  cfsSlotId?: number
 }
 
 export type MoonrakerPushResult =
@@ -193,15 +214,57 @@ function makeRequest(
 }
 
 /**
+ * Build the `/server/files/upload` URL for a Moonraker push, optionally
+ * tagged with the operator-picked K2 Plus CFS slot. Pure function --
+ * exported for unit tests so the URL-shape contract is locked down.
+ *
+ * Rules:
+ *   - The base URL is `${printerUrl}/server/files/upload` (trailing
+ *     slash stripped from `printerUrl` -- matches the legacy shape).
+ *   - When `cfsSlotId` is a finite integer in 0..3, append `?cfs_slot=N`
+ *     as a query param. The K2 CFS holds four spools; this matches
+ *     OrcaSlicer / Bambu AMS / Creality wiki zero-indexed convention.
+ *   - Any other value (null, undefined, NaN, Infinity, non-integer,
+ *     negative, > 3) is dropped silently -- the URL is byte-identical
+ *     to the pre-CFS shape so existing call sites cannot regress.
+ *
+ * Safety Rule 1: the slot id ONLY rides on the URL. The G-code bytes
+ * are not touched anywhere in this module.
+ */
+export function buildUploadUrlForK2Cfs(
+  printerUrl: string,
+  cfsSlotId?: number
+): string {
+  const base = `${printerUrl.replace(/\/$/, '')}/server/files/upload`
+  if (
+    typeof cfsSlotId === 'number' &&
+    Number.isFinite(cfsSlotId) &&
+    Number.isInteger(cfsSlotId) &&
+    cfsSlotId >= 0 &&
+    cfsSlotId <= 3
+  ) {
+    return `${base}?cfs_slot=${cfsSlotId}`
+  }
+  return base
+}
+
+/**
  * Multipart/form-data upload using Node.js's built-in http module.
  * Moonraker's `/server/files/upload` endpoint requires multipart form data.
+ *
+ * When `cfsSlotId` is supplied (finite integer 0..3), the upload URL
+ * carries a `?cfs_slot=N` query param so a printer-side Klipper macro /
+ * future Moonraker plugin can read the K2 CFS slot the operator picked.
+ * Stock Moonraker ignores unknown query params, so the upload still
+ * succeeds on pre-CFS firmware.
  */
 async function uploadFileMultipart(
   printerUrl: string,
   localPath: string,
   remoteFilename: string,
   uploadPath: string,
-  timeoutMs: number
+  timeoutMs: number,
+  cfsSlotId?: number
 ): Promise<{ status: number; body: string }> {
   const boundary = `----MoonrakerFormBoundary${Date.now().toString(16)}`
   const fileBuffer = await import('node:fs/promises').then((m) => m.readFile(localPath))
@@ -222,7 +285,7 @@ async function uploadFileMultipart(
     fileBuffer,
     Buffer.from(trailer, 'latin1')
   ])
-  const uploadUrl = `${printerUrl.replace(/\/$/, '')}/server/files/upload`
+  const uploadUrl = buildUploadUrlForK2Cfs(printerUrl, cfsSlotId)
   return makeRequest('POST', uploadUrl, {
     body,
     contentType: `multipart/form-data; boundary=${boundary}`,
@@ -317,7 +380,8 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
     uploadPath = '',
     startAfterUpload = false,
     timeoutMs = 15_000,
-    machineCapabilities = null
+    machineCapabilities = null,
+    cfsSlotId
   } = payload
 
   const filename = basename(gcodePath)
@@ -403,12 +467,41 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
         )
       }
     }
+    // Advisory-only Klipper PLR + adaptive-probing checks. Only surfaced
+    // when the header looks like a slicer file (at least one of the four
+    // core fields is present) -- otherwise we are looking at a CNC G-code
+    // or non-slicer payload and should not nag. Both are NEVER blockers;
+    // the upload proceeds either way (Safety Rule: G-code is sacred, this
+    // is read-only metadata).
+    if (headerHealth.missingFields.length < 4) {
+      if (headerHealth.fields.hasPowerLossRecovery !== true) {
+        warnings.push(
+          `${filename}: no Klipper power-loss recovery sentinel detected ` +
+            '(expected `SAVE_VARIABLE VARIABLE=was_interrupted` in the start gcode). ' +
+            'The K2 Plus will NOT be able to resume this print after a power blip.',
+        )
+      }
+      if (headerHealth.fields.hasAdaptiveProbing !== true) {
+        warnings.push(
+          `${filename}: no adaptive-probing sentinel detected ` +
+            '(expected `; MINX = ... ; MAXX = ...` annotation or `BED_MESH_CALIBRATE`). ' +
+            'The K2 will use the last full bed mesh instead of probing the print area.',
+        )
+      }
+    }
   }
 
   // Upload
   let uploadResult: { status: number; body: string }
   try {
-    uploadResult = await uploadFileMultipart(printerUrl, gcodePath, filename, uploadPath, timeoutMs)
+    uploadResult = await uploadFileMultipart(
+      printerUrl,
+      gcodePath,
+      filename,
+      uploadPath,
+      timeoutMs,
+      cfsSlotId
+    )
   } catch (e) {
     return {
       ok: false,

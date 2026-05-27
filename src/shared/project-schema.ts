@@ -159,6 +159,29 @@ export const appSettingsSchema = z.object({
    */
   moonrakerApiKey: z.string().optional(),
   /**
+   * Creality K2 Plus CFS (Creality Filament System) slot id for the next
+   * Send-to-K2 upload. The CFS is Creality's multi-spool ams-style filament
+   * switcher; the K2 Plus Combo ships with one CFS unit that holds four
+   * spools (slots 0..3 -- zero-indexed to match Bambu AMS / OrcaSlicer's
+   * extruder index convention and the K2's wiki guide).
+   *
+   * Wire path: when set AND active machine is K2 Plus, the renderer threads
+   * this value into the `moonraker:push` IPC payload, and `moonrakerPush`
+   * appends `?cfs_slot=N` to the `/server/files/upload` URL so a printer-
+   * side Klipper macro (or future Moonraker plugin) can read the requested
+   * slot. URL query params on the upload endpoint are ignored by stock
+   * Moonraker today, so this is forward-compatible AND non-blocking on
+   * pre-CFS firmware -- the upload still succeeds either way.
+   *
+   * Safety Rule 1 (G-code is sacred): the slot id ONLY travels on the URL.
+   * The renderer never mutates G-code bytes to carry the CFS hint.
+   *
+   * Default: absent (no slot opinion -- printer uses its CFS automatic
+   * mapping). My-Shop-Only: this field is K2 Plus only; Laguna / Carvera
+   * CNC profiles have no CFS concept.
+   */
+  cfsSlotId: z.number().int().min(0).max(3).optional(),
+  /**
    * Laguna Swift 5x10 active vacuum zones (1..6) for full-sheet jobs.
    * The Laguna table is split into six T-slot vacuum zones in a 2x3
    * grid; the operator selects which zones to engage based on stock

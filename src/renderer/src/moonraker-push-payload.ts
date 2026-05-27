@@ -51,6 +51,15 @@ export type MoonrakerPushPayload = {
   startAfterUpload?: boolean
   timeoutMs?: number
   machineId?: string
+  /**
+   * Creality K2 Plus CFS (Creality Filament System) slot id (0..3).
+   * Optional; when present the main-process push handler appends
+   * `?cfs_slot=N` to the `/server/files/upload` URL so a printer-side
+   * Klipper macro (or future Moonraker plugin) can read the slot the
+   * operator picked in the K2 Send section. Safety Rule 1: the slot id
+   * NEVER mutates the G-code bytes -- it only travels on the URL.
+   */
+  cfsSlotId?: number
 }
 
 /**
@@ -110,6 +119,13 @@ export type ShopJobForPush = {
   gcodeOut: string
   printerUrl: string
   machineId?: string | null
+  /**
+   * Creality K2 Plus CFS slot id (0..3). Optional; passes through to
+   * the IPC payload's `cfsSlotId` so the main-side push appends a
+   * `?cfs_slot=N` query param to the upload URL. See the type doc on
+   * `MoonrakerPushPayload.cfsSlotId` above.
+   */
+  cfsSlotId?: number | null
 }
 
 /**
@@ -165,6 +181,20 @@ export function buildMoonrakerPushPayload(
     opts.timeoutMs > 0
   ) {
     out.timeoutMs = opts.timeoutMs
+  }
+  // CFS slot threading -- additive / optional. Only included when the
+  // caller passed a finite integer in 0..3 (K2 Plus CFS slot range). Any
+  // other value (null, undefined, out-of-range, non-finite) is dropped
+  // so the IPC payload remains byte-identical to the pre-CFS shape.
+  // Safety Rule 2: existing callers see zero behavior change.
+  if (
+    typeof job.cfsSlotId === 'number' &&
+    Number.isFinite(job.cfsSlotId) &&
+    Number.isInteger(job.cfsSlotId) &&
+    job.cfsSlotId >= 0 &&
+    job.cfsSlotId <= 3
+  ) {
+    out.cfsSlotId = job.cfsSlotId
   }
   return out
 }

@@ -117,6 +117,19 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   const moonrakerUrl = p.settings?.moonrakerUrl?.trim() ?? ''
   const sendCandidatePath = p.lastSliceGcodePath?.trim() ?? ''
   const canSendToK2 = isK2Plus && sendCandidatePath.length > 0 && moonrakerUrl.length > 0
+  // K2 Plus CFS (Creality Filament System) slot id (0..3). Defaults to
+  // slot 0 -- matches the K2 wiki guide's "load first spool in slot 0"
+  // default and OrcaSlicer's zero-indexed extruder/filament convention.
+  // Persisted per-project via `onSaveSettingsField` so the operator's
+  // pick survives a reload. Safety Rule 1: this value rides on the
+  // upload URL only -- never mutates the G-code bytes.
+  const cfsSlotId: number =
+    typeof p.settings?.cfsSlotId === 'number' &&
+    Number.isInteger(p.settings.cfsSlotId) &&
+    p.settings.cfsSlotId >= 0 &&
+    p.settings.cfsSlotId <= 3
+      ? p.settings.cfsSlotId
+      : 0
 
   const [k2SendBusy, setK2SendBusy] = useState(false)
   const [filaments, setFilaments] = useState<FilamentRecord[]>([])
@@ -138,7 +151,8 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
         {
           gcodeOut: sendCandidatePath,
           printerUrl: moonrakerUrl,
-          machineId: p.activeMachine?.id ?? null
+          machineId: p.activeMachine?.id ?? null,
+          cfsSlotId
         },
         { startAfterUpload: true }
       )
@@ -199,6 +213,50 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           {moonrakerUrl.length === 0 ? (
             <p className="msg">Add a Moonraker URL in File → Settings to enable Send.</p>
           ) : null}
+          {/*
+           * K2 Plus CFS (Creality Filament System) slot picker. The K2
+           * Plus Combo ships with one CFS unit holding four spools
+           * (slots 0..3 zero-indexed, matching the Creality wiki guide
+           * and OrcaSlicer's extruder convention). Selecting a slot
+           * persists per-project via `onSaveSettingsField` and rides
+           * on the next Send-to-K2 upload as a `?cfs_slot=N` query
+           * param on the Moonraker /server/files/upload URL. The K2
+           * firmware's CFS automatic-mapping macro can read it (or
+           * stock Moonraker harmlessly ignores it on pre-CFS firmware).
+           *
+           * Safety Rule 1: the slot id never mutates G-code bytes --
+           * it only travels on the upload URL. My-Shop-Only: K2 Plus
+           * only; Laguna / Carvera CNC profiles have no CFS concept
+           * and this picker is gated inside the `isK2Plus` branch.
+           */}
+          <fieldset
+            className="k2-cfs-slot-picker"
+            data-testid="k2-cfs-slot-picker"
+            aria-labelledby="k2-cfs-slot-legend"
+          >
+            <legend id="k2-cfs-slot-legend">CFS slot</legend>
+            <div className="row" role="group" aria-labelledby="k2-cfs-slot-legend">
+              {[0, 1, 2, 3].map((slot) => {
+                const active = cfsSlotId === slot
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    className={active ? 'primary' : 'secondary'}
+                    data-testid={`k2-cfs-slot-${slot}`}
+                    data-active={active ? 'true' : 'false'}
+                    aria-pressed={active}
+                    onClick={() => p.onSaveSettingsField({ cfsSlotId: slot })}
+                  >
+                    Slot {slot}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="msg msg--muted" role="status">
+              {`Using CFS slot ${cfsSlotId} for the next Send (override via the buttons above).`}
+            </p>
+          </fieldset>
           <button
             type="button"
             data-testid="k2-send-to-printer-button"
