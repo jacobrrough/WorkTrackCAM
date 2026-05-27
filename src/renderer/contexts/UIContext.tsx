@@ -15,8 +15,12 @@ type UIContextValue = {
   setShowShortcuts: React.Dispatch<React.SetStateAction<boolean>>
   helpOpen: boolean
   setHelpOpen: React.Dispatch<React.SetStateAction<boolean>>
+  /** Legacy informational onboarding overlay (now repurposed as "What's new"). */
   showOnboarding: boolean
   setShowOnboarding: React.Dispatch<React.SetStateAction<boolean>>
+  /** First-launch project wizard (replaces OnboardingOverlay's first-run trigger). */
+  showFirstLaunchWizard: boolean
+  setShowFirstLaunchWizard: React.Dispatch<React.SetStateAction<boolean>>
   logOpen: boolean
   setLogOpen: React.Dispatch<React.SetStateAction<boolean>>
   gcodeViewerOpen: boolean
@@ -41,6 +45,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showFirstLaunchWizard, setShowFirstLaunchWizard] = useState(false)
   const [savedIndicator, setSavedIndicator] = useState(false)
 
   const [logOpen, setLogOpenRaw] = useState(ws.logOpen ?? false)
@@ -73,6 +78,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
       showShortcuts, setShowShortcuts,
       helpOpen, setHelpOpen,
       showOnboarding, setShowOnboarding,
+      showFirstLaunchWizard, setShowFirstLaunchWizard,
       logOpen, setLogOpen,
       gcodeViewerOpen, setGcodeViewerOpen,
       leftPanelWidth, setLeftPanelWidth,

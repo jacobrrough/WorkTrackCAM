@@ -1,30 +1,20 @@
 /**
- * OnboardingOverlay -- First-run quick start guide.
+ * OnboardingOverlay -- "What's new" / quick-tour reference panel.
  *
- * Displayed on initial launch (controlled by a localStorage flag).
- * Walks the user through 4 steps: select machine, import model,
- * create operation, generate G-code. Includes a "Don't show again"
- * checkbox and dismisses to the normal app.
+ * History: was originally a 4-card first-run overlay tied to a
+ * localStorage flag. As of the first-launch wizard rollout
+ * (`FirstLaunchWizard.tsx`), the **first-run trigger is owned by the
+ * wizard** and persisted via `appSettings.hasCompletedOnboarding`.
+ *
+ * This component is now reachable on demand from the command palette
+ * ("Show app tour…") and from the Help drawer as a quick reminder of
+ * the four core steps of a WorkTrackCAM workflow. The educational
+ * content was preserved verbatim so users who liked it still have it.
+ *
+ * The legacy `fab-onboarding-dismissed-v1` localStorage key is no
+ * longer read or written -- the wizard's settings flag supersedes it.
  */
 import React, { useState } from 'react'
-
-const ONBOARDING_DISMISSED_KEY = 'fab-onboarding-dismissed-v1'
-
-/** Check whether the onboarding should be shown. */
-export function shouldShowOnboarding(): boolean {
-  try {
-    return localStorage.getItem(ONBOARDING_DISMISSED_KEY) !== 'true'
-  } catch {
-    return false
-  }
-}
-
-/** Mark onboarding as dismissed permanently. */
-function dismissOnboarding(): void {
-  try {
-    localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true')
-  } catch { /* storage unavailable -- ignore */ }
-}
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
@@ -65,13 +55,9 @@ const STEPS: OnboardingStep[] = [
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function OnboardingOverlay({ onDismiss }: { onDismiss: () => void }): React.ReactElement {
-  const [dontShowAgain, setDontShowAgain] = useState(false)
   const [activeStep, setActiveStep] = useState(0)
 
   const handleDismiss = (): void => {
-    if (dontShowAgain) {
-      dismissOnboarding()
-    }
     onDismiss()
   }
 
@@ -104,28 +90,16 @@ export function OnboardingOverlay({ onDismiss }: { onDismiss: () => void }): Rea
         </div>
 
         <div className="onboarding-footer">
-          <label className="onboarding-checkbox-label">
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={e => setDontShowAgain(e.target.checked)}
-            />
-            Don't show this again
-          </label>
+          <span className="onboarding-checkbox-label">
+            App tour — open from Help anytime
+          </span>
           <div className="flex-spacer" />
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={handleDismiss}
-          >
-            Skip
-          </button>
           <button
             type="button"
             className="onboarding-start-btn"
             onClick={handleDismiss}
           >
-            Get Started
+            Close
           </button>
         </div>
       </div>

@@ -174,7 +174,18 @@ export const appSettingsSchema = z.object({
    * regressions in 6+ test files; the `.default(...)` was flipping
    * the inferred type to required).
    */
-  lagunaActiveZones: z.array(z.number().int().min(1).max(6)).optional()
+  lagunaActiveZones: z.array(z.number().int().min(1).max(6)).optional(),
+  /**
+   * First-launch project wizard completion flag. Set to `true` after the
+   * user finishes (or explicitly skips) the 3-step project wizard so
+   * subsequent launches go straight to the main app. Re-triggered via
+   * File menu / command palette ("New Project from Wizard") regardless of
+   * this flag. Kept optional / additive so existing settings.json files
+   * load cleanly. Replaces the legacy `fab-onboarding-dismissed-v1`
+   * localStorage flag used by the educational `OnboardingOverlay` (which
+   * is preserved as a "What's new" panel under Help).
+   */
+  hasCompletedOnboarding: z.boolean().optional()
 }).superRefine((data, ctx) => {
   // Validate JSON string fields are parseable and have the expected structural type.
   // Catching malformed JSON at schema parse time surfaces a clear error rather than

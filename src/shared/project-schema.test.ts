@@ -208,6 +208,16 @@ describe('appSettingsSchema', () => {
     expect(empty.moonrakerApiKey).toBeUndefined()
   })
 
+  it('accepts hasCompletedOnboarding=true (first-launch wizard flag)', () => {
+    const result = appSettingsSchema.parse({ hasCompletedOnboarding: true })
+    expect(result.hasCompletedOnboarding).toBe(true)
+  })
+
+  it('treats missing hasCompletedOnboarding as undefined (additive optional)', () => {
+    const result = appSettingsSchema.parse({})
+    expect(result.hasCompletedOnboarding).toBeUndefined()
+  })
+
   it('accepts valid curaSlicePreset values', () => {
     expect(appSettingsSchema.parse({ curaSlicePreset: 'balanced' }).curaSlicePreset).toBe('balanced')
     expect(appSettingsSchema.parse({ curaSlicePreset: 'draft' }).curaSlicePreset).toBe('draft')

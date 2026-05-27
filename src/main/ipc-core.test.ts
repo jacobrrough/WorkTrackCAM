@@ -20,7 +20,14 @@ vi.mock('electron', () => ({
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn()
+  writeFile: vi.fn(),
+  access: vi.fn().mockRejectedValue(new Error('ENOENT')),
+  copyFile: vi.fn().mockResolvedValue(undefined),
+  mkdir: vi.fn().mockResolvedValue(undefined)
+}))
+
+vi.mock('./paths', () => ({
+  getResourcesRoot: vi.fn().mockReturnValue('/mock/resources')
 }))
 
 vi.mock('./app-runtime', () => ({
@@ -83,7 +90,9 @@ describe('ipc-core', () => {
       'dialog:saveFile',
       'shell:openPath',
       'file:readText',
-      'file:writeText'
+      'file:writeText',
+      'samples:list',
+      'wizard:copySample'
     ]
 
     for (const ch of expectedChannels) {

@@ -27,6 +27,11 @@ import type { ManufactureSetup } from '../shared/manufacture-schema'
 import type { SetupSequenceValidation, FlipSetupSuggestion } from '../shared/multi-setup-utils'
 import type { ProbeCycleType, ProbeBaseParams } from '../shared/probing-cycles'
 import type { CamRunPayload, CamRunResultContract } from '../shared/cam-ipc-contract'
+import type {
+  WizardSamplesAvailability,
+  WizardCopySampleRequest,
+  WizardCopySampleResult
+} from '../shared/first-launch-wizard-contract'
 
 export type Api = {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -37,6 +42,10 @@ export type Api = {
   projectRead: (dir: string) => Promise<ProjectFile>
   projectCreate: (payload: { dir: string; name: string; machineId: string }) => Promise<ProjectFile>
   projectSave: (dir: string, project: ProjectFile) => Promise<void>
+  /** First-launch wizard: which machines have bundled starter STLs on disk. */
+  samplesList: () => Promise<WizardSamplesAvailability>
+  /** First-launch wizard: copy the bundled sample STL into `<projectDir>/assets/`. */
+  wizardCopySample: (payload: WizardCopySampleRequest) => Promise<WizardCopySampleResult>
   dialogOpenFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
   dialogOpenFiles: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string[]>
   dialogSaveFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
@@ -350,6 +359,8 @@ const api: Api = {
   projectRead: (dir) => ipcRenderer.invoke('project:read', dir),
   projectCreate: (payload) => ipcRenderer.invoke('project:create', payload),
   projectSave: (dir, project) => ipcRenderer.invoke('project:save', dir, project),
+  samplesList: () => ipcRenderer.invoke('samples:list'),
+  wizardCopySample: (payload) => ipcRenderer.invoke('wizard:copySample', payload),
   dialogOpenFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFile', filters, defaultPath),
   dialogOpenFiles: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFiles', filters, defaultPath),
   dialogSaveFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:saveFile', filters, defaultPath),

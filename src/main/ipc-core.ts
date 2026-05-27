@@ -1,11 +1,18 @@
 import { dialog, ipcMain, shell } from 'electron'
-import { readFile, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
+import { constants as fsConstants } from 'node:fs'
 import { getAppVersion } from './app-runtime'
 import type { MainIpcWindowContext } from './ipc-context'
 import { newProject, readProjectFile, writeProjectFile } from './project-store'
 import { loadSettings, saveSettings } from './settings-store'
 import { appSettingsSchema, projectSchema } from '../shared/project-schema'
 import { isSafeExternalUrl } from './path-security'
+import { getResourcesRoot } from './paths'
+import {
+  WIZARD_MACHINE_TO_SAMPLE_FILE,
+  type WizardStarterMachineId
+} from '../shared/first-launch-wizard-contract'
 
 export function registerCoreIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle('app:getVersion', async () => getAppVersion())
@@ -140,6 +147,92 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
       await writeFile(p, content, 'utf-8')
     } catch (e) {
       throw new Error(`Failed to write file "${p}": ${e instanceof Error ? e.message : String(e)}`)
+    }
+  })
+
+  // ── First-launch project wizard ──────────────────────────────────────
+  // `samples:list` -- which wizard machine IDs currently have a bundled
+  // starter STL under `resources/samples/<machineId>/`. Drives the
+  // disabled state of the wizard's Step 3 "Sample STL" option.
+  ipcMain.handle('samples:list', async () => {
+    const resourcesRoot = getResourcesRoot()
+    const samplesRoot = join(resourcesRoot, 'samples')
+    const availableMachineIds: WizardStarterMachineId[] = []
+    for (const [machineId, sampleFile] of Object.entries(
+      WIZARD_MACHINE_TO_SAMPLE_FILE
+    )) {
+      const samplePath = join(samplesRoot, machineId, sampleFile)
+      try {
+        await access(samplePath, fsConstants.R_OK)
+        availableMachineIds.push(machineId as WizardStarterMachineId)
+      } catch {
+        // Sample missing -- not an error; the wizard disables the option.
+      }
+    }
+    return { availableMachineIds }
+  })
+
+  // `wizard:copySample` -- copies the bundled sample STL for a given
+  // wizard machine ID into `<projectDir>/assets/`. Returns the relative
+  // POSIX path so the renderer can stage it as a starter mesh. Refuses
+  // missing samples and missing project directories. Path-traversal-safe
+  // because both inputs are validated before any filesystem touch.
+  ipcMain.handle('wizard:copySample', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false as const, error: 'Invalid wizard:copySample payload' }
+    }
+    const { projectDir, machineId } = payload as {
+      projectDir?: unknown
+      machineId?: unknown
+    }
+    if (
+      typeof projectDir !== 'string' ||
+      projectDir.length === 0 ||
+      projectDir.includes('\0')
+    ) {
+      return { ok: false as const, error: 'Invalid projectDir' }
+    }
+    if (
+      typeof machineId !== 'string' ||
+      !(machineId in WIZARD_MACHINE_TO_SAMPLE_FILE)
+    ) {
+      return { ok: false as const, error: 'Unknown wizard machine id' }
+    }
+    const sampleFile = WIZARD_MACHINE_TO_SAMPLE_FILE[machineId as WizardStarterMachineId]
+    const sourcePath = join(getResourcesRoot(), 'samples', machineId, sampleFile)
+    try {
+      await access(sourcePath, fsConstants.R_OK)
+    } catch {
+      return {
+        ok: false as const,
+        error: `Sample bundle not found for ${machineId}.`
+      }
+    }
+    const assetsDir = join(projectDir, 'assets')
+    try {
+      await mkdir(assetsDir, { recursive: true })
+    } catch (e) {
+      return {
+        ok: false as const,
+        error: `Failed to create project assets directory: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      }
+    }
+    const destPath = join(assetsDir, basename(sampleFile))
+    try {
+      await copyFile(sourcePath, destPath)
+    } catch (e) {
+      return {
+        ok: false as const,
+        error: `Failed to copy sample: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      }
+    }
+    return {
+      ok: true as const,
+      assetRelativePath: `assets/${basename(sampleFile)}`
     }
   })
 }

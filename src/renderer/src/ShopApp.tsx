@@ -73,7 +73,8 @@ import {
 } from './environments/env-jobs-storage'
 import { LeftPanel } from './LeftPanel'
 import { HelpPanel } from './HelpPanel'
-import { OnboardingOverlay, shouldShowOnboarding } from './OnboardingOverlay'
+import { OnboardingOverlay } from './OnboardingOverlay'
+import { FirstLaunchWizard, wizardStarterOpKind, type FirstLaunchWizardCompletion } from './FirstLaunchWizard'
 import { LibraryDrawer } from '../shell/LibraryDrawer'
 import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { MyShopDrawer } from '../shell/MyShopDrawer'
@@ -665,11 +666,18 @@ function ShopAppInner(): React.ReactElement {
     showShortcuts, setShowShortcuts,
     helpOpen, setHelpOpen,
     showOnboarding, setShowOnboarding,
+    showFirstLaunchWizard, setShowFirstLaunchWizard,
     logOpen, setLogOpen,
     gcodeViewerOpen, setGcodeViewerOpen,
     leftPanelWidth, setLeftPanelWidth,
     savedIndicator, setSavedIndicator,
   } = useUI()
+  // Recent projects + projects root for the first-launch wizard. Both are
+  // pulled fresh on mount; the wizard treats missing/empty arrays as no
+  // recent projects (zero crashes when the MRU is authored by a parallel
+  // agent and not yet shipped).
+  const [recentProjectPaths, setRecentProjectPaths] = useState<readonly string[]>([])
+  const [projectsRoot, setProjectsRoot] = useState<string | null>(null)
   const [gcodeGeneration, setGcodeGeneration] = useState(0)
   const [lastGenMs, setLastGenMs] = useState<number | null>(null)
   const [gcodeSafetyAckKey, setGcodeSafetyAckKey] = useState<string | null>(null)
@@ -724,8 +732,27 @@ function ShopAppInner(): React.ReactElement {
 
   const { execute: undoExec } = useUndo()
 
-  // Set onboarding on first mount
-  useEffect(() => { if (shouldShowOnboarding()) setShowOnboarding(true) }, [])
+  // First-launch project wizard trigger.
+  // On every mount: read `hasCompletedOnboarding` from settings (the new
+  // source of truth). Show the wizard iff the flag is NOT true. Also
+  // hydrate the recent-projects MRU + projectsRoot so the wizard has
+  // them available without a second round-trip.
+  useEffect(() => {
+    let cancelled = false
+    fab().settingsGet()
+      .then((s) => {
+        if (cancelled) return
+        const mru = Array.isArray(s.recentProjectPaths) ? s.recentProjectPaths : []
+        setRecentProjectPaths(mru)
+        setProjectsRoot(typeof s.projectsRoot === 'string' && s.projectsRoot.length > 0 ? s.projectsRoot : null)
+        if (s.hasCompletedOnboarding !== true) {
+          setShowFirstLaunchWizard(true)
+        }
+      })
+      .catch(() => { /* settings unavailable -- skip wizard quietly */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const activeJob = useMemo(() => jobs.find(j => j.id === activeJobId) ?? null, [jobs, activeJobId])
 
@@ -1515,6 +1542,45 @@ function ShopAppInner(): React.ReactElement {
   }
 
   /**
+   * First-launch wizard completion handler. The wizard has already:
+   *   - Created the project via `project:create`
+   *   - Optionally copied a sample STL via `wizard:copySample`
+   *   - Persisted `hasCompletedOnboarding = true`
+   *
+   * This handler activates the chosen machine, seeds the in-memory job
+   * list with a starter job (always), and -- when the user picked
+   * sample / import -- attaches the model + a starter operation kind.
+   */
+  const handleWizardFinish = async (completion: FirstLaunchWizardCompletion): Promise<void> => {
+    setShowFirstLaunchWizard(false)
+    // 1. Activate the machine + transition to the main app.
+    await handleMachineSelect(completion.machine)
+    // 2. Build a starter job. Always create one so the user lands in
+    //    a real working surface (the "3-clicks-from-launch" rule).
+    const baseJob = newJob(completion.projectName || 'Job 1', completion.machine.id)
+    const starter = completion.starterContent
+    let stlPathForJob: string | null = null
+    if (starter.kind === 'sample') {
+      stlPathForJob = starter.absolutePath
+    } else if (starter.kind === 'imported') {
+      stlPathForJob = starter.sourcePath
+    }
+    const job: Job = { ...baseJob, stlPath: stlPathForJob }
+    if (starter.kind === 'sample' || starter.kind === 'imported') {
+      // Pre-seed one operation matching the machine kind.
+      const op = newOp(starter.starterOpKind)
+      job.operations = [op]
+    }
+    setJobs([job])
+    setActiveJobId(job.id)
+    pushToast('ok', `Project "${completion.projectName}" created.`)
+  }
+
+  const handleWizardSkip = (): void => {
+    setShowFirstLaunchWizard(false)
+  }
+
+  /**
    * Brand-bar env quick-switch. Resolves the target machine via the pure
    * helper, records the choice in per-env variant memory (localStorage), and
    * delegates to `handleMachineSelect`. When no owned machine is installed,
@@ -1641,6 +1707,22 @@ function ShopAppInner(): React.ReactElement {
     materials.forEach(m => c.push({ id: `set_mat_${m.id}`, group: 'Materials', label: `Set material: ${m.name}`, icon: '\u{1F9F1}', action: () => { if (activeJob) updateJob(activeJob.id, { materialId: m.id }) } }))
     c.push({ id: 'library', group: 'Navigate', label: 'Open Library', icon: '\u{1F4E6}', action: () => setLibraryDrawerOpen(true) })
     c.push({ id: 'settings', group: 'Navigate', label: 'Open Settings', icon: '\u2699', action: () => setSettingsDrawerOpen(true) })
+    // First-launch wizard re-trigger (acceptance criterion: re-triggerable
+    // from a menu/command palette item).
+    c.push({
+      id: 'new_project_wizard',
+      group: 'File',
+      label: 'New Project from Wizard\u2026',
+      icon: '\u{2728}',
+      action: () => setShowFirstLaunchWizard(true)
+    })
+    c.push({
+      id: 'app_tour',
+      group: 'Help',
+      label: 'Show app tour (What\u2019s new)',
+      icon: '\u{1F4D6}',
+      action: () => setShowOnboarding(true)
+    })
     return c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeJob, machines, materials, jobs.length, mode, isFdm])
@@ -1938,6 +2020,40 @@ function ShopAppInner(): React.ReactElement {
       {showShortcuts && <ErrorBoundary label="Keyboard Shortcuts" severity="panel"><KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /></ErrorBoundary>}
       {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
       {showOnboarding && <OnboardingOverlay onDismiss={() => setShowOnboarding(false)} />}
+      {showFirstLaunchWizard && (
+        <ErrorBoundary label="First-launch wizard" severity="panel">
+          <FirstLaunchWizard
+            machines={machines}
+            recentProjectPaths={recentProjectPaths}
+            defaultProjectsRoot={projectsRoot}
+            onFinish={(c) => { void handleWizardFinish(c) }}
+            onSkip={handleWizardSkip}
+            onOpenRecent={(p) => {
+              setShowFirstLaunchWizard(false)
+              // The host doesn't currently have a single "open recent
+              // project path" API exposed at this level, so fall back to
+              // the existing fabsession picker -- the wizard's MRU is a
+              // convenience that hands off to the normal Open Project
+              // flow seeded with the chosen folder.
+              void (async () => {
+                try {
+                  // Best-effort: read project.json + activate its machine.
+                  const pf = await fab().projectRead(p)
+                  const mach = machines.find((m) => m.id === pf.activeMachineId)
+                  if (mach) {
+                    await handleMachineSelect(mach)
+                    pushToast('ok', `Opened "${pf.name}"`)
+                  } else {
+                    pushToast('warn', `Project "${pf.name}" references an unknown machine.`)
+                  }
+                } catch (e) {
+                  pushToast('err', `Failed to open recent project: ${e instanceof Error ? e.message : String(e)}`)
+                }
+              })()
+            }}
+          />
+        </ErrorBoundary>
+      )}
 
       <ConfirmDialog
         open={showRemoveModelConfirm}
