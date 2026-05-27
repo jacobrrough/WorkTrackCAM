@@ -348,6 +348,53 @@ export type Api = {
     | { ok: true; gcode: string }
     | { ok: false; error: string }
   >
+
+  // ── K2 Plus Calibration Suite ───────────────────────────────────────────
+  /**
+   * Gap #4 (docs/COMPETITIVE-GAP-ANALYSIS.md): build a K2 Plus calibration
+   * G-code file (temperature tower, flow rate, or pressure advance). The
+   * main-process handler writes the file to `outputGcodePath` and returns
+   * the absolute path so the renderer can offer "Send to K2 Plus" via the
+   * existing `moonraker:push` IPC.
+   */
+  calibrationGenerate: (payload:
+    | {
+        kind: 'temperature-tower'
+        params: {
+          outputGcodePath: string
+          startTempC?: number
+          endTempC?: number
+          stepTempC?: number
+          bedTempC?: number
+        }
+      }
+    | {
+        kind: 'flow-rate'
+        params: {
+          outputGcodePath: string
+          cubeSizeMm?: number
+          cubeHeightMm?: number
+          wallCount?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
+    | {
+        kind: 'pressure-advance'
+        params: {
+          outputGcodePath: string
+          startPa?: number
+          endPa?: number
+          stepPa?: number
+          lineLengthMm?: number
+          nozzleTempC?: number
+          bedTempC?: number
+        }
+      }
+  ) => Promise<
+    | { ok: true; outputGcodePath: string; description: string; args: string[] }
+    | { ok: false; error: string; hint?: string }
+  >
 }
 
 const api: Api = {
@@ -493,6 +540,9 @@ const api: Api = {
 
   // Probing Cycles
   probeGenerate: (payload) => ipcRenderer.invoke('probe:generate', payload),
+
+  // K2 Plus Calibration Suite
+  calibrationGenerate: (payload) => ipcRenderer.invoke('calibration:generate', payload),
 }
 
 contextBridge.exposeInMainWorld('fab', api)

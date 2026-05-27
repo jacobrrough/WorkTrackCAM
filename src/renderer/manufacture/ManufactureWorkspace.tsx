@@ -23,6 +23,7 @@ import {
 import { estimateFeedMmMinFromTool } from '../../shared/tool-feed-hint'
 import type { ToolLibraryFile, ToolRecord } from '../../shared/tool-schema'
 import { CamManufacturePanel, SliceManufacturePanel, ToolsManufacturePanel } from './ManufactureAuxPanels'
+import { CalibrationPanel } from './CalibrationPanel'
 import { ManufactureSetupStrip } from './ManufactureSetupStrip'
 import { ManufactureCamSimulationPanel } from './ManufactureCamSimulationPanel'
 import { ManufactureSubTabStrip } from './ManufactureSubTabStrip'
@@ -1022,6 +1023,14 @@ export function ManufactureWorkspace({
           <SliceManufacturePanel {...auxPanelProps} />
         ) : panelTab === 'cam' ? (
           <CamManufacturePanel {...auxPanelProps} />
+        ) : panelTab === 'calibrate' ? (
+          <CalibrationPanel
+            activeMachine={activeMachine}
+            settings={settings}
+            projectDir={projectDir}
+            onStatus={onStatus}
+            onGoSettings={onGoSettings}
+          />
         ) : (
           <ToolsManufacturePanel {...auxPanelProps} />
         )}

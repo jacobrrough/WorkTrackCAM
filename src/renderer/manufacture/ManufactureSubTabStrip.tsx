@@ -11,6 +11,7 @@ const TABS: { id: ManufacturePanelTab; label: string; icon: string; title: strin
   { id: 'cam', label: 'CAM', icon: '⚙', title: 'Generate G-code toolpaths' },
   { id: 'simulate', label: 'Simulate', icon: '▶', title: '3D toolpath simulation viewer' },
   { id: 'slice', label: 'Slice', icon: '⊟', title: 'FDM slicer (CuraEngine)' },
+  { id: 'calibrate', label: 'Calibrate', icon: '🎯', title: 'K2 Plus calibration: temp tower / flow / pressure advance' },
   { id: 'tools', label: 'Tools', icon: '🔧', title: 'Tool library import and management' }
 ]
 

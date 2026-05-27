@@ -138,6 +138,50 @@ export declare const window: Window & {
     shellOpenPath: (filePath: string) => Promise<void>
     dxfImport: (filePath: string) => Promise<({ ok: true } & DxfParseResult) | { ok: false; error: string }>
     materialAudit: () => Promise<({ ok: true } & MaterialAuditResult) | { ok: false; error: string }>
+    /**
+     * Gap #4 (docs/COMPETITIVE-GAP-ANALYSIS.md): K2 Plus calibration suite
+     * (temperature tower, flow rate, pressure advance). Dispatches to the
+     * `calibration:generate` main-process handler which writes the program
+     * to `outputGcodePath` and returns the absolute path.
+     */
+    calibrationGenerate: (payload:
+      | {
+          kind: 'temperature-tower'
+          params: {
+            outputGcodePath: string
+            startTempC?: number
+            endTempC?: number
+            stepTempC?: number
+            bedTempC?: number
+          }
+        }
+      | {
+          kind: 'flow-rate'
+          params: {
+            outputGcodePath: string
+            cubeSizeMm?: number
+            cubeHeightMm?: number
+            wallCount?: number
+            nozzleTempC?: number
+            bedTempC?: number
+          }
+        }
+      | {
+          kind: 'pressure-advance'
+          params: {
+            outputGcodePath: string
+            startPa?: number
+            endPa?: number
+            stepPa?: number
+            lineLengthMm?: number
+            nozzleTempC?: number
+            bedTempC?: number
+          }
+        }
+    ) => Promise<
+      | { ok: true; outputGcodePath: string; description: string; args: string[] }
+      | { ok: false; error: string; hint?: string }
+    >
   }
 }
 

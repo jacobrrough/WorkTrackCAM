@@ -84,6 +84,11 @@ import { autoAssignWcsOffsets, validateSetupSequence, suggestFlipSetup } from '.
 import { generateProbeCycle, type ProbeCycleType, type ProbeBaseParams } from '../shared/probing-cycles'
 import { camRunPayloadSchema } from '../shared/cam-ipc-contract'
 import { listStaleSourceMeshesVersusGcode, type CamSourceMeshMtime } from '../shared/cam-source-stale'
+import {
+  buildCalibrationGcode,
+  type CalibrationGeneratePayload,
+  type CalibrationTestKind
+} from './calibration/k2-plus-tests'
 
 export type { MainIpcWindowContext } from './ipc-context'
 
@@ -1068,6 +1073,68 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         return { ok: false as const, error: msg }
+      }
+    }
+  )
+
+  // ── K2 Plus calibration suite ─────────────────────────────────────────────
+  // Gap #4 (docs/COMPETITIVE-GAP-ANALYSIS.md): one-click calibration tests
+  // (temperature tower, flow rate, pressure advance) for the Creality K2 Plus.
+  // The handler dispatches by kind, builds the Klipper-flavor program via the
+  // pure `buildCalibrationGcode` helper, writes it to the supplied
+  // `outputGcodePath` (under `<projectDir>/output/calibration/...`), and
+  // returns the absolute path. The renderer then offers a "Send to K2 Plus"
+  // button that reuses the existing `moonraker:push` IPC.
+  //
+  // Safety Rule 1 (G-code is sacred): the builder asserts every emitted
+  // feed/accel/temp value stays under K2_PLUS_HARDWARE_CEILINGS; the
+  // paired-pin contract `src/main/calibration/k2-plus-tests-pin.test.ts`
+  // re-asserts on the produced gcode at CI time.
+  ipcMain.handle(
+    'calibration:generate',
+    async (
+      _e,
+      payload: CalibrationGeneratePayload
+    ): Promise<
+      | { ok: true; outputGcodePath: string; description: string; args: string[] }
+      | { ok: false; error: string; hint?: string }
+    > => {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false as const, error: 'invalid_payload', hint: "calibration:generate requires { kind, params }" }
+      }
+      const VALID_KINDS: ReadonlySet<CalibrationTestKind> = new Set([
+        'temperature-tower',
+        'flow-rate',
+        'pressure-advance'
+      ])
+      if (typeof payload.kind !== 'string' || !VALID_KINDS.has(payload.kind as CalibrationTestKind)) {
+        return { ok: false as const, error: 'invalid_kind', hint: `kind must be one of: ${[...VALID_KINDS].join(', ')}` }
+      }
+      if (!payload.params || typeof payload.params !== 'object') {
+        return { ok: false as const, error: 'invalid_params' }
+      }
+      const outputGcodePath = (payload.params as { outputGcodePath?: unknown }).outputGcodePath
+      if (typeof outputGcodePath !== 'string' || outputGcodePath.length === 0) {
+        return { ok: false as const, error: 'missing_output_path' }
+      }
+      // Null-byte rejection -- same pattern as `slice:orca` and `fs:readBase64`.
+      if (outputGcodePath.includes('\0')) {
+        return { ok: false as const, error: 'invalid_path' }
+      }
+      try {
+        const result = buildCalibrationGcode(payload)
+        // Ensure the parent directory exists, then write the gcode.
+        await mkdir(dirname(result.outputGcodePath), { recursive: true })
+        await writeFile(result.outputGcodePath, result.gcode, 'utf-8')
+        return {
+          ok: true as const,
+          outputGcodePath: result.outputGcodePath,
+          description: result.description,
+          args: result.args
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return { ok: false as const, error: 'calibration_failed', hint: msg }
       }
     }
   )

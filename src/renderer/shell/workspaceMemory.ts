@@ -12,11 +12,20 @@ import type {
  * - cam: G-code generation + toolpath output
  * - simulate: 3D toolpath simulation viewer
  * - slice: FDM CuraEngine slice
+ * - calibrate: K2 Plus calibration suite (Gap #4 / temp tower + flow + pressure advance)
  * - tools: tool library management
  */
-export type ManufacturePanelTab = 'plan' | 'setup' | 'cam' | 'simulate' | 'slice' | 'tools'
+export type ManufacturePanelTab = 'plan' | 'setup' | 'cam' | 'simulate' | 'slice' | 'calibrate' | 'tools'
 
-const VALID_MFG_PANEL: ReadonlySet<ManufacturePanelTab> = new Set(['plan', 'setup', 'cam', 'simulate', 'slice', 'tools'])
+const VALID_MFG_PANEL: ReadonlySet<ManufacturePanelTab> = new Set([
+  'plan',
+  'setup',
+  'cam',
+  'simulate',
+  'slice',
+  'calibrate',
+  'tools'
+])
 
 const MFG_PANEL_TAB_KEY = 'ufs_manufacture_panel_tab'
 
