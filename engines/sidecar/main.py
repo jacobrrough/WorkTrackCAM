@@ -44,6 +44,7 @@ from typing import Any, Callable
 from . import __version__
 from .cad_handlers import HANDLERS as CAD_HANDLERS
 from .cam_handlers import HANDLERS as CAM_HANDLERS
+from .cam_handlers import _SidecarHandlerError
 
 
 HandlerFn = Callable[[dict[str, Any]], dict[str, Any]]
@@ -123,6 +124,11 @@ def _dispatch(table: dict[str, HandlerFn], line: str) -> str | None:
 
     try:
         result = handler(params)
+    except _SidecarHandlerError as exc:
+        # Structured CAM error — preserve the machine-readable code so the TS
+        # bridge can map to operator-facing fallback hints.
+        _log(f"handler {method} returned structured error: {exc.code} {exc}")
+        return _err(req_id, exc.code, str(exc), exc.detail)
     except Exception as exc:  # noqa: BLE001 - we want to surface ALL handler failures
         _log(f"handler {method} raised: {exc!r}")
         _log(traceback.format_exc())

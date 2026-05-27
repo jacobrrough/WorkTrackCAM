@@ -59,7 +59,22 @@ export type CadTessellateResult = {
   triangleCount: number
 }
 
-export type CamStrategy = 'waterline' | 'adaptive_waterline' | 'raster'
+/**
+ * CAM strategies the Python sidecar can dispatch via ``cam.run_toolpath``.
+ *
+ * Must stay in lock-step with ``engines/cam/ocl_strategies.py::STRATEGY_NAMES``
+ * (paired-pin test ``sidecar-protocol.test.ts`` enforces this contract).
+ *
+ * - ``waterline`` / ``adaptive_waterline`` — Z-level contour finishing.
+ * - ``raster`` — XY zigzag PathDropCutter with a flat-end (cylindrical) mill.
+ * - ``surface_scan`` — XY zigzag PathDropCutter with a ball-end mill plus
+ *   finer sampling, intended for ``cnc_3d_finish`` surface scan operations.
+ */
+export type CamStrategy =
+  | 'waterline'
+  | 'adaptive_waterline'
+  | 'raster'
+  | 'surface_scan'
 
 export type CamRunToolpathParams = {
   strategy: CamStrategy
@@ -69,11 +84,22 @@ export type CamRunToolpathParams = {
   feedMmMin: number
   plungeMmMin: number
   safeZMm: number
-  /** Required for `waterline` and `adaptive_waterline`. */
+  /** Required for `waterline` and `adaptive_waterline`; ignored for raster / surface_scan. */
   zPassMm?: number
 }
+
+/**
+ * Result of ``cam.run_toolpath``.
+ *
+ * ``toolpathLines`` are pre-formatted G-code strings (``"G0 Z..."`` /
+ * ``"G1 X.. Y.. Z.. F.."`` / ``"; comment"``) ready to feed into the
+ * Handlebars post-processor. Strings (NOT ``number[][]``) match what the
+ * legacy ``ocl_toolpath.py`` subprocess returns and what ``cam-runner.ts``
+ * consumes downstream — keeping them as strings means the sidecar can be a
+ * drop-in replacement without rewriting the post-render pipeline.
+ */
 export type CamRunToolpathResult = {
-  toolpathLines: number[][]
+  toolpathLines: string[]
   strategy: CamStrategy
   lineCount: number
 }

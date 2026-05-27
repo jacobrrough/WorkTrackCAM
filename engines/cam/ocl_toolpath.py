@@ -1,5 +1,5 @@
 """
-OpenCAMLib strategies for Unified Fab Studio (optional dependency).
+OpenCAMLib strategies for WorkTrackCAM (optional dependency).
 
 Install: ``pip install opencamlib`` (wheels typically Python 3.7–3.11; other
 versions may need a local build).
@@ -22,6 +22,13 @@ IPC contract (invoked by ``src/main/cam-runner.ts``)
   when feeds, tool diameter, stepover, or (for waterline) ``zPassMm`` are non-finite
   or out of range. ``stl_read_error`` when the STL path exists but OpenCAMLib cannot
   load it (corrupt file, unsupported variant, etc.).
+
+Shared core
+-----------
+The OCL invocations live in ``ocl_strategies.py`` so the sidecar
+(``engines/sidecar/cam_handlers.py``) and this legacy subprocess produce
+byte-identical G-code lines. Touching strategy numerics or formatting MUST
+go through that module to keep both call paths in lock-step.
 """
 from __future__ import annotations
 
@@ -30,6 +37,18 @@ import math
 import sys
 from pathlib import Path
 from typing import Any
+
+# Use a path-tolerant import: this file is invoked two ways —
+#   1. ``python engines/cam/ocl_toolpath.py <cfg>`` (legacy subprocess)
+#   2. ``python -m engines.cam.ocl_toolpath`` (sibling tools, tests)
+# Method 1 has no package context, so a relative ``from .ocl_strategies``
+# raises ImportError. Try the relative form first (sidecar-style modules),
+# then fall back to adding our own directory to sys.path for script mode.
+try:  # pragma: no cover - import shim, exercised by both call paths
+    from .ocl_strategies import dispatch_strategy, load_stl
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from ocl_strategies import dispatch_strategy, load_stl  # type: ignore[no-redef]
 
 REQUIRED_CFG_KEYS = ("stlPath", "toolpathJsonPath")
 ALLOWED_STRATEGIES = frozenset({"waterline", "adaptive_waterline", "raster"})
@@ -141,196 +160,6 @@ def _parse_cam_numeric_params(cfg: dict[str, Any], strategy: str) -> dict[str, f
     }
 
 
-def _stlsurf_from_file(filepath: Path):
-    """Build an OCL ``STLSurf`` from a binary/ASCII STL file on disk."""
-    import ocl  # noqa: PLC0415 — optional dependency
-
-    s = ocl.STLSurf()
-    ocl.STLReader(str(filepath), s)
-    return s
-
-
-def _cutter(ocl, tool_diameter: float):
-    """Cylindrical cutter: diameter clamped; length scales mildly with diameter."""
-    d = max(0.1, float(tool_diameter))
-    length = max(20.0, d * 4.0)
-    return ocl.CylCutter(d, length)
-
-
-def _make_waterline(ocl, strategy: str):
-    """
-    Instantiate Waterline or AdaptiveWaterline per strategy.
-
-    Returns ``(waterline_object, description_tag)`` for comment lines.
-    If AdaptiveWaterline is missing in this OCL build, falls back to Waterline.
-    """
-    if strategy == "adaptive_waterline":
-        try:
-            return ocl.AdaptiveWaterline(), "adaptive waterline"
-        except AttributeError:
-            return ocl.Waterline(), "waterline (AdaptiveWaterline unavailable in this ocl build)"
-    return ocl.Waterline(), "waterline"
-
-
-def _loops_to_lines(
-    loops,
-    *,
-    safe_z: float,
-    feed: float,
-    plunge: float,
-) -> list[str]:
-    """Turn OCL loop point lists into G0/G1 strings (mm, three decimals)."""
-    lines: list[str] = []
-    for loop in loops:
-        if not loop:
-            continue
-        n = len(loop)
-        first = loop[0]
-        lines.append(f"G0 Z{safe_z:.3f}")
-        lines.append(f"G0 X{first.x:.3f} Y{first.y:.3f}")
-        lines.append(f"G1 Z{first.z:.3f} F{plunge:.0f}")
-        for i in range(1, n):
-            p = loop[i]
-            lines.append(f"G1 X{p.x:.3f} Y{p.y:.3f} Z{p.z:.3f} F{feed:.0f}")
-    return lines
-
-
-def _path_append_xy_line(path, ocl_mod, xa: float, ya: float, xb: float, yb: float) -> None:
-    """Append one horizontal scan span to an OCL ``Path`` (API differs slightly by build)."""
-    p1 = ocl_mod.Point(float(xa), float(ya), 0.0)
-    p2 = ocl_mod.Point(float(xb), float(yb), 0.0)
-    ln = ocl_mod.Line(p1, p2)
-    if hasattr(path, "append"):
-        path.append(ln)
-    elif hasattr(path, "addLine"):
-        path.addLine(ln)
-    else:
-        raise RuntimeError("ocl_path_has_no_append_or_addLine")
-
-
-def _clpoints_to_polyline(pts, *, safe_z: float, feed: float, plunge: float) -> list[str]:
-    """Convert OCL CL-point list to G0/G1 strings."""
-    lines: list[str] = []
-    if not pts:
-        return lines
-    try:
-        n = len(pts)
-    except TypeError:
-        return lines
-    for i in range(n):
-        p = pts[i]
-        x, y, z = float(p.x), float(p.y), float(p.z)
-        if i == 0:
-            lines.append(f"G0 Z{safe_z:.3f}")
-            lines.append(f"G0 X{x:.3f} Y{y:.3f}")
-            lines.append(f"G1 Z{z:.3f} F{plunge:.0f}")
-        else:
-            lines.append(f"G1 X{x:.3f} Y{y:.3f} Z{z:.3f} F{feed:.0f}")
-    return lines
-
-
-def _run_raster_pathdrop(
-    ocl,
-    stl,
-    *,
-    stepover_mm: float,
-    sampling_mm: float,
-    tool_diameter_mm: float,
-    safe_z_mm: float,
-    feed_mm_min: float,
-    plunge_mm_min: float,
-) -> list[str]:
-    """
-    XY zigzag raster: PathDropCutter along horizontal lines, Y stepped by ``stepover_mm``.
-    ``setZ`` is a floor below the model so the cutter can lift to the surface.
-    """
-    bounds = stl.getBounds()
-    minx, maxx, miny, maxy, minz, _maxz = (
-        float(bounds[0]),
-        float(bounds[1]),
-        float(bounds[2]),
-        float(bounds[3]),
-        float(bounds[4]),
-        float(bounds[5]),
-    )
-    step = max(0.05, float(stepover_mm))
-    sampling = max(0.05, min(float(sampling_mm), 5.0))
-    cutter = _cutter(ocl, tool_diameter_mm)
-    z_floor = float(minz) - 100.0
-
-    pdc = ocl.PathDropCutter()
-    pdc.setSTL(stl)
-    pdc.setCutter(cutter)
-    pdc.setSampling(sampling)
-    pdc.setZ(z_floor)
-
-    all_lines: list[str] = []
-    y = miny
-    flip = False
-    while y <= maxy + 1e-6:
-        xa, xb = (minx, maxx) if not flip else (maxx, minx)
-        path = ocl.Path()
-        _path_append_xy_line(path, ocl, xa, y, xb, y)
-        pdc.setPath(path)
-        pdc.run()
-        pts = pdc.getCLPoints()
-        all_lines.append(f"; OCL PathDropCutter raster Y={y:.3f}")
-        all_lines.extend(_clpoints_to_polyline(pts, safe_z=safe_z_mm, feed=feed_mm_min, plunge=plunge_mm_min))
-        flip = not flip
-        y += step
-
-    return all_lines
-
-
-def _run_waterline_levels(
-    ocl,
-    stl,
-    *,
-    strategy: str,
-    z_pass_mm: float,
-    stepover_mm: float,
-    tool_diameter_mm: float,
-    safe_z_mm: float,
-    feed_mm_min: float,
-    plunge_mm_min: float,
-) -> list[str]:
-    """Slice the STL between bounds with repeated waterline passes at decreasing Z."""
-    bounds = stl.getBounds()
-    _minx, _maxx, _miny, _maxy, minz, maxz = (
-        float(bounds[0]),
-        float(bounds[1]),
-        float(bounds[2]),
-        float(bounds[3]),
-        float(bounds[4]),
-        float(bounds[5]),
-    )
-    step = max(0.05, abs(float(z_pass_mm)))
-    sampling = max(0.05, min(float(stepover_mm), 5.0))
-    cutter = _cutter(ocl, tool_diameter_mm)
-    z_floor = minz + tool_diameter_mm * 0.25
-    z = maxz - 0.001
-
-    all_lines: list[str] = []
-    while z >= z_floor - 1e-6:
-        wl, tag = _make_waterline(ocl, strategy)
-        wl.setSTL(stl)
-        wl.setCutter(cutter)
-        wl.setSampling(sampling)
-        if strategy == "adaptive_waterline" and "adaptive waterline" in tag:
-            wl.setMinSampling(max(0.02, sampling * 0.25))
-            wl.setCosLimit(0.65)
-        wl.setZ(z)
-        wl.run()
-        loops = wl.getLoops()
-        all_lines.append(f"; OCL {tag} Z={z:.3f}")
-        all_lines.extend(_loops_to_lines(loops, safe_z=safe_z_mm, feed=feed_mm_min, plunge=plunge_mm_min))
-        z -= step
-        if not math.isfinite(z):
-            break
-
-    return all_lines
-
-
 def main() -> None:
     cfg = _load_cfg()
     _validate_cfg(cfg)
@@ -373,36 +202,24 @@ def main() -> None:
 
     try:
         try:
-            stl = _stlsurf_from_file(stl_path)
+            stl = load_stl(ocl, stl_path)
         except Exception as e:  # noqa: BLE001
             print(
                 json.dumps({"ok": False, "error": "stl_read_error", "detail": str(e)}, ensure_ascii=False)
             )
             sys.exit(3)
 
-        if strategy == "raster":
-            lines = _run_raster_pathdrop(
-                ocl,
-                stl,
-                stepover_mm=stepover,
-                sampling_mm=stepover,
-                tool_diameter_mm=tool_d,
-                safe_z_mm=safe_z,
-                feed_mm_min=feed,
-                plunge_mm_min=plunge,
-            )
-        else:
-            lines = _run_waterline_levels(
-                ocl,
-                stl,
-                strategy=strategy,
-                z_pass_mm=z_pass,
-                stepover_mm=stepover,
-                tool_diameter_mm=tool_d,
-                safe_z_mm=safe_z,
-                feed_mm_min=feed,
-                plunge_mm_min=plunge,
-            )
+        lines = dispatch_strategy(
+            ocl,
+            stl,
+            strategy=strategy,
+            z_pass_mm=z_pass,
+            stepover_mm=stepover,
+            tool_diameter_mm=tool_d,
+            safe_z_mm=safe_z,
+            feed_mm_min=feed,
+            plunge_mm_min=plunge,
+        )
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": "ocl_runtime_error", "detail": str(e)}, ensure_ascii=False))
         sys.exit(3)
