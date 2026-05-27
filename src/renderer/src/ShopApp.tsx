@@ -31,6 +31,8 @@ import { ShopModelViewer, defaultTransform } from './ShopModelViewer'
 import MoonrakerPreviewBanner from './MoonrakerPreviewBanner'
 import type { GcodeTempSample } from '../../shared/gcode-temp-validator'
 import { ErrorBoundary } from './ErrorBoundary'
+import { autoOrient } from '../../shared/auto-orient'
+import { triangulateBinaryStl } from '../../shared/stl-binary-preview'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { ModelTransform, GizmoMode } from './ShopModelViewer'
 import {
@@ -292,6 +294,50 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
     onUpdateJob(job.id, { transform: { ...job.transform, ...fit } })
   }, [job, modelSize, mode, onUpdateJob])
 
+  const [autoOrienting, setAutoOrienting] = useState(false)
+  // Auto-orient (FDM): read the loaded STL, run pure-math autoOrient(), push the
+  // result into the per-job transform.rotation. NO disk write, NO G-code emission
+  // — only the in-memory Three.js transform changes (safety: G-code is sacred).
+  const handleAutoOrient = useCallback(async (): Promise<void> => {
+    if (!job?.stlPath) {
+      onToast('warn', 'Load an STL first to auto-orient.')
+      return
+    }
+    if (mode !== 'fdm') return
+    setAutoOrienting(true)
+    try {
+      const b64 = await fab().fsReadBase64(job.stlPath)
+      const bin = atob(b64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      // Triangulate up to 60K triangles for orientation scoring — bounds runtime
+      // at well under the 100ms budget for typical FDM parts and keeps the UI snappy
+      // on huge sculptures (>200K) too.
+      const tri = triangulateBinaryStl(bytes, 60_000)
+      if ('error' in tri) {
+        onToast('err', `Auto-orient failed to read STL: ${tri.error}`)
+        return
+      }
+      const r = autoOrient({ positions: tri.positions })
+      const [rx, ry, rz] = r.rotationEulerDegXyz
+      onUpdateJob(job.id, {
+        transform: {
+          ...job.transform,
+          rotation: {
+            x: +rx.toFixed(2),
+            y: +ry.toFixed(2),
+            z: +rz.toFixed(2)
+          }
+        }
+      })
+      onToast('ok', `Auto-orient applied (${r.candidatesEvaluated} candidates). ${r.reason}`)
+    } catch (e) {
+      onToast('err', `Auto-orient failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAutoOrienting(false)
+    }
+  }, [job, mode, onToast, onUpdateJob])
+
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -435,6 +481,23 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
         <div className="vp-hud-hint">
           <span className="vp-hud-hint__mode">{gizmoMode}</span>
           <span className="vp-hud-hint__keys">Drag axis {'\u00B7'} G/R/S/F {'\u00B7'} Esc</span>
+        </div>
+      )}
+
+      {mode === 'fdm' && job?.stlPath && (
+        <div className="vp-hud-group" role="toolbar" aria-label="FDM viewport tools">
+          <button
+            type="button"
+            title={autoOrienting ? 'Auto-orienting\u2026' : 'Auto-orient model for FDM (minimize overhang, maximize bed contact)'}
+            aria-label="Auto-orient model"
+            aria-busy={autoOrienting}
+            disabled={autoOrienting}
+            onClick={() => { void handleAutoOrient() }}
+            className="vp-hud-btn"
+          >
+            <span aria-hidden="true">{autoOrienting ? '\u29D7' : '\u293E'}</span>
+            {' '}Auto-orient
+          </button>
         </div>
       )}
 
