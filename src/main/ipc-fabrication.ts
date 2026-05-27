@@ -355,9 +355,14 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         typeof payload.filamentId === 'string' && payload.filamentId.length > 0
           ? payload.filamentId
           : 'pla-generic'
-      const machineProfileIni = join(profilesDir, 'machines', `${payload.machineId}.ini`)
-      const processProfileIni = join(profilesDir, 'process', `${qualityPresetId}.ini`)
-      const filamentProfileIni = join(profilesDir, 'filament', `${filamentId}.ini`)
+      // OrcaSlicer 2.3.x requires its own Bambu/Orca-flavour JSON profile
+      // files (the CLI calls `load_from_json` and rejects Slic3r .ini with
+      // a parse error). The on-disk profile tree under
+      // `resources/orca-slicer/profiles/{machines,process,filament}/` is
+      // populated with .json files written specifically for the K2 Plus.
+      const machineProfileIni = join(profilesDir, 'machines', `${payload.machineId}.json`)
+      const processProfileIni = join(profilesDir, 'process', `${qualityPresetId}.json`)
+      const filamentProfileIni = join(profilesDir, 'filament', `${filamentId}.json`)
       try {
         const result = await runOrcaSlice(appRoot, {
           inputPath: payload.stlPath,

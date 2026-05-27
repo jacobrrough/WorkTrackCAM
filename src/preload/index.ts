@@ -117,9 +117,9 @@ export type Api = {
   /**
    * 2026-05-27 OrcaSlicer pivot (task #9). Bridges the renderer's K2 Plus
    * slice button to the bundled OrcaSlicer CLI via the `slice:orca` IPC
-   * handler. Profile .ini files are resolved in the main process from
-   * `resources/orca-slicer/profiles/{machines,process,filament}` based
-   * on the supplied `machineId` + `qualityPresetId` + `filamentId`.
+   * handler. Profile JSON files are resolved in the main process from
+   * `resources/orca-slicer/profiles/{machines,process,filament}/<id>.json`
+   * (switched from .ini -> .json on 2026-05-27 CLI fix).
    */
   sliceOrca: (payload: {
     stlPath: string

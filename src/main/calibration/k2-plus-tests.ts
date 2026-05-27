@@ -25,7 +25,7 @@
  * mm/min) fails CI BEFORE it can ship.
  *
  * The bundled K2 Plus profile (`resources/orca-slicer/profiles/machines/
- * creality-k2-plus.ini`) defines Klipper START_PRINT / END_PRINT macros
+ * creality-k2-plus.json`) defines Klipper START_PRINT / END_PRINT macros
  * that handle bed-level mesh, nozzle/bed/chamber preheat, and adaptive
  * probing. The calibration programs reuse those macros so they preserve
  * the same machine-side safety net (probe + preheat + park) and read like
@@ -330,7 +330,7 @@ function fmtNum(n: number, digits = 3): string {
 /**
  * Build the K2 Plus pre-print sequence. Uses the same Klipper START_PRINT
  * macro the bundled OrcaSlicer profile invokes (see
- * `resources/orca-slicer/profiles/machines/creality-k2-plus.ini`), so the
+ * `resources/orca-slicer/profiles/machines/creality-k2-plus.json`), so the
  * machine-side adaptive probing + chamber/bed/nozzle preheat fire exactly
  * the same way as a normal job. Feedrates / accels are deliberately
  * conservative (well under the K2 ceiling).
