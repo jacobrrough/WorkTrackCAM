@@ -21,12 +21,16 @@ function appPathOrCwd(): string {
   return process.cwd()
 }
 
-/** Relative paths under `engines/` that must exist for Python CAM + mesh import. */
-export const ENGINES_CAM_SENTINELS = [
-  'cam/ocl_toolpath.py',
-  'cam/advanced/__main__.py',
-  'cam/toolpath_engine/__main__.py'
-] as const
+/**
+ * Relative paths under `engines/` that must exist for Python CAM + mesh import.
+ *
+ * Post-2026-05-27 foundation pivot: the deleted custom `cam/advanced/` and
+ * `cam/toolpath_engine/` Python packages are no longer required at startup.
+ * The retained `cam/ocl_toolpath.py` is the single OpenCAMLib runner used by
+ * `cam-runner.ts`. The long-term home is the sidecar (`engines/sidecar/`)
+ * which discovers its scripts independently.
+ */
+export const ENGINES_CAM_SENTINELS = ['cam/ocl_toolpath.py'] as const
 
 export const ENGINES_MESH_SCRIPT = 'mesh/mesh_to_stl.py' as const
 export const ENGINES_OCCT_STEP_SCRIPT = 'occt/step_to_stl.py' as const

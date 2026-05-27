@@ -707,112 +707,45 @@ export function manufactureKindUsesToolpathEngine(
   return kind ? (map[kind] ?? null) : null
 }
 
+/**
+ * Advanced toolpath engine subprocess shim.
+ *
+ * Post-2026-05-27 foundation pivot: `engines/cam/advanced/` was deleted. The
+ * runner short-circuits this branch and returns a typed `advanced_engine_failed`
+ * outcome so the chain falls through to OCL (`ocl_toolpath.py`, retained) and
+ * the built-in mesh / parallel fallback. The signature is preserved because
+ * `cam-runner.ts` internals still call it as a step in the dispatch chain.
+ */
 async function tryAdvancedToolpath(
-  job: CamJobConfig,
-  strategy: string,
-  bounds: { min: [number, number, number]; max: [number, number, number] }
+  _job: CamJobConfig,
+  _strategy: string,
+  _bounds: { min: [number, number, number]; max: [number, number, number] }
 ): Promise<{
   ok: boolean
   toolpathLines?: string[]
   stdout: string
   code: number | null
 }> {
-  const toolpathJsonPath = join(dirname(job.outputGcodePath), '_cam_advanced_toolpath.json')
-  const cfgPath = join(getEnginesRoot(), 'cam', '_tmp_advanced_cam.json')
-  await mkdir(dirname(cfgPath), { recursive: true })
-
-  const stockZMin = job.stockBoxZMm != null ? -(job.stockBoxZMm) : bounds.min[2]
-  const stockZMax = 0 // WCS Z0 = stock top convention
-  const advParams = job.operationParams ?? {}
-  const adaptiveCutTuning = resolveAdaptiveCutTuning({
-    operationKind: job.operationKind,
-    operationParams: advParams,
-    safeZMm: job.safeZMm
-  })
-
-  await writeFile(
-    cfgPath,
-    JSON.stringify({
-      stlPath: job.stlPath,
-      toolpathJsonPath,
-      strategy,
-      toolDiameterMm: job.toolDiameterMm ?? 6,
-      feedMmMin: job.feedMmMin,
-      plungeMmMin: job.plungeMmMin,
-      stepoverMm: job.stepoverMm,
-      zStepMm: Math.abs(job.zPassMm),
-      safeZMm: job.safeZMm,
-      // Stock bounds from mesh + stock box
-      stockXMin: bounds.min[0] - 2,
-      stockXMax: bounds.max[0] + 2,
-      stockYMin: bounds.min[1] - 2,
-      stockYMax: bounds.max[1] + 2,
-      stockZMin,
-      stockZMax,
-      // Machine limits
-      xTravelMm: job.machine.workAreaMm?.x ?? 300,
-      yTravelMm: job.machine.workAreaMm?.y ?? 200,
-      zTravelMm: job.machine.workAreaMm?.z ?? 100,
-      maxFeedMmMin: job.machine.maxFeedMmMin ?? 5000,
-      maxSpindleRpm: 24000,
-      maxEngagementDeg: adaptiveCutTuning.maxEngagementDeg,
-      retractZMm: adaptiveCutTuning.retractZMm,
-      stockAllowanceMm: adaptiveCutTuning.stockAllowanceMm,
-      // Raster-specific — scanAngleDeg takes precedence over rasterAngleDeg
-      rasterAngleDeg: numParam(advParams, 'rasterAngleDeg', 0),
-      ...(advParams?.['scanAngleDeg'] != null ? { scanAngleDeg: numParam(advParams, 'scanAngleDeg', 0) } : {})
-    }),
-    'utf-8'
-  )
-
-  let code: number | null = 1
-  let stdout = ''
-  try {
-    // Use the advanced engine package: python -m engines.cam.advanced <config.json>
-    // We pass the module path to runPythonScript which joins with engines/cam/
-    const script = join(getEnginesRoot(), 'cam', 'advanced')
-    const r = await spawnBounded(job.pythonPath, ['-m', 'engines.cam.advanced', cfgPath], {
-      cwd: job.appRoot,
-      timeoutMs: 60_000,
-      maxBufferBytes: CAM_PYTHON_OUTPUT_MAX_BYTES,
-      signal: job.signal
-    })
-    code = r.code
-    stdout = r.stdout + r.stderr
-  } catch (e) {
-    code = 1
-    stdout = `advanced_engine_spawn_failed: ${e instanceof Error ? e.message : String(e)}`
+  return {
+    ok: false,
+    stdout: 'advanced_engine_spawn_failed: engines/cam/advanced removed in 2026-05-27 pivot',
+    code: 1
   }
-
-  if (code !== 0) {
-    return { ok: false, stdout, code }
-  }
-
-  try {
-    const raw = await readFile(toolpathJsonPath, 'utf-8')
-    const parsed: unknown = JSON.parse(raw)
-    if (isOclToolpathFile(parsed)) {
-      const lines = parsed.toolpathLines
-      if (parsed.ok && Array.isArray(lines) && lines.length > 0) {
-        await unlink(toolpathJsonPath).catch(() => {})
-        return { ok: true, toolpathLines: lines, stdout, code }
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-
-  return { ok: false, stdout, code }
 }
 
 /**
- * Try the v4.0 toolpath_engine (14 strategies, drop-cutter, linking optimizer).
- * Invoked via `python -m engines.cam.toolpath_engine <config.json>`.
+ * v4.0 toolpath_engine subprocess shim.
+ *
+ * Post-2026-05-27 foundation pivot: `engines/cam/toolpath_engine/` was deleted.
+ * The runner short-circuits this branch and returns a typed failure outcome so
+ * the chain falls through to advanced (also disabled), OCL, and the built-in
+ * mesh / parallel fallback. The signature is preserved because `cam-runner.ts`
+ * internals still call it as a step in the dispatch chain.
  */
 async function tryToolpathEngine(
-  job: CamJobConfig,
-  strategy: string,
-  bounds: { min: [number, number, number]; max: [number, number, number] }
+  _job: CamJobConfig,
+  _strategy: string,
+  _bounds: { min: [number, number, number]; max: [number, number, number] }
 ): Promise<{
   ok: boolean
   toolpathLines?: string[]
@@ -820,110 +753,11 @@ async function tryToolpathEngine(
   code: number | null
   warnings?: string[]
 }> {
-  const toolpathJsonPath = join(dirname(job.outputGcodePath), '_cam_toolpath_engine.json')
-  const cfgPath = join(getEnginesRoot(), 'cam', '_tmp_cam.json')
-  await mkdir(dirname(cfgPath), { recursive: true })
-
-  const stockZMin = job.stockBoxZMm != null ? -(job.stockBoxZMm) : bounds.min[2]
-  const stockZMax = 0 // WCS Z0 = stock top convention
-  const params = job.operationParams ?? {}
-
-  // Build config matching toolpath_engine/models.py job_from_config() expectations
-  const config: Record<string, unknown> = {
-    stlPath: job.stlPath,
-    toolpathJsonPath,
-    strategy,
-    // Tool
-    toolDiameterMm: job.toolDiameterMm ?? 6,
-    toolShape: strParam(params, 'toolShape', 'flat'),
-    cornerRadiusMm: numParam(params, 'cornerRadiusMm', 0),
-    fluteLengthMm: numParam(params, 'fluteLengthMm', 25),
-    fluteCount: numParam(params, 'fluteCount', 2),
-    holderDiameterMm: numParam(params, 'holderDiameterMm', 0),
-    // Cut params
-    feedMmMin: job.feedMmMin,
-    plungeMmMin: job.plungeMmMin,
-    stepoverMm: job.stepoverMm,
-    zStepMm: Math.abs(job.zPassMm),
-    safeZMm: job.safeZMm,
-    rampAngleDeg: numParam(params, 'rampAngleDeg', 3),
-    spindleRpm: numParam(params, 'spindleRpm', 10000),
-    climbMilling: params.climbMilling !== false,
-    // Stock bounds
-    stockXMin: bounds.min[0] - 2,
-    stockXMax: bounds.max[0] + 2,
-    stockYMin: bounds.min[1] - 2,
-    stockYMax: bounds.max[1] + 2,
-    stockZMin,
-    stockZMax,
-    // Machine limits
-    xTravelMm: job.machine.workAreaMm?.x ?? 300,
-    yTravelMm: job.machine.workAreaMm?.y ?? 200,
-    zTravelMm: job.machine.workAreaMm?.z ?? 100,
-    maxFeedMmMin: job.machine.maxFeedMmMin ?? 5000,
-    maxRapidMmMin: numParam(params, 'maxRapidMmMin', 10000),
-    maxSpindleRpm: numParam(params, 'maxSpindleRpm', 24000),
-    // Machine capabilities
-    has4thAxis: (job.machine.axisCount ?? 3) >= 4,
-    has5thAxis: (job.machine.axisCount ?? 3) >= 5,
-    // Tolerances
-    toleranceMm: numParam(params, 'toleranceMm', 0.01),
-    surfaceFinishRaUm: numParam(params, 'surfaceFinishRaUm', 3.2),
-    maxEngagementDeg: numParam(params, 'maxEngagementDeg', 90),
-    // Post dialect
-    postDialect: job.machine.dialect ?? 'generic_mm',
-    // Raster-specific — scanAngleDeg takes precedence over rasterAngleDeg
-    rasterAngleDeg: numParam(params, 'rasterAngleDeg', 0),
-    ...(params?.['scanAngleDeg'] != null ? { scanAngleDeg: numParam(params, 'scanAngleDeg', 0) } : {}),
-    // 4-axis params
-    cylinderDiameterMm: numParam(params, 'cylinderDiameterMm', job.rotaryStockDiameterMm ?? 50),
-    // Material
-    materialName: strParam(params, 'materialName', 'aluminum_6061'),
-    // Adaptive feed
-    ...(params?.['adaptiveFeedEnabled'] != null ? { adaptiveFeedEnabled: !!params['adaptiveFeedEnabled'] } : {}),
+  return {
+    ok: false,
+    stdout: 'toolpath_engine_spawn_failed: engines/cam/toolpath_engine removed in 2026-05-27 pivot',
+    code: 1
   }
-
-  await writeFile(cfgPath, JSON.stringify(config), 'utf-8')
-
-  let code: number | null = 1
-  let stdout = ''
-  try {
-    const r = await spawnBounded(job.pythonPath, ['-m', 'engines.cam.toolpath_engine', cfgPath], {
-      cwd: job.appRoot,
-      timeoutMs: 120_000, // v4.0 engine may take longer for complex strategies
-      maxBufferBytes: CAM_PYTHON_OUTPUT_MAX_BYTES,
-      signal: job.signal
-    })
-    code = r.code
-    stdout = r.stdout + r.stderr
-  } catch (e) {
-    code = 1
-    stdout = `toolpath_engine_spawn_failed: ${e instanceof Error ? e.message : String(e)}`
-  }
-
-  if (code !== 0) {
-    return { ok: false, stdout, code }
-  }
-
-  try {
-    const raw = await readFile(toolpathJsonPath, 'utf-8')
-    const parsed = JSON.parse(raw) as {
-      ok?: boolean
-      toolpathLines?: string[]
-      strategy?: string
-      warnings?: string[]
-      stats?: Record<string, unknown>
-    }
-    const lines = parsed.toolpathLines
-    if (parsed.ok && Array.isArray(lines) && lines.length > 0) {
-      await unlink(toolpathJsonPath).catch(() => {})
-      return { ok: true, toolpathLines: lines, stdout, code, warnings: parsed.warnings }
-    }
-  } catch {
-    /* fall through */
-  }
-
-  return { ok: false, stdout, code }
 }
 
 /** Strategy labels for human-readable hints. */
