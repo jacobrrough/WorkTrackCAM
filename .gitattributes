@@ -1,5 +1,20 @@
 # WorkTrackCAM — git attributes.
 #
+# Project-wide LF enforcement. Many source-text pin tests (e.g.
+# `moonraker-push-pin.test.ts`, `k2-plus-slice-presets-pin.test.ts`,
+# `cam-axis4/__tests__/index-contract.test.ts`) assert EXACT byte sizes,
+# LF-only line endings, and `\n`-anchored regexes against the on-disk
+# source. Likewise, `.hbs` post-processor templates are rendered verbatim
+# into G-code, and Safety Rule 1 ("G-code is sacred") plus the contract
+# tests (`post-process-fdm-passthrough-contract.test.ts`,
+# `post-process-k2-capabilities.test.ts`,
+# `post-process-laguna-vacuum-wiring.test.ts`) require LF newlines in
+# the rendered output. Windows checkouts with `core.autocrlf=true`
+# silently convert these to CRLF, breaking every byte-precise pin and
+# every `; ----` ruler scaffold check. Pinning the whole tree to LF
+# keeps Windows + Linux + macOS byte-identical.
+* text=auto eol=lf
+
 # CuraEngine binary set vendored under resources/slicer/bin/<platform>-<arch>/
 # (Phase 2 [P2-K2-SLICE]/Cycle 3 -- win32-x64 vendored 2026-05-05). Mark the
 # whole tree as binary so `git diff` doesn't try to text-render PE/DLL files

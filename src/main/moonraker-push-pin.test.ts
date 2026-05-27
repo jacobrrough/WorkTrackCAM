@@ -152,11 +152,11 @@ describe('moonraker-push PIN A -- module shape', () => {
 // ─── B. SOURCE-text purity ───────────────────────────────────────────
 
 describe('moonraker-push PIN B -- SOURCE-text purity', () => {
-  it('B1: SOURCE byte-size is exactly 18869', () => {
-    expect(SOURCE_BYTES).toBe(18869)
+  it('B1: SOURCE byte-size is exactly 18870', () => {
+    expect(SOURCE_BYTES).toBe(18870)
   })
-  it('B2: SOURCE UTF-16 length (.length) is exactly 18557', () => {
-    expect(SOURCE_TEXT.length).toBe(18557)
+  it('B2: SOURCE UTF-16 length (.length) is exactly 18558', () => {
+    expect(SOURCE_TEXT.length).toBe(18558)
   })
   it('B3: SOURCE_LINES split-by-LF length is 523 (522 LF newlines + trailing-empty)', () => {
     expect(SOURCE_LINES).toHaveLength(523)
@@ -605,7 +605,11 @@ describe('moonraker-push PIN J -- three-machine impact realism', () => {
     expect(SOURCE_TEXT.includes('Makera')).toBe(false)
   })
   it('J5: SOURCE imports the FdmCapabilityFields type used for K2 Plus pre-upload temp validation', () => {
-    expect(SOURCE_TEXT.includes("import type { FdmCapabilityFields } from '../shared/cura-slice-defaults'")).toBe(true)
+    // Post-2026-05-27 foundation pivot: FdmCapabilityFields moved from the
+    // deleted `../shared/cura-slice-defaults` (CuraEngine bundle) into the
+    // `../shared/gcode-temp-validator` module, which is the new home for
+    // K2 Plus temp-ceiling validation.
+    expect(SOURCE_TEXT.includes("import type { FdmCapabilityFields } from '../shared/gcode-temp-validator'")).toBe(true)
   })
   it('J6: SOURCE wires readGcodeHeaderText for the [ID-0075] bounded 128 KiB header read', () => {
     expect(SOURCE_TEXT.includes("import { readGcodeHeaderText } from './gcode-header-read'")).toBe(true)
@@ -680,8 +684,8 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K4: SOURCE_TEXT references moonraker.readthedocs.io (canonical Moonraker docs URL)', () => {
     expect(SOURCE_TEXT.includes('moonraker.readthedocs.io')).toBe(true)
   })
-  it('K5: SOURCE_BYTES is exactly 18869 (regression net for any silent byte drift)', () => {
-    expect(SOURCE_BYTES).toBe(18869)
+  it('K5: SOURCE_BYTES is exactly 18870 (regression net for any silent byte drift)', () => {
+    expect(SOURCE_BYTES).toBe(18870)
   })
   it('K6: SOURCE has 156 non-ASCII chars total (147 box-drawing + 8 em-dash + 1 arrow)', () => {
     let count = 0
@@ -736,7 +740,7 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
     // Triple sentinel: any silent rewrite that preserves byte-count but shifts
     // line-count or utf16-length will fail at least one of these.
     expect(SOURCE_LINES.length).toBe(523)
-    expect(SOURCE_BYTES).toBe(18869)
-    expect(SOURCE_TEXT.length).toBe(18557)
+    expect(SOURCE_BYTES).toBe(18870)
+    expect(SOURCE_TEXT.length).toBe(18558)
   })
 })

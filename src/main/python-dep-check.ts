@@ -1,14 +1,26 @@
 /**
  * Startup Python dependency checker.
  *
- * Spawns `check_deps.py` and parses the structured JSON output.
- * Surfaces a structured result that can be sent to the renderer
- * via IPC so the UI can display a friendly warning banner when
- * required Python packages are missing.
+ * Probes the bundled Python sidecar (`engines/sidecar/main.py`) via a single
+ * `ping` JSON-RPC call to confirm Python is reachable and the sidecar's
+ * required imports (CadQuery, OpenCAMLib, numpy, trimesh) resolve at module
+ * load. Surfaces a structured result that can be sent to the renderer via
+ * IPC so the UI can display a friendly warning banner when required Python
+ * packages are missing.
+ *
+ * History: prior to the 2026-05-27 foundation pivot this module spawned
+ * `engines/cam/toolpath_engine/check_deps.py`, which emitted a JSON dep
+ * inventory. That script was deleted with the rest of the custom CAM
+ * toolpath engine; the sidecar's load-time import check is now the
+ * authoritative "are Python deps usable" signal. If the sidecar's
+ * `import` statements at the top of `main.py` / `cad_handlers.py` /
+ * `cam_handlers.py` fail, the `ping` round-trip will fail too -- we
+ * surface that to the renderer as a `pythonOk=false` outcome so the
+ * banner can prompt the user to install `engines/requirements.txt`.
  */
-import { spawnBounded } from './subprocess-bounded'
+import { spawn } from 'node:child_process'
 import { getEnginesRoot } from './paths'
-import { join } from 'node:path'
+import { dirname } from 'node:path'
 
 export type DepStatus = {
   name: string
@@ -32,72 +44,145 @@ export type PythonDepCheckOutcome =
   | { checked: false; error: string }
 
 /**
- * Run `check_deps.py` with the given Python executable and parse the JSON output.
- * Returns a structured outcome; never throws.
+ * Probe the bundled Python sidecar with a single `ping` JSON-RPC round-trip.
+ *
+ * Strategy: spawn `<pythonPath> -m engines.sidecar.main`, write one ping
+ * request to stdin, read one response line from stdout, then close stdin
+ * so the sidecar exits cleanly (its loop exits on EOF per `main.py` docs).
+ * Success means Python is reachable AND every top-level import inside
+ * `engines/sidecar/main.py`, `cad_handlers.py`, and `cam_handlers.py`
+ * resolved -- i.e. CadQuery + OpenCAMLib + numpy + trimesh are usable.
+ *
+ * If the spawn fails or the sidecar exits non-zero before responding, we
+ * return a `checked:false` outcome whose error string is suitable for the
+ * renderer's startup banner. Never throws.
+ *
+ * Timeout: 15s wall-clock for the spawn + ping round-trip. CadQuery's
+ * first import can be slow (~3-5s on cold disk caches); 15s is a generous
+ * ceiling that still surfaces a hang in finite time.
  */
 export async function checkPythonDeps(pythonPath: string): Promise<PythonDepCheckOutcome> {
   const enginesRoot = getEnginesRoot()
-  const scriptPath = join(enginesRoot, 'cam', 'toolpath_engine', 'check_deps.py')
+  // The sidecar package lives at <enginesRoot>/sidecar; we invoke it as
+  // `python -m engines.sidecar.main` from the parent directory so the
+  // package import resolves against the repo's `engines/__init__.py`.
+  const cwd = dirname(enginesRoot)
 
-  try {
-    const r = await spawnBounded(pythonPath, [scriptPath], {
-      cwd: enginesRoot,
-      timeoutMs: 15_000
+  return new Promise<PythonDepCheckOutcome>((resolve) => {
+    let settled = false
+    const settle = (outcome: PythonDepCheckOutcome): void => {
+      if (settled) return
+      settled = true
+      try {
+        child.kill()
+      } catch {
+        // child may already have exited; ignore
+      }
+      resolve(outcome)
+    }
+
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(pythonPath, ['-m', 'engines.sidecar.main'], {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      resolve({ checked: false, error: `Failed to spawn '${pythonPath}': ${msg}` })
+      return
+    }
+
+    let stdoutBuf = ''
+    let stderrBuf = ''
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString('utf-8')
+      // Sidecar protocol is one JSON object per line on stdout.
+      const newlineIdx = stdoutBuf.indexOf('\n')
+      if (newlineIdx === -1) return
+      const line = stdoutBuf.slice(0, newlineIdx).trim()
+      if (!line) return
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>
+        const ok = parsed.ok === true
+        const result: PythonDepCheckResult = {
+          ok,
+          pythonOk: ok,
+          // We don't ask Python for its version (the sidecar only echoes
+          // its own protocol version). Report the executable's resolved
+          // path instead so the renderer banner has SOMETHING actionable.
+          pythonVersion: ok ? 'bundled sidecar reachable' : 'unknown',
+          pythonMin: '3.9',
+          required: [],
+          optional: [],
+          missingRequired: ok ? [] : ['engines.sidecar']
+        }
+        settle({ checked: true, result })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        settle({
+          checked: false,
+          error: `Sidecar emitted unparseable response: ${msg}. Raw line (first 200 chars): ${line.slice(0, 200)}`
+        })
+      }
     })
 
-    // check_deps.py exits 1 when required deps are missing but still emits JSON to stdout
-    const stdout = r.stdout.trim()
-    if (!stdout) {
-      return {
-        checked: false,
-        error: `Python dependency check produced no output (exit code ${r.code}). stderr: ${r.stderr.slice(0, 500)}`
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuf += chunk.toString('utf-8')
+    })
+
+    child.on('error', (err) => {
+      if (isSpawnNotFound(err)) {
+        settle({
+          checked: false,
+          error: `Python executable '${pythonPath}' was not found. Install Python 3.9+ or set the correct path in Utilities > Settings > Paths.`
+        })
+        return
       }
-    }
-
-    const parsed = JSON.parse(stdout) as Record<string, unknown>
-
-    const result: PythonDepCheckResult = {
-      ok: Boolean(parsed.ok),
-      pythonOk: Boolean(parsed.python_ok),
-      pythonVersion: String(parsed.python_version ?? 'unknown'),
-      pythonMin: String(parsed.python_min ?? '3.9'),
-      required: Array.isArray(parsed.required) ? parsed.required.map(mapDepStatus) : [],
-      optional: Array.isArray(parsed.optional) ? parsed.optional.map(mapDepStatus) : [],
-      missingRequired: Array.isArray(parsed.missing_required)
-        ? (parsed.missing_required as string[])
-        : []
-    }
-
-    return { checked: true, result }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-
-    // Distinguish "python not found" from other errors
-    if (isSpawnNotFound(err)) {
-      return {
+      settle({
         checked: false,
-        error: `Python executable '${pythonPath}' was not found. Install Python 3.9+ or set the correct path in Utilities > Settings > Paths.`
-      }
+        error: `Python dependency check failed: ${err.message}`
+      })
+    })
+
+    child.on('exit', (code, signal) => {
+      // Only matters if we exited BEFORE the stdout handler resolved.
+      if (settled) return
+      const reason =
+        code != null
+          ? `sidecar exited with code ${code}`
+          : `sidecar killed by signal ${signal ?? 'unknown'}`
+      settle({
+        checked: false,
+        error: `${reason} before responding. stderr: ${stderrBuf.slice(0, 500)}`
+      })
+    })
+
+    // Send a single ping request, then close stdin so the sidecar exits
+    // on EOF after replying (its dispatch loop exits gracefully on EOF).
+    const ping = JSON.stringify({ id: 'startup-ping', method: 'ping', params: {} }) + '\n'
+    try {
+      child.stdin?.write(ping)
+      child.stdin?.end()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      settle({ checked: false, error: `Failed to write ping to sidecar stdin: ${msg}` })
+      return
     }
 
-    return {
-      checked: false,
-      error: `Python dependency check failed: ${msg}`
-    }
-  }
-}
-
-function mapDepStatus(raw: unknown): DepStatus {
-  if (raw === null || typeof raw !== 'object') {
-    return { name: 'unknown', available: false, version: null, note: '' }
-  }
-  const obj = raw as Record<string, unknown>
-  return {
-    name: String(obj.name ?? 'unknown'),
-    available: Boolean(obj.available),
-    version: obj.version != null ? String(obj.version) : null,
-    note: String(obj.note ?? '')
-  }
+    // Wall-clock timeout net.
+    const timeoutMs = 15_000
+    const timer = setTimeout(() => {
+      settle({
+        checked: false,
+        error: `Sidecar ping timed out after ${timeoutMs}ms. stderr: ${stderrBuf.slice(0, 500)}`
+      })
+    }, timeoutMs)
+    // Don't keep the event loop alive for this timer (Electron main process
+    // is long-lived; the timer should be a passive net not a wakeup).
+    timer.unref()
+  })
 }
 
 /** Detect ENOENT from spawn (python executable not on PATH). */

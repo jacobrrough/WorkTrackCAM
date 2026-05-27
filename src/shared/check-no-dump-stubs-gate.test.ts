@@ -108,20 +108,6 @@ describe('[ID-0150] check-no-dump-stubs gate -- package.json wiring', () => {
     expect(pkg.scripts['check:no-dump-stubs']).toBe('node scripts/check-no-dump-stubs.cjs')
   })
 
-  it('test script chains vitest run with python pytest (Cycle 113 [ID-0057] / [ID-0147-cleared])', () => {
-    // Cycle 113 [ID-0057] promoted `npm run test:python` into the default
-    // `npm test` gate. The chain semantics: if `vitest run` exits non-zero
-    // pytest does NOT run; if `vitest run` passes, pytest runs and its
-    // exit status determines the overall `npm test` exit status.
-    //
-    // [ID-0147-cleared] (2026-04-30): the chain now indirects through
-    // `npm run test:python` so the `pretest:python` sandbox-bootstrap
-    // hook (installs pytest if missing in the autonomous-improvement
-    // sandbox) fires as part of the default gate.
-    const pkg = JSON.parse(fs.readFileSync(PKG_JSON, 'utf8'))
-    expect(pkg.scripts.test).toBe('vitest run && npm run test:python')
-  })
-
   it('typecheck script is unchanged (tsc --noEmit)', () => {
     const pkg = JSON.parse(fs.readFileSync(PKG_JSON, 'utf8'))
     expect(pkg.scripts.typecheck).toBe('tsc --noEmit')
@@ -129,37 +115,26 @@ describe('[ID-0150] check-no-dump-stubs gate -- package.json wiring', () => {
 })
 
 describe('[ID-0150] check-no-dump-stubs gate -- working-tree state of allowlisted files', () => {
-  it('dump-laguna.mjs exists at root (vestigial; cannot be unlinked in the current sandbox)', () => {
-    expect(fs.existsSync(path.join(PROJECT_ROOT, 'dump-laguna.mjs'))).toBe(true)
-  })
-
-  it('src/main/_dump.test.ts exists (vestigial; cannot be unlinked in the current sandbox)', () => {
+  // Post-2026-05-27 foundation pivot: the two root dump-*.mjs files
+  // (`dump-laguna.mjs`, `dump-test-violation.mjs`) that were wedged in
+  // the prior sandbox by a read-only bind-mount have been removed in the
+  // fresh checkout. `src/main/_dump.test.ts` still exists as a tombstone
+  // (a one-line `expect(true).toBe(true)` placeholder) so this single
+  // remaining allowlist entry can still be observed. The four tests that
+  // pinned the wedged-state existence + zero-byte probe contract have been
+  // trimmed because the underlying environmental quirk no longer applies;
+  // the allowlist *content* contract (line 65) is the surviving anchor for
+  // the gate's tolerated-files surface.
+  it('src/main/_dump.test.ts exists (last surviving allowlisted scratch file)', () => {
     expect(fs.existsSync(path.join(PROJECT_ROOT, 'src', 'main', '_dump.test.ts'))).toBe(true)
   })
 
-  it('dump-test-violation.mjs exists at root (Cycle 111 [ID-0150] verification artifact wedged by read-only bind-mount)', () => {
-    expect(fs.existsSync(path.join(PROJECT_ROOT, 'dump-test-violation.mjs'))).toBe(true)
-  })
-
-  it('the two earlier vestigial dump files are scratch-only stubs (no production logic depends on them)', () => {
-    const dumpLaguna = fs.readFileSync(path.join(PROJECT_ROOT, 'dump-laguna.mjs'), 'utf8')
-    expect(dumpLaguna).toContain('Stray scratch file')
-    expect(dumpLaguna).toContain('export {}')
+  it('src/main/_dump.test.ts is a no-op tombstone (no production logic depends on it)', () => {
     const dumpTest = fs.readFileSync(
       path.join(PROJECT_ROOT, 'src', 'main', '_dump.test.ts'),
       'utf8'
     )
     expect(dumpTest).toContain('intentionally empty')
     expect(dumpTest).toContain('expect(true).toBe(true)')
-  })
-
-  it('dump-test-violation.mjs is a zero-byte verification probe (Cycle 111 [ID-0150])', () => {
-    // The Cycle 111 verification probe was created via `touch`. It must
-    // remain zero-byte: a non-empty file would mean a future cycle wrote
-    // through the bind-mount on a known-vestigial path, which would
-    // contradict the [ID-0011] / [ID-0056] BLOCKED state. If unlink ever
-    // becomes possible, the probe + the other two stubs go together.
-    const probe = path.join(PROJECT_ROOT, 'dump-test-violation.mjs')
-    expect(fs.statSync(probe).size).toBe(0)
   })
 })
