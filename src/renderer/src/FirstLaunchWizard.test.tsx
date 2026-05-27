@@ -99,11 +99,24 @@ describe('first-launch-wizard-contract (shared)', () => {
       ])
     })
 
-    it('uses a non-empty filename for each machine', () => {
+    it('uses a non-empty mesh-or-vector filename for each machine', () => {
+      // STL for 3D mesh starters (K2 Plus / Carvera), DXF for 2D contour
+      // starters (Laguna Swift 5x10 sign-board). Anything else would
+      // confuse the wizard's "Sample STL" radio + starter-op kind logic.
       for (const [, file] of Object.entries(WIZARD_MACHINE_TO_SAMPLE_FILE)) {
         expect(file.length).toBeGreaterThan(0)
-        expect(file).toMatch(/\.stl$/i)
+        expect(file).toMatch(/\.(stl|dxf)$/i)
       }
+    })
+
+    it('maps the FDM and 3D CAM machines to .stl meshes', () => {
+      expect(WIZARD_MACHINE_TO_SAMPLE_FILE['creality-k2-plus']).toMatch(/\.stl$/i)
+      expect(WIZARD_MACHINE_TO_SAMPLE_FILE['makera-carvera-3axis']).toMatch(/\.stl$/i)
+      expect(WIZARD_MACHINE_TO_SAMPLE_FILE['makera-carvera-4axis']).toMatch(/\.stl$/i)
+    })
+
+    it('maps the Laguna router to a .dxf 2D contour starter', () => {
+      expect(WIZARD_MACHINE_TO_SAMPLE_FILE['laguna-swift-5x10']).toMatch(/\.dxf$/i)
     })
   })
 

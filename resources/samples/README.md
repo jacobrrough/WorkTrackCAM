@@ -2,43 +2,75 @@
 
 The first-launch project wizard (`src/renderer/src/FirstLaunchWizard.tsx`,
 Step 3) offers an optional "Sample STL for this machine" choice that
-copies a small starter mesh into the new project's `assets/` folder and
-pre-creates a matching starter operation.
+copies a small starter mesh (or DXF) into the new project's `assets/`
+folder and pre-creates a matching starter operation.
+
+## Files shipped today
+
+| Machine ID                | File                              | Format        | Geometry                                                    |
+|---------------------------|-----------------------------------|---------------|-------------------------------------------------------------|
+| `creality-k2-plus`        | `calibration-cube-20mm.stl`       | Binary STL    | 20 mm solid calibration cube, centered on X/Y, Z=0 at bottom (12 tris) |
+| `laguna-swift-5x10`       | `sign-board-sample.dxf`           | DXF R12 ASCII | 200 x 100 mm sign-board plaque with one 12 mm round mounting hole and one 60 x 30 mm rounded-rect cutout |
+| `makera-carvera-3axis`    | `carvera-pocket-sample.stl`       | Binary STL    | 50 x 40 x 10 mm rectangular block with a 20 x 15 x 5 mm centered top-face pocket (closed 2-manifold, 68 tris) |
+| `makera-carvera-4axis`    | `carvera-rotary-pen-sample.stl`   | Binary STL    | Cylindrical pen blank, 20 mm dia x 80 mm long, axis along +X (chuck at X=0), 16-facet tessellation (64 tris) |
+
+All four files are **authored from scratch by procedural scripts under
+`scripts/sample-stl-gen/`** -- no third-party geometry, no Thingiverse /
+GrabCAD / MakerWorld assets. Anyone can re-run the generators with:
+
+```bash
+node scripts/sample-stl-gen/generate-all.js
+```
+
+Each generator script documents the geometry's origin in a header
+comment and lays the file out as a closed 2-manifold (STLs) or a clean
+LINE+ARC+CIRCLE+POLYLINE entity set (DXF) so slicers, OpenCAMLib, and
+the Laguna router's DXF importer accept them without preprocessing.
 
 ## Convention
 
-Each target machine has its own subdirectory keyed by **machine ID**:
+Each target machine has its own subdirectory keyed by **machine ID** as
+declared in `src/shared/first-launch-wizard-contract.ts`:
 
 ```
 resources/samples/
 ├── creality-k2-plus/
-│   └── calibration-cube.stl     ← (planned) 20mm cube for K2 FDM
+│   └── calibration-cube-20mm.stl       <- K2 Plus FDM starter
 ├── laguna-swift-5x10/
-│   └── sign-board.stl           ← (planned) sample sign panel
+│   └── sign-board-sample.dxf           <- Laguna 2D contour starter
 ├── makera-carvera-3axis/
-│   └── small-part.stl           ← (planned) small 3-axis demo part
+│   └── carvera-pocket-sample.stl       <- Carvera 3-axis pocket starter
 └── makera-carvera-4axis/
-    └── rotary-part.stl          ← (planned) cylindrical 4-axis demo
+    └── carvera-rotary-pen-sample.stl   <- Carvera 4-axis rotary starter
 ```
 
 The wizard reads the directory via the `samples:list` IPC handler
-(`src/main/ipc-samples.ts`). When a machine has **no** sample bundle, the
+(`src/main/ipc-core.ts`). When a machine has **no** sample bundle, the
 "Sample STL" option is disabled in the wizard with the tooltip
-"Sample bundle coming soon for this machine" — there is no hard failure.
+"Sample bundle coming soon for this machine" -- there is no hard failure.
 
 ## Adding a new sample
 
-1. Drop a small (<1 MB) STL under the relevant `resources/samples/<machineId>/` directory.
-2. Restart the dev server. The wizard re-enables the option automatically.
-3. The starter operation kind is chosen by machine kind:
-   - `fdm` → `fdm_slice` with K2 standard preset
-   - `cnc` 2-axis (Laguna) → `cnc_contour`
-   - `cnc` 3-axis (Carvera 3-axis) → `cnc_pocket`
-   - `cnc` 4-axis (Carvera 4th-axis HD) → `cnc_4axis_indexed`
+1. Add (or modify) a generator script under `scripts/sample-stl-gen/`.
+2. Update `WIZARD_MACHINE_TO_SAMPLE_FILE` in
+   `src/shared/first-launch-wizard-contract.ts` if you're changing the
+   expected filename.
+3. Re-run `node scripts/sample-stl-gen/generate-all.js`.
+4. Restart the dev server. The wizard re-enables the option automatically.
+
+The starter operation kind is chosen by `wizardStarterOpKind()` in
+`FirstLaunchWizard.tsx` (mirrored from CLAUDE.md My-Shop-Only mode):
+
+| Machine                       | Op kind seeded         |
+|-------------------------------|------------------------|
+| `creality-k2-plus`            | `fdm_slice`            |
+| `laguna-swift-5x10`           | `cnc_contour`          |
+| `makera-carvera-3axis`        | `cnc_pocket`           |
+| `makera-carvera-4axis`        | `cnc_4axis_indexed`    |
 
 ## Why this exists
 
-Bundled samples let a new user click **Sample STL → Finish** and land in
+Bundled samples let a new user click **Sample STL -> Finish** and land in
 a project that already has a model + an operation ready to slice or
-generate G-code — i.e., the "3-clicks-from-launch" guarantee in
+generate G-code -- i.e., the "3-clicks-from-launch" guarantee in
 `docs/COMPETITIVE-GAP-ANALYSIS.md` gap #3.

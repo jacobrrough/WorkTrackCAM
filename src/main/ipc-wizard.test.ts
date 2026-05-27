@@ -158,7 +158,9 @@ describe('first-launch wizard IPC', () => {
       })
       expect(result).toEqual({
         ok: true,
-        assetRelativePath: 'assets/calibration-cube.stl'
+        // Filename comes from WIZARD_MACHINE_TO_SAMPLE_FILE; the K2 Plus
+        // sample is the procedural 20mm calibration cube.
+        assetRelativePath: 'assets/calibration-cube-20mm.stl'
       })
       expect(mkdirMock).toHaveBeenCalledWith(
         expect.stringContaining('assets'),

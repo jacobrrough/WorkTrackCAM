@@ -31,3 +31,9 @@ resources/slicer/definitions/*.json text eol=lf
 
 # AGPLv3 license text is kept LF-only for the same provenance reason.
 resources/slicer/LICENSES/*.txt text eol=lf
+
+# Per-machine sample-bundle binary STLs (consumed by the first-launch
+# wizard's "Sample STL for this machine" option). Binary STL is a
+# little-endian byte-precise format -- a text-mode CRLF/LF rewrite would
+# corrupt the file's normal vectors and triangle data. Mark explicitly.
+resources/samples/**/*.stl binary
