@@ -281,6 +281,26 @@ export type Api = {
   moonrakerPause: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   moonrakerResume: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   /**
+   * Rich "Test connection" probe for Settings → Network & Printers
+   * (Creality K2 Plus). Fetches printer hostname / Klipper firmware
+   * version / live bed + nozzle temperatures so the operator can verify
+   * they are talking to the real K2 Plus without opening Fluidd.
+   *
+   * Errors NEVER reject — every failure is surfaced as a structured
+   * `{ ok: false, error, detail }` so the UI can show a real reason.
+   */
+  moonrakerInfo: (printerUrl: string, timeoutMs?: number) => Promise<
+    | {
+        ok: true
+        hostname?: string
+        firmwareVersion?: string
+        state?: string
+        bed?: { presentC?: number; targetC?: number }
+        nozzle?: { presentC?: number; targetC?: number }
+      }
+    | { ok: false; error: string; detail?: string }
+  >
+  /**
    * Pre-flight Moonraker temperature preview hook ([ID-0072-followup],
    * Cycle 50 ui-polish). Lightweight signal that the renderer is about
    * to surface a `formatFdmTempPreview` banner above the Send button.
@@ -595,6 +615,7 @@ const api: Api = {
   moonrakerCancel: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:cancel', printerUrl, timeoutMs),
   moonrakerPause: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:pause', printerUrl, timeoutMs),
   moonrakerResume: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:resume', printerUrl, timeoutMs),
+  moonrakerInfo: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:info', printerUrl, timeoutMs),
   moonrakerPreview: (samples) => {
     // Short-circuit absent / empty samples WITHOUT invoking the IPC
     // channel -- preserves the renderer-side guarantee that an empty

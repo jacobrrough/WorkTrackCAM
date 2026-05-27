@@ -125,6 +125,23 @@ export declare const window: Window & {
       machineId?: string
     }) => Promise<{ ok: boolean; filename?: string; error?: string; detail?: string }>
     moonrakerStatus: (url: string) => Promise<{ ok: boolean; state?: string; rawState?: string; filename?: string; progress?: number; etaSeconds?: number; error?: string }>
+    /**
+     * Rich Test-connection probe for the Settings → Network & Printers panel
+     * on the Creality K2 Plus. Returns hostname, Klipper firmware version,
+     * Klipper state, and live bed + nozzle temperatures (each with present
+     * + target Celsius). Errors fold into `{ ok: false, error, detail }`.
+     */
+    moonrakerInfo: (url: string, timeoutMs?: number) => Promise<
+      | {
+          ok: true
+          hostname?: string
+          firmwareVersion?: string
+          state?: string
+          bed?: { presentC?: number; targetC?: number }
+          nozzle?: { presentC?: number; targetC?: number }
+        }
+      | { ok: false; error: string; detail?: string }
+    >
     moonrakerCancel: (url: string) => Promise<{ ok: boolean; error?: string }>
     materialsList: () => Promise<MaterialRecord[]>
     materialsSave: (record: MaterialRecord) => Promise<MaterialRecord>

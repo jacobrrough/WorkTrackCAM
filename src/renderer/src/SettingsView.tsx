@@ -29,10 +29,18 @@ export interface SettingsViewProps {
 }
 
 type OrcaStatus = { bundled: boolean; expectedPath: string; platform: string }
+type MoonrakerHeaterPanel = { presentC?: number; targetC?: number }
 type MoonrakerProbe =
   | { kind: 'idle' }
   | { kind: 'busy' }
-  | { kind: 'ok'; rawState: string }
+  | {
+      kind: 'ok'
+      rawState: string
+      hostname?: string
+      firmwareVersion?: string
+      bed?: MoonrakerHeaterPanel
+      nozzle?: MoonrakerHeaterPanel
+    }
   | { kind: 'err'; message: string }
 
 export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement {
@@ -127,26 +135,66 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
     if (p) setField('pythonPath', p)
   }
 
+  /**
+   * Test connection: first verifies the Moonraker server speaks JSON via the
+   * fast `moonrakerStatus` probe (gives us print state), then fetches the
+   * richer `moonrakerInfo` (hostname, firmware version, live bed + nozzle
+   * temperatures). Surfaces the real error message on failure instead of
+   * just a red dot, so the operator can diagnose timeout vs 4xx vs network.
+   */
   const handleTestMoonraker = async (): Promise<void> => {
-    if (!moonrakerUrl.trim()) {
+    const trimmed = moonrakerUrl.trim()
+    if (!trimmed) {
       setMoonrakerProbe({ kind: 'err', message: 'Enter a Moonraker URL first.' })
       return
     }
     setMoonrakerProbe({ kind: 'busy' })
     try {
-      const r = await fab().moonrakerStatus(moonrakerUrl.trim())
-      if (r.ok) {
-        const raw = (r as { rawState?: string; state?: string }).rawState
-          ?? (r as { state?: string }).state
-          ?? 'unknown'
-        setMoonrakerProbe({ kind: 'ok', rawState: raw })
-      } else {
-        const err = (r as { error?: string }).error ?? 'Could not reach printer.'
-        setMoonrakerProbe({ kind: 'err', message: err })
+      const status = await fab().moonrakerStatus(trimmed)
+      if (!status.ok) {
+        const err = (status as { error?: string; detail?: string }).error ?? 'Could not reach printer.'
+        const detail = (status as { detail?: string }).detail
+        setMoonrakerProbe({
+          kind: 'err',
+          message: detail ? `${err} ${detail}` : err
+        })
+        return
       }
+      const raw = (status as { rawState?: string; state?: string }).rawState
+        ?? (status as { state?: string }).state
+        ?? 'unknown'
+      const info = await fab().moonrakerInfo(trimmed)
+      if (!info.ok) {
+        // Status worked but info failed — surface that the printer is
+        // up but didn't honour /printer/info (rare but possible if the
+        // user has a custom Moonraker auth scheme).
+        const err = info.error
+        const detail = info.detail
+        setMoonrakerProbe({
+          kind: 'err',
+          message: detail ? `${err} ${detail}` : err
+        })
+        return
+      }
+      setMoonrakerProbe({
+        kind: 'ok',
+        rawState: raw,
+        ...(info.hostname !== undefined ? { hostname: info.hostname } : {}),
+        ...(info.firmwareVersion !== undefined ? { firmwareVersion: info.firmwareVersion } : {}),
+        ...(info.bed !== undefined ? { bed: info.bed } : {}),
+        ...(info.nozzle !== undefined ? { nozzle: info.nozzle } : {})
+      })
     } catch (e) {
       setMoonrakerProbe({ kind: 'err', message: e instanceof Error ? e.message : String(e) })
     }
+  }
+
+  // Pure formatter — keeps the JSX tidy + lets the unit tests assert the copy.
+  const formatHeaterLine = (label: string, h: MoonrakerHeaterPanel | undefined): string | null => {
+    if (h === undefined) return null
+    const present = h.presentC !== undefined ? `${h.presentC.toFixed(1)}°C` : '—'
+    const target = h.targetC !== undefined ? `${h.targetC.toFixed(1)}°C` : '—'
+    return `${label}: ${present} / Target ${target}`
   }
 
   return (
@@ -273,7 +321,13 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
                   <>
                     <span className="settings-probe-dot settings-probe-dot--ok" aria-hidden="true" />
                     <span className="settings-probe-label settings-probe-label--ok">
-                      Connected{' · '}rawState: {moonrakerProbe.rawState}
+                      {moonrakerProbe.hostname !== undefined
+                        ? `Connected to ${moonrakerProbe.hostname}`
+                        : 'Connected'}
+                      {moonrakerProbe.firmwareVersion !== undefined
+                        ? ` (Klipper ${moonrakerProbe.firmwareVersion})`
+                        : ''}
+                      {' · '}rawState: {moonrakerProbe.rawState}
                     </span>
                   </>
                 )}
@@ -287,6 +341,25 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
                 )}
               </span>
             </div>
+            {moonrakerProbe.kind === 'ok' &&
+              (moonrakerProbe.bed !== undefined || moonrakerProbe.nozzle !== undefined) && (
+                <div
+                  className="settings-probe-temps"
+                  role="group"
+                  aria-label="Moonraker live temperatures"
+                >
+                  {formatHeaterLine('Bed', moonrakerProbe.bed) !== null && (
+                    <div className="settings-probe-temps__row">
+                      {formatHeaterLine('Bed', moonrakerProbe.bed)}
+                    </div>
+                  )}
+                  {formatHeaterLine('Nozzle', moonrakerProbe.nozzle) !== null && (
+                    <div className="settings-probe-temps__row">
+                      {formatHeaterLine('Nozzle', moonrakerProbe.nozzle)}
+                    </div>
+                  )}
+                </div>
+              )}
           </div>
         </div>
       </fieldset>

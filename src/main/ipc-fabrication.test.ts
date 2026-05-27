@@ -77,6 +77,17 @@ vi.mock('./moonraker-push', () => ({
   moonrakerStatus: vi.fn()
 }))
 
+vi.mock('./moonraker-info', () => ({
+  moonrakerInfo: vi.fn().mockResolvedValue({
+    ok: true,
+    hostname: 'k2plus-mock',
+    firmwareVersion: 'v0.0.0-mock',
+    state: 'ready',
+    bed: { presentC: 22.0, targetC: 0 },
+    nozzle: { presentC: 24.0, targetC: 0 }
+  })
+}))
+
 vi.mock('./machines', () => ({
   deleteUserMachine: vi.fn(),
   getMachineById: vi.fn(),
@@ -235,6 +246,7 @@ describe('ipc-fabrication', () => {
       'carvera:generateSetup',
       'moonraker:push',
       'moonraker:status',
+      'moonraker:info',
       'moonraker:cancel',
       'moonraker:pause',
       'moonraker:resume',
@@ -291,6 +303,18 @@ describe('ipc-fabrication', () => {
     expect(result).toMatchObject({
       ok: false,
       error: 'invalid_cam_payload'
+    })
+  })
+
+  it('moonraker:info handler delegates to moonrakerInfo and returns rich fields', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('moonraker:info')!
+    const result = await handler({}, 'http://k2plus.local', 3000)
+    expect(result).toMatchObject({
+      ok: true,
+      hostname: 'k2plus-mock',
+      firmwareVersion: 'v0.0.0-mock',
+      state: 'ready'
     })
   })
 

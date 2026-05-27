@@ -32,7 +32,8 @@ import MoonrakerPreviewBanner from './MoonrakerPreviewBanner'
 import type { GcodeTempSample } from '../../shared/gcode-temp-validator'
 import { ErrorBoundary } from './ErrorBoundary'
 import { autoOrient } from '../../shared/auto-orient'
-import { triangulateBinaryStl } from '../../shared/stl-binary-preview'
+import { triangulateBinaryStl, computeBinaryStlBoundingBox } from '../../shared/stl-binary-preview'
+import { autoArrangePlate, type AutoArrangeMesh } from '../../shared/auto-arrange-plate'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { ModelTransform, GizmoMode } from './ShopModelViewer'
 import {
@@ -259,13 +260,21 @@ const GIZMO_MODES: { mode: GizmoMode; icon: string; title: string }[] = [
 ]
 const AX_COLORS = { x: '#e74c3c', y: '#2ecc71', z: '#3d7eff' } as const
 
-const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, onToast, modelSize, setModelSize, gcodeGeneration = 0 }: {
+const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, onToast, modelSize, setModelSize, gcodeGeneration = 0, onAutoArrangePlate, autoArrangeAvailable }: {
   job: Job | null; mode: MachineUIMode
   onUpdateJob: (id: string, patch: Partial<Job>) => void
   onToast: (kind: Toast['kind'], msg: string) => void
   modelSize: { x: number; y: number; z: number } | null
   setModelSize: (s: { x: number; y: number; z: number } | null) => void
   gcodeGeneration?: number
+  /**
+   * FDM-only: arrange all loaded K2 Plus jobs on the print bed. Called when
+   * the operator clicks the viewport "Auto-arrange" button. Owned by
+   * ShopAppInner since the full job list lives there.
+   */
+  onAutoArrangePlate?: () => Promise<void>
+  /** True when there are 2+ FDM jobs with loaded STLs (button is meaningless for 1). */
+  autoArrangeAvailable?: boolean
 }): React.ReactElement {
   const [floatOpen,    setFloatOpen]    = useState(true)
   const [dragging,     setDragging]     = useState(false)
@@ -299,6 +308,16 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
   }, [job, modelSize, mode, onUpdateJob])
 
   const [autoOrienting, setAutoOrienting] = useState(false)
+  const [autoArranging, setAutoArranging] = useState(false)
+  const handleAutoArrangeClick = useCallback(async (): Promise<void> => {
+    if (!onAutoArrangePlate) return
+    setAutoArranging(true)
+    try {
+      await onAutoArrangePlate()
+    } finally {
+      setAutoArranging(false)
+    }
+  }, [onAutoArrangePlate])
   // Auto-orient (FDM): read the loaded STL, run pure-math autoOrient(), push the
   // result into the per-job transform.rotation. NO disk write, NO G-code emission
   // — only the in-memory Three.js transform changes (safety: G-code is sacred).
@@ -502,6 +521,26 @@ const ViewportArea = React.memo(function ViewportArea({ job, mode, onUpdateJob, 
             <span aria-hidden="true">{autoOrienting ? '\u29D7' : '\u293E'}</span>
             {' '}Auto-orient
           </button>
+          {onAutoArrangePlate && (
+            <button
+              type="button"
+              title={
+                autoArranging
+                  ? 'Arranging\u2026'
+                  : autoArrangeAvailable
+                    ? 'Auto-arrange all loaded models on the K2 Plus print bed (shelf-pack)'
+                    : 'Load 2+ FDM models to auto-arrange them on the plate'
+              }
+              aria-label="Auto-arrange models on plate"
+              aria-busy={autoArranging}
+              disabled={autoArranging || !autoArrangeAvailable}
+              onClick={() => { void handleAutoArrangeClick() }}
+              className="vp-hud-btn"
+            >
+              <span aria-hidden="true">{autoArranging ? '\u29D7' : '\u2B1A'}</span>
+              {' '}Auto-arrange
+            </button>
+          )}
         </div>
       )}
 
@@ -1093,6 +1132,134 @@ function ShopAppInner(): React.ReactElement {
     }
     doRemoveModel()
   }, [activeJob, doRemoveModel])
+
+  // ── Auto-arrange on plate (K2 Plus FDM) ─────────────────────────────────
+  //
+  // Lays out all loaded FDM jobs targeting the active K2 Plus machine on the
+  // 350×350 mm print bed using the shelf-pack algorithm in
+  // `src/shared/auto-arrange-plate.ts`. Per-job transform.position.x/y is
+  // overwritten with the placement offset (centred on the plate so the
+  // renderer's origin convention is honoured). Safety Rule 1: no G-code
+  // is emitted — only the in-memory transform changes, identical to the
+  // auto-orient pattern (Agent N).
+  //
+  // The slice:orca handler (verified per Agent N's audit) ignores
+  // transform when slicing, so the placement does NOT silently leak into
+  // the output until the user actually re-runs slicing for that job.
+  //
+  // Jobs without an STL or with unreadable STLs are skipped (silent).
+  // Jobs whose AABB does not fit any rotation are reported via toast as
+  // unplaced count.
+  const fdmJobsWithStl = useMemo(
+    () => jobs.filter((j) => j.stlPath != null && j.machineId === sessionMachine?.id),
+    [jobs, sessionMachine?.id]
+  )
+  const autoArrangeAvailable = isFdm && fdmJobsWithStl.length >= 2
+  const handleAutoArrangePlate = useCallback(async (): Promise<void> => {
+    if (!isFdm) {
+      pushToast('warn', 'Auto-arrange is only available for FDM machines (K2 Plus).')
+      return
+    }
+    if (fdmJobsWithStl.length < 2) {
+      pushToast('warn', 'Load at least two FDM models before auto-arranging.')
+      return
+    }
+    // Resolve plate dimensions from the active machine profile, fall back
+    // to K2 Plus defaults if any field is missing or non-numeric. The K2
+    // Plus build volume per CLAUDE.md USER CONTEXT is 350×350×350 mm.
+    const profileXMm = sessionMachine?.workAreaMm?.x ?? 350
+    const profileYMm = sessionMachine?.workAreaMm?.y ?? 350
+    const plateX = Number.isFinite(profileXMm) && profileXMm > 0 ? profileXMm : 350
+    const plateY = Number.isFinite(profileYMm) && profileYMm > 0 ? profileYMm : 350
+    const plate = { x: plateX, y: plateY, clearance: 3 }
+
+    // Probe each job's STL to get its AABB. Results are kept in lockstep
+    // with the input job list so we can write per-job transform updates
+    // by id later.
+    type Probe = { jobId: string; mesh: AutoArrangeMesh; width: number; depth: number } | { jobId: string; error: string }
+    const probes: Probe[] = await Promise.all(
+      fdmJobsWithStl.map(async (j): Promise<Probe> => {
+        if (!j.stlPath) return { jobId: j.id, error: 'no stl path' }
+        try {
+          const b64 = await fab().fsReadBase64(j.stlPath)
+          const bin = atob(b64)
+          const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          const bbox = computeBinaryStlBoundingBox(bytes)
+          if (bbox === null) {
+            return { jobId: j.id, error: 'not a binary STL (auto-arrange requires binary STLs)' }
+          }
+          const w = bbox.max[0] - bbox.min[0]
+          const d = bbox.max[1] - bbox.min[1]
+          const h = bbox.max[2] - bbox.min[2]
+          return {
+            jobId: j.id,
+            mesh: { id: j.id, aabbMm: { width: w, depth: d, height: h } },
+            width: w,
+            depth: d
+          }
+        } catch (e) {
+          return { jobId: j.id, error: e instanceof Error ? e.message : String(e) }
+        }
+      })
+    )
+    const usable = probes.filter((p): p is Extract<Probe, { mesh: AutoArrangeMesh }> => 'mesh' in p)
+    if (usable.length === 0) {
+      pushToast('err', 'Auto-arrange failed: no STLs could be probed for AABBs.')
+      return
+    }
+    const meshes = usable.map((p) => p.mesh)
+    const arranged = autoArrangePlate(meshes, plate)
+
+    // Apply each placement to its source job. The renderer treats
+    // transform.position.x/y as the in-plate offset from the plate
+    // centre, so we convert via placementToCenteredOffset.
+    const dimsById = new Map<string, { width: number; depth: number }>()
+    for (const p of usable) {
+      dimsById.set(p.jobId, { width: p.width, depth: p.depth })
+    }
+    setJobs((js) => js.map((j) => {
+      const placement = arranged.placements.find((pl) => pl.id === j.id)
+      if (!placement) return j
+      const dims = dimsById.get(j.id)
+      if (!dims) return j
+      const off = {
+        // Mirror the same centred-origin convention `placementToCenteredOffset` produces.
+        x: placement.xMm + (placement.rotationDeg === 90 ? dims.depth : dims.width) / 2 - plate.x / 2,
+        y: placement.yMm + (placement.rotationDeg === 90 ? dims.width : dims.depth) / 2 - plate.y / 2
+      }
+      return {
+        ...j,
+        transform: {
+          ...j.transform,
+          position: {
+            ...j.transform.position,
+            x: +off.x.toFixed(2),
+            y: +off.y.toFixed(2)
+          },
+          // 90° rotation is around +Z; the in-app Z rotation field is the
+          // one consumed by the Three.js scene for FDM bed rotation.
+          rotation: {
+            ...j.transform.rotation,
+            z: placement.rotationDeg
+          }
+        }
+      }
+    }))
+    const placedCount = arranged.placements.length
+    const unplacedCount = arranged.unplaced.length
+    if (unplacedCount === 0) {
+      pushToast(
+        'ok',
+        `Auto-arrange: placed ${placedCount} model${placedCount === 1 ? '' : 's'} (${arranged.utilizationPct.toFixed(1)}% bed utilization).`
+      )
+    } else {
+      pushToast(
+        'warn',
+        `Auto-arrange: placed ${placedCount}, ${unplacedCount} did not fit (${arranged.utilizationPct.toFixed(1)}% bed utilization). Split the job across plates or scale down.`
+      )
+    }
+  }, [isFdm, fdmJobsWithStl, sessionMachine?.workAreaMm?.x, sessionMachine?.workAreaMm?.y, pushToast])
 
   // ── Import model into the active job ─────────────────────────────────────────
   const importModel = useCallback(async (): Promise<void> => {
@@ -2052,6 +2219,8 @@ function ShopAppInner(): React.ReactElement {
                   job={activeJob} mode={mode} onUpdateJob={updateJob} onToast={pushToast}
                   modelSize={modelSize} setModelSize={setModelSize}
                   gcodeGeneration={gcodeGeneration}
+                  onAutoArrangePlate={handleAutoArrangePlate}
+                  autoArrangeAvailable={autoArrangeAvailable}
                 />
               </ErrorBoundary>
 

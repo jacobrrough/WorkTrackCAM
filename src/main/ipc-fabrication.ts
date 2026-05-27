@@ -24,6 +24,7 @@ import {
   generateCarveraZProbe
 } from '../shared/carvera-zeroing'
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
+import { moonrakerInfo } from './moonraker-info'
 import { runOrcaSlice } from './slicer/orca-wrapper'
 import type { FdmCapabilityFields, GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
@@ -851,6 +852,24 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle(
     'moonraker:status',
     async (_e, printerUrl: string, timeoutMs?: number) => moonrakerStatus(printerUrl, timeoutMs)
+  )
+
+  /**
+   * Rich "Test connection" probe for the Settings → Network & Printers
+   * panel. Goes beyond `moonraker:status` (which only reports print
+   * state) by ALSO fetching hostname / firmware version / live bed +
+   * nozzle temperatures from /printer/info + /printer/objects/query.
+   *
+   * Errors NEVER throw — every failure is folded into
+   * `{ ok: false, error, detail }` so the renderer can surface the real
+   * reason (timeout / 4xx / non-JSON body / network).
+   *
+   * Safety: Read-only probe. No G-code emission, no machine actuation,
+   * no shell commands.
+   */
+  ipcMain.handle(
+    'moonraker:info',
+    async (_e, printerUrl: string, timeoutMs?: number) => moonrakerInfo(printerUrl, timeoutMs)
   )
 
   ipcMain.handle(
