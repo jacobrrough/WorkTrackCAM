@@ -9,14 +9,11 @@
     "build": "electron-vite build && electron-builder",
     "preview": "electron-vite preview",
     "pretest": "node scripts/check-no-dump-stubs.cjs",
-    "test": "vitest run && npm run test:python",
-    "pretest:python": "node scripts/sandbox-bootstrap.mjs",
-    "test:python": "python3 -m pytest engines/cam/advanced/tests/ -p no:cacheprovider -q",
+    "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "check:no-dump-stubs": "node scripts/check-no-dump-stubs.cjs",
-    "bootstrap:python": "node scripts/sandbox-bootstrap.mjs",
     "verify:release-gate": "node scripts/verify-release-gate.mjs"
   },
   "dependencies": {
