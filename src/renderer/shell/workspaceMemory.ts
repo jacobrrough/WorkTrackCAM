@@ -37,6 +37,8 @@ const VALID_COMBO_TAB: ReadonlySet<PersistedComboViewTab> = new Set(['model', 't
 const COMBO_VIEW_TAB_KEY = 'ufs_combo_view_tab'
 
 const LAST_WORKSPACE_KEY = 'ufs_last_workspace'
+const SHELL_V3_FLAG_KEY = 'ufs_shell_v3'
+const ACTIVE_TAB_KEY = 'ufs_active_tab'
 const MFG_OP_FILTER_KEY = 'ufs_mfg_op_filter'
 const MFG_ACTIONABLE_ONLY_KEY = 'ufs_mfg_actionable_only'
 const COMMAND_CATALOG_QUERY_KEY = 'ufs_command_catalog_query'
@@ -299,6 +301,36 @@ export function readPersistedManufactureLastRunMode(fallback: 'slice' | 'cam' = 
 export function writePersistedManufactureLastRunMode(mode: 'slice' | 'cam'): void {
   try {
     localStorage.setItem(MFG_LAST_RUN_MODE_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+}
+
+// ── UI rebuild (v3 tabbed shell) — feature flag + active-tab persistence ──────
+// The tabbed-IA rebuild (see docs/UI-REBUILD.md) lands incrementally behind
+// `ufs_shell_v3`. While OFF (default during Phases 1-4) the legacy
+// EnvironmentSplash + NavRail + cc-shell renders unchanged. Flip ON to preview
+// the new AppShell. Phase 5 flips the default; Phase 6 removes the flag.
+
+/**
+ * Read the v3 tabbed-shell feature flag. Defaults to `false` (legacy shell)
+ * unless the operator opted in via localStorage `ufs_shell_v3 = '1'`.
+ */
+export function readShellV3Flag(fallback = false): boolean {
+  try {
+    const raw = localStorage.getItem(SHELL_V3_FLAG_KEY)
+    if (raw === '1') return true
+    if (raw === '0') return false
+  } catch {
+    /* private mode / quota */
+  }
+  return fallback
+}
+
+/** Persist the v3 tabbed-shell feature flag. */
+export function writeShellV3Flag(on: boolean): void {
+  try {
+    localStorage.setItem(SHELL_V3_FLAG_KEY, on ? '1' : '0')
   } catch {
     /* ignore */
   }
