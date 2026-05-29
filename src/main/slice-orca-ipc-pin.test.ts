@@ -343,3 +343,42 @@ describe('G. Three-machine cross-cut: DIRECT on K2, INDIRECT on Laguna + Carvera
     }
   })
 })
+
+describe('H. OrcaSlicer resolution falls back to a system install (Cycle 233)', () => {
+  it('H1: orca-wrapper exports the pure orcaBinaryCandidates helper', () => {
+    expect(ORCA_SRC).toContain('export function orcaBinaryCandidates')
+  })
+
+  it('H2: resolution honors the WORKTRACKCAM_ORCA_BIN env override', () => {
+    expect(ORCA_SRC).toContain("export const ORCA_BIN_ENV = 'WORKTRACKCAM_ORCA_BIN'")
+  })
+
+  it('H3: resolution includes a system-install fallback (Program Files OrcaSlicer.exe)', () => {
+    expect(ORCA_SRC).toContain("source: 'system'")
+    expect(ORCA_SRC).toContain('OrcaSlicer.exe')
+  })
+
+  it('H4: slicer:orcaStatus delegates to resolveOrcaInstall (not a bundled-only statSync)', () => {
+    const handler = IPC_SRC.match(
+      /ipcMain\.handle\(\s*'slicer:orcaStatus',[\s\S]+?(?=ipcMain\.handle\(\s*')/,
+    )
+    expect(handler).not.toBeNull()
+    if (handler) {
+      expect(handler[0]).toContain('resolveOrcaInstall(appRoot)')
+    }
+  })
+
+  it('H5: slicer:orcaStatus reports found/source/resolvedPath, keeps bundled for back-compat', () => {
+    const handler = IPC_SRC.match(
+      /ipcMain\.handle\(\s*'slicer:orcaStatus',[\s\S]+?(?=ipcMain\.handle\(\s*')/,
+    )
+    expect(handler).not.toBeNull()
+    if (handler) {
+      const body = handler[0]
+      expect(body).toContain('found:')
+      expect(body).toContain('source:')
+      expect(body).toContain('resolvedPath:')
+      expect(body).toContain('bundled:')
+    }
+  })
+})

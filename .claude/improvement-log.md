@@ -16301,3 +16301,52 @@ salvageable ones to the new `sliceOrca` surface) is the natural
 follow-up. Independently, the OrcaSlicer binary bundling
 (electron-builder `extraResources` + scripts/bundle-orca-slicer.ps1)
 unblocks real-world K2 Plus printing.
+
+
+---
+
+## Cycle 233 -- OrcaSlicer system-install resolution + real-world testing guide (2026-05-28)
+
+- **Focus**: docs-and-dx. **User-directed**: Jacob asked to "keep working on the app, make it perfect, and give me a step by step how to test it in the real world." Rotation slot (post-pivot rotation was PAUSED per the three Pivot stages + Task #9/#10 entries); the user directive sets the focus. The single highest-leverage real-world unblock + the explicitly-requested guide both fit docs-and-dx, so this cycle takes that slot.
+- **Baseline**: `npm test` -> 13,689 passed, 2 skipped (343 files). `npm run typecheck` -> clean. (Much healthier than the pivot-era 79-107 failures -- the dead `slice:cura` pins from Task #10 have since been cleaned up by the recent feature commits.)
+- **Changes**:
+  - `src/main/slicer/orca-wrapper.ts` -- **the real-world unblock.** `resolveOrcaInstall` previously found ONLY a bundled binary under `resources/orca-slicer/win32-x64/`, so a shop machine with OrcaSlicer 2.3.2 installed normally (Jacob's case) got `orca_unavailable` and could not slice. Reworked resolution to walk an ordered candidate list (most-specific first): (1) `WORKTRACKCAM_ORCA_BIN` env override, (2) bundled build, (3) standard per-platform **system install** locations (`%PROGRAMFILES%\OrcaSlicer\OrcaSlicer.exe` + `%LOCALAPPDATA%` per-user on Windows; `.app` bundle on macOS; `/usr/bin` etc. on Linux). New pure `orcaBinaryCandidates(appRoot, env, platform)` + exported `bundledOrcaBinaryPath` + `ORCA_BIN_ENV` const. `resolveOrcaInstall` now takes injectable `{ env, platform, exists }` opts for deterministic tests. Throw message is actionable (lists every checked path + the three fixes). `buildOrcaArgs` (the CLI contract) and the profiles are UNTOUCHED.
+  - `src/main/ipc-fabrication.ts` -- `slicer:orcaStatus` handler now delegates to `resolveOrcaInstall` (was a bundled-only `statSync`). Returns `found` / `resolvedPath` / `source` (`env|bundled|system|none`) while keeping `bundled` / `expectedPath` for back-compat. Import widened to pull `resolveOrcaInstall` + `bundledOrcaBinaryPath`.
+  - `src/renderer/src/SettingsView.tsx` -- Settings -> Paths now shows "Found (system install)" / "Found (bundled)" / "Found (WORKTRACKCAM_ORCA_BIN)" with the resolved path, or "Not found" with install/bundle/env-var hints. Was a misleading "Bundled / Not bundled" that said "Not bundled" even when slicing actually worked via a system install.
+  - `src/preload/index.ts` + `src/renderer/src/shop-types.ts` -- widened the `slicerOrcaStatus` return typing to match (both carried the old `{ bundled, expectedPath, platform }` shape; the preload one is the authoritative `window.fab` typing).
+  - `docs/REAL-WORLD-TESTING.md` -- **NEW.** Task-oriented end-to-end guide for all three machines: one-time setup (Node/Python/OrcaSlicer), in-app pre-flight, then per-machine flows -- K2 Plus (OrcaSlicer resolution + slice + Moonraker push, with Fluidd fallback), Laguna Swift 5x10 (CAM -> RichAuto-A-series `.nc` -> mandatory air-cut), Carvera 3-axis + 4-axis (Smoothieware dialect, rotary origin X-offset/Y=0, UNVERIFIED simultaneous flag). Troubleshooting table keyed on the actual error codes (`orca_unavailable`, `orca_slice_failed`, `not_fdm_machine`). Cross-links MACHINES.md / SLICING.md / SMOKE-K2-MOONRAKER.md / CAM_4TH_AXIS_REFERENCE.md rather than duplicating them.
+  - `README.md` -- fixed stale "Cura defaults" feature line -> OrcaSlicer; added a "Testing on real machines" section linking the new guide.
+- **Tests added**: +15 (13,689 -> 13,704). `src/main/slicer/orca-wrapper.test.ts`: rewrote the single "throws" test to inject `exists:()=>false` (deterministic even on a machine that actually has OrcaSlicer installed) + added precedence tests (env > bundled > system, macOS .app) and an `orcaBinaryCandidates` describe (ordering, blank-override omission, Program Files path, platform bundled subdir). `src/main/slice-orca-ipc-pin.test.ts`: new group H (5 source-pins) locking the env override const, the system-install fallback, and the `slicer:orcaStatus` delegation + new return fields. Cross-platform-safe (expected paths derived via `path.join`, not hardcoded separators).
+- **Results**: `npm test` -> 13,704 passed, 2 skipped (Δ +15). `npm run typecheck` -> clean. Zero regressions.
+- **Safety Rule 1 (G-code is sacred)**: UNTOUCHED. No post templates, no machine profiles, no CAM engine, no `buildOrcaArgs` CLI flags, no OrcaSlicer profiles changed. The only behavioral change is *which* OrcaSlicer binary is located; OrcaSlicer remains its own G-code emitter, still gated by the pre-upload temperature validator. `gcode-safety` skill therefore not triggered (no emitted-G-code surface changed) -- noted deliberately.
+- **Three-machine impact**: **K2 Plus** DIRECT -- this is the change that lets the K2 FDM slice pipeline work in Jacob's shop without bundling a ~400 MB binary into the repo. **Laguna + Carvera** INDIRECT -- unaffected by FDM resolution; the `not_fdm_machine` gate still protects them. All three are covered by the new real-world guide.
+- **Edit-tool fires**: source files via clean Edit; this log append via Python-via-bash per the `.claude/`-file rule in docs/EDIT-WORKFLOW.md.
+- **Next cycle**: cam-engine slot is due next in the rotation. Candidate: pin/validate `src/main/cam-axis4/strategies/pattern.ts` (81L) or `continuous.ts` (105L) -- both un-pinned per the Cycle 232 hand-off. Independently, the OrcaSlicer **binary bundling** (`scripts/bundle-orca-slicer.ps1` + electron-builder extraResources is already wired in package.json) remains the one host-side step that turns the shipped installer into a zero-dependency K2 slice -- system-install resolution (this cycle) covers the dev/shop case until then.
+
+
+---
+
+## USER-DIRECTED -- npm vulnerability remediation (2026-05-28)
+
+> Interactive user-directed work, not a numbered rotation cycle. Jacob: "npm has lots of vulnerabilities." Chose (via AskUserQuestion) the full fix including the breaking electron-builder major bump + build verification.
+
+**Trigger / baseline:** `npm audit` -> 15 vulnerabilities (1 low, 3 moderate, 11 high). `npm audit --omit=dev` -> **0** -- every advisory was in dev/build tooling; nothing in the shipped app. The bulk of the highs was the node-tar / node-gyp chain pulled transitively through electron-builder 25 (tar -> node-gyp/cacache/make-fetch-happen -> @electron/rebuild -> app-builder-lib -> dmg-builder/electron-builder).
+
+**Environment note:** this worktree had no real `node_modules` of its own -- it was resolving up to the MAIN repo's install via Node's parent-dir walk. Applying real fixes required a genuine `npm install` in the worktree, which (correctly) exposed two latent dependency-declaration gaps -- see Changes.
+
+**Changes:**
+- `package.json`
+  - devDep `electron-builder` `^25.1.8` -> `^26.8.1`. Clears the entire tar/node-gyp/cacache/make-fetch-happen/@electron/rebuild/app-builder-lib transitive chain (most of the 11 highs + tmp).
+  - Removed `build.win.publisherName`. electron-builder 26 tightened its config schema and **rejects** that property (`configuration.win has an unknown property 'publisherName'`) -- it's now derived from the code-signing cert. The app isn't code-signed, so it was a no-op. **This was a real build-breaker the v26 bump introduced; caught by the build-verification step.**
+  - Added missing devDep `fast-check` `^3.23.2`. Three committed property-test files (`post-process-property.test.ts`, `post-process-property-extension.test.ts`, `post-process-rotary-bypass-property.test.ts`) `import fc from 'fast-check'`, but it was **never declared** in package.json -- the baseline only passed because it resolved from a parent-level `node_modules`. The clean worktree install surfaced this.
+- `package-lock.json` -- regenerated against the above, plus `npm audit fix` (non-breaking) for the residual `postcss` XSS + `brace-expansion` DoS moderates.
+
+**Results:**
+- `npm audit` -> **0 vulnerabilities** (from 15).
+- `npm test` -> **13,704 passed, 2 skipped** (identical to the Cycle 233 baseline; the 3 fast-check suites restored after declaring the dep -- briefly red mid-remediation, then green).
+- `npm run typecheck` -> clean.
+- **Build verified end-to-end:** `electron-vite build` compiles all three bundles; `electron-builder --dir` (v26.8.1) packaged `dist\win-unpacked\WorkTrackCAM.exe` exit 0 after the `publisherName` migration. (Full NSIS `npm run build` additionally needs the OrcaSlicer binary under `resources/orca-slicer/win32-x64/` per the `extraResources` config -- pre-existing, documented in docs/REAL-WORLD-TESTING.md; unrelated to this change. Verified with a temporary placeholder, then removed.)
+
+**Safety Rule 1:** UNTOUCHED -- no post templates, machine profiles, CAM engine, or G-code emission changed. Build/test tooling + one missing test-dep declaration only.
+
+**Three-machine impact:** none at runtime -- all changes are dev/build/test tooling. The shipped app behavior for K2 Plus / Laguna Swift / Makera Carvera is unchanged.

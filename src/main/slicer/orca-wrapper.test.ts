@@ -1,5 +1,12 @@
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { buildOrcaArgs, resolveOrcaInstall, type OrcaSliceConfig } from './orca-wrapper'
+import {
+  buildOrcaArgs,
+  resolveOrcaInstall,
+  orcaBinaryCandidates,
+  bundledOrcaBinaryPath,
+  type OrcaSliceConfig,
+} from './orca-wrapper'
 
 const baseConfig: OrcaSliceConfig = {
   inputPath: '/jobs/widget.stl',
@@ -131,12 +138,112 @@ describe('buildOrcaArgs', () => {
 })
 
 describe('resolveOrcaInstall', () => {
-  it('throws a descriptive error when the binary is not bundled', () => {
-    // resources/orca-slicer/ does not exist in dev — the test asserts the
-    // promise that the wrapper surfaces a clear error rather than a cryptic
-    // ENOENT from spawn.
-    expect(() => resolveOrcaInstall('/nonexistent/app/root')).toThrow(
-      /OrcaSlicer binary not bundled/,
+  it('throws an actionable error when nothing is found (injected exists:false)', () => {
+    // `exists: () => false` keeps this deterministic even on a machine that
+    // actually has OrcaSlicer installed — otherwise the system-install
+    // fallback would resolve and the throw would never fire.
+    expect(() =>
+      resolveOrcaInstall('/nonexistent/app/root', {
+        env: {},
+        platform: 'win32',
+        exists: () => false,
+      }),
+    ).toThrow(/OrcaSlicer binary not found/)
+  })
+
+  it('error lists checked paths and names the env var + bundle script as fixes', () => {
+    let msg = ''
+    try {
+      resolveOrcaInstall('/app', { env: {}, platform: 'win32', exists: () => false })
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e)
+    }
+    expect(msg).toContain('WORKTRACKCAM_ORCA_BIN')
+    expect(msg).toContain('bundle-orca-slicer')
+    expect(msg).toContain('(bundled)')
+    expect(msg).toContain('(system)')
+  })
+
+  it('prefers the WORKTRACKCAM_ORCA_BIN override over bundled + system', () => {
+    const r = resolveOrcaInstall('/app', {
+      env: { WORKTRACKCAM_ORCA_BIN: '/custom/orca.exe' },
+      platform: 'win32',
+      exists: () => true, // even with everything "present", the override wins
+    })
+    expect(r.binary).toBe('/custom/orca.exe')
+    expect(r.source).toBe('env')
+  })
+
+  it('falls back to the bundled binary when no override is set', () => {
+    const bundled = bundledOrcaBinaryPath('/app', 'win32')
+    const r = resolveOrcaInstall('/app', {
+      env: {},
+      platform: 'win32',
+      exists: (p) => p === bundled,
+    })
+    expect(r.binary).toBe(bundled)
+    expect(r.source).toBe('bundled')
+  })
+
+  it('falls back to a Windows system install when override + bundle are absent', () => {
+    const systemPath = join('C:\\Program Files', 'OrcaSlicer', 'OrcaSlicer.exe')
+    const r = resolveOrcaInstall('/app', {
+      env: { PROGRAMFILES: 'C:\\Program Files' },
+      platform: 'win32',
+      exists: (p) => p === systemPath,
+    })
+    expect(r.binary).toBe(systemPath)
+    expect(r.source).toBe('system')
+  })
+
+  it('resolves a macOS .app-bundle system install', () => {
+    const macPath = '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer'
+    const r = resolveOrcaInstall('/app', {
+      env: {},
+      platform: 'darwin',
+      exists: (p) => p === macPath,
+    })
+    expect(r.binary).toBe(macPath)
+    expect(r.source).toBe('system')
+  })
+})
+
+describe('orcaBinaryCandidates', () => {
+  it('orders env override first, then bundled, then system installs', () => {
+    const c = orcaBinaryCandidates(
+      '/app',
+      { WORKTRACKCAM_ORCA_BIN: '/x/orca.exe', PROGRAMFILES: 'C:\\Program Files' },
+      'win32',
     )
+    expect(c[0]).toEqual({ path: '/x/orca.exe', source: 'env' })
+    expect(c[1].source).toBe('bundled')
+    expect(c.slice(2).every((x) => x.source === 'system')).toBe(true)
+  })
+
+  it('omits the env candidate when the override is unset or blank', () => {
+    const c = orcaBinaryCandidates('/app', { WORKTRACKCAM_ORCA_BIN: '   ' }, 'win32')
+    expect(c.some((x) => x.source === 'env')).toBe(false)
+    expect(c[0].source).toBe('bundled')
+  })
+
+  it('includes the standard Program Files OrcaSlicer.exe on Windows', () => {
+    const paths = orcaBinaryCandidates('/app', { PROGRAMFILES: 'C:\\Program Files' }, 'win32').map(
+      (x) => x.path,
+    )
+    expect(paths).toContain(join('C:\\Program Files', 'OrcaSlicer', 'OrcaSlicer.exe'))
+  })
+
+  it('uses the .app bundle on macOS and standard bins on linux', () => {
+    const mac = orcaBinaryCandidates('/app', {}, 'darwin').map((x) => x.path)
+    expect(mac).toContain('/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer')
+    const linux = orcaBinaryCandidates('/app', {}, 'linux').map((x) => x.path)
+    expect(linux).toContain('/usr/bin/orca-slicer')
+  })
+
+  it('bundled candidate uses the platform subdir + exe name', () => {
+    const win = orcaBinaryCandidates('/app', {}, 'win32').find((x) => x.source === 'bundled')
+    expect(win?.path).toContain(join('resources', 'orca-slicer', 'win32-x64', 'orca-slicer.exe'))
+    const lin = orcaBinaryCandidates('/app', {}, 'linux').find((x) => x.source === 'bundled')
+    expect(lin?.path).toContain(join('resources', 'orca-slicer', 'linux-x64', 'orca-slicer'))
   })
 })

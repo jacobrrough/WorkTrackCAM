@@ -3,13 +3,18 @@
  *
  * OrcaSlicer (https://github.com/SoftFever/OrcaSlicer) is a maintained fork
  * of PrusaSlicer/SuperSlicer with first-class K2 Plus / Klipper profiles. We
- * bundle the Windows binary under `resources/orca-slicer/win32-x64/` and
  * invoke it as a one-shot subprocess per slice.
  *
- * This module is a pure argument builder + spawn invoker. The actual binary
- * bundling happens at electron-builder time (see package.json `extraResources`)
- * and is NOT yet present in the repo — the wrapper throws a clear error if
- * the binary is missing, so callers know to bundle it before shipping.
+ * Binary resolution (`resolveOrcaInstall`) tries three sources, most specific
+ * first: the `WORKTRACKCAM_ORCA_BIN` env override, the bundled build under
+ * `resources/orca-slicer/<platform>/` (materialized at electron-builder time
+ * via package.json `extraResources`), then a standard system install of
+ * OrcaSlicer 2.3.x. The system-install fallback lets a shop machine that
+ * already has OrcaSlicer installed slice with zero configuration before the
+ * binary is bundled. When none exist the wrapper throws an actionable error
+ * listing every path it checked.
+ *
+ * This module is otherwise a pure argument builder + spawn invoker.
  *
  * CLI history (Safety Rule 1, G-code is sacred -- bad CLI flags ⇒ no slice)
  * -----------------------------------------------------------------------
@@ -91,32 +96,142 @@ export type OrcaSliceResult = {
   exitCode: number | null
 }
 
+/** Where a resolved OrcaSlicer binary came from, most-specific first. */
+export type OrcaResolutionSource = 'env' | 'bundled' | 'system'
+
 export type OrcaResolution = {
   /** Absolute path to the OrcaSlicer CLI binary. */
   binary: string
   /** Directory containing bundled profiles (machine/process/filament). */
   profilesDir: string
+  /** How the binary was located (env override / bundled build / system install). */
+  source: OrcaResolutionSource
+}
+
+export type OrcaBinaryCandidate = {
+  /** Absolute path to a candidate OrcaSlicer binary. */
+  path: string
+  /** Why this path is on the search list. */
+  source: OrcaResolutionSource
 }
 
 /**
- * Resolve where the bundled OrcaSlicer lives relative to the app root.
- * Throws if the binary is not bundled (i.e. development before electron-builder
- * has materialized `resources/orca-slicer/`).
+ * Environment variable that points WorkTrackCAM at a specific OrcaSlicer
+ * binary. Highest-priority resolution source — wins over the bundled build
+ * and any auto-detected system install. Use it when OrcaSlicer is installed
+ * somewhere non-standard, or to pin a specific version for a slice job.
  */
-export function resolveOrcaInstall(appRoot: string): OrcaResolution {
-  const baseDir = join(appRoot, 'resources', 'orca-slicer')
-  const platformDir = process.platform === 'win32' ? 'win32-x64' : process.platform === 'darwin' ? 'darwin-arm64' : 'linux-x64'
-  const binName = process.platform === 'win32' ? 'orca-slicer.exe' : 'orca-slicer'
-  const binary = join(baseDir, platformDir, binName)
-  const profilesDir = join(baseDir, 'profiles')
+export const ORCA_BIN_ENV = 'WORKTRACKCAM_ORCA_BIN'
 
-  if (!existsSync(binary)) {
-    throw new Error(
-      `OrcaSlicer binary not bundled. Expected at ${binary}. ` +
-        `Run the bundle-orca-slicer script (forthcoming) or download manually.`,
-    )
+/** Per-platform directory name under `resources/orca-slicer/`. */
+function bundlePlatformDir(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? 'win32-x64' : platform === 'darwin' ? 'darwin-arm64' : 'linux-x64'
+}
+
+/** Absolute path to the bundled OrcaSlicer binary for this platform. */
+export function bundledOrcaBinaryPath(appRoot: string, platform: NodeJS.Platform = process.platform): string {
+  const binName = platform === 'win32' ? 'orca-slicer.exe' : 'orca-slicer'
+  return join(appRoot, 'resources', 'orca-slicer', bundlePlatformDir(platform), binName)
+}
+
+/**
+ * Standard locations where a user-installed OrcaSlicer 2.3.x lands per
+ * platform. Pure — derives paths from env vars only, no FS access. The
+ * Windows installer ships the CLI-capable exe as `OrcaSlicer.exe` in
+ * `%PROGRAMFILES%\OrcaSlicer\` (the same exe runs headless when handed
+ * `--slice`); the hyphenated `orca-slicer.exe` is also listed because the
+ * portable zip uses that name. Windows path lookup is case-insensitive, so
+ * listing both casings is belt-and-suspenders, not a correctness risk.
+ */
+function systemOrcaInstallPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  if (platform === 'win32') {
+    const out: string[] = []
+    const programFiles = env.PROGRAMFILES ?? 'C:\\Program Files'
+    const programFilesX86 = env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+    const localAppData = env.LOCALAPPDATA
+    for (const base of [programFiles, programFilesX86]) {
+      out.push(join(base, 'OrcaSlicer', 'OrcaSlicer.exe'))
+      out.push(join(base, 'OrcaSlicer', 'orca-slicer.exe'))
+    }
+    if (localAppData) {
+      out.push(join(localAppData, 'Programs', 'OrcaSlicer', 'OrcaSlicer.exe'))
+      out.push(join(localAppData, 'Programs', 'OrcaSlicer', 'orca-slicer.exe'))
+    }
+    return out
   }
-  return { binary, profilesDir }
+  if (platform === 'darwin') {
+    return ['/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer']
+  }
+  return ['/usr/bin/orca-slicer', '/usr/local/bin/orca-slicer', '/opt/OrcaSlicer/orca-slicer']
+}
+
+/**
+ * Build the ordered list of places to look for the OrcaSlicer CLI binary,
+ * most specific first. Pure — no FS access; `resolveOrcaInstall` walks this
+ * list and returns the first entry that actually exists on disk.
+ *
+ * Order:
+ *   1. `WORKTRACKCAM_ORCA_BIN` env override (custom install / CI / version pin)
+ *   2. bundled binary under `resources/orca-slicer/<platform>/` (shipped build)
+ *   3. standard per-platform system install locations (the user's own OrcaSlicer)
+ *
+ * This is what unblocks real-world K2 Plus slicing before the binary is
+ * bundled: a shop machine with OrcaSlicer 2.3.x installed normally is found
+ * via step 3 with zero configuration.
+ */
+export function orcaBinaryCandidates(
+  appRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): OrcaBinaryCandidate[] {
+  const candidates: OrcaBinaryCandidate[] = []
+  const override = env[ORCA_BIN_ENV]
+  if (typeof override === 'string' && override.trim().length > 0) {
+    candidates.push({ path: override.trim(), source: 'env' })
+  }
+  candidates.push({ path: bundledOrcaBinaryPath(appRoot, platform), source: 'bundled' })
+  for (const p of systemOrcaInstallPaths(env, platform)) {
+    candidates.push({ path: p, source: 'system' })
+  }
+  return candidates
+}
+
+/**
+ * Resolve a usable OrcaSlicer binary for the app, preferring (in order) an
+ * explicit env override, the bundled build, then a system install. Throws an
+ * actionable error listing every path checked when none exist.
+ *
+ * `opts` is injectable for deterministic tests (the default reads real
+ * `process.env` / `process.platform` / `existsSync`).
+ */
+export function resolveOrcaInstall(
+  appRoot: string,
+  opts: {
+    env?: NodeJS.ProcessEnv
+    platform?: NodeJS.Platform
+    exists?: (p: string) => boolean
+  } = {},
+): OrcaResolution {
+  const env = opts.env ?? process.env
+  const platform = opts.platform ?? process.platform
+  const exists = opts.exists ?? existsSync
+  const profilesDir = join(appRoot, 'resources', 'orca-slicer', 'profiles')
+
+  const candidates = orcaBinaryCandidates(appRoot, env, platform)
+  for (const candidate of candidates) {
+    if (exists(candidate.path)) {
+      return { binary: candidate.path, profilesDir, source: candidate.source }
+    }
+  }
+
+  const checked = candidates.map((c) => `  - ${c.path} (${c.source})`).join('\n')
+  throw new Error(
+    `OrcaSlicer binary not found. WorkTrackCAM looked in:\n${checked}\n` +
+      `Fix one of: install OrcaSlicer 2.3.x to the default location ` +
+      `(https://github.com/SoftFever/OrcaSlicer/releases), run ` +
+      `scripts/bundle-orca-slicer.ps1 to bundle the CLI, or set ${ORCA_BIN_ENV} ` +
+      `to the full path of orca-slicer(.exe). See docs/REAL-WORLD-TESTING.md.`,
+  )
 }
 
 /**

@@ -25,7 +25,7 @@ import {
 } from '../shared/carvera-zeroing'
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
 import { moonrakerInfo } from './moonraker-info'
-import { runOrcaSlice } from './slicer/orca-wrapper'
+import { runOrcaSlice, resolveOrcaInstall, bundledOrcaBinaryPath } from './slicer/orca-wrapper'
 import type { FdmCapabilityFields, GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
   deleteUserMachine,
@@ -399,24 +399,37 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
   )
 
   /**
-   * Settings-panel helper — reports whether the OrcaSlicer CLI binary is
-   * actually bundled at the expected platform path. Pure existsSync check;
-   * no subprocess spawn. Used by the Real Settings view (Paths subsection)
-   * to render "Bundled" vs "Not bundled" with the script hint.
+   * Settings-panel helper — reports where (if anywhere) WorkTrackCAM can find
+   * an OrcaSlicer CLI binary, using the same resolution the slice path uses
+   * (`resolveOrcaInstall`): WORKTRACKCAM_ORCA_BIN env override → bundled build
+   * → system install. Returns `found` + `resolvedPath` + `source` so the
+   * Settings → Paths panel can show "Found (system install)" instead of a
+   * misleading "Not bundled" when the user already has OrcaSlicer installed.
+   * `bundled` + `expectedPath` are retained for back-compat with the UI.
    */
   ipcMain.handle('slicer:orcaStatus', async () => {
     const appRoot = app.getAppPath()
-    const platformDir =
-      process.platform === 'win32'
-        ? 'win32-x64'
-        : process.platform === 'darwin'
-        ? 'darwin-arm64'
-        : 'linux-x64'
-    const binName = process.platform === 'win32' ? 'orca-slicer.exe' : 'orca-slicer'
-    const expectedPath = join(appRoot, 'resources', 'orca-slicer', platformDir, binName)
-    let bundled = false
-    try { bundled = statSync(expectedPath).isFile() } catch { bundled = false }
-    return { bundled, expectedPath, platform: process.platform }
+    const expectedPath = bundledOrcaBinaryPath(appRoot)
+    try {
+      const r = resolveOrcaInstall(appRoot)
+      return {
+        found: true as const,
+        resolvedPath: r.binary,
+        source: r.source,
+        bundled: r.source === 'bundled',
+        expectedPath,
+        platform: process.platform
+      }
+    } catch {
+      return {
+        found: false as const,
+        resolvedPath: null,
+        source: 'none' as const,
+        bundled: false,
+        expectedPath,
+        platform: process.platform
+      }
+    }
   })
 
   ipcMain.handle(

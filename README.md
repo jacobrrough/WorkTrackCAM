@@ -5,7 +5,7 @@ CNC toolpath generation, 4-axis machining, heightfield strategies, FDM slicing, 
 
 ## Features
 - Advanced CAM: 2D/2.5D/4-axis, waterline, adaptive raster, scallop, voxel removal (OCCT + OpenCAMLib)
-- FDM slicing with Cura defaults + Moonraker push
+- FDM slicing via bundled OrcaSlicer CLI + Moonraker push
 - Real-time 3D viewport (Three.js / React Three Fiber)
 - STL/DXF import, mesh placement, assembly kinematics
 - Machine, tool, material, fixture, and post-processor library
@@ -19,6 +19,12 @@ CNC toolpath generation, 4-axis machining, heightfield strategies, FDM slicing, 
 4. Install Python engine: `pip install -r engines/requirements.txt` (Python ≥ 3.9)
 5. `npm run dev` (development)
 6. `npm run build` (production installer)
+
+## Testing on real machines
+See **[docs/REAL-WORLD-TESTING.md](docs/REAL-WORLD-TESTING.md)** for an
+end-to-end, step-by-step guide to taking a model all the way to a real print
+(K2 Plus) or cut (Laguna Swift, Makera Carvera 3/4-axis), including OrcaSlicer
+setup, Moonraker push, and the mandatory CNC air-cut / dry-run checklist.
 
 ## Development
 - `npm test` + `npm run typecheck` before every change (mandatory per CLAUDE.md)

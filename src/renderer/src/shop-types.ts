@@ -93,11 +93,21 @@ export declare const window: Window & {
       | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
     >
     /**
-     * Pure filesystem check — does the bundled OrcaSlicer binary exist at the
-     * expected platform path? Used by Settings → Paths and any
-     * &quot;is FDM slicing available?&quot; preflight UI. No subprocess spawn.
+     * Where (if anywhere) WorkTrackCAM can find an OrcaSlicer CLI binary,
+     * using the same resolution the slice path uses: env override → bundled
+     * build → system install. `found`/`resolvedPath`/`source` describe the
+     * winning candidate; `bundled`/`expectedPath` are retained for back-compat.
+     * Used by Settings → Paths and any &quot;is FDM slicing available?&quot;
+     * preflight UI. No subprocess spawn.
      */
-    slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
+    slicerOrcaStatus: () => Promise<{
+      found: boolean
+      resolvedPath: string | null
+      source: 'env' | 'bundled' | 'system' | 'none'
+      bundled: boolean
+      expectedPath: string
+      platform: string
+    }>
     toolsRead: (dir: string) => Promise<ToolLibraryFile>
     toolsSave: (dir: string, lib: ToolLibraryFile) => Promise<void>
     toolsImport: (dir: string, payload: { kind: 'csv' | 'json' | 'fusion' | 'fusion_csv'; content: string }) => Promise<ToolLibraryFile>
