@@ -45,14 +45,14 @@ describe('environments/registry', () => {
     expect(ENVIRONMENTS.vcarve_pro.machineIds).toEqual(['laguna-swift-5x10'])
     expect(ENVIRONMENTS.vcarve_pro.defaultMachineId).toBe('laguna-swift-5x10')
     expect(ENVIRONMENTS.vcarve_pro.requiresPython).toBe(true)
-    expect(ENVIRONMENTS.vcarve_pro.requiresCuraEngine).toBe(false)
+    expect(ENVIRONMENTS.vcarve_pro.requiresSlicer).toBe(false)
   })
 
   it('Creality Print routes to creality-k2-plus only', () => {
     expect(ENVIRONMENTS.creality_print.machineIds).toEqual(['creality-k2-plus'])
     expect(ENVIRONMENTS.creality_print.defaultMachineId).toBe('creality-k2-plus')
     expect(ENVIRONMENTS.creality_print.requiresPython).toBe(false)
-    expect(ENVIRONMENTS.creality_print.requiresCuraEngine).toBe(true)
+    expect(ENVIRONMENTS.creality_print.requiresSlicer).toBe(true)
   })
 
   it('Makera CAM routes to both Carvera variants and defaults to 3-axis', () => {

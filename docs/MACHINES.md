@@ -71,7 +71,7 @@ All seven fields are **optional** — absent fields fall back to slicer-definiti
 |---|---|---|---|
 | `maxNozzleTempC` | `350` | positive number, °C | Slicer profile + pre-upload validator ([`gcode-temp-validator.ts`](../src/shared/gcode-temp-validator.ts)). Any `M104`/`M109` target above this rejects the upload. |
 | `maxBedTempC` | `120` | positive number, °C | Slicer profile + pre-upload validator. Any `M140`/`M190` target above this rejects the upload. |
-| `chamberTempC` | `60` | positive number, °C | Slicer profile (sets CuraEngine `machine_heated_build_volume=true` + `build_volume_temperature`) + pre-upload validator for `M141` / Klipper `SET_HEATER_TEMPERATURE HEATER=chamber`. Absent → machine treated as having no heated chamber. |
+| `chamberTempC` | `60` | positive number, °C | Slicer profile (sets OrcaSlicer `support_chamber_temp_control = 1` + `chamber_temperature`, emitted as `build_volume_temperature`) + pre-upload validator for `M141` / Klipper `SET_HEATER_TEMPERATURE HEATER=chamber`. Absent → machine treated as having no heated chamber. |
 | `inputShapingPresets` | `["ZV","MZV","EI","2HUMP_EI","3HUMP_EI"]` | non-empty string[] | Slicer UI preset picker. Each entry must be a non-empty trimmed string. |
 | `rfidFilamentSupport` | `true` | boolean | UI filament picker surface (RFID spool auto-detect). |
 | `cfsMultiColorEnabled` | `true` | boolean | UI multi-extruder / multi-color assignment surface (Creality CFS). |

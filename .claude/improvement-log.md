@@ -16418,3 +16418,35 @@ unblocks real-world K2 Plus printing.
 - **Three-machine impact**: none at runtime -- the removed code had no live callers on any machine path. Reduces post-pivot confusion (no vestigial Cura `-s` machinery implying filament settings flow to a Cura mapper).
 - **Gotchas discovered**: `src/shared/project-schema.ts` still carries PERSISTED Cura settings fields -- `curaEngineExtraSettingsJson`, `curaSliceProfilesJson`, `curaActiveSliceProfileId` (+ `prusaSlicerPath`) -- with doc comments referencing the deleted helpers. These are part of the `.wtcam` / settings schema, so removing them is a **Safety Rule 2 migration** (must not break existing saved projects) -- DEFERRED to a dedicated migration-aware cycle, NOT a string swap.
 - **Next cycle**: cam-engine slot is next in the rotation. OR finish the Cura cleanup with the migration-aware removal of the project-schema Cura fields (`curaEngineExtraSettingsJson` / `curaSliceProfilesJson` / `curaActiveSliceProfileId`): confirm no live readers, add a schema migration that drops them from existing saved projects, then remove. Future (non-cleanup) option: a `filamentToOrcaSettings` mapper IF dynamic filament overrides into `slice:orca` are ever wanted (the orca-wrapper `overrides` field is currently ignored).
+
+
+## Cycles 238-240 -- parallel sub-agent batch: CuraEngine residue cleanup (2026-05-28)
+
+**Mode:** User directed "set up sub agents to keep cycling." Ran 3 improvement cycles IN PARALLEL via isolated-worktree sub-agents, each on a disjoint file tree (no source or improvement-log conflicts), then consolidated centrally onto `claude/happy-northcutt-a92c12`. The sub-agents branched off the pre-session base (`a108f94`), so their per-agent baselines read 13,689; the deltas below are re-verified against THIS branch's actual 13,705 baseline after consolidation.
+
+**Baseline (this branch):** `npm test` -> 13,705 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 238 -- schema: remove dead CuraEngine persisted fields (sub-agent 1)
+- **Focus**: cleanup (Safety Rule 2 migration). `src/shared/project-schema.ts` + `project-schema.test.ts` + `project-settings-cam.test.ts`.
+- Removed 4 dead persisted `appSettings` fields orphaned by the OrcaSlicer pivot -- `curaEngineExtraSettingsJson`, `curaSliceProfilesJson`, `curaActiveSliceProfileId`, `prusaSlicerPath` -- after grep-confirming ZERO live readers/writers (all `Prusa` hits were unrelated foreign-machine ids or PrusaSlicer-style G-code-header parsing). Dropped the 2 now-orphaned `superRefine` validators + fixed a dangling CuraEngine ref in the neighboring `k2QualityPresetId` doc comment.
+- **Safety Rule 2 honored**: `appSettingsSchema` is non-strict `z.object`, so old `settings.json` / `.wtcam` files carrying these keys still parse (Zod strips unknown keys); `settings-store.ts` + `schema-migration.ts` are generic pass-throughs that never name these keys. NEW back-compat regression test feeds all 4 dead keys and asserts they parse to `undefined`. Tests: -10 net (removed dead-field suites; +1 back-compat add).
+
+### Cycle 239 -- environments: rename requiresCuraEngine -> requiresSlicer (sub-agent 2)
+- **Focus**: cleanup. `src/renderer/src/environments/`.
+- Renamed the stale `requiresCuraEngine` boolean field -> `requiresSlicer` (identical semantics) across `registry.ts` (interface + JSDoc + 3 env literals) and its 3 pin/test files, including the key-name pin arrays (`SHOP_ENVIRONMENT_KEYS`, the `keyof ShopEnvironment` required-keys list) that assert against `Object.keys`. Pure mechanical rename; 0 occurrences of `requiresCuraEngine` remain in `src/`. Tests: +0.
+
+### Cycle 240 -- docs: purge stale CuraEngine slicer references (sub-agent 3)
+- **Focus**: docs-and-dx. `docs/`.
+- Fixed stale slicer refs: `docs/MACHINES.md` (K2 `chamberTempC` row now cites the real OrcaSlicer keys `support_chamber_temp_control` / `chamber_temperature` -> emitted `build_volume_temperature`, verified against `resources/orca-slicer/profiles/`), `docs/COMPETITIVE-GAP-ANALYSIS.md` (SettingsView label -> "OrcaSlicer (bundled)"), `docs/SMOKE-K2-MOONRAKER.md` (3 spots: operator now slices in OrcaSlicer with `resources/orca-slicer/profiles/machines/creality-k2-plus.ini`, cross-linked to SLICING.md). Kept accurate pivot-history in `SLICING.md:8` and the generic `;LAYER:` format label in `EDIT-WORKFLOW.md`. (Sub-agent also edited `README.md:8`, but Cycle 233 already fixed that line + added the testing-guide link, so the README change was DROPPED as redundant during consolidation.) Tests: +0.
+
+**Results (consolidated):** `npm test` -> 13,695 passed, 2 skipped (Δ -10, all intentional dead-field-test removal from Cycle 238). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered for any of the 3 -- none touch posts / machine profiles / CAM engine / G-code emission (persisted schema fields, an env field name, and docs prose only).
+
+**Three-machine impact**: **K2 Plus** -- removes the last vestigial CuraEngine persisted settings + corrects the K2 slicing docs to OrcaSlicer. All runtime behavior unchanged (dead code/config + naming + docs only). Laguna + Carvera: untouched.
+
+**Gotchas discovered**: isolated-worktree sub-agents (Agent tool `isolation: "worktree"`) branch off the repo's pre-session base, NOT the current feature-branch HEAD -- their gate baselines (13,689) lag the live branch (13,705), and any file the parent also edited (here `README.md`) overlaps. Consolidation MUST (a) re-verify gates on the real branch and (b) drop agent edits to parent-touched files. Disjoint file-tree assignment kept the other 9 files conflict-free; agents left changes UNCOMMITTED on a base-ref branch, so consolidation was a file-copy (not a git merge).
+
+**Out-of-scope follow-up (flagged by sub-agent 1)**: `appSettingsSchema` still has `curaEnginePath`, `curaDefinitionsPath`, `curaMachineDefinitionPath`, `curaSlicePreset` -- audit each for a live OrcaSlicer reader (some path fields may be repurposable) before removing.
+
+**Next cycle**: cam-engine slot in the rotation, OR the flagged `cura*` path-settings audit (migration-aware, same pattern as Cycle 238).

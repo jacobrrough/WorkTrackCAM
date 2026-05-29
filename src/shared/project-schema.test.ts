@@ -234,41 +234,6 @@ describe('appSettingsSchema', () => {
     }
   })
 
-  it('validates curaEngineExtraSettingsJson is a JSON object', () => {
-    const good = appSettingsSchema.parse({
-      curaEngineExtraSettingsJson: '{"infill_pattern":"grid"}'
-    })
-    expect(good.curaEngineExtraSettingsJson).toBe('{"infill_pattern":"grid"}')
-  })
-
-  it('rejects curaEngineExtraSettingsJson that is not a JSON object', () => {
-    expect(() =>
-      appSettingsSchema.parse({ curaEngineExtraSettingsJson: '"just a string"' })
-    ).toThrow()
-    expect(() =>
-      appSettingsSchema.parse({ curaEngineExtraSettingsJson: '[1,2,3]' })
-    ).toThrow()
-    expect(() =>
-      appSettingsSchema.parse({ curaEngineExtraSettingsJson: 'not json' })
-    ).toThrow()
-  })
-
-  it('validates curaSliceProfilesJson is a JSON array', () => {
-    const good = appSettingsSchema.parse({
-      curaSliceProfilesJson: '[{"id":"pla","label":"PLA"}]'
-    })
-    expect(good.curaSliceProfilesJson).toBe('[{"id":"pla","label":"PLA"}]')
-  })
-
-  it('rejects curaSliceProfilesJson that is not a JSON array', () => {
-    expect(() =>
-      appSettingsSchema.parse({ curaSliceProfilesJson: '{"not":"an array"}' })
-    ).toThrow()
-    expect(() =>
-      appSettingsSchema.parse({ curaSliceProfilesJson: 'invalid' })
-    ).toThrow()
-  })
-
   it('validates carveraCliExtraArgsJson is a JSON array', () => {
     const good = appSettingsSchema.parse({
       carveraCliExtraArgsJson: '["-m","carvera_cli"]'

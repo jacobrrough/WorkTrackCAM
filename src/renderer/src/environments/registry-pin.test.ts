@@ -13,11 +13,11 @@
  * The existing behavioral file `registry.test.ts` covers happy-path lookups;
  * this pin file extends coverage to lock the CONTRACT surface that callers,
  * splash card layout, brand-bar theming, jobs-storage keys, and Python /
- * CuraEngine requirement gates depend on -- module shape, type-guard
+ * slicer requirement gates depend on -- module shape, type-guard
  * exhaustivity, the 3-environment cap (no foreign environments), the
  * machineId -> environment routing invariant, the `MAKERA_CAM_OPS` =
  * `MAKERA_3AXIS_OPS` ⊕ 4-axis-HD-superset invariant, the localStorage key
- * uniqueness invariant, and the per-environment Python/CuraEngine flags.
+ * uniqueness invariant, and the per-environment Python/slicer flags.
  *
  * Three-machine relevance:
  *   - **Laguna Swift 5x10** (DIRECT): registered as the only `vcarve_pro`
@@ -26,7 +26,7 @@
  *     2D/2.5D Laguna sweet spot.
  *   - **Creality K2 Plus** (DIRECT): registered as the only `creality_print`
  *     machine; ops set is `fdm_slice / export_stl` only; flagged as
- *     `requiresCuraEngine: true` so the splash gates CuraEngine availability.
+ *     `requiresSlicer: true` so the splash gates slicer availability.
  *   - **Makera Carvera 3-axis + 4-axis HD** (DIRECT): both registered under
  *     `makera_cam`; default is the 3-axis variant; the 4-axis ops superset
  *     adds `cnc_4axis_{roughing,finishing,contour,indexed}` to the 3-axis
@@ -80,7 +80,7 @@ const SHOP_ENVIRONMENT_KEYS = [
   'availableOpKinds',
   'jobsStorageKey',
   'requiresPython',
-  'requiresCuraEngine'
+  'requiresSlicer'
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -397,17 +397,17 @@ describe('F. availableOpKinds wiring per environment', () => {
 // ---------------------------------------------------------------------------
 // G. Python + CuraEngine requirement flags
 // ---------------------------------------------------------------------------
-describe('G. Python + CuraEngine requirement flags', () => {
+describe('G. Python + slicer requirement flags', () => {
   it('vcarve_pro requires Python (toolpath kernel for CNC)', () => {
     expect(ENVIRONMENTS.vcarve_pro.requiresPython).toBe(true)
   })
 
-  it('vcarve_pro does NOT require CuraEngine (CNC, no FDM)', () => {
-    expect(ENVIRONMENTS.vcarve_pro.requiresCuraEngine).toBe(false)
+  it('vcarve_pro does NOT require a slicer (CNC, no FDM)', () => {
+    expect(ENVIRONMENTS.vcarve_pro.requiresSlicer).toBe(false)
   })
 
-  it('creality_print requires CuraEngine (FDM slicing)', () => {
-    expect(ENVIRONMENTS.creality_print.requiresCuraEngine).toBe(true)
+  it('creality_print requires a slicer (FDM slicing)', () => {
+    expect(ENVIRONMENTS.creality_print.requiresSlicer).toBe(true)
   })
 
   it('creality_print does NOT require Python (FDM workflow bypasses kernel)', () => {
@@ -418,8 +418,8 @@ describe('G. Python + CuraEngine requirement flags', () => {
     expect(ENVIRONMENTS.makera_cam.requiresPython).toBe(true)
   })
 
-  it('makera_cam does NOT require CuraEngine (CNC, no FDM)', () => {
-    expect(ENVIRONMENTS.makera_cam.requiresCuraEngine).toBe(false)
+  it('makera_cam does NOT require a slicer (CNC, no FDM)', () => {
+    expect(ENVIRONMENTS.makera_cam.requiresSlicer).toBe(false)
   })
 
   it('every CNC env requires Python; the FDM env does not', () => {
@@ -428,15 +428,15 @@ describe('G. Python + CuraEngine requirement flags', () => {
     expect(ENVIRONMENTS.creality_print.requiresPython).toBe(false)
   })
 
-  it('exactly one env requires CuraEngine (the FDM env)', () => {
-    const curaEnvs = ENVIRONMENT_LIST.filter((e) => e.requiresCuraEngine)
-    expect(curaEnvs).toHaveLength(1)
-    expect(curaEnvs[0]!.id).toBe('creality_print')
+  it('exactly one env requires a slicer (the FDM env)', () => {
+    const slicerEnvs = ENVIRONMENT_LIST.filter((e) => e.requiresSlicer)
+    expect(slicerEnvs).toHaveLength(1)
+    expect(slicerEnvs[0]!.id).toBe('creality_print')
   })
 
-  it('no env requires both Python AND CuraEngine simultaneously', () => {
+  it('no env requires both Python AND a slicer simultaneously', () => {
     for (const env of ENVIRONMENT_LIST) {
-      expect(env.requiresPython && env.requiresCuraEngine).toBe(false)
+      expect(env.requiresPython && env.requiresSlicer).toBe(false)
     }
   })
 })
@@ -690,7 +690,7 @@ describe('M. Type-level parity', () => {
       availableOpKinds: VCARVE_PRO_OPS,
       jobsStorageKey: 'fab-jobs-vcarve-v1',
       requiresPython: true,
-      requiresCuraEngine: false
+      requiresSlicer: false
     }
     expect(env.id).toBe('vcarve_pro')
   })

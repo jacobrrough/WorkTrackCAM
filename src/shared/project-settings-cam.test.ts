@@ -4,47 +4,6 @@ import { appSettingsSchema } from './project-schema'
 const baseSettings = { theme: 'dark' as const, recentProjectPaths: [] as string[] }
 
 describe('appSettingsSchema JSON field validation', () => {
-  it('accepts valid curaEngineExtraSettingsJson object string', () => {
-    const parsed = appSettingsSchema.parse({
-      ...baseSettings,
-      curaEngineExtraSettingsJson: '{"infill_pattern":"grid","material_print_temperature":"210"}'
-    })
-    expect(parsed.curaEngineExtraSettingsJson).toBe('{"infill_pattern":"grid","material_print_temperature":"210"}')
-  })
-
-  it('rejects curaEngineExtraSettingsJson that is not a JSON object', () => {
-    expect(() =>
-      appSettingsSchema.parse({ ...baseSettings, curaEngineExtraSettingsJson: '[1,2,3]' })
-    ).toThrow()
-    expect(() =>
-      appSettingsSchema.parse({ ...baseSettings, curaEngineExtraSettingsJson: '"just a string"' })
-    ).toThrow()
-  })
-
-  it('rejects curaEngineExtraSettingsJson that is malformed JSON', () => {
-    expect(() =>
-      appSettingsSchema.parse({ ...baseSettings, curaEngineExtraSettingsJson: '{invalid json}' })
-    ).toThrow()
-  })
-
-  it('accepts valid curaSliceProfilesJson array string', () => {
-    const profilesJson = '[{"id":"pla","label":"PLA","basePreset":"balanced","settingsJson":"{}"}]'
-    const parsed = appSettingsSchema.parse({ ...baseSettings, curaSliceProfilesJson: profilesJson })
-    expect(parsed.curaSliceProfilesJson).toBe(profilesJson)
-  })
-
-  it('rejects curaSliceProfilesJson that is not a JSON array', () => {
-    expect(() =>
-      appSettingsSchema.parse({ ...baseSettings, curaSliceProfilesJson: '{"not":"an array"}' })
-    ).toThrow()
-  })
-
-  it('rejects curaSliceProfilesJson that is malformed JSON', () => {
-    expect(() =>
-      appSettingsSchema.parse({ ...baseSettings, curaSliceProfilesJson: '[{broken' })
-    ).toThrow()
-  })
-
   it('accepts valid carveraCliExtraArgsJson array string', () => {
     const parsed = appSettingsSchema.parse({
       ...baseSettings,
@@ -65,21 +24,32 @@ describe('appSettingsSchema JSON field validation', () => {
     ).toThrow()
   })
 
-  it('accepts settings with all three JSON fields absent (all optional)', () => {
+  it('accepts settings with the carveraCliExtraArgsJson field absent (optional)', () => {
     const parsed = appSettingsSchema.parse(baseSettings)
-    expect(parsed.curaEngineExtraSettingsJson).toBeUndefined()
-    expect(parsed.curaSliceProfilesJson).toBeUndefined()
     expect(parsed.carveraCliExtraArgsJson).toBeUndefined()
   })
 
-  it('accepts empty JSON object for curaEngineExtraSettingsJson', () => {
-    const parsed = appSettingsSchema.parse({ ...baseSettings, curaEngineExtraSettingsJson: '{}' })
-    expect(parsed.curaEngineExtraSettingsJson).toBe('{}')
+  it('accepts empty JSON array for carveraCliExtraArgsJson', () => {
+    const parsed = appSettingsSchema.parse({ ...baseSettings, carveraCliExtraArgsJson: '[]' })
+    expect(parsed.carveraCliExtraArgsJson).toBe('[]')
   })
 
-  it('accepts empty JSON array for curaSliceProfilesJson', () => {
-    const parsed = appSettingsSchema.parse({ ...baseSettings, curaSliceProfilesJson: '[]' })
-    expect(parsed.curaSliceProfilesJson).toBe('[]')
+  it('strips legacy CuraEngine slicer settings keys from old saved settings', () => {
+    // The CuraEngine slicing path was removed in the 2026-05-27 OrcaSlicer pivot.
+    // appSettingsSchema is a plain (non-strict) z.object, so old settings.json /
+    // .wtcam files carrying these dead keys still parse — Zod strips them rather
+    // than erroring. This pins the saved-project back-compat contract.
+    const parsed = appSettingsSchema.parse({
+      ...baseSettings,
+      curaEngineExtraSettingsJson: '{"infill_pattern":"grid"}',
+      curaSliceProfilesJson: '[{"id":"pla"}]',
+      curaActiveSliceProfileId: 'pla',
+      prusaSlicerPath: '/usr/bin/prusa-slicer'
+    } as Record<string, unknown>) as Record<string, unknown>
+    expect(parsed.curaEngineExtraSettingsJson).toBeUndefined()
+    expect(parsed.curaSliceProfilesJson).toBeUndefined()
+    expect(parsed.curaActiveSliceProfileId).toBeUndefined()
+    expect(parsed.prusaSlicerPath).toBeUndefined()
   })
 })
 

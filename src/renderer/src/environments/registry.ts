@@ -41,8 +41,8 @@ export interface ShopEnvironment {
   readonly jobsStorageKey: string
   /** True when the Python toolpath kernel is required for the env's primary workflow. */
   readonly requiresPython: boolean
-  /** True when CuraEngine is required for the env's primary workflow. */
-  readonly requiresCuraEngine: boolean
+  /** True when a slicer binary is required for the env's primary workflow. */
+  readonly requiresSlicer: boolean
 }
 
 // ── Per-environment op kinds ────────────────────────────────────────────────
@@ -102,7 +102,7 @@ const VCARVE_PRO_ENV: ShopEnvironment = {
   availableOpKinds: VCARVE_PRO_OPS,
   jobsStorageKey: 'fab-jobs-vcarve-v1',
   requiresPython: true,
-  requiresCuraEngine: false
+  requiresSlicer: false
 }
 
 const CREALITY_PRINT_ENV: ShopEnvironment = {
@@ -116,7 +116,7 @@ const CREALITY_PRINT_ENV: ShopEnvironment = {
   availableOpKinds: CREALITY_PRINT_OPS,
   jobsStorageKey: 'fab-jobs-creality-v1',
   requiresPython: false,
-  requiresCuraEngine: true
+  requiresSlicer: true
 }
 
 const MAKERA_CAM_ENV: ShopEnvironment = {
@@ -130,7 +130,7 @@ const MAKERA_CAM_ENV: ShopEnvironment = {
   availableOpKinds: MAKERA_CAM_OPS,
   jobsStorageKey: 'fab-jobs-makera-v1',
   requiresPython: true,
-  requiresCuraEngine: false
+  requiresSlicer: false
 }
 
 /** Lookup map keyed by environment ID. */
