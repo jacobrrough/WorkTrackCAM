@@ -76,6 +76,47 @@ describe('parsePrinterInfoBody', () => {
     })
     expect(parsePrinterInfoBody(body)).toEqual({})
   })
+
+  it('returns empty object when result is explicitly null', () => {
+    // `typeof null === 'object'`, so the parser must special-case null
+    // before treating `result` as a record. A regression here would
+    // throw on `result['hostname']`.
+    expect(parsePrinterInfoBody('{"result":null}')).toEqual({})
+  })
+
+  it('returns empty object when result is a non-record (array)', () => {
+    // Arrays are `typeof 'object'` and pass the null/object guard, but
+    // carry none of the expected string fields, so every field degrades
+    // to undefined and the result is empty.
+    expect(parsePrinterInfoBody('{"result":[1,2,3]}')).toEqual({})
+  })
+
+  it('returns empty object when the top-level body is a JSON array', () => {
+    // A bare array has no `.result`, so the optional-chain yields
+    // undefined and we bail with an empty object (no throw).
+    expect(parsePrinterInfoBody('[1,2,3]')).toEqual({})
+  })
+
+  it('returns hostname/firmware even when state is absent', () => {
+    // The empty-parse guard in moonrakerInfo() keys off all three
+    // fields; a body with only hostname + firmware must still surface
+    // both (state stays undefined).
+    const body = JSON.stringify({
+      result: { hostname: 'k2plus', software_version: 'v0.13.0' }
+    })
+    expect(parsePrinterInfoBody(body)).toEqual({
+      hostname: 'k2plus',
+      firmwareVersion: 'v0.13.0'
+    })
+  })
+
+  it('returns only state when hostname + firmware are absent', () => {
+    // Mirror of the above: a state-only info body is enough to pass the
+    // probe's "is this Moonraker JSON" sniff.
+    expect(parsePrinterInfoBody('{"result":{"state":"startup"}}')).toEqual({
+      state: 'startup'
+    })
+  })
 })
 
 describe('parsePrinterHeatersBody', () => {
@@ -138,6 +179,55 @@ describe('parsePrinterHeatersBody', () => {
       result: { status: { extruder: null } }
     })
     expect(parsePrinterHeatersBody(body)).toEqual({})
+  })
+
+  it('returns empty object when status is explicitly null', () => {
+    // `typeof null === 'object'`; the parser must guard null before
+    // indexing `status['extruder']`.
+    expect(parsePrinterHeatersBody('{"result":{"status":null}}')).toEqual({})
+  })
+
+  it('returns empty object when status is a non-record (array)', () => {
+    // An array status passes the null/object guard but has no named
+    // heater keys, so both heaters degrade to undefined.
+    expect(parsePrinterHeatersBody('{"result":{"status":[]}}')).toEqual({})
+  })
+
+  it('returns empty object for an empty body string', () => {
+    expect(parsePrinterHeatersBody('')).toEqual({})
+  })
+
+  it('drops a heater present but carrying no temperature/target fields', () => {
+    // A heater object that exists but reports neither field collapses to
+    // undefined (extractHeaterTemps) and is omitted entirely.
+    const body = JSON.stringify({
+      result: { status: { extruder: {}, heater_bed: { temperature: 30 } } }
+    })
+    expect(parsePrinterHeatersBody(body)).toEqual({
+      bed: { presentC: 30 }
+    })
+  })
+
+  it('preserves a heater with only the target field present', () => {
+    // Complementary to the temperature-only case already covered: a
+    // commanded set-point with no live reading must still surface.
+    const body = JSON.stringify({
+      result: { status: { extruder: { target: 215 } } }
+    })
+    expect(parsePrinterHeatersBody(body)).toEqual({
+      nozzle: { targetC: 215 }
+    })
+  })
+
+  it('ignores a non-number target while keeping a valid temperature', () => {
+    // Field-level degradation is independent: a bogus target is dropped
+    // but the numeric temperature is retained.
+    const body = JSON.stringify({
+      result: { status: { heater_bed: { temperature: 45.2, target: null } } }
+    })
+    expect(parsePrinterHeatersBody(body)).toEqual({
+      bed: { presentC: 45.2 }
+    })
   })
 })
 
@@ -348,5 +438,81 @@ describe('moonrakerInfo full round-trip (mocked server)', () => {
       expect(p.startsWith('//')).toBe(false)
     }
     expect(seenPaths).toContain('/printer/info')
+  })
+
+  it('queries the heaters endpoint with the exact extruder + heater_bed query string', async () => {
+    // Locks the heater query path so a future refactor of the query
+    // builder can't silently drop a heater object from the request.
+    const seenPaths: string[] = []
+    const result = await withMockServer(
+      (req, res) => {
+        seenPaths.push(req.url ?? '')
+        res.setHeader('Content-Type', 'application/json')
+        res.statusCode = 200
+        if (req.url === '/printer/info') {
+          res.end(
+            JSON.stringify({
+              result: { state: 'ready', hostname: 'k2plus', software_version: 'v1' }
+            })
+          )
+        } else {
+          res.end(JSON.stringify({ result: { status: {} } }))
+        }
+      },
+      (baseUrl) => moonrakerInfo(baseUrl, 3_000)
+    )
+    expect(result.ok).toBe(true)
+    expect(seenPaths).toContain('/printer/objects/query?extruder&heater_bed')
+  })
+
+  it('treats a state-only /printer/info body as a valid (ok:true) probe', async () => {
+    // Klipper during startup reports state but not yet hostname/version.
+    // The empty-parse guard keys off all three fields, so a state-only
+    // reply must NOT be misread as a captive-portal failure.
+    const result = await withMockServer(
+      (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.statusCode = 200
+        if (req.url === '/printer/info') {
+          res.end(JSON.stringify({ result: { state: 'startup' } }))
+        } else {
+          res.end(JSON.stringify({ result: { status: {} } }))
+        }
+      },
+      (baseUrl) => moonrakerInfo(baseUrl, 3_000)
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.state).toBe('startup')
+      expect(result.hostname).toBeUndefined()
+      expect(result.firmwareVersion).toBeUndefined()
+    }
+  })
+
+  it('omits heater fields when the heaters endpoint returns 200 with empty status', async () => {
+    // A 200 + valid-but-empty heater payload must still yield ok:true
+    // with bed/nozzle absent (partial degradation, not failure).
+    const result = await withMockServer(
+      (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.statusCode = 200
+        if (req.url === '/printer/info') {
+          res.end(
+            JSON.stringify({
+              result: { state: 'ready', hostname: 'k2plus', software_version: 'v2' }
+            })
+          )
+        } else {
+          res.end(JSON.stringify({ result: { status: {} } }))
+        }
+      },
+      (baseUrl) => moonrakerInfo(baseUrl, 3_000)
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.hostname).toBe('k2plus')
+      expect(result.bed).toBeUndefined()
+      expect(result.nozzle).toBeUndefined()
+    }
   })
 })
