@@ -894,7 +894,7 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'manufacture',
     'partial',
     'ADDITIVE',
-    'Utilities → Slice + optional extra `-s` JSON + named profiles (`mergeCuraSliceInvocationSettings`); optional machine definition `-j` path in Settings; Slice tab layer summary from `;LAYER` / `;LAYER_COUNT` in G-code; Manufacture `fdm_slice` → Slice with CuraEngine uses `sourceMesh` + same merged settings'
+    'Utilities → Slice, or Manufacture `fdm_slice` → Slice with OrcaSlicer (uses `sourceMesh` + the filament and K2 quality preset from Settings); Slice-tab layer summary from `;LAYER` / `;LAYER_COUNT` in the sliced G-code'
   ),
   c(
     'mf_simulate',

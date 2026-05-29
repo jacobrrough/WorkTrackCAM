@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import {
   filamentLibrarySchema,
   filamentRecordSchema,
-  filamentToCuraSettings,
   FILAMENT_TYPE_LABELS,
   filamentTypeEnum,
   type FilamentRecord
@@ -71,89 +70,6 @@ describe('filament-schema', () => {
         expect(f.printSettings.fanSpeedPercent).toBeGreaterThanOrEqual(0)
         expect(f.printSettings.fanSpeedPercent).toBeLessThanOrEqual(100)
       }
-    })
-  })
-
-  describe('filamentToCuraSettings', () => {
-    const pla: FilamentRecord = {
-      id: 'test-pla',
-      name: 'Test PLA',
-      type: 'PLA',
-      diameterMm: 1.75,
-      printSettings: {
-        nozzleTempC: 215,
-        bedTempC: 60,
-        chamberTempC: 35,
-        fanSpeedPercent: 100,
-        retractionMm: 0.5,
-        retractionSpeedMmPerSec: 40
-      }
-    }
-
-    it('maps nozzle temp to material_print_temperature', () => {
-      const m = filamentToCuraSettings(pla)
-      expect(m.get('material_print_temperature')).toBe('215')
-    })
-
-    it('maps bed temp to material_bed_temperature', () => {
-      const m = filamentToCuraSettings(pla)
-      expect(m.get('material_bed_temperature')).toBe('60')
-    })
-
-    it('maps chamber temp to build_volume_temperature', () => {
-      const m = filamentToCuraSettings(pla)
-      expect(m.get('build_volume_temperature')).toBe('35')
-    })
-
-    it('maps fan speed to cool_fan_speed', () => {
-      const m = filamentToCuraSettings(pla)
-      expect(m.get('cool_fan_speed')).toBe('100')
-    })
-
-    it('maps retraction to retraction_amount and retraction_speed', () => {
-      const m = filamentToCuraSettings(pla)
-      expect(m.get('retraction_amount')).toBe('0.5')
-      expect(m.get('retraction_speed')).toBe('40')
-    })
-
-    it('omits optional keys when not set', () => {
-      const minimal: FilamentRecord = {
-        id: 'min',
-        name: 'Minimal',
-        type: 'PLA',
-        diameterMm: 1.75,
-        printSettings: {
-          nozzleTempC: 200,
-          bedTempC: 50,
-          fanSpeedPercent: 100
-        }
-      }
-      const m = filamentToCuraSettings(minimal)
-      expect(m.has('build_volume_temperature')).toBe(false)
-      expect(m.has('retraction_amount')).toBe(false)
-      expect(m.has('retraction_speed')).toBe(false)
-      expect(m.has('cool_fan_speed_0')).toBe(false)
-    })
-
-    it('includes first-layer overrides when set', () => {
-      const abs: FilamentRecord = {
-        id: 'abs',
-        name: 'ABS',
-        type: 'ABS',
-        diameterMm: 1.75,
-        printSettings: {
-          nozzleTempC: 250,
-          nozzleTempFirstLayerC: 255,
-          bedTempC: 100,
-          bedTempFirstLayerC: 105,
-          fanSpeedPercent: 30,
-          fanSpeedFirstLayerPercent: 0
-        }
-      }
-      const m = filamentToCuraSettings(abs)
-      expect(m.get('material_print_temperature_layer_0')).toBe('255')
-      expect(m.get('material_bed_temperature_layer_0')).toBe('105')
-      expect(m.get('cool_fan_speed_0')).toBe('0')
     })
   })
 
