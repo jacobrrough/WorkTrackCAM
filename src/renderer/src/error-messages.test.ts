@@ -117,15 +117,21 @@ describe('error-messages', () => {
       expect(r!.title).toMatch(/network timeout/i)
     })
 
-    // ── CuraEngine ──────────────────────────────────────────────────────────
-    it('matches CuraEngine not found', () => {
-      const r = toFriendlyError('ENOENT: CuraEngine not found')
+    // ── OrcaSlicer ────────────────────────────────────────────────────────────
+    it('matches OrcaSlicer not found', () => {
+      const r = toFriendlyError('OrcaSlicer binary not found. WorkTrackCAM looked in: ...')
       expect(r).not.toBeNull()
-      expect(r!.title).toMatch(/curaengine not found/i)
+      expect(r!.title).toMatch(/orcaslicer not found/i)
     })
 
-    it('matches cura crash', () => {
-      const r = toFriendlyError('CuraEngine error: slice failed')
+    it('matches orca_unavailable', () => {
+      const r = toFriendlyError('orca_unavailable')
+      expect(r).not.toBeNull()
+      expect(r!.title).toMatch(/orcaslicer not found/i)
+    })
+
+    it('matches orca slice failure', () => {
+      const r = toFriendlyError('orca_slice_failed: slice failed')
       expect(r).not.toBeNull()
       expect(r!.title).toMatch(/slicer failed/i)
     })

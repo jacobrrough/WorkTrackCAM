@@ -53,7 +53,7 @@ const OPERATIONS: { kind: string; name: string; description: string }[] = [
   { kind: 'cnc_4axis_finishing', name: '4-Axis Finishing',  description: 'Rotary finishing pass for smooth surface quality on 4-axis parts.' },
   { kind: 'cnc_4axis_contour',   name: '4-Axis Contour',   description: 'Profile cutting around rotary stock. Follows the part outline while rotating.' },
   { kind: 'cnc_4axis_indexed',   name: '4-Axis Indexed',   description: 'Machines at fixed rotary angles (e.g., 0/90/180/270). Combines 3-axis cutting at multiple orientations.' },
-  { kind: 'fdm_slice',           name: 'FDM Slice',        description: 'Slices the model into layers for FDM 3D printing. Uses CuraEngine with configurable presets.' },
+  { kind: 'fdm_slice',           name: 'FDM Slice',        description: 'Slices the model into layers for FDM 3D printing. Uses OrcaSlicer with configurable presets.' },
   { kind: 'export_stl',          name: 'Export STL',        description: 'Exports the staged STL model to a file. No machining parameters required.' },
 ]
 
