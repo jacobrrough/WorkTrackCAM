@@ -46,15 +46,6 @@ export type ProjectFile = z.infer<typeof projectSchema>
 
 export const appSettingsSchema = z.object({
   curaEnginePath: z.string().optional(),
-  /** Directory containing Cura `definitions` (fdmprinter.def.json) */
-  curaDefinitionsPath: z.string().optional(),
-  /**
-   * Optional path to a machine `.def.json` passed as CuraEngine `-j` (overrides bundled
-   * `resources/slicer/creality_k2_plus.def.json` when non-empty).
-   */
-  curaMachineDefinitionPath: z.string().optional(),
-  /** CuraEngine `-s` bundle for `buildCuraSliceArgs` (see `cura-slice-defaults.ts`). */
-  curaSlicePreset: z.enum(['balanced', 'draft', 'fine']).optional(),
   /**
    * Creality K2 Plus quality preset id ('standard' | 'high_speed').
    * Consumed by `runFdmSliceFromOp` in the Manufacture workspace and threaded

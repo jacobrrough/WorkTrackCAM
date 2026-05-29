@@ -218,14 +218,35 @@ describe('appSettingsSchema', () => {
     expect(result.hasCompletedOnboarding).toBeUndefined()
   })
 
-  it('accepts valid curaSlicePreset values', () => {
-    expect(appSettingsSchema.parse({ curaSlicePreset: 'balanced' }).curaSlicePreset).toBe('balanced')
-    expect(appSettingsSchema.parse({ curaSlicePreset: 'draft' }).curaSlicePreset).toBe('draft')
-    expect(appSettingsSchema.parse({ curaSlicePreset: 'fine' }).curaSlicePreset).toBe('fine')
+  // ── Post-OrcaSlicer-pivot dead-key back-compat ───────────────────────────
+  // The 2026-05-27 pivot dropped CuraEngine. These legacy Cura-path keys were
+  // removed from appSettingsSchema after confirming no live reader/writer.
+  // appSettingsSchema is a non-strict z.object, so old settings.json /
+  // .wtcam files that still carry these keys MUST continue to parse — Zod
+  // strips the unknown keys (SAFETY RULE 2: never break existing saved
+  // projects/settings). This test pins that the removed keys parse away to
+  // undefined rather than throwing.
+  it('strips legacy CuraEngine slicer settings keys (back-compat)', () => {
+    const legacy = {
+      theme: 'dark' as const,
+      curaDefinitionsPath: '/opt/cura/definitions',
+      curaMachineDefinitionPath: '/opt/cura/creality_k2_plus.def.json',
+      curaSlicePreset: 'balanced'
+    }
+    const parsed = appSettingsSchema.parse(legacy) as Record<string, unknown>
+    // Surviving field still parses normally.
+    expect((parsed as AppSettings).theme).toBe('dark')
+    // Removed keys are stripped (non-strict object → unknown keys dropped).
+    expect(parsed.curaDefinitionsPath).toBeUndefined()
+    expect(parsed.curaMachineDefinitionPath).toBeUndefined()
+    expect(parsed.curaSlicePreset).toBeUndefined()
   })
 
-  it('rejects invalid curaSlicePreset values', () => {
-    expect(() => appSettingsSchema.parse({ curaSlicePreset: 'ultra' })).toThrow()
+  it('does not throw on a removed curaSlicePreset value that was previously invalid', () => {
+    // 'ultra' was rejected while curaSlicePreset was an enum field; now that the
+    // field is gone it is just an unknown key and must be stripped, not thrown on.
+    const parsed = appSettingsSchema.parse({ curaSlicePreset: 'ultra' }) as Record<string, unknown>
+    expect(parsed.curaSlicePreset).toBeUndefined()
   })
 
   it('accepts valid camDefaultMachineDialect values', () => {
