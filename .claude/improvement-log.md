@@ -16480,3 +16480,32 @@ unblocks real-world K2 Plus printing.
 **Out-of-scope follow-up (flagged by sub-agent A)**: `manufacture-readiness.ts` still gates on the (live) `curaEnginePath` with CuraEngine-specific wording ("CuraEngine path is not set") + a `settings_cura_missing` issue id -- stale relative to OrcaSlicer. Reword in a dedicated cycle (the field STAYS; only the message + possibly the issue id changes -- first confirm the issue id isn't a pinned contract).
 
 **Next cycle**: cam-engine slot in the rotation, OR the `manufacture-readiness.ts` OrcaSlicer-wording reword above.
+
+
+## Cycles 243-245 -- parallel sub-agent wave 3: readiness reword + spawn/upload coverage (2026-05-29)
+
+**Mode:** Third parallel sub-agent wave ("keep cycling"). 3 isolated-worktree agents on disjoint, parent-UNTOUCHED files -> all 3 cherry-picks were CONFLICT-FREE (vs wave-2's one comment conflict). Consolidated onto `claude/happy-northcutt-a92c12`; gates re-verified centrally.
+
+**Baseline (this branch):** `npm test` -> 13,709 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 243 -- readiness message: CuraEngine -> OrcaSlicer (sub-agent A)
+- **Focus**: cleanup. `src/shared/manufacture-readiness.ts` + its pin test.
+- Reworded the `settings_cura_missing` FDM slice-readiness warning "CuraEngine path is not set" -> "OrcaSlicer path is not set (required for slicing)." KEPT the `settings_cura_missing` issue id (pinned in `manufacture-readiness-pin.test.ts` `EXPECTED_ISSUE_IDS` + a source-text assertion, and referenced in the improvement-log) and the live `curaEnginePath` setting key + the internal `hasCura` -- message-only change, no contract drift. Synced the pin test assertion + header comment. +0 tests.
+
+### Cycle 244 -- test-coverage: moonraker-push advisory warnings (sub-agent B)
+- **Focus**: test-coverage. NEW `src/main/moonraker-push-coverage.test.ts` (test-only; production untouched -- no bug).
+- +6 tests closing the gap on `moonrakerPush`'s advisory `warnings[]` + `headerHealth` assembly (the pure parsers were already saturated by the 4 existing suites): the Klipper power-loss-recovery + adaptive-probing warning branches, the partial-missing-fields advisory (with the `thumbnail`-excluded filter), the all-4-missing no-nag suppression for raw CNC G-code, warnings+headerHealth threading onto the `startAfterUpload:true` success result, and the zero-warning clean-K2 path (warnings key omitted, not empty array). Driven via the shared `moonraker-fake` mock + `mkdtemp` fixtures.
+
+### Cycle 245 -- test-coverage: subprocess-bounded spawn primitive (sub-agent C)
+- **Focus**: test-coverage. `src/main/subprocess-bounded.test.ts` (test-only; production untouched -- no bug).
+- +8 tests for `spawnBounded` / `spawnBoundedWithLineCallback` -- the bounded-spawn safety primitive behind the OrcaSlicer CLI + the Python CAD/CAM sidecar: non-zero exit-code surfaced via resolve (diagnostics preserved), independent stderr capture, the combined stdout+stderr `maxBufferBytes` cap killing a stderr-flooding child, the ENOENT spawn-failure reject path, the `timeoutMs:null` no-timer branch, and the line-callback variant's own cap + timeout. Children invoke `process.execPath -e` for Win/Linux portability. Read confirmed the `finish()` settle-once guard correctly handles the Windows ENOENT error+close double-event race -- no production change.
+
+**Results (consolidated):** `npm test` -> 13,722 passed, 2 skipped, ZERO failed (Δ +13 vs 13,709). The two coverage cycles add +14 (Cycle 244 +6, Cycle 245 +8; Cycle 243 +0), confirmed by focused per-file runs (moonraker-push-coverage 6/6; subprocess-bounded 10->18); the net +13 reflects a known +-1 `fast-check` property-test registration wobble in the 343-file suite (not a failure, not caused by this wave). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered (a readiness-message string + two test-only cycles; no posts / machine profiles / CAM engine / emit code).
+
+**Three-machine impact**: **K2 Plus** -- the slice-readiness warning now names OrcaSlicer; the Moonraker upload advisory logic + the bounded-spawn primitive (which runs the OrcaSlicer CLI for K2 slicing) are now branch-covered. **Laguna + Carvera** benefit indirectly from the spawn-primitive coverage (it runs every external tool incl. the Python CAM sidecar).
+
+**Gotchas discovered**: all 3 wave-3 files were untouched by the parent branch, so cherry-picks were clean -- confirms the "assign disjoint, parent-untouched files" rule from waves 1-2. Sub-agents still report against the 13,689 pre-session base; the central re-gate is authoritative (13,723). One agent noted a benign +-1 measurement wobble in the 342-file suite (a `fast-check` dynamically-registered case) -- not present in the central run.
+
+**Next cycle**: cam-engine (rotation slot; best done SOLO with the gcode-safety skill, not a parallel agent), OR renderer-side coverage of the K2 Send panel that consumes the moonraker `warnings[]`/`headerHealth` (flagged by sub-agent B), OR `python-bridge.ts` / `orca-wrapper.ts` branch coverage building on the now-covered spawn primitive (flagged by sub-agent C).
