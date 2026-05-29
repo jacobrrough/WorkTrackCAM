@@ -16301,3 +16301,211 @@ salvageable ones to the new `sliceOrca` surface) is the natural
 follow-up. Independently, the OrcaSlicer binary bundling
 (electron-builder `extraResources` + scripts/bundle-orca-slicer.ps1)
 unblocks real-world K2 Plus printing.
+
+
+---
+
+## Cycle 233 -- OrcaSlicer system-install resolution + real-world testing guide (2026-05-28)
+
+- **Focus**: docs-and-dx. **User-directed**: Jacob asked to "keep working on the app, make it perfect, and give me a step by step how to test it in the real world." Rotation slot (post-pivot rotation was PAUSED per the three Pivot stages + Task #9/#10 entries); the user directive sets the focus. The single highest-leverage real-world unblock + the explicitly-requested guide both fit docs-and-dx, so this cycle takes that slot.
+- **Baseline**: `npm test` -> 13,689 passed, 2 skipped (343 files). `npm run typecheck` -> clean. (Much healthier than the pivot-era 79-107 failures -- the dead `slice:cura` pins from Task #10 have since been cleaned up by the recent feature commits.)
+- **Changes**:
+  - `src/main/slicer/orca-wrapper.ts` -- **the real-world unblock.** `resolveOrcaInstall` previously found ONLY a bundled binary under `resources/orca-slicer/win32-x64/`, so a shop machine with OrcaSlicer 2.3.2 installed normally (Jacob's case) got `orca_unavailable` and could not slice. Reworked resolution to walk an ordered candidate list (most-specific first): (1) `WORKTRACKCAM_ORCA_BIN` env override, (2) bundled build, (3) standard per-platform **system install** locations (`%PROGRAMFILES%\OrcaSlicer\OrcaSlicer.exe` + `%LOCALAPPDATA%` per-user on Windows; `.app` bundle on macOS; `/usr/bin` etc. on Linux). New pure `orcaBinaryCandidates(appRoot, env, platform)` + exported `bundledOrcaBinaryPath` + `ORCA_BIN_ENV` const. `resolveOrcaInstall` now takes injectable `{ env, platform, exists }` opts for deterministic tests. Throw message is actionable (lists every checked path + the three fixes). `buildOrcaArgs` (the CLI contract) and the profiles are UNTOUCHED.
+  - `src/main/ipc-fabrication.ts` -- `slicer:orcaStatus` handler now delegates to `resolveOrcaInstall` (was a bundled-only `statSync`). Returns `found` / `resolvedPath` / `source` (`env|bundled|system|none`) while keeping `bundled` / `expectedPath` for back-compat. Import widened to pull `resolveOrcaInstall` + `bundledOrcaBinaryPath`.
+  - `src/renderer/src/SettingsView.tsx` -- Settings -> Paths now shows "Found (system install)" / "Found (bundled)" / "Found (WORKTRACKCAM_ORCA_BIN)" with the resolved path, or "Not found" with install/bundle/env-var hints. Was a misleading "Bundled / Not bundled" that said "Not bundled" even when slicing actually worked via a system install.
+  - `src/preload/index.ts` + `src/renderer/src/shop-types.ts` -- widened the `slicerOrcaStatus` return typing to match (both carried the old `{ bundled, expectedPath, platform }` shape; the preload one is the authoritative `window.fab` typing).
+  - `docs/REAL-WORLD-TESTING.md` -- **NEW.** Task-oriented end-to-end guide for all three machines: one-time setup (Node/Python/OrcaSlicer), in-app pre-flight, then per-machine flows -- K2 Plus (OrcaSlicer resolution + slice + Moonraker push, with Fluidd fallback), Laguna Swift 5x10 (CAM -> RichAuto-A-series `.nc` -> mandatory air-cut), Carvera 3-axis + 4-axis (Smoothieware dialect, rotary origin X-offset/Y=0, UNVERIFIED simultaneous flag). Troubleshooting table keyed on the actual error codes (`orca_unavailable`, `orca_slice_failed`, `not_fdm_machine`). Cross-links MACHINES.md / SLICING.md / SMOKE-K2-MOONRAKER.md / CAM_4TH_AXIS_REFERENCE.md rather than duplicating them.
+  - `README.md` -- fixed stale "Cura defaults" feature line -> OrcaSlicer; added a "Testing on real machines" section linking the new guide.
+- **Tests added**: +15 (13,689 -> 13,704). `src/main/slicer/orca-wrapper.test.ts`: rewrote the single "throws" test to inject `exists:()=>false` (deterministic even on a machine that actually has OrcaSlicer installed) + added precedence tests (env > bundled > system, macOS .app) and an `orcaBinaryCandidates` describe (ordering, blank-override omission, Program Files path, platform bundled subdir). `src/main/slice-orca-ipc-pin.test.ts`: new group H (5 source-pins) locking the env override const, the system-install fallback, and the `slicer:orcaStatus` delegation + new return fields. Cross-platform-safe (expected paths derived via `path.join`, not hardcoded separators).
+- **Results**: `npm test` -> 13,704 passed, 2 skipped (Δ +15). `npm run typecheck` -> clean. Zero regressions.
+- **Safety Rule 1 (G-code is sacred)**: UNTOUCHED. No post templates, no machine profiles, no CAM engine, no `buildOrcaArgs` CLI flags, no OrcaSlicer profiles changed. The only behavioral change is *which* OrcaSlicer binary is located; OrcaSlicer remains its own G-code emitter, still gated by the pre-upload temperature validator. `gcode-safety` skill therefore not triggered (no emitted-G-code surface changed) -- noted deliberately.
+- **Three-machine impact**: **K2 Plus** DIRECT -- this is the change that lets the K2 FDM slice pipeline work in Jacob's shop without bundling a ~400 MB binary into the repo. **Laguna + Carvera** INDIRECT -- unaffected by FDM resolution; the `not_fdm_machine` gate still protects them. All three are covered by the new real-world guide.
+- **Edit-tool fires**: source files via clean Edit; this log append via Python-via-bash per the `.claude/`-file rule in docs/EDIT-WORKFLOW.md.
+- **Next cycle**: cam-engine slot is due next in the rotation. Candidate: pin/validate `src/main/cam-axis4/strategies/pattern.ts` (81L) or `continuous.ts` (105L) -- both un-pinned per the Cycle 232 hand-off. Independently, the OrcaSlicer **binary bundling** (`scripts/bundle-orca-slicer.ps1` + electron-builder extraResources is already wired in package.json) remains the one host-side step that turns the shipped installer into a zero-dependency K2 slice -- system-install resolution (this cycle) covers the dev/shop case until then.
+
+
+---
+
+## USER-DIRECTED -- npm vulnerability remediation (2026-05-28)
+
+> Interactive user-directed work, not a numbered rotation cycle. Jacob: "npm has lots of vulnerabilities." Chose (via AskUserQuestion) the full fix including the breaking electron-builder major bump + build verification.
+
+**Trigger / baseline:** `npm audit` -> 15 vulnerabilities (1 low, 3 moderate, 11 high). `npm audit --omit=dev` -> **0** -- every advisory was in dev/build tooling; nothing in the shipped app. The bulk of the highs was the node-tar / node-gyp chain pulled transitively through electron-builder 25 (tar -> node-gyp/cacache/make-fetch-happen -> @electron/rebuild -> app-builder-lib -> dmg-builder/electron-builder).
+
+**Environment note:** this worktree had no real `node_modules` of its own -- it was resolving up to the MAIN repo's install via Node's parent-dir walk. Applying real fixes required a genuine `npm install` in the worktree, which (correctly) exposed two latent dependency-declaration gaps -- see Changes.
+
+**Changes:**
+- `package.json`
+  - devDep `electron-builder` `^25.1.8` -> `^26.8.1`. Clears the entire tar/node-gyp/cacache/make-fetch-happen/@electron/rebuild/app-builder-lib transitive chain (most of the 11 highs + tmp).
+  - Removed `build.win.publisherName`. electron-builder 26 tightened its config schema and **rejects** that property (`configuration.win has an unknown property 'publisherName'`) -- it's now derived from the code-signing cert. The app isn't code-signed, so it was a no-op. **This was a real build-breaker the v26 bump introduced; caught by the build-verification step.**
+  - Added missing devDep `fast-check` `^3.23.2`. Three committed property-test files (`post-process-property.test.ts`, `post-process-property-extension.test.ts`, `post-process-rotary-bypass-property.test.ts`) `import fc from 'fast-check'`, but it was **never declared** in package.json -- the baseline only passed because it resolved from a parent-level `node_modules`. The clean worktree install surfaced this.
+- `package-lock.json` -- regenerated against the above, plus `npm audit fix` (non-breaking) for the residual `postcss` XSS + `brace-expansion` DoS moderates.
+
+**Results:**
+- `npm audit` -> **0 vulnerabilities** (from 15).
+- `npm test` -> **13,704 passed, 2 skipped** (identical to the Cycle 233 baseline; the 3 fast-check suites restored after declaring the dep -- briefly red mid-remediation, then green).
+- `npm run typecheck` -> clean.
+- **Build verified end-to-end:** `electron-vite build` compiles all three bundles; `electron-builder --dir` (v26.8.1) packaged `dist\win-unpacked\WorkTrackCAM.exe` exit 0 after the `publisherName` migration. (Full NSIS `npm run build` additionally needs the OrcaSlicer binary under `resources/orca-slicer/win32-x64/` per the `extraResources` config -- pre-existing, documented in docs/REAL-WORLD-TESTING.md; unrelated to this change. Verified with a temporary placeholder, then removed.)
+
+**Safety Rule 1:** UNTOUCHED -- no post templates, machine profiles, CAM engine, or G-code emission changed. Build/test tooling + one missing test-dep declaration only.
+
+**Three-machine impact:** none at runtime -- all changes are dev/build/test tooling. The shipped app behavior for K2 Plus / Laguna Swift / Makera Carvera is unchanged.
+
+
+## Cycle 234 -- pattern.ts non-positive stepover hang guard (2026-05-28)
+
+- **Focus**: cam-engine. The Cycle 233 hand-off said "pin pattern.ts / continuous.ts", but BOTH are already fully pinned (`strategy-pattern.test.ts` carries the [ID-0159] invariant set; `strategy-continuous.test.ts` the [ID-0157] set). Rather than add a duplicate co-located pin, re-scoped to a genuine, non-redundant robustness gap in the same module.
+- **Baseline**: `npm test` -> 13,704 passed, 2 skipped (343 files). `npm run typecheck` -> clean.
+- **Changes**:
+  - `src/main/cam-axis4/strategies/pattern.ts` -- guarded the A-angle loop against a non-positive / non-finite `stepoverDeg`. `pattern` is the 4-axis dispatch **fallback** (the `index.ts` `default` case, reached by any FOUR_AXIS kind not explicitly switched). Unlike its siblings `roughing.ts` / `finishing.ts` (which clamp `Math.max(0.5, Math.min(90, step))`), it consumed the raw `p.stepoverDeg`, so a step `<= 0` or `NaN` made `while (aAngle <= 360) { aAngle += step }` never advance -> **infinite loop hanging the MAIN process**. Fix: `stepValid = Number.isFinite(step) && step > 0`; when invalid, iterate an empty depth list (`for (const zd of stepValid ? p.zDepthsMm : [])`) so zero cutting passes are emitted, plus a clear warning. Guards ONLY the degenerate case -- coarse steps `> 90` (120/180) are preserved because the [ID-0159] pins intentionally exercise them (the siblings clamp to 90; pattern must not).
+- **Tests added**: +6 in `src/main/cam-axis4/__tests__/strategy-pattern.test.ts` ([ID-0306] describe): stepover `0` / `-30` / `NaN` / `+Infinity` each terminate with zero `G1` passes, zero `Pass N A=` comments, zero depth separators, and a stepover-naming warning, while still emitting the header + `G0 A0 ; return A to home` tail (a safe no-op program); a valid step (30) still emits passes with no stepover warning (regression that the guard wrapper did not alter normal output); coarse step 180 preserved -> cut-X targets `[80, 10, 80]` (not clamped).
+- **gcode-safety**: RUN (Carvera 4-axis -- pattern is the 4-axis fallback). Strategy-level change only; NO post template / machine profile / header-footer / units / spindle / M2-vs-M30 / M6 touched. Valid-step toolpath lines are byte-identical (the [ID-0159] pins pass unchanged). The invalid-step no-op output keeps `Y0` centering, returns `A0`, emits no cutting moves and no negative X -- it mirrors the already-pinned "all depths skipped" empty-pass path ([ID-0159] test 7). No forbidden emissions introduced.
+- **Results**: `npm test` -> 13,710 passed, 2 skipped (Δ +6). `npm run typecheck` -> clean. Zero regressions.
+- **Safety Rule 1**: honored -- the G-code-affecting change ran through the gcode-safety skill; valid-step output unchanged vs known-good pins.
+- **Three-machine impact**: **Carvera 4-axis** DIRECT -- the 4-axis dispatch fallback can no longer hang the main process on a degenerate/mis-wired stepover. **K2 Plus + Laguna Swift**: none (FDM and 3-axis paths untouched).
+- **Next cycle**: post-processing slot. Candidate: audit `resources/posts/cnc_generic_mm.hbs` spindle warm-up / cool-down for the Laguna Swift RichAuto A-series, or extend `carvera_4axis.hbs` G93/G94 inverse-time coverage. Code-health note (not blocking): `index.ts` `default` -> `generatePattern` is only reachable for a FOUR_AXIS kind missing from the switch -- consider an exhaustiveness assertion or documenting the fallback intent so the now-guarded fallback is clearly the catch-all.
+
+
+## Cycle 235 -- K2 fdm_passthrough.hbs: fix stale CuraEngine refs post-pivot (2026-05-28)
+
+- **Focus**: post-processing. The Cycle 234 hand-off candidates were BOTH already done: `vcarve_mach3.hbs` (the Laguna's actual post -- `cnc_generic_mm.hbs` is used by NO shop machine) already carries the `G4 P2.0` warm-up + `G4 P3.0` cool-down + gated M7/M9 dust collection; `carvera_4axis.hbs` pairs G93/G94 by construction and both are pinned. Re-scoped to a genuine stale-documentation defect in the K2 post.
+- **Baseline**: `npm test` -> 13,710 passed, 2 skipped (343 files). `npm run typecheck` -> clean.
+- **Changes**:
+  - `resources/posts/fdm_passthrough.hbs` (Creality K2 Plus post) -- fixed post-OrcaSlicer-pivot stale references. The 2026-05-27 foundation pivot deleted CuraEngine + `src/main/slicer.ts` and switched K2 slicing to OrcaSlicer, but this post still claimed "slicing is performed by CuraEngine" (an EMITTED `;` comment that ships in every K2 `.gcode`) and "delegates real slicing to CuraEngine via src/main/slicer.ts" (maintainer block). Updated: emitted header `; WorkTrackCAM — Creality Print passthrough post` -> `OrcaSlicer passthrough post`; emitted disclaimer `...performed by CuraEngine` -> `...performed by OrcaSlicer`; maintainer block `CuraEngine`/`src/main/slicer.ts` -> `OrcaSlicer`/`src/main/slicer/orca-wrapper.ts`, "Creality Print environment" -> "OrcaSlicer FDM environment", dropped "non-Cura". Kept "Creality firmware" (the K2 genuinely runs Creality's Klipper-based OS).
+  - `src/main/post-process-fdm-passthrough-contract.test.ts` -- re-pointed the [ID-0204] (F)-block disclaimer pins (which hard-pinned the stale "CuraEngine" string in BOTH the emitted G-code and `TEMPLATE_SOURCE`) to the accurate OrcaSlicer wording, plus the file-header + incidental "Cura-emitted" comments. The pin still catches disclaimer drift -- it now locks correct content.
+- **Tests added**: +1 (13,710 -> 13,711). New (F)-block negative regression pin: `TEMPLATE_SOURCE` must NOT contain `CuraEngine` / `src/main/slicer.ts` / `Creality Print`, so the stale pre-pivot wording cannot creep back into the K2 post.
+- **gcode-safety**: RUN (K2 Plus, per `references/k2-plus-fdm.md`). COMMENT-ONLY change: both edited lines remain valid `;` Klipper/Marlin comments (no text in a command-parseable position), the `{{#each toolpathLines}}` verbatim passthrough is untouched, no synthesized motion/temperature lines, and the [ID-0092] capability-header (inputShaping/RFID/CFS/power-loss-recovery FYI comments) is unchanged. Contract test (36/36) + post-process snapshots (60/60) confirm no structural/whitespace drift; no G/M word added or removed. Moonraker upload contract untouched.
+- **Results**: `npm test` -> 13,711 passed, 2 skipped (Δ +1). `npm run typecheck` -> clean. Zero regressions.
+- **Safety Rule 1**: honored -- the post-template edit ran through the gcode-safety skill; the emitted output is a comment-text-only diff vs known-good.
+- **Three-machine impact**: **K2 Plus** DIRECT -- the operator-visible header in every K2 passthrough `.gcode` now correctly names OrcaSlicer (consistent with `docs/REAL-WORLD-TESTING.md` from Cycle 233) instead of the deleted CuraEngine. **Laguna + Carvera**: none.
+- **Gotchas discovered**: the OrcaSlicer pivot left stale "CuraEngine" references in ~8 more files beyond this post -- `src/main/ipc-fabrication.ts`, `src/main/cam-operation-policy-pin.test.ts`, `src/main/gcode-header-read-pin.test.ts`, `src/main/moonraker-push-pin.test.ts`, `src/renderer/dashboard/WorkshopDashboard.tsx`, `src/renderer/dashboard/workshop-dashboard-helpers.ts`, `src/renderer/manufacture/ManufactureAuxPanels.tsx`. Out of scope for a post-processing cycle (mostly renderer/IPC) but a real cleanup.
+- **Next cycle**: test-coverage slot. Strong candidate -- sweep the ~8 stale-CuraEngine references above so the OrcaSlicer pivot is fully reflected (docs-and-dx / test-coverage), OR add behavior coverage to an under-covered IPC handler. Note: `cnc_generic_mm.hbs` lacks spindle warm-up/cool-down but is used by NO shop machine (My-Shop-Only) -- leave it.
+
+
+## Cycle 236 -- sweep stale CuraEngine references from user-facing surfaces (2026-05-28)
+
+- **Focus**: docs-and-dx / cleanup (user-selected continuation). The 2026-05-27 OrcaSlicer pivot deleted CuraEngine + `src/main/slicer.ts` but left "CuraEngine" in operator-visible strings across the renderer, a friendly-error mapper, and a cam-gate hint. This cycle removes the user-visible ones so the operator never sees a tool the app no longer ships. (Scope is larger than the Cycle 235 "~8 files" estimate -- see Gotchas; the structural/dead-code pieces are deferred.)
+- **Baseline**: `npm test` -> 13,711 passed, 2 skipped (343 files). `npm run typecheck` -> clean.
+- **Changes**:
+  - `src/renderer/manufacture/ManufactureOperationList.tsx` -- fdm_slice hint + Slice button text/aria-label: "Run Cura" -> "Run the slicer", "Slice with CuraEngine" -> "Slice with OrcaSlicer" (x2); dropped the stale Cura-only "`-j` `.def.json`" CLI detail (OrcaSlicer uses bundled JSON profiles).
+  - `src/renderer/manufacture/ManufactureSubTabStrip.tsx` -- Slice tab title `FDM slicer (CuraEngine)` -> `(OrcaSlicer)`.
+  - `src/renderer/src/HelpPanel.tsx` -- fdm_slice description "Uses CuraEngine" -> "Uses OrcaSlicer".
+  - `src/renderer/src/LeftPanel.tsx` -- Shop help "For CuraEngine paths and logs" -> "For OrcaSlicer paths and logs".
+  - `src/renderer/src/error-messages.ts` -- FUNCTIONAL fix, not just naming: the two friendly-error mappings were keyed on `/cura.*not found/` etc., so post-pivot OrcaSlicer errors (incl. the Cycle 233 `OrcaSlicer binary not found` throw + the `orca_unavailable` / `orca_slice_failed` IPC codes) fell through to a generic message. Re-keyed to `/orca.*not\s*found|orca[_ ]?unavailable|ENOENT.*orca/i` (title "OrcaSlicer not found"; suggestion points at `WORKTRACKCAM_ORCA_BIN` + `docs/REAL-WORLD-TESTING.md`) and `/orca.*(?:crash|fail|error)|orca_slice_failed/i` ("Slicer failed").
+  - `src/shared/manufacture-cam-gate.ts` -- the user-facing fdm_slice gate hint (shown when an FDM op is wrongly routed to Generate CAM) "Slice with CuraEngine ... merged Cura settings" -> OrcaSlicer wording. `describeCamOperationKind('fdm_slice')` surfaces this via `getManufactureCamRunBlock` (single source -- no duplicate copy).
+- **Tests added**: +1 (13,711 -> 13,712). `error-messages.test.ts` rewrote the 2 CuraEngine cases into 3 OrcaSlicer cases (not-found / `orca_unavailable` / slice-failure). `cam-operation-policy-pin.test.ts` re-pointed the two `r.hint).toContain('CuraEngine')` pins + their titles + the file-header comment to OrcaSlicer.
+- **gcode-safety**: NOT triggered -- none of the touched files emit or shape G-code. The changes are renderer UI strings, a renderer error-string mapper, and a routing-gate HINT (`manufacture-cam-gate` REJECTS fdm_slice from the CNC `cam:run` path; it does not feed toolpath generation). No posts, machine profiles, CAM engine, or emit code touched.
+- **Results**: `npm test` -> 13,712 passed, 2 skipped (Δ +1). `npm run typecheck` -> clean. Zero regressions.
+- **Three-machine impact**: **K2 Plus** DIRECT -- every operator-facing FDM surface (Slice button, tab title, Help description, left-panel hint, Generate-CAM gate error, and the friendly "OrcaSlicer not found" error) now names OrcaSlicer, consistent with Cycle 233's guide and Cycle 235's K2 post. **Laguna + Carvera**: unaffected.
+- **Gotchas discovered**: the CuraEngine residue is bigger than the Cycle 235 "~8 files" estimate. DEFERRED (not user-facing / larger blast radius):
+  1. `src/renderer/src/environments/registry.ts` exposes a structural `requiresCuraEngine: boolean` field, pinned by `registry-pin.test.ts` / `registry.test.ts` / `env-routing-pin.test.ts` (many assertions). Renaming to `requiresSlicer` is a pure refactor across the env subsystem -- its own cycle.
+  2. `src/shared/filament-schema.ts` (filament -> Cura `-s` key/value mapping) + `src/shared/fusion-style-command-catalog.ts` (`mergeCuraSliceInvocationSettings`, `-s` JSON) reference the old Cura CLI. OrcaSlicer uses `--load-settings` JSON, not `-s`, so this machinery may now be dead -- investigate before deleting.
+  KEPT (accurate history): the pivot-context comments in `ipc-fabrication.ts`, `ManufactureAuxPanels.tsx`, `ManufactureWorkspace.tsx`, `shop-types.ts`, and the `[ID-0230] cura-slice-defaults` audit-trail references in pin tests.
+- **Next cycle**: cam-engine slot is next in the rotation. OR continue the CuraEngine cleanup with one of the bounded follow-ons above: (a) investigate/remove the dead Cura `-s` filament mapping (`filament-schema.ts` + fusion catalog), or (b) rename the `requiresCuraEngine` env field + its pins.
+
+
+## Cycle 237 -- delete dead Cura `-s` filament mapper + dangling catalog ref (2026-05-28)
+
+- **Focus**: cleanup / dead-code (user-selected continuation of the CuraEngine sweep).
+- **Baseline**: `npm test` -> 13,712 passed, 2 skipped (343 files). `npm run typecheck` -> clean.
+- **Changes**:
+  - `src/shared/filament-schema.ts` -- DELETED the dead `filamentToCuraSettings(FilamentRecord): Map<string, string>` function (~35 lines). It mapped filament print settings to CuraEngine `-s` setting keys (`material_print_temperature`, `cool_fan_speed`, ...). Verified **zero production callers** (grep: only its own test exercised it); OrcaSlicer uses `--load-settings` JSON profiles (`resources/orca-slicer/profiles/filament/*.json`), not Cura `-s` keys, so the mapper is vestigial post-pivot. The FilamentRecord schemas in the same file (`filamentRecordSchema`, `filamentPrintSettingsSchema`, etc.) are STILL LIVE and untouched.
+  - `src/shared/filament-schema.test.ts` -- removed the `filamentToCuraSettings` import + its `describe` block (7 `it()`). The bundled-filament / K2-ceiling / filamentTypeEnum blocks remain (9 tests).
+  - `src/shared/fusion-style-command-catalog.ts` -- the `mf_additive` command description referenced the deleted `mergeCuraSliceInvocationSettings` helper + Cura `-s`/`-j` CLI + "Slice with CuraEngine". Rewrote it to the OrcaSlicer reality (Slice with OrcaSlicer, filament + K2 quality preset, `;LAYER`/`;LAYER_COUNT` summary). `mergeCuraSliceInvocationSettings` has NO definition anywhere -- it was deleted in the pivot; this was a dangling reference.
+- **Tests added**: none -- dead-code removal. **Test count intentionally DROPS by 7** (13,712 -> 13,705): the 7 removed tests were the dedicated suite for the deleted `filamentToCuraSettings`. NOT a regression -- no passing behavior broke; every removed test maps 1:1 to the deleted dead function.
+- **gcode-safety**: NOT triggered. `filamentToCuraSettings` had no callers, so removing it changes no emitted G-code; the OrcaSlicer slice path (`slice:orca`) uses static filament JSON profiles, not this mapper. The catalog edit is a UI command-description string. No posts / machine profiles / CAM engine / emit code touched.
+- **Results**: `npm test` -> 13,705 passed, 2 skipped (Δ -7, intentional dead-code removal). `npm run typecheck` -> clean. No regressions (the delta is exactly the removed dead-code suite).
+- **Three-machine impact**: none at runtime -- the removed code had no live callers on any machine path. Reduces post-pivot confusion (no vestigial Cura `-s` machinery implying filament settings flow to a Cura mapper).
+- **Gotchas discovered**: `src/shared/project-schema.ts` still carries PERSISTED Cura settings fields -- `curaEngineExtraSettingsJson`, `curaSliceProfilesJson`, `curaActiveSliceProfileId` (+ `prusaSlicerPath`) -- with doc comments referencing the deleted helpers. These are part of the `.wtcam` / settings schema, so removing them is a **Safety Rule 2 migration** (must not break existing saved projects) -- DEFERRED to a dedicated migration-aware cycle, NOT a string swap.
+- **Next cycle**: cam-engine slot is next in the rotation. OR finish the Cura cleanup with the migration-aware removal of the project-schema Cura fields (`curaEngineExtraSettingsJson` / `curaSliceProfilesJson` / `curaActiveSliceProfileId`): confirm no live readers, add a schema migration that drops them from existing saved projects, then remove. Future (non-cleanup) option: a `filamentToOrcaSettings` mapper IF dynamic filament overrides into `slice:orca` are ever wanted (the orca-wrapper `overrides` field is currently ignored).
+
+
+## Cycles 238-240 -- parallel sub-agent batch: CuraEngine residue cleanup (2026-05-28)
+
+**Mode:** User directed "set up sub agents to keep cycling." Ran 3 improvement cycles IN PARALLEL via isolated-worktree sub-agents, each on a disjoint file tree (no source or improvement-log conflicts), then consolidated centrally onto `claude/happy-northcutt-a92c12`. The sub-agents branched off the pre-session base (`a108f94`), so their per-agent baselines read 13,689; the deltas below are re-verified against THIS branch's actual 13,705 baseline after consolidation.
+
+**Baseline (this branch):** `npm test` -> 13,705 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 238 -- schema: remove dead CuraEngine persisted fields (sub-agent 1)
+- **Focus**: cleanup (Safety Rule 2 migration). `src/shared/project-schema.ts` + `project-schema.test.ts` + `project-settings-cam.test.ts`.
+- Removed 4 dead persisted `appSettings` fields orphaned by the OrcaSlicer pivot -- `curaEngineExtraSettingsJson`, `curaSliceProfilesJson`, `curaActiveSliceProfileId`, `prusaSlicerPath` -- after grep-confirming ZERO live readers/writers (all `Prusa` hits were unrelated foreign-machine ids or PrusaSlicer-style G-code-header parsing). Dropped the 2 now-orphaned `superRefine` validators + fixed a dangling CuraEngine ref in the neighboring `k2QualityPresetId` doc comment.
+- **Safety Rule 2 honored**: `appSettingsSchema` is non-strict `z.object`, so old `settings.json` / `.wtcam` files carrying these keys still parse (Zod strips unknown keys); `settings-store.ts` + `schema-migration.ts` are generic pass-throughs that never name these keys. NEW back-compat regression test feeds all 4 dead keys and asserts they parse to `undefined`. Tests: -10 net (removed dead-field suites; +1 back-compat add).
+
+### Cycle 239 -- environments: rename requiresCuraEngine -> requiresSlicer (sub-agent 2)
+- **Focus**: cleanup. `src/renderer/src/environments/`.
+- Renamed the stale `requiresCuraEngine` boolean field -> `requiresSlicer` (identical semantics) across `registry.ts` (interface + JSDoc + 3 env literals) and its 3 pin/test files, including the key-name pin arrays (`SHOP_ENVIRONMENT_KEYS`, the `keyof ShopEnvironment` required-keys list) that assert against `Object.keys`. Pure mechanical rename; 0 occurrences of `requiresCuraEngine` remain in `src/`. Tests: +0.
+
+### Cycle 240 -- docs: purge stale CuraEngine slicer references (sub-agent 3)
+- **Focus**: docs-and-dx. `docs/`.
+- Fixed stale slicer refs: `docs/MACHINES.md` (K2 `chamberTempC` row now cites the real OrcaSlicer keys `support_chamber_temp_control` / `chamber_temperature` -> emitted `build_volume_temperature`, verified against `resources/orca-slicer/profiles/`), `docs/COMPETITIVE-GAP-ANALYSIS.md` (SettingsView label -> "OrcaSlicer (bundled)"), `docs/SMOKE-K2-MOONRAKER.md` (3 spots: operator now slices in OrcaSlicer with `resources/orca-slicer/profiles/machines/creality-k2-plus.ini`, cross-linked to SLICING.md). Kept accurate pivot-history in `SLICING.md:8` and the generic `;LAYER:` format label in `EDIT-WORKFLOW.md`. (Sub-agent also edited `README.md:8`, but Cycle 233 already fixed that line + added the testing-guide link, so the README change was DROPPED as redundant during consolidation.) Tests: +0.
+
+**Results (consolidated):** `npm test` -> 13,695 passed, 2 skipped (Δ -10, all intentional dead-field-test removal from Cycle 238). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered for any of the 3 -- none touch posts / machine profiles / CAM engine / G-code emission (persisted schema fields, an env field name, and docs prose only).
+
+**Three-machine impact**: **K2 Plus** -- removes the last vestigial CuraEngine persisted settings + corrects the K2 slicing docs to OrcaSlicer. All runtime behavior unchanged (dead code/config + naming + docs only). Laguna + Carvera: untouched.
+
+**Gotchas discovered**: isolated-worktree sub-agents (Agent tool `isolation: "worktree"`) branch off the repo's pre-session base, NOT the current feature-branch HEAD -- their gate baselines (13,689) lag the live branch (13,705), and any file the parent also edited (here `README.md`) overlaps. Consolidation MUST (a) re-verify gates on the real branch and (b) drop agent edits to parent-touched files. Disjoint file-tree assignment kept the other 9 files conflict-free; agents left changes UNCOMMITTED on a base-ref branch, so consolidation was a file-copy (not a git merge).
+
+**Out-of-scope follow-up (flagged by sub-agent 1)**: `appSettingsSchema` still has `curaEnginePath`, `curaDefinitionsPath`, `curaMachineDefinitionPath`, `curaSlicePreset` -- audit each for a live OrcaSlicer reader (some path fields may be repurposable) before removing.
+
+**Next cycle**: cam-engine slot in the rotation, OR the flagged `cura*` path-settings audit (migration-aware, same pattern as Cycle 238).
+
+
+## Cycles 241-242 -- parallel sub-agent wave 2: schema cleanup + test-coverage (2026-05-29)
+
+**Mode:** User directed "set up sub agents to keep cycling" -- second parallel wave. 3 isolated-worktree sub-agents on disjoint areas; this time each COMMITTED its work so consolidation was via `git cherry-pick` (more robust than wave-1's whole-file copy for the one file that overlapped parent work). Consolidated onto `claude/happy-northcutt-a92c12`; gates re-verified centrally.
+
+**Baseline (this branch):** `npm test` -> 13,695 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 241 -- schema: remove 3 more dead Cura-path settings fields (sub-agent A)
+- **Focus**: cleanup (Safety Rule 2). `src/shared/project-schema.ts` + `project-schema.test.ts`.
+- Audited the four remaining `cura*` path/preset fields on `appSettingsSchema`. Removed 3 confirmed-dead -- `curaDefinitionsPath`, `curaMachineDefinitionPath`, `curaSlicePreset` (+ doc comments + the 2 `curaSlicePreset` tests) -- after grep-confirming zero live readers. **KEPT `curaEnginePath`**: still LIVE (read by `manufacture-readiness.ts` as the slice-readiness gate + exposed on the renderer IPC surface `shop-types.ts`). Safety Rule 2: non-strict `z.object` strips removed keys from old saved files; added back-compat tests (incl. that the previously-invalid `curaSlicePreset: 'ultra'` now strips rather than throws).
+- Consolidation: cherry-pick conflict with wave-1's adjacent edit to the `k2QualityPresetId` doc comment, resolved centrally by keeping the OrcaSlicer-worded HEAD version (the sub-agent's version still referenced the wave-1-removed `curaEngineExtraSettingsJson`).
+
+### Cycle 242 -- test-coverage: moonraker-info.ts (sub-agent C)
+- **Focus**: test-coverage. `src/main/moonraker-info.test.ts` (test-only; production `moonraker-info.ts` untouched).
+- +14 focused tests for the K2 Moonraker "Test connection" probe: the `typeof null === 'object'` guards in both pure parsers, partial info bodies (hostname/firmware-only, state-only), heater degradation (present-but-empty, target-only, field-level drop of a bogus target), and 3 `moonrakerInfo` round-trip invariants (exact `/printer/objects/query?extruder&heater_bed` string; a state-only Klipper-startup body accepted as `ok:true` rather than a captive-portal failure; 200 + empty heater status -> `ok:true` with temps absent). No production bug found.
+
+**Verification (sub-agent B -- correct no-op):** a 3rd agent swept `WorkshopDashboard.tsx`, `workshop-dashboard-helpers.ts`, `ManufactureAuxPanels.tsx`, `moonraker-push-payload.ts` for stale CuraEngine refs. Found the dashboard files have ZERO (the Cycle 235 "~8 files" estimate over-counted them) and the 2 remaining hits -- `ManufactureAuxPanels.tsx:93` pivot-description comment + `moonraker-push-payload.ts:12` `[ID-0068]` audit-trail line (test-pinned) -- are accurate history to KEEP. Made no change / no empty commit (good discipline). Its worktree auto-cleaned.
+
+**Results (consolidated):** `npm test` -> 13,709 passed, 2 skipped (Δ +14 vs 13,695: all from Cycle 242's test-coverage; Cycle 241 net ~0). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered (persisted schema fields + test-only + no G-code surface).
+
+**Three-machine impact**: **K2 Plus** -- removes the last dead Cura *config* fields (kept the live `curaEnginePath` gate) and hardens Moonraker "Test connection" probe coverage. Laguna + Carvera: none.
+
+**Gotchas discovered**: (1) having sub-agents COMMIT + consolidating via cherry-pick is cleaner than wave-1's whole-file copy when a file overlaps parent work -- the lone conflict (the `k2QualityPresetId` comment) was a trivial keep-HEAD. (2) Sub-agents based on the pre-session commit re-suggest already-done work (Agent A's "next" suggested auditing `curaEngineExtraSettingsJson` etc., which wave-1 already removed) -- the consolidator must filter moot suggestions.
+
+**Out-of-scope follow-up (flagged by sub-agent A)**: `manufacture-readiness.ts` still gates on the (live) `curaEnginePath` with CuraEngine-specific wording ("CuraEngine path is not set") + a `settings_cura_missing` issue id -- stale relative to OrcaSlicer. Reword in a dedicated cycle (the field STAYS; only the message + possibly the issue id changes -- first confirm the issue id isn't a pinned contract).
+
+**Next cycle**: cam-engine slot in the rotation, OR the `manufacture-readiness.ts` OrcaSlicer-wording reword above.
+
+
+## Cycles 243-245 -- parallel sub-agent wave 3: readiness reword + spawn/upload coverage (2026-05-29)
+
+**Mode:** Third parallel sub-agent wave ("keep cycling"). 3 isolated-worktree agents on disjoint, parent-UNTOUCHED files -> all 3 cherry-picks were CONFLICT-FREE (vs wave-2's one comment conflict). Consolidated onto `claude/happy-northcutt-a92c12`; gates re-verified centrally.
+
+**Baseline (this branch):** `npm test` -> 13,709 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 243 -- readiness message: CuraEngine -> OrcaSlicer (sub-agent A)
+- **Focus**: cleanup. `src/shared/manufacture-readiness.ts` + its pin test.
+- Reworded the `settings_cura_missing` FDM slice-readiness warning "CuraEngine path is not set" -> "OrcaSlicer path is not set (required for slicing)." KEPT the `settings_cura_missing` issue id (pinned in `manufacture-readiness-pin.test.ts` `EXPECTED_ISSUE_IDS` + a source-text assertion, and referenced in the improvement-log) and the live `curaEnginePath` setting key + the internal `hasCura` -- message-only change, no contract drift. Synced the pin test assertion + header comment. +0 tests.
+
+### Cycle 244 -- test-coverage: moonraker-push advisory warnings (sub-agent B)
+- **Focus**: test-coverage. NEW `src/main/moonraker-push-coverage.test.ts` (test-only; production untouched -- no bug).
+- +6 tests closing the gap on `moonrakerPush`'s advisory `warnings[]` + `headerHealth` assembly (the pure parsers were already saturated by the 4 existing suites): the Klipper power-loss-recovery + adaptive-probing warning branches, the partial-missing-fields advisory (with the `thumbnail`-excluded filter), the all-4-missing no-nag suppression for raw CNC G-code, warnings+headerHealth threading onto the `startAfterUpload:true` success result, and the zero-warning clean-K2 path (warnings key omitted, not empty array). Driven via the shared `moonraker-fake` mock + `mkdtemp` fixtures.
+
+### Cycle 245 -- test-coverage: subprocess-bounded spawn primitive (sub-agent C)
+- **Focus**: test-coverage. `src/main/subprocess-bounded.test.ts` (test-only; production untouched -- no bug).
+- +8 tests for `spawnBounded` / `spawnBoundedWithLineCallback` -- the bounded-spawn safety primitive behind the OrcaSlicer CLI + the Python CAD/CAM sidecar: non-zero exit-code surfaced via resolve (diagnostics preserved), independent stderr capture, the combined stdout+stderr `maxBufferBytes` cap killing a stderr-flooding child, the ENOENT spawn-failure reject path, the `timeoutMs:null` no-timer branch, and the line-callback variant's own cap + timeout. Children invoke `process.execPath -e` for Win/Linux portability. Read confirmed the `finish()` settle-once guard correctly handles the Windows ENOENT error+close double-event race -- no production change.
+
+**Results (consolidated):** `npm test` -> 13,722 passed, 2 skipped, ZERO failed (Δ +13 vs 13,709). The two coverage cycles add +14 (Cycle 244 +6, Cycle 245 +8; Cycle 243 +0), confirmed by focused per-file runs (moonraker-push-coverage 6/6; subprocess-bounded 10->18); the net +13 reflects a known +-1 `fast-check` property-test registration wobble in the 343-file suite (not a failure, not caused by this wave). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered (a readiness-message string + two test-only cycles; no posts / machine profiles / CAM engine / emit code).
+
+**Three-machine impact**: **K2 Plus** -- the slice-readiness warning now names OrcaSlicer; the Moonraker upload advisory logic + the bounded-spawn primitive (which runs the OrcaSlicer CLI for K2 slicing) are now branch-covered. **Laguna + Carvera** benefit indirectly from the spawn-primitive coverage (it runs every external tool incl. the Python CAM sidecar).
+
+**Gotchas discovered**: all 3 wave-3 files were untouched by the parent branch, so cherry-picks were clean -- confirms the "assign disjoint, parent-untouched files" rule from waves 1-2. Sub-agents still report against the 13,689 pre-session base; the central re-gate is authoritative (13,723). One agent noted a benign +-1 measurement wobble in the 342-file suite (a `fast-check` dynamically-registered case) -- not present in the central run.
+
+**Next cycle**: cam-engine (rotation slot; best done SOLO with the gcode-safety skill, not a parallel agent), OR renderer-side coverage of the K2 Send panel that consumes the moonraker `warnings[]`/`headerHealth` (flagged by sub-agent B), OR `python-bridge.ts` / `orca-wrapper.ts` branch coverage building on the now-covered spawn primitive (flagged by sub-agent C).

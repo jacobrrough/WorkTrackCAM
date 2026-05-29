@@ -378,7 +378,7 @@ export const LeftPanel = React.memo(function LeftPanel({
       ) : (
         <div className="panel-section panel-section--compact shop-cam-workflow-hint" role="note">
           <p className="text-muted text-sm lh-snug shop-cam-workflow-hint__p">
-            <strong>Shop</strong>: pick filament/machine, place the model, then <strong>Slice</strong>. For CuraEngine paths and logs, use{' '}
+            <strong>Shop</strong>: pick filament/machine, place the model, then <strong>Slice</strong>. For OrcaSlicer paths and logs, use{' '}
             <strong>File → Settings → External tool paths</strong> if the bundled profile is not enough.
           </p>
         </div>

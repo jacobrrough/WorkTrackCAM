@@ -133,12 +133,20 @@ export type Api = {
     | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
   >
   /**
-   * Settings-panel helper — reports whether the bundled OrcaSlicer CLI binary
-   * is present at the expected platform path. Pure filesystem check; no
-   * subprocess spawn. Used by the Real Settings view (Paths subsection) to
-   * render "Bundled" vs "Not bundled — run scripts/bundle-orca-slicer.ps1".
+   * Settings-panel helper — reports where (if anywhere) an OrcaSlicer CLI
+   * binary can be found, using the same resolution the slice path uses:
+   * WORKTRACKCAM_ORCA_BIN env override → bundled build → system install.
+   * `found`/`resolvedPath`/`source` describe the winning candidate;
+   * `bundled`/`expectedPath` are retained for back-compat. No subprocess spawn.
    */
-  slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
+  slicerOrcaStatus: () => Promise<{
+    found: boolean
+    resolvedPath: string | null
+    source: 'env' | 'bundled' | 'system' | 'none'
+    bundled: boolean
+    expectedPath: string
+    platform: string
+  }>
 
   // ── Manufacture file ─────────────────────────────────────────────────────
   manufactureLoad: (projectDir: string) => Promise<ManufactureFile>

@@ -28,7 +28,14 @@ export interface SettingsViewProps {
   onToast: (k: Toast['kind'], m: string) => void
 }
 
-type OrcaStatus = { bundled: boolean; expectedPath: string; platform: string }
+type OrcaStatus = {
+  found: boolean
+  resolvedPath: string | null
+  source: 'env' | 'bundled' | 'system' | 'none'
+  bundled: boolean
+  expectedPath: string
+  platform: string
+}
 type MoonrakerHeaterPanel = { presentC?: number; targetC?: number }
 type MoonrakerProbe =
   | { kind: 'idle' }
@@ -393,30 +400,34 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
           </div>
 
           <div className="form-group">
-            <label>OrcaSlicer (bundled)</label>
+            <label>OrcaSlicer</label>
             <div className="settings-bundle-row" role="status" aria-live="polite">
               {orcaStatus === null && (
                 <span className="settings-bundle-status settings-bundle-status--unknown">
                   Checking{'…'}
                 </span>
               )}
-              {orcaStatus?.bundled === true && (
+              {orcaStatus?.found === true && (
                 <>
                   <span className="settings-probe-dot settings-probe-dot--ok" aria-hidden="true" />
                   <span className="settings-bundle-status settings-bundle-status--ok">
-                    Bundled
+                    {orcaStatus.source === 'bundled'
+                      ? 'Found (bundled)'
+                      : orcaStatus.source === 'env'
+                      ? 'Found (WORKTRACKCAM_ORCA_BIN)'
+                      : 'Found (system install)'}
                   </span>
-                  <code className="settings-bundle-path">{orcaStatus.expectedPath}</code>
+                  <code className="settings-bundle-path">{orcaStatus.resolvedPath}</code>
                 </>
               )}
-              {orcaStatus?.bundled === false && (
+              {orcaStatus?.found === false && (
                 <>
                   <span className="settings-probe-dot settings-probe-dot--err" aria-hidden="true" />
                   <span className="settings-bundle-status settings-bundle-status--err">
-                    Not bundled
+                    Not found
                   </span>
                   <span className="settings-hint">
-                    Run <code>scripts/bundle-orca-slicer.ps1</code> to install the CLI at <code>{orcaStatus.expectedPath}</code>.
+                    Install OrcaSlicer 2.3.x, run <code>scripts/bundle-orca-slicer.ps1</code> to bundle the CLI at <code>{orcaStatus.expectedPath}</code>, or set <code>WORKTRACKCAM_ORCA_BIN</code> to its full path.
                   </span>
                 </>
               )}

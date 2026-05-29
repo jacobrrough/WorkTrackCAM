@@ -29,7 +29,7 @@
  * runnable=true branch is documented so a future post can pick them up
  * without a policy edit. The `fdm_slice` blocked branch is what keeps
  * the K2 Plus FDM jobs out of the CNC `cam:run` path (they go through
- * `slicer.ts` / CuraEngine instead).
+ * the OrcaSlicer slice path instead).
  *
  * This pin co-locates with the existing behavioral test
  * `cam-operation-policy.test.ts`. The pin is exhaustive against every
@@ -104,11 +104,11 @@ describe('B. Default fallthrough -- IPC backward-compatibility', () => {
 // C. Blocked kinds (delegated to manufacture-cam-gate)
 // ---------------------------------------------------------------------------
 describe('C. Blocked kinds delegated to getManufactureCamRunBlock', () => {
-  it('fdm_slice is BLOCKED (K2 Plus FDM goes through CuraEngine, not cam:run)', () => {
+  it('fdm_slice is BLOCKED (K2 Plus FDM goes through OrcaSlicer, not cam:run)', () => {
     const r = describeCamOperationKind('fdm_slice')
     expect(r.runnable).toBe(false)
     expect(r.error).toBe('FDM slicing is not available through Generate CAM.')
-    expect(r.hint).toContain('CuraEngine')
+    expect(r.hint).toContain('OrcaSlicer')
   })
 
   it('export_stl is BLOCKED (planning-only kind)', () => {
@@ -385,10 +385,10 @@ describe('G. 5-axis kinds -- reserved for future hardware (axisCount: 5)', () =>
 // H. Three-machine cross-cut realism
 // ---------------------------------------------------------------------------
 describe('H. Three-machine cross-cut realism', () => {
-  it('K2 Plus FDM kind is BLOCKED -- the slicer.ts CuraEngine path handles it', () => {
+  it('K2 Plus FDM kind is BLOCKED -- the OrcaSlicer slice path handles it', () => {
     const r = describeCamOperationKind('fdm_slice')
     expect(r.runnable).toBe(false)
-    expect(r.hint).toContain('CuraEngine')
+    expect(r.hint).toContain('OrcaSlicer')
   })
 
   it('Laguna Swift 5x10 -- typical full-sheet kinds are all runnable', () => {

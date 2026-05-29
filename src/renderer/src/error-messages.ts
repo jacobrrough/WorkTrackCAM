@@ -68,14 +68,14 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     suggestion: 'The operation took too long. Try simplifying the model or reducing resolution.',
   },
 
-  // ── CuraEngine / FDM (before generic file I/O so "ENOENT.*cura" isn't shadowed) ─
+  // ── OrcaSlicer / FDM (before generic file I/O so "orca"/"ENOENT" isn't shadowed) ─
   {
-    test: /cura.*not\s*found|ENOENT.*cura/i,
-    title: 'CuraEngine not found',
-    suggestion: 'Set the CuraEngine path in Settings, or install CuraEngine.',
+    test: /orca.*not\s*found|orca[_ ]?unavailable|ENOENT.*orca/i,
+    title: 'OrcaSlicer not found',
+    suggestion: 'Install OrcaSlicer 2.3.x or set WORKTRACKCAM_ORCA_BIN to its path (Settings → Paths). See docs/REAL-WORLD-TESTING.md.',
   },
   {
-    test: /cura.*(?:crash|fail|error)/i,
+    test: /orca.*(?:crash|fail|error)|orca_slice_failed/i,
     title: 'Slicer failed',
     suggestion: 'Check the output log. The model may have non-manifold geometry — try mesh repair.',
   },

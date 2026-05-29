@@ -84,6 +84,66 @@ describe('spawnBounded', () => {
     expect(r.code).toBe(0)
     expect(r.stdout.trim()).toBe('hello')
   })
+
+  it('resolves (does not reject) with the non-zero exit code surfaced', async () => {
+    // The CAM/CAD sidecar and OrcaSlicer CLI signal failure via a non-zero exit
+    // code while still writing diagnostics to stdout/stderr. spawnBounded must
+    // RESOLVE (not reject) so callers can read `code` + the captured streams to
+    // build a useful error; rejecting here would discard the child's diagnostics.
+    const script = "process.stdout.write('partial'); process.exit(7)"
+    const r = await spawnBounded(process.execPath, ['-e', script], { timeoutMs: 10_000 })
+    expect(r.code).toBe(7)
+    expect(r.stdout).toBe('partial')
+  })
+
+  it('captures stderr independently from stdout', async () => {
+    // Exercises the `else stderr += s` branch in append() and proves the two
+    // streams are kept separate (diagnostics on stderr must not leak into stdout,
+    // which downstream parsers treat as structured tool output).
+    const script = "process.stdout.write('OUT'); process.stderr.write('ERR')"
+    const r = await spawnBounded(process.execPath, ['-e', script], { timeoutMs: 10_000 })
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe('OUT')
+    expect(r.stderr).toBe('ERR')
+  })
+
+  it('counts stdout+stderr together against the combined maxBufferBytes cap', async () => {
+    // The cap is a COMBINED ceiling on decoded stdout+stderr (guards main-process
+    // memory). Flood stderr alone to prove the cap is not stdout-only and that the
+    // rejection path fires + kills the child for runaway stderr too.
+    const script = "for (let i = 0; i < 5000; i++) { process.stderr.write('e'.repeat(200) + '\\n') }"
+    await expect(
+      spawnBounded(process.execPath, ['-e', script], {
+        timeoutMs: 30_000,
+        maxBufferBytes: 4000
+      })
+    ).rejects.toThrow(/maxBufferBytes/)
+  })
+
+  it('rejects with an ENOENT error when the command does not exist', async () => {
+    // Spawn-failure path: a missing executable (e.g. an unbundled sidecar/CLI)
+    // surfaces via the child `error` event -> reject. Asserts the Node ErrnoException
+    // `.code` so callers can distinguish "tool not installed" from a tool that ran
+    // and failed. Uses a name with no shell metacharacters; shell defaults to false.
+    const err = await spawnBounded('worktrackcam-no-such-binary-xyzzy', [], {
+      timeoutMs: 10_000
+    }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect((err as NodeJS.ErrnoException).code).toBe('ENOENT')
+  })
+
+  it('does not reject when timeoutMs is null (no timer armed)', async () => {
+    // Guards the `timeoutMs != null && timeoutMs > 0` branch: a falsy/omitted
+    // timeout must NOT arm a timer, so a fast child still resolves cleanly.
+    const r = await spawnBounded(process.execPath, ['-e', "console.log('done')"], {
+      timeoutMs: null
+    })
+    expect(r.code).toBe(0)
+    expect(r.stdout.trim()).toBe('done')
+  })
 })
 
 describe('spawnBoundedWithLineCallback', () => {
@@ -146,5 +206,35 @@ describe('spawnBoundedWithLineCallback', () => {
     )
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).name).toBe('AbortError')
+  })
+
+  it('enforces maxBufferBytes (kills the child) even in line-callback mode', async () => {
+    // The line-callback path has its own append()/cap implementation; prove the
+    // bounded-output guarantee still holds when a callback is supplied so a future
+    // edit there cannot silently uncap memory for progress-parsing callers.
+    const lines: string[] = []
+    const script =
+      "for (let i = 0; i < 5000; i++) { process.stdout.write('z'.repeat(200) + '\\n') }"
+    await expect(
+      spawnBoundedWithLineCallback(process.execPath, ['-e', script], {
+        timeoutMs: 30_000,
+        maxBufferBytes: 4000,
+        onStdoutLine: (line) => lines.push(line)
+      })
+    ).rejects.toThrow(/maxBufferBytes/)
+  })
+
+  it('rejects on timeout in line-callback mode for a long-running child', async () => {
+    // The timeout path is duplicated in the line-callback implementation; pin it
+    // with a wall-clock budget so a regression that drops the timer there is caught.
+    const t0 = Date.now()
+    await expect(
+      spawnBoundedWithLineCallback(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        timeoutMs: 100,
+        maxBufferBytes: 1024 * 1024,
+        onStdoutLine: () => {}
+      })
+    ).rejects.toThrow(/timed out/)
+    expect(Date.now() - t0).toBeLessThan(400)
   })
 })

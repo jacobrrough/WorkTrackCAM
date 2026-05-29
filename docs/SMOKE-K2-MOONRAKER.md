@@ -16,7 +16,7 @@ This document is the bench procedure Jacob runs to verify, on his actual K2 Plus
 | Moonraker reachable from a browser | `http://<ip-or-hostname>` returns Fluidd UI | n/a |
 | K2 Plus firmware | Klipper-based + Moonraker (stock K2 Plus OS) | `Settings -> About` on the touchscreen |
 | WorkTrackCAM build | `npm run build` clean from a Phase 2 commit | terminal |
-| Test G-code file | a Cura-sliced `.gcode` <= 5 MiB targeting K2 Plus | external Cura with profile `creality_k2_plus.def.json` |
+| Test G-code file | an OrcaSlicer-sliced `.gcode` <= 5 MiB targeting K2 Plus | OrcaSlicer with profile `resources/orca-slicer/profiles/machines/creality-k2-plus.ini` (see `docs/SLICING.md`) |
 
 Do NOT run this against a stranger printer or a printer you do not physically control. The push API does not authenticate by default on a stock K2 Plus; the safety net is your LAN, not the protocol.
 
@@ -59,7 +59,7 @@ If either file is red, FIX THE BUILD before pointing it at hardware. A mock fail
 
 The objective: prove the multipart upload reaches `/server/files/upload` and the file shows up in Fluidd's queue, WITHOUT starting a print.
 
-1. Pick a tiny pre-sliced test file. A 20-line air-print is included as `tests/fixtures/k2-airprint-20lines.gcode` if available; otherwise slice a 5x5x1 mm cube in Cura with the K2 Plus profile and save it.
+1. Pick a tiny pre-sliced test file. A 20-line air-print is included as `tests/fixtures/k2-airprint-20lines.gcode` if available; otherwise slice a 5x5x1 mm cube in OrcaSlicer with the K2 Plus profile and save it.
 2. In WorkTrackCAM, click **Push to printer** with **Start after upload = OFF**.
 3. Expected app behavior:
    - Status toast / banner: `Uploaded <filename> to K2 Plus`.
@@ -157,7 +157,7 @@ When this line is signed, `[P2-K2-PUSH]` is DONE for the K2 Plus Definition-of-D
 
 ## What is NOT in this checklist
 
-- The slicer integration (`[P2-K2-SLICE]`) is a separate Phase 2 item and is currently BLOCKED on Jacob's sign-off in `docs/SLICING.md`. While it is blocked, the smoke checklist assumes the operator slices in external Cura with `resources/slicer/creality_k2_plus.def.json`. After `[P2-K2-SLICE]` lands, this checklist will be augmented with a Step 2.5 ("slice via WorkTrackCAM") and Step 7 will become the load-and-slice-and-push-and-watch single-click flow that the K2 Plus Definition-of-Done in CLAUDE.md actually requires.
+- The slicer integration (`[P2-K2-SLICE]`) is a separate Phase 2 item and is currently BLOCKED on Jacob's sign-off in `docs/SLICING.md`. While it is blocked, the smoke checklist assumes the operator slices in external OrcaSlicer with the K2 Plus profile at `resources/orca-slicer/profiles/machines/creality-k2-plus.ini` (the 2026-05-27 pivot replaced the old CuraEngine slicing path with OrcaSlicer — see `docs/SLICING.md`). After `[P2-K2-SLICE]` lands, this checklist will be augmented with a Step 2.5 ("slice via WorkTrackCAM") and Step 7 will become the load-and-slice-and-push-and-watch single-click flow that the K2 Plus Definition-of-Done in CLAUDE.md actually requires.
 - Multi-color (CFS) verification. Single-extruder first; CFS after.
 - RFID filament tag verification. Out of scope for the push pipeline; the slicer profile owns it.
 

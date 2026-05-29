@@ -27,7 +27,7 @@
  *     M-codes / non-toolpath G-codes leak through fdm_passthrough.hbs even
  *     when `renderPost` opts populate spindle / WCS / tool / dust-collection
  *     / cutter-comp fields (which the FDM template MUST IGNORE so the
- *     CuraEngine-emitted toolpath is the source of truth -- per the
+ *     OrcaSlicer-emitted toolpath is the source of truth -- per the
  *     template's own `; This is a passthrough` disclaimer block).
  *   - Safety Rule 2 (no churn for existing saved projects): the structural
  *     pins assert exact-byte landmarks for the bundled K2 Plus profile so
@@ -276,7 +276,7 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
       const machine = bareFdm()
       const { gcode } = await renderPost(RESOURCES_ROOT, machine, [...SAMPLE_TOOLPATH])
       expect(gcode).toContain(
-        '; This is a passthrough — slicing is performed by CuraEngine and the resulting'
+        '; This is a passthrough — slicing is performed by OrcaSlicer and the resulting'
       )
       expect(gcode).toContain('; G-code is the source of truth. Verify start/end macros, bed/nozzle temps,')
       expect(gcode).toContain('; and home/park sequences match your Creality firmware before printing.')
@@ -301,14 +301,24 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
       expect(homeIdx).toBeLessThan(r2)
     })
 
-    it('disclaimer block names CuraEngine, bed/nozzle temps, and home/park sequences (audit-trail content pin)', () => {
+    it('disclaimer block names OrcaSlicer, bed/nozzle temps, and home/park sequences (audit-trail content pin)', () => {
       // Source-text pin keeps the disclaimer's substantive operator-safety
       // claims locked. If any future edit weakens or removes the
-      // "CuraEngine is the source of truth" phrasing, the pin trips.
-      expect(TEMPLATE_SOURCE).toContain('CuraEngine')
+      // "OrcaSlicer is the source of truth" phrasing, the pin trips.
+      expect(TEMPLATE_SOURCE).toContain('OrcaSlicer')
       expect(TEMPLATE_SOURCE).toContain('bed/nozzle temps')
       expect(TEMPLATE_SOURCE).toContain('home/park sequences')
       expect(TEMPLATE_SOURCE).toContain('Creality firmware')
+    })
+
+    it('[Cycle 235] no stale pre-pivot slicer references survive (CuraEngine / slicer.ts)', () => {
+      // The 2026-05-27 OrcaSlicer foundation pivot deleted CuraEngine and
+      // src/main/slicer.ts. This negative pin keeps the K2 passthrough post
+      // from drifting back to the stale wording, which would mis-describe the
+      // slicing backend in the operator-visible G-code header.
+      expect(TEMPLATE_SOURCE).not.toContain('CuraEngine')
+      expect(TEMPLATE_SOURCE).not.toContain('src/main/slicer.ts')
+      expect(TEMPLATE_SOURCE).not.toContain('Creality Print')
     })
 
     it('disclaimer block has exactly 3 disclaimer comment lines (no creep)', async () => {
@@ -365,7 +375,7 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
 
     it('toolpath line containing a `;` comment is emitted verbatim (not double-commented)', async () => {
       const machine = bareFdm()
-      // A Cura-emitted comment line should pass through unchanged.
+      // An OrcaSlicer-emitted comment line should pass through unchanged.
       const tp = ['; LAYER:0', 'G1 F1800 X10']
       const { gcode } = await renderPost(RESOURCES_ROOT, machine, tp)
       const lines = gcode.split('\n')
@@ -377,7 +387,7 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
 
     it('toolpath line with embedded G-code that LOOKS like a milling command is still emitted verbatim (no template post-filtering)', async () => {
       const machine = bareFdm()
-      // Even if Cura ever emitted M3 / G54 (it should not), the passthrough
+      // Even if OrcaSlicer ever emitted M3 / G54 (it should not), the passthrough
       // template MUST forward whatever the upstream slicer emitted. The
       // Safety Rule 1 contract here is "do not mutate", not "veto upstream".
       const tp = ['G54', 'M3 S1000', 'G1 X1 Y1']

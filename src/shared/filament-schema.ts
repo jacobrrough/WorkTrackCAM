@@ -73,39 +73,3 @@ export const filamentLibrarySchema = z.object({
   filaments: z.array(filamentRecordSchema)
 })
 export type FilamentLibrary = z.infer<typeof filamentLibrarySchema>
-
-/**
- * Map filament print settings to CuraEngine `-s` key/value pairs.
- * These layer OVER quality-preset defaults and UNDER explicit user overrides.
- */
-export function filamentToCuraSettings(filament: FilamentRecord): Map<string, string> {
-  const m = new Map<string, string>()
-  const s = filament.printSettings
-
-  m.set('material_print_temperature', String(s.nozzleTempC))
-  if (s.nozzleTempFirstLayerC != null) {
-    m.set('material_print_temperature_layer_0', String(s.nozzleTempFirstLayerC))
-  }
-  m.set('material_bed_temperature', String(s.bedTempC))
-  if (s.bedTempFirstLayerC != null) {
-    m.set('material_bed_temperature_layer_0', String(s.bedTempFirstLayerC))
-  }
-  if (s.chamberTempC != null) {
-    m.set('build_volume_temperature', String(s.chamberTempC))
-  }
-  m.set('cool_fan_speed', String(s.fanSpeedPercent))
-  if (s.fanSpeedFirstLayerPercent != null) {
-    m.set('cool_fan_speed_0', String(s.fanSpeedFirstLayerPercent))
-  }
-  if (s.retractionMm != null) {
-    m.set('retraction_amount', String(s.retractionMm))
-  }
-  if (s.retractionSpeedMmPerSec != null) {
-    m.set('retraction_speed', String(s.retractionSpeedMmPerSec))
-  }
-  if (s.maxVolFlowMm3PerSec != null) {
-    m.set('machine_max_feedrate_e', String(s.maxVolFlowMm3PerSec))
-  }
-
-  return m
-}

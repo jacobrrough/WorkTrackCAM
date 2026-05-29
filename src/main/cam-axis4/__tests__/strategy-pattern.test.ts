@@ -327,3 +327,68 @@ describe('generatePattern -- edge-case + safety-emit invariants (DISCOVERED-2026
     expect(seps.length).toBe(0)
   })
 })
+
+
+// ----------------------------------------------------------------------------
+// [ID-0306] Cycle 234 — pattern.ts non-positive / non-finite stepover guard
+// pattern is the dispatch fallback (index.ts `default` case, reached by any
+// FOUR_AXIS kind not explicitly switched). Unlike roughing/finishing it does
+// NOT clamp stepoverDeg, and its `while (aAngle <= 360) { aAngle += step }`
+// loop would spin the MAIN process forever on a step <= 0 or NaN. The guard
+// emits zero passes + a warning instead of hanging, while leaving every valid
+// step > 0 (including the coarse 120/180 the [ID-0159] pins use) byte-identical.
+// ----------------------------------------------------------------------------
+describe('generatePattern -- non-positive / non-finite stepover guard ([ID-0306])', () => {
+  const baseParams = {
+    cylinderDiameterMm: 50,
+    machXStartMm: 10,
+    machXEndMm: 80,
+    zDepthsMm: [-2, -4],
+    feedMmMin: 800,
+    plungeMmMin: 300,
+    safeZMm: 10,
+    toolDiameterMm: 3.175
+  }
+
+  for (const bad of [0, -30, Number.NaN, Number.POSITIVE_INFINITY]) {
+    it(`stepoverDeg=${String(bad)} terminates with zero passes + a warning (no infinite loop)`, () => {
+      // If the guard regressed, this test would hang until vitest's timeout
+      // rather than passing — the assertions below only run because the call
+      // returned.
+      const result = generatePattern({ ...baseParams, stepoverDeg: bad })
+      expect(result.lines.filter((l) => /^G1\s/.test(l)).length).toBe(0)
+      expect(result.lines.filter((l) => /Pass \d+\s+A=/.test(l)).length).toBe(0)
+      expect(result.lines.filter((l) => /^; --- Z depth /.test(l)).length).toBe(0)
+      // A clear warning names the stepover so the operator knows why the
+      // program homes without cutting.
+      expect(result.warnings.some((w) => /stepover/i.test(w))).toBe(true)
+      // Header + returnHome tail still emitted (a valid, safe no-op program).
+      expect(result.lines.some((l) => l.includes('cylindrical parallel (pattern)'))).toBe(true)
+      expect(result.lines[result.lines.length - 1]).toBe('G0 A0 ; return A to home')
+    })
+  }
+
+  it('valid stepover (30) still emits passes and no stepover warning (regression)', () => {
+    const result = generatePattern({ ...baseParams, stepoverDeg: 30 })
+    expect(result.lines.filter((l) => /^G1\s/.test(l)).length).toBeGreaterThan(0)
+    expect(result.warnings.some((w) => /stepover must be/i.test(w))).toBe(false)
+  })
+
+  it('coarse stepover > 90 (180) is preserved, not clamped ([ID-0159] compatibility)', () => {
+    // overcutMm=0 -> extXStart=10, extXEnd=80. step=180 over one depth emits
+    // passes at A=0/180/360 = 3 cuts; direction alternates 80 -> 10 -> 80.
+    const result = generatePattern({
+      ...baseParams,
+      zDepthsMm: [-2],
+      stepoverDeg: 180,
+      overcutMm: 0
+    })
+    const cutXs = result.lines
+      .filter((l) => /^G1\s+X-?[\d.]/.test(l))
+      .flatMap((l) => {
+        const m = l.match(/X(-?\d+(?:\.\d+)?)/)
+        return m ? [parseFloat(m[1]!)] : []
+      })
+    expect(cutXs).toEqual([80, 10, 80])
+  })
+})

@@ -886,7 +886,7 @@ describe('env-routing-pin (J) registry-coupling invariants', () => {
       'availableOpKinds',
       'jobsStorageKey',
       'requiresPython',
-      'requiresCuraEngine'
+      'requiresSlicer'
     ]
     for (const env of ENVIRONMENT_LIST) {
       for (const k of required) {
@@ -923,9 +923,9 @@ describe('env-routing-pin (J) registry-coupling invariants', () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
-  it('Creality Print is the only env that requires CuraEngine', () => {
-    const reqCura = ENVIRONMENT_LIST.filter((e) => e.requiresCuraEngine)
-    expect(reqCura.map((e) => e.id)).toEqual(['creality_print'])
+  it('Creality Print is the only env that requires a slicer', () => {
+    const reqSlicer = ENVIRONMENT_LIST.filter((e) => e.requiresSlicer)
+    expect(reqSlicer.map((e) => e.id)).toEqual(['creality_print'])
   })
 
   it('VCarve Pro and Makera CAM are the two envs that require Python (CAM kernel)', () => {

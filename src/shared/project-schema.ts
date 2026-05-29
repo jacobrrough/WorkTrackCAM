@@ -46,39 +46,15 @@ export type ProjectFile = z.infer<typeof projectSchema>
 
 export const appSettingsSchema = z.object({
   curaEnginePath: z.string().optional(),
-  /** Directory containing Cura `definitions` (fdmprinter.def.json) */
-  curaDefinitionsPath: z.string().optional(),
-  /**
-   * Optional path to a machine `.def.json` passed as CuraEngine `-j` (overrides bundled
-   * `resources/slicer/creality_k2_plus.def.json` when non-empty).
-   */
-  curaMachineDefinitionPath: z.string().optional(),
-  /** CuraEngine `-s` bundle for `buildCuraSliceArgs` (see `cura-slice-defaults.ts`). */
-  curaSlicePreset: z.enum(['balanced', 'draft', 'fine']).optional(),
   /**
    * Creality K2 Plus quality preset id ('standard' | 'high_speed').
-   * Layered between the generic `curaSlicePreset` and explicit
-   * `curaEngineExtraSettingsJson` overrides; consumed by
-   * `runFdmSliceFromOp` in the Manufacture workspace and threaded into
-   * `SliceRequest.k2QualityPresetId` for the bundled CuraEngine call.
+   * Consumed by `runFdmSliceFromOp` in the Manufacture workspace and threaded
+   * into `SliceRequest.k2QualityPresetId` for the bundled OrcaSlicer call.
    * Only meaningful when the active machine is the Creality K2 Plus.
    * Roadmap: [P2-K2-SLICE]/Cycle 6.
    */
   k2QualityPresetId: z.enum(['standard', 'high_speed']).optional(),
   activeFilamentId: z.string().optional(),
-  /**
-   * Extra CuraEngine `-s` keys as JSON object, e.g. `{"infill_pattern":"grid","material_print_temperature":"210"}`.
-   * Merged after the numeric preset; keys match Cura setting ids (underscore names).
-   */
-  curaEngineExtraSettingsJson: z.string().optional(),
-  /**
-   * JSON array of named profiles: `[{"id":"pla","label":"PLA","basePreset":"balanced","settingsJson":"{}"}]`.
-   * See Utilities → Slice and `mergeCuraSliceInvocationSettings`.
-   */
-  curaSliceProfilesJson: z.string().optional(),
-  /** When set, Slice merges this profile from `curaSliceProfilesJson` after the global extra JSON. */
-  curaActiveSliceProfileId: z.string().optional(),
-  prusaSlicerPath: z.string().optional(),
   pythonPath: z.string().optional(),
   /** Last folder used when opening/creating a project (legacy; see `recentProjectPaths`). */
   lastProjectPath: z.string().optional(),
@@ -212,45 +188,7 @@ export const appSettingsSchema = z.object({
 }).superRefine((data, ctx) => {
   // Validate JSON string fields are parseable and have the expected structural type.
   // Catching malformed JSON at schema parse time surfaces a clear error rather than
-  // a cryptic runtime crash deep inside the slicer or Carvera CLI path.
-  if (data.curaEngineExtraSettingsJson !== undefined) {
-    try {
-      const parsed = JSON.parse(data.curaEngineExtraSettingsJson)
-      if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['curaEngineExtraSettingsJson'],
-          message: 'must be a JSON object string (e.g. {"infill_pattern":"grid"})'
-        })
-      }
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['curaEngineExtraSettingsJson'],
-        message: 'must be valid JSON'
-      })
-    }
-  }
-
-  if (data.curaSliceProfilesJson !== undefined) {
-    try {
-      const parsed = JSON.parse(data.curaSliceProfilesJson)
-      if (!Array.isArray(parsed)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['curaSliceProfilesJson'],
-          message: 'must be a JSON array of slice profile objects'
-        })
-      }
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['curaSliceProfilesJson'],
-        message: 'must be valid JSON'
-      })
-    }
-  }
-
+  // a cryptic runtime crash deep inside the Carvera CLI path.
   if (data.carveraCliExtraArgsJson !== undefined) {
     try {
       const parsed = JSON.parse(data.carveraCliExtraArgsJson)
