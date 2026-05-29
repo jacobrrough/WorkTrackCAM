@@ -31,7 +31,20 @@ export function generatePattern(p: PatternParams): PatternResult {
   const ocMm = p.overcutMm ?? p.toolDiameterMm
   const extXStart = Math.max(0, p.machXStartMm - ocMm)
   const extXEnd = p.machXEndMm + ocMm
+  const warnings: string[] = []
+  // A non-positive or non-finite stepover would make the A-angle loop below
+  // (`while (aAngle <= 360) { aAngle += step }`) never advance, spinning the
+  // main process forever. Siblings (roughing/finishing) clamp step to
+  // [0.5, 90]; pattern intentionally allows coarse steps > 90 (the [ID-0159]
+  // pins exercise 120/180), so guard only the degenerate non-advancing case:
+  // fail loudly with a warning and emit zero cutting passes instead of hanging.
   const step = p.stepoverDeg
+  const stepValid = Number.isFinite(step) && step > 0
+  if (!stepValid) {
+    warnings.push(
+      `Pattern stepover must be a positive, finite angle (got ${String(p.stepoverDeg)}); no cutting passes generated.`
+    )
+  }
 
   const emit = new Emitter({
     stockRadius: stockR,
@@ -54,7 +67,7 @@ export function generatePattern(p: PatternParams): PatternResult {
 
   let passNum = 0
   let direction = 1
-  for (const zd of p.zDepthsMm) {
+  for (const zd of stepValid ? p.zDepthsMm : []) {
     const cutZ = stockR + zd
     if (cutZ < 0.05) continue
     emit.comment(`--- Z depth ${zd.toFixed(3)} mm (radial cut Z=${cutZ.toFixed(3)}) ---`)
@@ -77,5 +90,5 @@ export function generatePattern(p: PatternParams): PatternResult {
   }
 
   emit.returnHome()
-  return { lines: emit.lines(), warnings: emit.warnings() }
+  return { lines: emit.lines(), warnings: [...emit.warnings(), ...warnings] }
 }
