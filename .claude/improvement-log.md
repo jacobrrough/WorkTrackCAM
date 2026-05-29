@@ -16450,3 +16450,33 @@ unblocks real-world K2 Plus printing.
 **Out-of-scope follow-up (flagged by sub-agent 1)**: `appSettingsSchema` still has `curaEnginePath`, `curaDefinitionsPath`, `curaMachineDefinitionPath`, `curaSlicePreset` -- audit each for a live OrcaSlicer reader (some path fields may be repurposable) before removing.
 
 **Next cycle**: cam-engine slot in the rotation, OR the flagged `cura*` path-settings audit (migration-aware, same pattern as Cycle 238).
+
+
+## Cycles 241-242 -- parallel sub-agent wave 2: schema cleanup + test-coverage (2026-05-29)
+
+**Mode:** User directed "set up sub agents to keep cycling" -- second parallel wave. 3 isolated-worktree sub-agents on disjoint areas; this time each COMMITTED its work so consolidation was via `git cherry-pick` (more robust than wave-1's whole-file copy for the one file that overlapped parent work). Consolidated onto `claude/happy-northcutt-a92c12`; gates re-verified centrally.
+
+**Baseline (this branch):** `npm test` -> 13,695 passed, 2 skipped. `npm run typecheck` -> clean.
+
+### Cycle 241 -- schema: remove 3 more dead Cura-path settings fields (sub-agent A)
+- **Focus**: cleanup (Safety Rule 2). `src/shared/project-schema.ts` + `project-schema.test.ts`.
+- Audited the four remaining `cura*` path/preset fields on `appSettingsSchema`. Removed 3 confirmed-dead -- `curaDefinitionsPath`, `curaMachineDefinitionPath`, `curaSlicePreset` (+ doc comments + the 2 `curaSlicePreset` tests) -- after grep-confirming zero live readers. **KEPT `curaEnginePath`**: still LIVE (read by `manufacture-readiness.ts` as the slice-readiness gate + exposed on the renderer IPC surface `shop-types.ts`). Safety Rule 2: non-strict `z.object` strips removed keys from old saved files; added back-compat tests (incl. that the previously-invalid `curaSlicePreset: 'ultra'` now strips rather than throws).
+- Consolidation: cherry-pick conflict with wave-1's adjacent edit to the `k2QualityPresetId` doc comment, resolved centrally by keeping the OrcaSlicer-worded HEAD version (the sub-agent's version still referenced the wave-1-removed `curaEngineExtraSettingsJson`).
+
+### Cycle 242 -- test-coverage: moonraker-info.ts (sub-agent C)
+- **Focus**: test-coverage. `src/main/moonraker-info.test.ts` (test-only; production `moonraker-info.ts` untouched).
+- +14 focused tests for the K2 Moonraker "Test connection" probe: the `typeof null === 'object'` guards in both pure parsers, partial info bodies (hostname/firmware-only, state-only), heater degradation (present-but-empty, target-only, field-level drop of a bogus target), and 3 `moonrakerInfo` round-trip invariants (exact `/printer/objects/query?extruder&heater_bed` string; a state-only Klipper-startup body accepted as `ok:true` rather than a captive-portal failure; 200 + empty heater status -> `ok:true` with temps absent). No production bug found.
+
+**Verification (sub-agent B -- correct no-op):** a 3rd agent swept `WorkshopDashboard.tsx`, `workshop-dashboard-helpers.ts`, `ManufactureAuxPanels.tsx`, `moonraker-push-payload.ts` for stale CuraEngine refs. Found the dashboard files have ZERO (the Cycle 235 "~8 files" estimate over-counted them) and the 2 remaining hits -- `ManufactureAuxPanels.tsx:93` pivot-description comment + `moonraker-push-payload.ts:12` `[ID-0068]` audit-trail line (test-pinned) -- are accurate history to KEEP. Made no change / no empty commit (good discipline). Its worktree auto-cleaned.
+
+**Results (consolidated):** `npm test` -> 13,709 passed, 2 skipped (Δ +14 vs 13,695: all from Cycle 242's test-coverage; Cycle 241 net ~0). `npm run typecheck` -> clean. Zero regressions.
+
+**gcode-safety**: NOT triggered (persisted schema fields + test-only + no G-code surface).
+
+**Three-machine impact**: **K2 Plus** -- removes the last dead Cura *config* fields (kept the live `curaEnginePath` gate) and hardens Moonraker "Test connection" probe coverage. Laguna + Carvera: none.
+
+**Gotchas discovered**: (1) having sub-agents COMMIT + consolidating via cherry-pick is cleaner than wave-1's whole-file copy when a file overlaps parent work -- the lone conflict (the `k2QualityPresetId` comment) was a trivial keep-HEAD. (2) Sub-agents based on the pre-session commit re-suggest already-done work (Agent A's "next" suggested auditing `curaEngineExtraSettingsJson` etc., which wave-1 already removed) -- the consolidator must filter moot suggestions.
+
+**Out-of-scope follow-up (flagged by sub-agent A)**: `manufacture-readiness.ts` still gates on the (live) `curaEnginePath` with CuraEngine-specific wording ("CuraEngine path is not set") + a `settings_cura_missing` issue id -- stale relative to OrcaSlicer. Reword in a dedicated cycle (the field STAYS; only the message + possibly the issue id changes -- first confirm the issue id isn't a pinned contract).
+
+**Next cycle**: cam-engine slot in the rotation, OR the `manufacture-readiness.ts` OrcaSlicer-wording reword above.
