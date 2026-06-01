@@ -261,16 +261,32 @@ export function AppHeader(props: AppHeaderProps): React.ReactElement {
         </span>
       </div>
 
-      {/* Right — E-stop (conditional) */}
+      {/* Right — E-stop (conditional)
+          SAFETY: the button is rendered with a distinctive red treatment so
+          it never blends in with the normal toolbar surface. When no machine
+          is selected the slot collapses entirely — there is nothing to stop.
+          Click handling is gated by the parent via a native confirm() dialog
+          in ShopApp.handleEstop (no immediate trigger). */}
       <div className="app-header__right">
         {showEstop && (
           <button
             type="button"
-            className="app-header__estop"
+            className="app-header__estop app-header__estop--active"
             onClick={onEstop}
             title="Emergency stop"
             aria-label="Emergency stop"
             data-action="estop"
+            data-testid="app-header-estop-button"
+            style={{
+              backgroundColor: 'var(--err)',
+              color: '#fff',
+              fontWeight: 700,
+              border: '1px solid var(--err)',
+              padding: '4px 12px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              letterSpacing: '0.04em'
+            }}
           >
             E-STOP
           </button>

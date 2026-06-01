@@ -16,7 +16,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import * as THREE from 'three'
 import { PlateTabs, type PlateStatus, type PlateTabsProps } from './PlateTabs'
+import {
+  _clearPlateThumbnailCacheForTests,
+  fitCameraToBounds,
+  hashGeometryForCache,
+  offscreenRenderingAvailable,
+  plateThumbnailCacheSize,
+  renderPlateThumbnail,
+  THUMBNAIL_HEIGHT_PX,
+  THUMBNAIL_WIDTH_PX,
+  type PlateThumbnailFailureReason
+} from './plate-thumbnail'
 import type { Plate } from '../../shared/manufacture-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 
@@ -350,5 +362,229 @@ describe('PlateTabs UX Move 8 -- split slice button', () => {
   it('emits an sr-only kbd hint mentioning the new Slice button affordance', () => {
     const html = render(baseProps({}))
     expect(html).toContain('Slice button slices the active plate')
+  })
+})
+
+// -- UX Move #7 V2: real 3D-preview thumbnails (replaces colored-rect placeholders) --
+//
+// The parent `ManufactureWorkspace` computes a data-URL per plate via
+// `plate-thumbnail.ts`'s `renderPlateThumbnail` and passes the map down
+// via `plateThumbnails`. The strip uses the URL when present and falls
+// back to the legacy colored-rect placeholder when it's null/missing.
+// Vitest runs in the `node` environment with no OffscreenCanvas, so the
+// helper's offscreen render branch is exercised separately below via a
+// feature-test guard; most coverage is the render-pin fallback path.
+describe('PlateTabs UX Move #7 V2 -- thumbnail-or-placeholder render-pin', () => {
+  it('falls back to the colored-rect placeholder when no plateThumbnails map is supplied', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1'
+      })
+    )
+    // Each plate still paints SOME preview element (placeholder span)
+    expect(html).toContain('plate-thumb__preview')
+    // No <img> elements rendered for thumbnails
+    expect(html).not.toContain('plate-thumb__preview--image')
+    expect(html).not.toContain('<img')
+    // The deterministic hue class survives (colored-rect path)
+    expect(html).toMatch(/plate-thumb__preview--hue-\d/)
+  })
+
+  it('renders the <img> path when a per-plate data-URL is supplied', () => {
+    const fakeUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII='
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1',
+        plateThumbnails: { p1: fakeUrl, p2: fakeUrl }
+      })
+    )
+    // <img> elements paint for both plates
+    expect(html).toContain('plate-thumb__preview--image')
+    // Width/height attributes match the canonical 120x80 tile
+    expect(html).toMatch(/width="120"/)
+    expect(html).toMatch(/height="80"/)
+    // The data-URL is wired through src=""
+    expect(html).toContain(`src="${fakeUrl}"`)
+    // Image is decorative (alt="" + aria-hidden)
+    expect(html).toContain('alt=""')
+    // Colored-rect hue classes are GONE for these plates (replaced by img)
+    expect(html).not.toMatch(/plate-thumb__preview--hue-\d/)
+  })
+
+  it('mixes thumbnails and placeholders independently per-plate', () => {
+    const fakeUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII='
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B'), plate('p3', 'C')],
+        activePlateId: 'p2',
+        // p1 has a thumbnail, p2 explicit null, p3 missing entry
+        plateThumbnails: { p1: fakeUrl, p2: null }
+      })
+    )
+    // One img for p1
+    const imgMatches = html.match(/plate-thumb__preview--image/g) ?? []
+    expect(imgMatches.length).toBe(1)
+    // Two placeholder hue classes (p2 + p3)
+    const hueMatches = html.match(/plate-thumb__preview--hue-\d/g) ?? []
+    expect(hueMatches.length).toBe(2)
+  })
+
+  it('preserves the thumbnail path when a plate is in inline-rename mode', () => {
+    // Rename mode renders the same preview slot above the input. The
+    // strip must keep the <img> visible so the rename doesn't shrink
+    // the tile -- but the static-markup render doesn't enter edit mode
+    // (no client interaction). We at least pin that the markup wiring
+    // is identical: an img for the data-URL plate even in non-edit
+    // mode, which is the only state SSR can express.
+    const fakeUrl = 'data:image/png;base64,AAAA'
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A')],
+        activePlateId: 'p1',
+        plateThumbnails: { p1: fakeUrl }
+      })
+    )
+    expect(html).toContain('plate-thumb__preview--image')
+    expect(html).toContain(`src="${fakeUrl}"`)
+  })
+
+  it('does not paint <img> when the entry is explicitly null', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A')],
+        activePlateId: 'p1',
+        plateThumbnails: { p1: null }
+      })
+    )
+    expect(html).not.toContain('plate-thumb__preview--image')
+    expect(html).toMatch(/plate-thumb__preview--hue-\d/)
+  })
+
+  it('renders identically across all three target machine contexts when thumbnails are absent (cross-machine pin)', () => {
+    // Thumbnails are geometry-only -- they MUST NOT vary by machine.
+    for (const machine of THREE_MACHINES) {
+      const html = render(
+        baseProps({
+          plates: [plate('p1', 'A'), plate('p2', 'B')],
+          activePlateId: 'p1'
+        })
+      )
+      // No machine-specific text leaks into the thumbnail strip
+      expect(html).not.toContain(machine.name)
+      expect(html).not.toContain(machine.id)
+      // The placeholder path is still wired
+      expect(html).toContain('plate-thumb__preview')
+    }
+  })
+})
+
+// -- plate-thumbnail.ts unit tests --
+//
+// The offscreen-render path requires OffscreenCanvas + WebGL, neither
+// of which exists in the vitest `node` env. The feature-test branch
+// IS the documented behavior on that env, and we pin it explicitly so
+// future migrations (jsdom, happy-dom, or a real Chromium harness)
+// don't silently lose coverage of the failure path.
+describe('plate-thumbnail.ts -- module shape + pure helpers', () => {
+  it('exports the documented constants matching the 120x80 tile', () => {
+    expect(THUMBNAIL_WIDTH_PX).toBe(120)
+    expect(THUMBNAIL_HEIGHT_PX).toBe(80)
+  })
+
+  it('offscreenRenderingAvailable returns false in the vitest node environment', () => {
+    // Documents the branch the parent fallback relies on.
+    expect(offscreenRenderingAvailable()).toBe(false)
+  })
+
+  it('renderPlateThumbnail returns null when the source is null/undefined', () => {
+    expect(renderPlateThumbnail(null)).toBeNull()
+    expect(renderPlateThumbnail(undefined)).toBeNull()
+  })
+
+  it('renderPlateThumbnail surfaces the no-geometry failure reason for null sources', () => {
+    const failure: { reason?: PlateThumbnailFailureReason } = {}
+    const out = renderPlateThumbnail(null, { failure })
+    expect(out).toBeNull()
+    expect(failure.reason).toBe('no-geometry')
+  })
+
+  it('renderPlateThumbnail returns null in the node env even when a real geometry is supplied', () => {
+    const geom = new THREE.BoxGeometry(10, 10, 10)
+    const failure: { reason?: PlateThumbnailFailureReason } = {}
+    const out = renderPlateThumbnail(geom, { failure })
+    expect(out).toBeNull()
+    // In the node env the documented reason is the missing OffscreenCanvas
+    expect(failure.reason).toBe('no-offscreen-canvas')
+  })
+
+  it('renderPlateThumbnail accepts a Three.js Mesh as well as a BufferGeometry', () => {
+    const geom = new THREE.BoxGeometry(5, 5, 5)
+    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial())
+    const failure: { reason?: PlateThumbnailFailureReason } = {}
+    const out = renderPlateThumbnail(mesh, { failure })
+    expect(out).toBeNull()
+    // Same node-env failure path is hit -- proving the Mesh -> geom unwrap
+    expect(failure.reason).toBe('no-offscreen-canvas')
+  })
+
+  it('hashGeometryForCache is deterministic for identical geometries', () => {
+    const a = new THREE.BoxGeometry(10, 10, 10)
+    const b = new THREE.BoxGeometry(10, 10, 10)
+    expect(hashGeometryForCache(a)).toBe(hashGeometryForCache(b))
+  })
+
+  it('hashGeometryForCache differs for different geometries', () => {
+    const cube = new THREE.BoxGeometry(10, 10, 10)
+    const slab = new THREE.BoxGeometry(100, 1, 100)
+    expect(hashGeometryForCache(cube)).not.toBe(hashGeometryForCache(slab))
+  })
+
+  it('hashGeometryForCache returns a stable token for empty geometries', () => {
+    const empty = new THREE.BufferGeometry()
+    expect(hashGeometryForCache(empty)).toBe('no-position')
+  })
+
+  it('fitCameraToBounds positions the OrthographicCamera so the bbox is centred', () => {
+    const camera = new THREE.OrthographicCamera()
+    const bbox = new THREE.Box3(new THREE.Vector3(-50, -50, -50), new THREE.Vector3(50, 50, 50))
+    fitCameraToBounds(camera, bbox, 120, 80)
+    // Aspect ratio is preserved
+    const aspect = (camera.right - camera.left) / (camera.top - camera.bottom)
+    expect(aspect).toBeCloseTo(120 / 80, 5)
+    // Camera is symmetric around 0 (bbox is centred at origin)
+    expect(camera.left).toBeLessThan(0)
+    expect(camera.right).toBeGreaterThan(0)
+    expect(camera.top).toBeGreaterThan(0)
+    expect(camera.bottom).toBeLessThan(0)
+    // Near/far plane sanity
+    expect(camera.near).toBeGreaterThan(0)
+    expect(camera.far).toBeGreaterThan(camera.near)
+  })
+
+  it('fitCameraToBounds frames a 60x120 inch Laguna full-sheet stock without negative dimensions', () => {
+    // Laguna Swift 5x10 -- 60" x 120" full-sheet stock = 1524 x 3048 mm.
+    const camera = new THREE.OrthographicCamera()
+    const bbox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1524, 3048, 25))
+    fitCameraToBounds(camera, bbox, 120, 80)
+    expect(camera.right - camera.left).toBeGreaterThan(0)
+    expect(camera.top - camera.bottom).toBeGreaterThan(0)
+  })
+
+  it('fitCameraToBounds handles a Carvera 4-axis cylinder (92mm dia x 240mm length)', () => {
+    const camera = new THREE.OrthographicCamera()
+    const bbox = new THREE.Box3(new THREE.Vector3(-46, -46, 0), new THREE.Vector3(46, 46, 240))
+    fitCameraToBounds(camera, bbox, 120, 80)
+    expect(Number.isFinite(camera.left)).toBe(true)
+    expect(Number.isFinite(camera.right)).toBe(true)
+    expect(camera.far).toBeGreaterThan(camera.near)
+  })
+
+  it('plateThumbnailCacheSize + _clearPlateThumbnailCacheForTests are wired (cache primitives exist)', () => {
+    _clearPlateThumbnailCacheForTests()
+    expect(plateThumbnailCacheSize()).toBe(0)
   })
 })

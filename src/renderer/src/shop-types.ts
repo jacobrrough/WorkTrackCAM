@@ -21,7 +21,9 @@ import type {
   CadExportPayload,
   CadExportResponse,
   CadListOperationsPayload,
-  CadListOperationsResponse
+  CadListOperationsResponse,
+  CadTessellateWithIdsPayload,
+  CadTessellateWithIdsResponse
 } from '../../main/ipc-cad'
 
 // ── Re-exports for convenience ───────────────────────────────────────────────
@@ -310,6 +312,29 @@ export declare const window: Window & {
       execute: (payload: CadExecutePayload) => Promise<CadExecuteResponse>
       export: (payload: CadExportPayload) => Promise<CadExportResponse>
       listOperations: (payload: CadListOperationsPayload) => Promise<CadListOperationsResponse>
+      /**
+       * Selection-grade tessellation (CAD V1 Workflow H foundation).
+       * Returns vertices / indices / `faceIds` parallel array + per-face
+       * metadata so the renderer can map a clicked triangle back to the
+       * source CadQuery face. Stash `faceIds` on the BufferGeometry's
+       * `userData` so the click handler can resolve a face id in O(1).
+       */
+      tessellateWithIds: (
+        payload: CadTessellateWithIdsPayload,
+      ) => Promise<CadTessellateWithIdsResponse>
+    }
+    /**
+     * Workflow F: machine:estop — AppHeader STOP button safety dispatch.
+     * Renderer calls `window.fab.machine.estop({ machineId })`; the main
+     * process dispatches per-machine abort:
+     *   - K2 Plus → Moonraker `/printer/emergency_stop` (Klipper M112)
+     *   - Carvera → structured fallback toast (CLI has no abort verb)
+     *   - Laguna  → structured "use the pendant E-stop" toast
+     *
+     * Errors NEVER throw — every failure folds into the envelope.
+     */
+    machine: {
+      estop: (payload: { machineId: string }) => Promise<{ ok: boolean; error?: string; hint?: string }>
     }
   }
 }

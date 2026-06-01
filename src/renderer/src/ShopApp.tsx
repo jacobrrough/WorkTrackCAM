@@ -1152,6 +1152,57 @@ function ShopAppInner(): React.ReactElement {
     doRemoveModel()
   }, [activeJob, doRemoveModel])
 
+  // ── E-stop (safety-critical) ─────────────────────────────────────────────
+  //
+  // Wired into the AppHeader status strip. Confirms with the operator via
+  // a native confirm() dialog before invoking the
+  // `window.fab.machine.estop({machineId})` IPC channel that Agent 2
+  // registers in the preload. The IPC contract returns a
+  // `{ ok: boolean; error?: string; machineName?: string }` shape; we toast
+  // success or error, and never swallow exceptions silently — operator
+  // safety depends on visible feedback (Safety Rule 1).
+  //
+  // The handler is only created when a session machine is active; the
+  // AppHeader gates the button on the same condition via the `onEstop`
+  // prop being truthy AND `currentMachineId` being non-null.
+  type EstopBridge = {
+    machine?: {
+      estop?: (payload: { machineId: string }) => Promise<{
+        ok: boolean
+        machineName?: string
+        error?: string
+      }>
+    }
+  }
+  const handleEstop = useCallback((): void => {
+    const currentMachineId = sessionMachine?.id ?? null
+    if (!currentMachineId) return
+    const confirmed = window.confirm(
+      'E-STOP — abort current machine operation? This may leave the machine in an undefined state requiring manual recovery.'
+    )
+    if (!confirmed) return
+    void (async () => {
+      try {
+        const bridge = (fab() as unknown as EstopBridge)
+        const estopFn = bridge.machine?.estop
+        if (typeof estopFn !== 'function') {
+          pushToast('err', 'E-stop failed: IPC channel not registered.')
+          return
+        }
+        const r = await estopFn({ machineId: currentMachineId })
+        if (r.ok) {
+          const label = r.machineName ?? currentMachineId
+          pushToast('ok', `E-stop sent to ${label}`)
+        } else {
+          pushToast('err', `E-stop failed: ${r.error ?? 'unknown error'}`)
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        pushToast('err', `E-stop failed: ${msg}`)
+      }
+    })()
+  }, [sessionMachine?.id, pushToast])
+
   // ── Auto-arrange on plate (K2 Plus FDM) ─────────────────────────────────
   //
   // Lays out all loaded FDM jobs targeting the active K2 Plus machine on the
@@ -2208,12 +2259,14 @@ function ShopAppInner(): React.ReactElement {
       {/* UX MOVE 7 — locked global status strip (Mainsail/Fluidd pattern).
           Pinned at the very top so machine state never scrolls out of
           sight. For K2 Plus, derives state from the shared 5-second
-          Moonraker poll used by the WorkshopDashboard. E-stop is
-          intentionally left unwired here — V2 will route M112/M5. */}
+          Moonraker poll used by the WorkshopDashboard. E-stop is wired
+          to `handleEstop` which prompts a native confirm() and then
+          fires the `machine.estop` IPC channel (Agent 2 owns the IPC). */}
       <AppHeader
         currentMachineId={sessionMachine?.id ?? null}
         jobs={jobs}
         moonrakerUrl={moonrakerUrl}
+        onEstop={sessionMachine?.id ? handleEstop : undefined}
       />
 
       {/* Brand-bar (legacy Control Center header) sits below the status strip. */}

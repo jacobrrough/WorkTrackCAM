@@ -23,6 +23,7 @@ The tests are split into two tiers:
 """
 from __future__ import annotations
 
+import math
 import os
 import struct
 import tempfile
@@ -39,6 +40,7 @@ from engines.cad.cadquery_script import (
     export_by_handle,
     list_operations,
     scan_banned_tokens,
+    tessellate_with_face_ids,
 )
 from engines.sidecar import cad_handlers
 
@@ -547,9 +549,11 @@ def test_export_invalid_handle_raises() -> None:
 
 
 def test_dispatch_table_registers_new_cad_methods() -> None:
-    """The sidecar dispatch table MUST expose the three new method names so
-    the TS bridge can call them by dotted name. Drift here breaks the wire
-    contract.
+    """The sidecar dispatch table MUST expose every method name the TS bridge
+    can call by dotted name. Drift here breaks the wire contract.
+
+    BUILD 2 adds ``cad.tessellate_with_ids`` — the selection-grade
+    tessellator that powers the CAD V1 face-picking workflow.
     """
     from engines.sidecar.main import _build_dispatch_table
 
@@ -557,3 +561,222 @@ def test_dispatch_table_registers_new_cad_methods() -> None:
     assert "cad.execute_script" in table
     assert "cad.export" in table
     assert "cad.list_operations" in table
+    assert "cad.tessellate_with_ids" in table
+
+
+# ── Tier 1: tessellate_with_ids handler-level param validation ───────────
+
+
+def test_tessellate_with_ids_requires_handle() -> None:
+    """Empty params must short-circuit with ``bad_params`` before we touch
+    the CadQuery import — same posture as ``cad.export``."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.tessellate_with_ids({})
+    assert exc_info.value.code == "bad_params"
+
+
+def test_tessellate_with_ids_rejects_negative_tolerance() -> None:
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.tessellate_with_ids({
+            "handle": "script:never-existed",
+            "toleranceMm": -0.5,
+        })
+    assert exc_info.value.code == "invalid_numeric_params"
+
+
+def test_tessellate_with_ids_rejects_non_numeric_tolerance() -> None:
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.tessellate_with_ids({
+            "handle": "script:never-existed",
+            "toleranceMm": "fine",
+        })
+    assert exc_info.value.code == "invalid_numeric_params"
+
+
+def test_tessellate_with_ids_rejects_unknown_handle_when_no_cadquery() -> None:
+    """Handle lookup happens BEFORE CadQuery import so the failure mode is
+    deterministic regardless of whether the pip dependency exists in the
+    sidecar env."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.tessellate_with_ids({
+            "handle": "script:never-existed",
+            "toleranceMm": 0.1,
+        })
+    assert exc_info.value.code == "invalid_handle"
+
+
+# ── Tier 2: face-tagged tessellation full round-trip ─────────────────────
+
+
+@requires_cadquery
+def test_tessellate_with_ids_box_has_six_faces() -> None:
+    """A cq.box has 6 axis-aligned faces by construction. The face-tagged
+    tessellation MUST surface all six in the ``faceMap`` dict, and every
+    triangle MUST be tagged with a face id in the 0..5 range — the load-
+    bearing pre-condition for the renderer's mouse-ray → face mapping.
+    """
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(20, 15, 10)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    r = cad_handlers.tessellate_with_ids({"handle": handle})
+
+    # Shape sanity. Vertices come in flat (x,y,z) triples; indices come in
+    # flat (i0,i1,i2) triples.
+    assert isinstance(r["vertices"], list)
+    assert isinstance(r["indices"], list)
+    assert isinstance(r["faceIds"], list)
+    assert len(r["vertices"]) % 3 == 0
+    assert len(r["indices"]) % 3 == 0
+
+    # Parallel-array invariant — broken contract means every renderer
+    # selection lookup silently lies about which face was hit.
+    assert len(r["faceIds"]) == r["triangleCount"]
+    assert len(r["indices"]) == r["triangleCount"] * 3
+
+    # bbox echoed from the handle.
+    bbox = r["bbox"]
+    assert bbox["min"][0] < 0 < bbox["max"][0]  # box centered at origin
+
+    # 6 faces in the dict, keyed by string id.
+    face_map = r["faceMap"]
+    assert isinstance(face_map, dict)
+    assert len(face_map) == 6, f"expected 6 faces, got {sorted(face_map.keys())}"
+    for face_id in range(6):
+        entry = face_map[str(face_id)]
+        assert entry["kind"] == "face"
+        # Every box face should have non-zero area.
+        assert entry["area"] > 0.0, (
+            f"face {face_id} reported zero area: {entry!r}"
+        )
+        # occtHash is always an int; 0 is a fallback for binding mismatches.
+        assert isinstance(entry["occtHash"], int)
+
+    # Every triangle must be tagged with a face id pointing into the face_map.
+    valid_ids = set(int(k) for k in face_map.keys())
+    assert all(fid in valid_ids for fid in r["faceIds"]), (
+        f"unknown face ids in faceIds; valid={valid_ids}"
+    )
+
+
+@requires_cadquery
+def test_tessellate_with_ids_face_ids_stable_across_reruns() -> None:
+    """Stability pin: the same script produces the same face id assignment
+    across two independent execute_script → tessellate_with_ids round trips.
+    This is what lets the renderer remember a selection across edits — if
+    face id 3 means "top" today it must mean "top" tomorrow.
+    """
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(20, 15, 10)
+"""
+    # First run
+    exec1 = cad_handlers.execute_script({"script": script})
+    r1 = cad_handlers.tessellate_with_ids({"handle": exec1["meshes"][0]["handle"]})
+
+    # Second run — same script, fresh handle.
+    exec2 = cad_handlers.execute_script({"script": script})
+    r2 = cad_handlers.tessellate_with_ids({"handle": exec2["meshes"][0]["handle"]})
+
+    # Same face count + same per-face areas (within tessellation noise).
+    assert set(r1["faceMap"].keys()) == set(r2["faceMap"].keys())
+    for fid in r1["faceMap"]:
+        a1 = r1["faceMap"][fid]["area"]
+        a2 = r2["faceMap"][fid]["area"]
+        assert abs(a1 - a2) < 1e-6, (
+            f"face {fid} area drifted: run1={a1!r} run2={a2!r}"
+        )
+        # OCCT hash is the strongest stability signal we can publish to the
+        # renderer. If CadQuery's binding exposes HashCode (common case), the
+        # two runs MUST agree — same construction history → same hash.
+        h1 = r1["faceMap"][fid]["occtHash"]
+        h2 = r2["faceMap"][fid]["occtHash"]
+        if h1 != 0 or h2 != 0:  # both 0 means binding mismatch, not a drift
+            assert h1 == h2, (
+                f"face {fid} OCCT hash drifted: run1={h1} run2={h2}"
+            )
+
+
+@requires_cadquery
+def test_tessellate_with_ids_face_ids_within_triangle_count() -> None:
+    """Every entry of ``faceIds`` MUST be a non-negative integer within the
+    ``faceMap`` key set. A renderer that hits an unknown face id falls back
+    to "no selection", which is a silent loss of click responsiveness.
+    """
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(10, 10, 10)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    r = cad_handlers.tessellate_with_ids({
+        "handle": exec_result["meshes"][0]["handle"],
+        "toleranceMm": 0.05,
+    })
+
+    valid_ids = set(int(k) for k in r["faceMap"].keys())
+    for fid in r["faceIds"]:
+        assert isinstance(fid, int)
+        assert fid >= 0
+        assert fid in valid_ids
+
+
+@requires_cadquery
+def test_execute_script_embeds_face_map_on_meshes() -> None:
+    """``cad.execute_script`` MUST also embed the face-tagged tessellation
+    on each produced mesh (best-effort) so the renderer can wire selection
+    immediately without a second IPC round trip.
+
+    A future CadQuery refactor that breaks ``face.tessellate`` would surface
+    as a missing ``faceMap`` / ``faceIds`` on the mesh (the selection-failure
+    fallback), NOT as a broken ``execute_script`` result — Safety Rule 1:
+    the CAM STL path must keep working even when selection breaks.
+    """
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(8, 8, 8)
+"""
+    r = cad_handlers.execute_script({"script": script})
+    mesh = r["meshes"][0]
+    # Backward-compat: existing fields are always present.
+    assert "handle" in mesh
+    assert "stlPath" in mesh
+    assert "triangleCount" in mesh
+    assert "bbox" in mesh
+    # New CAD V1 selection fields (best-effort — absence is documented).
+    assert "faceMap" in mesh
+    assert "faceIds" in mesh
+    assert len(mesh["faceMap"]) == 6  # box has 6 faces
+    assert len(mesh["faceIds"]) > 0
+    # Every faceId must point into the faceMap.
+    valid = set(int(k) for k in mesh["faceMap"].keys())
+    assert all(fid in valid for fid in mesh["faceIds"])
+
+
+@requires_cadquery
+def test_tessellate_with_ids_cylinder_lateral_face_has_area() -> None:
+    """A cylinder has 3 faces (top disk, bottom disk, curved side). The
+    curved side is the largest face and the one selection in real-world
+    use most often. Pin its area to a known formula so a CadQuery refactor
+    that drops the curved face from the face list is caught immediately.
+    """
+    script = """
+import cadquery as cq
+# Radius 5, height 20 -> lateral area = 2 * pi * r * h = 200*pi ≈ 628.319
+result = cq.Workplane('XY').cylinder(20, 5)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    r = cad_handlers.tessellate_with_ids({
+        "handle": exec_result["meshes"][0]["handle"],
+    })
+
+    assert len(r["faceMap"]) == 3  # top + bottom + side
+    # The largest face is the cylindrical side.
+    areas = sorted((entry["area"] for entry in r["faceMap"].values()), reverse=True)
+    largest = areas[0]
+    expected_lateral = 2.0 * math.pi * 5.0 * 20.0
+    assert abs(largest - expected_lateral) < 1.0, (
+        f"lateral area mismatch: got {largest!r}, expected ~{expected_lateral!r}"
+    )

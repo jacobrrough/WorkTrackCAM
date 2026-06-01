@@ -22,6 +22,14 @@ import {
   type CameraAnimationState,
   type StandardView
 } from './viewport3d-camera-animate'
+import {
+  makeFaceSelection,
+  type Selection
+} from './selection-state'
+import {
+  triangleToFaceId,
+  trianglesForFace
+} from './selection-raycast'
 
 export type MeasureMarker = { x: number; y: number; z: number }
 
@@ -65,9 +73,106 @@ type Props = {
   onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
   onCenterOnBed?: () => void
   onSnapToBed?: () => void
+  /**
+   * CAD V1 Workflow H — entity-selection callback. Fires when the
+   * operator left-clicks the solid in plain (no-modifier) mode AND the
+   * hit triangle resolves to a face id via the geometry's
+   * `userData.faceIds` parallel array.
+   *
+   * Mutually exclusive with `measureMode`, `projectSketchMode`,
+   * `facePickMode`, and `layOnFaceMode` — the parent's viewport
+   * reducer ensures only one pick mode is active at a time.
+   *
+   * Receives a `Selection` value (currently always `{ kind: 'face' }`
+   * in V1; the wider union is in place so the upcoming edge / vertex
+   * picks can extend the callback without breaking consumers).
+   */
+  onSelect?: (selection: Selection) => void
+  /**
+   * Currently-highlighted face id. When non-null, the viewport renders
+   * a wire-outline overlay along the boundary triangles of that face
+   * so the operator gets clear visual feedback for the active
+   * selection.
+   *
+   * The component looks up triangles from the geometry's
+   * `userData.faceIds` array; if no `faceIds` are present (e.g. legacy
+   * tessellation), the overlay silently no-ops.
+   */
+  highlightedFaceId?: number | null
 }
 
 const HOME_POS: [number, number, number] = [120, 90, 120]
+
+/**
+ * Read the `faceIds` parallel array stashed on the geometry's `userData`
+ * by `DesignWorkspace` after `cad.tessellate_with_ids`. Defensive — when
+ * the array is missing or malformed (legacy `cad.execute_script`-only
+ * tessellation), returns `null` so the click handler can short-circuit.
+ *
+ * Exported for tests; pure (no Three.js dependencies on the value side).
+ */
+export function readGeometryFaceIds(
+  geometry: THREE.BufferGeometry | null | undefined
+): readonly number[] | null {
+  if (!geometry || !geometry.userData) return null
+  const candidate = (geometry.userData as Record<string, unknown>).faceIds
+  if (!Array.isArray(candidate)) return null
+  // Trust the stash — DesignWorkspace already validated each entry is a
+  // finite integer before writing. Cast to readonly for downstream safety.
+  return candidate as readonly number[]
+}
+
+/**
+ * Build a `Float32Array` of triangle-edge segment positions for the
+ * highlight overlay. Renders three line segments per triangle (the
+ * three edges) so the wire-outline trace runs along every triangle of
+ * the picked face. Visually this draws the face boundary plus its
+ * interior tessellation edges — perfectly fine for V1 (the operator
+ * just needs unambiguous "this face is selected" feedback).
+ *
+ * Pure — no Three.js objects beyond reading the input geometry. Safe to
+ * call with a missing-position BufferGeometry (returns an empty array).
+ * Exported for the test pin.
+ */
+export function buildFaceHighlightSegments(
+  geometry: THREE.BufferGeometry,
+  triangleIndices: readonly number[],
+): Float32Array {
+  if (triangleIndices.length === 0) return new Float32Array(0)
+  const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  if (!positionAttr) return new Float32Array(0)
+  const indexAttr = geometry.index
+  // Each triangle contributes 3 line segments × 2 endpoints × 3 floats = 18 floats.
+  const out = new Float32Array(triangleIndices.length * 18)
+  let cursor = 0
+  for (const triIdx of triangleIndices) {
+    let i0: number
+    let i1: number
+    let i2: number
+    if (indexAttr) {
+      i0 = indexAttr.getX(triIdx * 3)
+      i1 = indexAttr.getX(triIdx * 3 + 1)
+      i2 = indexAttr.getX(triIdx * 3 + 2)
+    } else {
+      i0 = triIdx * 3
+      i1 = triIdx * 3 + 1
+      i2 = triIdx * 3 + 2
+    }
+    const x0 = positionAttr.getX(i0); const y0 = positionAttr.getY(i0); const z0 = positionAttr.getZ(i0)
+    const x1 = positionAttr.getX(i1); const y1 = positionAttr.getY(i1); const z1 = positionAttr.getZ(i1)
+    const x2 = positionAttr.getX(i2); const y2 = positionAttr.getY(i2); const z2 = positionAttr.getZ(i2)
+    // edge 0 → 1
+    out[cursor++] = x0; out[cursor++] = y0; out[cursor++] = z0
+    out[cursor++] = x1; out[cursor++] = y1; out[cursor++] = z1
+    // edge 1 → 2
+    out[cursor++] = x1; out[cursor++] = y1; out[cursor++] = z1
+    out[cursor++] = x2; out[cursor++] = y2; out[cursor++] = z2
+    // edge 2 → 0
+    out[cursor++] = x2; out[cursor++] = y2; out[cursor++] = z2
+    out[cursor++] = x0; out[cursor++] = y0; out[cursor++] = z0
+  }
+  return out
+}
 
 /** Geometry is already placed in world space (see `sketchPreviewPlacementMatrix`). */
 const Solid = memo(function Solid({
@@ -80,6 +185,8 @@ const Solid = memo(function Solid({
   onPickFace,
   layOnFaceMode,
   onLayOnFace,
+  onSelect,
+  highlightedFaceId,
   clipPlane
 }: {
   geometry: THREE.BufferGeometry
@@ -91,6 +198,8 @@ const Solid = memo(function Solid({
   onPickFace?: (pick: FacePick) => void
   layOnFaceMode?: boolean
   onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
+  onSelect?: (selection: Selection) => void
+  highlightedFaceId?: number | null
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -109,6 +218,37 @@ const Solid = memo(function Solid({
       edgesGeom.dispose()
     }
   }, [edgesGeom])
+
+  /**
+   * Build a `BufferGeometry` for the highlight overlay covering every
+   * triangle of the highlighted face. Memoized on (geometry, faceId) so
+   * orbiting the camera doesn't pay the cost of rebuilding the overlay.
+   * Returns `null` when no face is highlighted OR the geometry has no
+   * `faceIds` stash.
+   */
+  const highlightGeom = useMemo(() => {
+    if (highlightedFaceId == null) return null
+    if (!Number.isFinite(highlightedFaceId)) return null
+    const faceIds = readGeometryFaceIds(geometry)
+    if (!faceIds) return null
+    const triangles = trianglesForFace(highlightedFaceId, faceIds)
+    if (triangles.length === 0) return null
+    const positions = buildFaceHighlightSegments(geometry, triangles)
+    if (positions.length === 0) return null
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    return g
+  }, [geometry, highlightedFaceId])
+  const prevHighlightRef = useRef<THREE.BufferGeometry | null>(null)
+  useEffect(() => {
+    if (prevHighlightRef.current && prevHighlightRef.current !== highlightGeom) {
+      prevHighlightRef.current.dispose()
+    }
+    prevHighlightRef.current = highlightGeom
+    return () => {
+      highlightGeom?.dispose()
+    }
+  }, [highlightGeom])
 
   return (
     <group>
@@ -133,19 +273,36 @@ const Solid = memo(function Solid({
             }
             return
           }
-          if (!facePickMode || !onPickFace) return
-          e.stopPropagation()
-          const worldNormal = e.face?.normal.clone().transformDirection(e.object.matrixWorld).normalize()
-          if (!worldNormal || worldNormal.lengthSq() < 1e-8) return
-          let xAxis = new THREE.Vector3(1, 0, 0)
-          if (Math.abs(worldNormal.dot(xAxis)) > 0.97) xAxis.set(0, 1, 0)
-          xAxis.addScaledVector(worldNormal, -xAxis.dot(worldNormal)).normalize()
-          if (xAxis.lengthSq() < 1e-8) xAxis.set(0, 0, 1)
-          onPickFace({
-            origin: [e.point.x, e.point.y, e.point.z],
-            normal: [worldNormal.x, worldNormal.y, worldNormal.z],
-            xAxis: [xAxis.x, xAxis.y, xAxis.z]
-          })
+          if (facePickMode && onPickFace) {
+            e.stopPropagation()
+            const worldNormal = e.face?.normal.clone().transformDirection(e.object.matrixWorld).normalize()
+            if (!worldNormal || worldNormal.lengthSq() < 1e-8) return
+            let xAxis = new THREE.Vector3(1, 0, 0)
+            if (Math.abs(worldNormal.dot(xAxis)) > 0.97) xAxis.set(0, 1, 0)
+            xAxis.addScaledVector(worldNormal, -xAxis.dot(worldNormal)).normalize()
+            if (xAxis.lengthSq() < 1e-8) xAxis.set(0, 0, 1)
+            onPickFace({
+              origin: [e.point.x, e.point.y, e.point.z],
+              normal: [worldNormal.x, worldNormal.y, worldNormal.z],
+              xAxis: [xAxis.x, xAxis.y, xAxis.z]
+            })
+            return
+          }
+          // CAD V1 Workflow H — plain-click entity selection. Falls
+          // through only when no other pick mode owns the click, so the
+          // existing measurement / sketch flows keep priority.
+          if (onSelect) {
+            const faceIds = readGeometryFaceIds(geometry)
+            if (!faceIds) return
+            // Three.js event uses `faceIndex` (triangle index) when the
+            // geometry has an index attribute, which is what the sidecar
+            // emits for tessellate_with_ids.
+            const triIdx = e.faceIndex
+            const faceId = triangleToFaceId(triIdx, faceIds)
+            if (faceId === null) return
+            e.stopPropagation()
+            onSelect(makeFaceSelection(faceId))
+          }
         }}
       >
         <meshStandardMaterial
@@ -166,6 +323,29 @@ const Solid = memo(function Solid({
           clippingPlanes={clippingPlanes}
         />
       </lineSegments>
+      {/*
+        Selection highlight overlay — a bright wire outline along every
+        triangle edge of the currently-picked face. Renders only when
+        `highlightedFaceId` is set AND the geometry carries the
+        `userData.faceIds` parallel array (gracefully degrades on
+        legacy tessellations).
+      */}
+      {highlightGeom ? (
+        <lineSegments
+          geometry={highlightGeom}
+          position={[0, 0, 0]}
+          renderOrder={2}
+          data-testid="viewport-3d-selection-highlight"
+        >
+          <lineBasicMaterial
+            color="#fde047"
+            transparent
+            opacity={0.92}
+            depthTest={false}
+            clippingPlanes={clippingPlanes}
+          />
+        </lineSegments>
+      ) : null}
     </group>
   )
 })
@@ -472,7 +652,9 @@ export function Viewport3D({
   layOnFaceMode: layOnFaceModeExternal,
   onLayOnFace,
   onCenterOnBed,
-  onSnapToBed
+  onSnapToBed,
+  onSelect,
+  highlightedFaceId = null
 }: Props) {
   const disposed = useRef<THREE.BufferGeometry | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
@@ -557,6 +739,8 @@ export function Viewport3D({
               onPickFace={onPickFace}
               layOnFaceMode={layOnFaceActive}
               onLayOnFace={onLayOnFace ? (n) => { setLayOnFaceInternal(false); onLayOnFace(n) } : undefined}
+              onSelect={onSelect}
+              highlightedFaceId={highlightedFaceId}
               clipPlane={clipPlane}
             />
           </Bounds>

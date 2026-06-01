@@ -1,0 +1,133 @@
+/**
+ * CAD V1 selection state — pure, framework-agnostic helpers for the
+ * Design workspace's 3D entity picking flow (Workflow H).
+ *
+ * Design tenets:
+ *   1. **No React inside this module.** The component layer (`DesignWorkspace`)
+ *      owns the `useState<Selection | null>` cell; this module exposes
+ *      pure functions that return the next state. That keeps the helpers
+ *      unit-testable in the existing `node` vitest environment without a
+ *      jsdom dependency (same pattern as `Viewport3D.test.ts`).
+ *   2. **Discriminated union by `kind`.** A selection is either a face,
+ *      an edge, or a vertex. The MVP only exercises the `face` branch,
+ *      but the wider type is in place so the upcoming sketch-on-face
+ *      and edge-fillet flows can extend the union without reshaping the
+ *      consumer surface.
+ *   3. **OCCT hash is optional.** Once the sidecar's `tessellate_with_ids`
+ *      surface lands ([task #54]), each face will carry a stable OCCT
+ *      hash that survives re-tessellation. Until then, the renderer
+ *      uses only the local `faceId` (an index into the tessellation's
+ *      per-triangle parallel array). The two-step migration path is:
+ *        - V1 (now):     faceId only — selection cleared when the user
+ *                        re-runs the script (geometry pointer changes).
+ *        - V1.5 (later): occtHash present — selection survives re-runs
+ *                        when the topology is unchanged.
+ *
+ * Why this module instead of inlining the helpers into `DesignWorkspace`?
+ *   - Other surfaces (the upcoming `FeatureTree` row click, the
+ *     `MeasurementTool` "pick this entity" affordance, the sketch
+ *     placement flow) will all need to read/write the same selection
+ *     cell. Pulling the state shape + transitions into one file means
+ *     there's exactly one source of truth for "what does a selection
+ *     look like" — and one place to audit when the sidecar widens the
+ *     wire types.
+ */
+
+// ── Discriminated union ─────────────────────────────────────────────────────
+
+/** A picked face on the active body. */
+export interface FaceSelection {
+  readonly kind: 'face'
+  /** 0-based index into the mesh's `userData.faceIds` parallel array. */
+  readonly faceId: number
+  /**
+   * Stable OCCT topology hash returned by the sidecar's
+   * `cad.tessellate_with_ids` handler. Absent in V1 — once the sidecar
+   * surface lands, selections that have a hash will survive re-runs of
+   * the script when the topology is unchanged.
+   */
+  readonly occtHash?: string
+}
+
+/** A picked edge between two faces. Reserved for V1.5. */
+export interface EdgeSelection {
+  readonly kind: 'edge'
+  readonly faceId: number
+  readonly occtHash?: string
+}
+
+/** A picked vertex (corner). Reserved for V1.5. */
+export interface VertexSelection {
+  readonly kind: 'vertex'
+  readonly faceId: number
+  readonly occtHash?: string
+}
+
+export type Selection = FaceSelection | EdgeSelection | VertexSelection
+
+// ── Constructors ────────────────────────────────────────────────────────────
+
+/**
+ * Build a `FaceSelection`. Exists so callers don't repeat the literal
+ * `{ kind: 'face' }` discriminator at every callsite and so a future
+ * shape change (e.g. adding a normal vector) lands in one place.
+ */
+export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelection {
+  return occtHash !== undefined
+    ? { kind: 'face', faceId, occtHash }
+    : { kind: 'face', faceId }
+}
+
+// ── Transitions ─────────────────────────────────────────────────────────────
+
+/**
+ * "Set" the selection. Returns the `next` value untouched. Exists as a
+ * named transition so future invariants (logging, telemetry, debounced
+ * UI commits) have one place to hook.
+ *
+ * NOTE: callers pass `null` to clear via `clearSelection` instead -- but
+ * the helper accepts `null` too for symmetry with the React `setState`
+ * dispatcher signature.
+ */
+export function setSelection(_prev: Selection | null, next: Selection | null): Selection | null {
+  void _prev
+  return next
+}
+
+/**
+ * Toggle the selection: re-clicking the same entity clears it; clicking
+ * a different entity replaces it. Equality is determined by `kind` +
+ * `faceId` (V1 -- `occtHash` ignored for toggle so the user can re-click
+ * the same face even when the hash is missing).
+ *
+ * Returns `null` when the click hit the currently-selected entity (so
+ * the operator can dismiss a selection without a separate "clear" step,
+ * matching the Fusion 360 / Onshape interaction model).
+ */
+export function toggleSelection(prev: Selection | null, next: Selection): Selection | null {
+  if (prev === null) return next
+  if (isSameEntity(prev, next)) return null
+  return next
+}
+
+/**
+ * Clear the selection. Always returns `null`. Named export rather than
+ * a literal so consumers can rely on the function identity in
+ * `useEffect` dependency arrays.
+ */
+export function clearSelection(): null {
+  return null
+}
+
+// ── Equality helper (exported for tests + downstream consumers) ─────────────
+
+/**
+ * Two selections are "the same entity" when they have the same `kind`
+ * AND the same `faceId`. The OCCT hash is intentionally ignored here --
+ * V1 needs the click-to-deselect behavior to work even before the
+ * sidecar starts emitting hashes.
+ */
+export function isSameEntity(a: Selection, b: Selection): boolean {
+  if (a.kind !== b.kind) return false
+  return a.faceId === b.faceId
+}

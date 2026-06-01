@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { registerCadIpc } from './ipc-cad'
 import { registerCoreIpc } from './ipc-core'
 import { registerFabricationIpc } from './ipc-fabrication'
+import { registerMachineIpc } from './ipc-machine'
 import { registerModelingIpc } from './ipc-modeling'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
 import {
@@ -107,6 +108,11 @@ app.whenReady().then(async () => {
   // sidecar. Registered alongside the other modeling channels so the
   // ordering invariant above keeps holding for cold-start renders.
   registerCadIpc(ipcCtx)
+  // Workflow F: machine:estop — safety-critical AppHeader STOP button.
+  // Dispatches per-machine abort (K2 Moonraker emergency_stop, Carvera
+  // fallback toast, Laguna physical-e-stop advisory). Registered next to
+  // the other IPC namespaces so the ordering invariant keeps holding.
+  registerMachineIpc(ipcCtx)
 
   createWindow()
 

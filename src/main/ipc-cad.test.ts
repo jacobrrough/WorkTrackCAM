@@ -64,14 +64,17 @@ import {
   CAD_SCRIPT_MAX_BYTES,
   coerceExecuteResult,
   coerceListOperationsResult,
+  coerceTessellateWithIdsResult,
   mapBridgeError,
   registerCadIpc,
   validateExecutePayload,
   validateExportPayload,
   validateListOperationsPayload,
+  validateTessellateWithIdsPayload,
   type CadExecuteResponse,
   type CadExportResponse,
-  type CadListOperationsResponse
+  type CadListOperationsResponse,
+  type CadTessellateWithIdsResponse
 } from './ipc-cad'
 import type { MainIpcWindowContext } from './ipc-context'
 import * as pythonBridgeModule from './sidecar/python-bridge'
@@ -101,9 +104,9 @@ beforeEach(() => {
 // ── A. Handler-shape pin ────────────────────────────────────────────────────
 
 describe('registerCadIpc', () => {
-  it('registers the three documented CAD channels', () => {
+  it('registers the four documented CAD channels', () => {
     registerCadIpc(createMockContext())
-    for (const ch of ['cad:execute', 'cad:export', 'cad:listOperations']) {
+    for (const ch of ['cad:execute', 'cad:export', 'cad:listOperations', 'cad:tessellateWithIds']) {
       expect(handlers.has(ch), `missing handler for channel "${ch}"`).toBe(true)
     }
   })
@@ -524,5 +527,230 @@ describe('cad:listOperations handler', () => {
       expect(r.result.parseError?.line).toBe(3)
       expect(r.result.parameters).toEqual([])
     }
+  })
+})
+
+// ── F. cad.tessellate_with_ids -- validator + coercer + handler ─────────────
+//
+// New selection-grade tessellator (CAD V1 selection foundation). The
+// sidecar returns ``{ vertices, indices, faceIds, triangleCount, bbox,
+// faceMap }``; the IPC layer enforces:
+//   - `handle` is required at the boundary (no spawn until validated)
+//   - `toleranceMm` is optional but typed (positive, finite) when present
+//   - malformed sidecar envelopes coerce to `sidecar_protocol_error`
+//   - the wire `cad.tessellate_with_ids` method name is the dispatch key
+
+describe('validateTessellateWithIdsPayload', () => {
+  it('rejects null / non-object payloads', () => {
+    const r = validateTessellateWithIdsPayload(null) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+  })
+
+  it('rejects missing handle', () => {
+    const r = validateTessellateWithIdsPayload({}) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects empty-string handle', () => {
+    const r = validateTessellateWithIdsPayload({ handle: '' }) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects non-positive toleranceMm', () => {
+    const r = validateTessellateWithIdsPayload({
+      handle: 'h1',
+      toleranceMm: -0.001
+    }) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_tolerance')
+
+    const zero = validateTessellateWithIdsPayload({
+      handle: 'h1',
+      toleranceMm: 0
+    }) as CadTessellateWithIdsResponse
+    expect(zero.ok).toBe(false)
+    if (!zero.ok) expect(zero.error).toBe('invalid_tolerance')
+  })
+
+  it('rejects non-finite toleranceMm', () => {
+    const r = validateTessellateWithIdsPayload({
+      handle: 'h1',
+      toleranceMm: Number.NaN
+    }) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_tolerance')
+  })
+
+  it('accepts a minimal handle-only payload', () => {
+    const r = validateTessellateWithIdsPayload({ handle: 'h1' })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.handle).toBe('h1')
+      expect(r.payload.toleranceMm).toBeUndefined()
+    }
+  })
+
+  it('round-trips an explicit toleranceMm', () => {
+    const r = validateTessellateWithIdsPayload({ handle: 'h1', toleranceMm: 0.05 })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.toleranceMm).toBe(0.05)
+    }
+  })
+})
+
+describe('coerceTessellateWithIdsResult', () => {
+  function validResultRaw(): Record<string, unknown> {
+    return {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      faceIds: [3],
+      triangleCount: 1,
+      bbox: { min: [0, 0, 0], max: [1, 1, 0] },
+      faceMap: { '3': { kind: 'face', occtHash: 12345, area: 0.5 } }
+    }
+  }
+
+  it('returns null when vertices array is missing', () => {
+    const raw = validResultRaw()
+    delete raw.vertices
+    expect(coerceTessellateWithIdsResult(raw)).toBeNull()
+  })
+
+  it('returns null when indices array is missing', () => {
+    const raw = validResultRaw()
+    delete raw.indices
+    expect(coerceTessellateWithIdsResult(raw)).toBeNull()
+  })
+
+  it('returns null when faceIds array is missing', () => {
+    const raw = validResultRaw()
+    delete raw.faceIds
+    expect(coerceTessellateWithIdsResult(raw)).toBeNull()
+  })
+
+  it('returns null when bbox is malformed', () => {
+    const raw = validResultRaw()
+    raw.bbox = { min: [0, 0], max: [1, 1, 1] } // wrong arity
+    expect(coerceTessellateWithIdsResult(raw)).toBeNull()
+  })
+
+  it('preserves the mesh buffers and integer face ids', () => {
+    const r = coerceTessellateWithIdsResult(validResultRaw())
+    expect(r).not.toBeNull()
+    expect(r?.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0])
+    expect(r?.indices).toEqual([0, 1, 2])
+    expect(r?.faceIds).toEqual([3])
+    expect(r?.triangleCount).toBe(1)
+    expect(r?.faceMap['3']?.occtHash).toBe(12345)
+    expect(r?.faceMap['3']?.area).toBe(0.5)
+  })
+
+  it('replaces non-integer / negative face ids with -1 sentinel', () => {
+    const raw = validResultRaw()
+    raw.faceIds = [0, 1.5, -1, Number.NaN, 4]
+    raw.indices = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6]
+    raw.triangleCount = 5
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(r).not.toBeNull()
+    expect(r?.faceIds).toEqual([0, -1, -1, -1, 4])
+  })
+
+  it('drops malformed faceMap entries (wrong kind / missing occtHash)', () => {
+    const raw = validResultRaw()
+    raw.faceMap = {
+      '0': { kind: 'face', occtHash: 100 },
+      '1': { kind: 'edge', occtHash: 200 }, // wrong kind
+      '2': { kind: 'face' }, // missing occtHash
+      '3': null
+    }
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(r).not.toBeNull()
+    expect(Object.keys(r?.faceMap ?? {}).sort()).toEqual(['0'])
+  })
+
+  it('falls back to faceIds.length when triangleCount is missing', () => {
+    const raw = validResultRaw()
+    raw.faceIds = [0, 1, 2, 3]
+    delete raw.triangleCount
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(r?.triangleCount).toBe(4)
+  })
+})
+
+describe('cad:tessellateWithIds handler', () => {
+  function validBridgeResponse(): Record<string, unknown> {
+    return {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      faceIds: [3],
+      triangleCount: 1,
+      bbox: { min: [0, 0, 0], max: [1, 1, 0] },
+      faceMap: { '3': { kind: 'face', occtHash: 999, area: 0.5 } }
+    }
+  }
+
+  it('short-circuits on missing handle BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateWithIds')!
+    const r = (await handler({}, {})) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.tessellate_with_ids with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce(validBridgeResponse())
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateWithIds')!
+    const r = (await handler({}, { handle: 'h1', toleranceMm: 0.05 })) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0])
+      expect(r.result.faceIds).toEqual([3])
+      expect(r.result.faceMap['3']?.occtHash).toBe(999)
+    }
+    expect(bridgeCallMock).toHaveBeenCalledTimes(1)
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.tessellate_with_ids')
+    expect(paramsArg).toEqual({ handle: 'h1', toleranceMm: 0.05 })
+  })
+
+  it('omits toleranceMm from the wire payload when not supplied', async () => {
+    bridgeCallMock.mockResolvedValueOnce(validBridgeResponse())
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateWithIds')!
+    await handler({}, { handle: 'h1' })
+    const [, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(paramsArg).toEqual({ handle: 'h1' })
+  })
+
+  it('translates sidecar invalid_handle error envelopes', async () => {
+    bridgeCallMock.mockRejectedValueOnce({
+      code: 'sidecar_error',
+      message: 'handle not found',
+      sidecarCode: 'invalid_handle'
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateWithIds')!
+    const r = (await handler({}, { handle: 'stale' })) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_handle')
+    expect(bridgeStopMock).toHaveBeenCalled()
+  })
+
+  it('folds malformed sidecar responses into sidecar_protocol_error', async () => {
+    // Sidecar drift: returns usable vertices but no faceIds key at all.
+    const broken = validBridgeResponse()
+    delete broken.faceIds
+    bridgeCallMock.mockResolvedValueOnce(broken)
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateWithIds')!
+    const r = (await handler({}, { handle: 'h1' })) as CadTessellateWithIdsResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
   })
 })

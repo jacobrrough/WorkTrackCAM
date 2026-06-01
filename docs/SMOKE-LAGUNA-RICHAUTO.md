@@ -96,6 +96,51 @@ ONLY proceed if Step 3 passed. This is the first cut into real stock.
 Sign-off line:
 - [ ] Step 4 PASS (first production cut completed, no chatter, vacuum held, no terminator surprises)  /  signed _________________  /  date __________
 
+## E-stop / abort (Laguna)
+
+The Laguna Swift 5x10 is the **physical-only** machine for E-stop in WorkTrackCAM. By design, there is **no network or USB abort path**. The RichAuto A-series handheld pendant has no remote-control API that WorkTrackCAM can target; the file lives on a USB stick and the controller runs it autonomously. Once the cycle is running, the only abort paths are mechanical.
+
+> **READ THIS FIRST.** The Laguna's primary aborts are:
+> 1. **Pendant E-stop** (red mushroom on the RichAuto A-series handheld). Hit this first if it's the closest.
+> 2. **Control-box E-stop** (red mushroom on the control cabinet). Hit this if the pendant is across the table.
+> 3. **Pendant Pause / Stop button** (soft buttons on the pendant face). Use only for clean program-aborts where the spindle is safely above the stock; do NOT use during a runaway.
+>
+> The 60" x 120" envelope means the gantry can be **10 feet away from the pendant at the far end of a sheet** -- per the Safety section above, **confirm the operator can reach the pendant's E-stop AND the control-box E-stop without moving feet** before cycle start.
+
+### What the in-app button does
+
+Clicking the AppHeader's red **E-stop** button when the active machine is `laguna-swift-5x10` does the following:
+
+1. **Confirms first.** A native confirm dialog: `The Laguna has no network abort path. Press the physical E-stop on the RichAuto pendant or the control box. Show the reminder?`.
+2. **On confirm, shows a toast reminder** (no IPC to the machine, because there is none to fire): `Laguna Swift 5x10 has no remote abort. Press the RichAuto pendant E-stop (or control-box E-stop) NOW.`. The toast has a long sticky duration so the operator sees it even while looking away from the screen.
+3. **No bytes leave the workstation.** There is no Moonraker URL, no `carvera-cli`-equivalent, no serial bridge. The post-process pipeline writes to a USB stick and is otherwise disconnected from the machine.
+
+This is intentional. Adding a fake "abort" path that did nothing useful would be **dangerous** -- the operator could be misled into believing a remote stop is in flight while the spindle keeps cutting. The reminder toast is the safest possible behavior: it points the operator at the controls that actually work.
+
+### What to verify on the bench
+
+The Laguna E-stop sub-step is a tabletop drill, not a real abort:
+
+1. With the Laguna powered ON and the pendant unlocked but **no job running**, click the AppHeader **E-stop** button in WorkTrackCAM. Confirm the dialog.
+2. Read the toast. Confirm it tells you (in plain English) to press the pendant's physical E-stop, and confirm it does NOT claim any network action was taken.
+3. Walk to the machine. With the operator standing at the typical job-start position, time how many seconds it takes to reach (a) the pendant E-stop, (b) the control-box E-stop. Both should be reachable without moving feet during a runaway, per the Safety section above.
+4. Twist the pendant E-stop to confirm it untwists / re-arms cleanly (do this with no spindle command in flight). A stuck E-stop is a real failure mode that has to be fixed before any production cut.
+
+Sign-off line for Jacob:
+- [ ] E-stop sub-step PASS (toast reminder reads correctly, both physical E-stops reachable and arm cleanly) / signed _________________ / date __________
+
+### Why not add a remote abort path later?
+
+The RichAuto A-series pendant **does not expose a network API**. It is a closed-system handheld with a USB-A port for file input and an Ethernet port for firmware updates only -- there is no documented or supported abort-over-network endpoint. Reverse-engineering one would be a safety-critical experiment that WorkTrackCAM is intentionally not in the business of running.
+
+If a future controller swap (e.g. retrofitting the Laguna with a Mach3-on-PC head or a LinuxCNC controller) adds a real remote abort path, this section will be updated to wire it up. Until then: **physical E-stop is the path. The AppHeader button is a reminder, not a control.**
+
+### Cross-references
+
+- IPC target: search `'fab:estop'` in [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts) -- the Laguna branch returns the reminder payload without making any network call.
+- Higher-level architecture summary: [`docs/MACHINES.md`](MACHINES.md) "Emergency Stop (E-stop)" section.
+- Safety section above (this doc): operator-position E-stop reachability requirement.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

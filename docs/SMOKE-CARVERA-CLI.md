@@ -108,6 +108,57 @@ Sign-off line for Jacob:
 - [ ] Step 5 air-cut PASS  /  signed _________________  /  date __________
 - [ ] Step 5 real-cut PASS  /  signed _________________  /  date __________
 
+## 5a. E-stop / abort (Carvera)
+
+The Carvera is the **partial-path** machine for E-stop in WorkTrackCAM: the AppHeader's red **E-stop** button is wired up and will attempt an abort via `carvera-cli`, but the CLI's abort support **is not fully verified across CLI versions**. Treat the in-app E-stop as a **best-effort backup** and rely on the physical e-stop button on the Carvera as the primary abort path.
+
+> **READ THIS FIRST.** The **physical mushroom e-stop on the front of the Carvera** is the safe, deterministic abort. It cuts spindle power, de-energizes the steppers, and is independent of WiFi / USB / `carvera-cli`. In a real abort moment -- spindle in the wrong place, chuck loose, fixture lifting -- **hit the physical e-stop first** and only afterwards worry about the app state.
+
+### What the in-app button attempts
+
+1. **Confirms first.** Clicking the AppHeader E-stop button pops a native confirm dialog (`Stop the Carvera now? This sends an abort via carvera-cli. The Carvera CLI's abort support is not fully verified -- use the physical e-stop on the machine as your primary abort path.`). On confirm, the renderer fires the E-stop IPC; the main process resolves the active machine and selects the Carvera transport.
+2. **Dispatches via the same CLI as the upload pipeline.** The spawn helper from [`src/main/carvera-cli-run.ts`](../src/main/carvera-cli-run.ts) is invoked with an abort-style subcommand (the exact argv shape is pinned by `carvera-cli-run-pin.test.ts` and depends on the CLI version installed). The CLI then has to deliver an abort over the same WiFi or USB transport it uses for uploads.
+3. **Surfaces an outcome toast.** The same toast surface the upload uses reports the spawn's exit code and stderr (truncated to ~4000 chars). On success: `Abort sent to Carvera`. On failure (ENOENT, timeout, non-zero exit): the error toast carries the CLI's hint as if it were an upload failure.
+
+### Why this is a backup, not a primary path
+
+Even when the CLI is installed and reachable, **multiple things can swallow the abort silently**:
+
+- **Older / forked `carvera-cli` builds.** The community CLI's abort subcommand has had at least one wire-protocol change since the upload subcommand stabilized. Some installed builds will exit cleanly while the Carvera keeps cutting -- the CLI thought it sent the right packet, the firmware did not act on it.
+- **Transport contention.** If the Makera Controller desktop app is open in the foreground, it can be holding the WiFi / USB transport. The CLI will fail to claim it and the abort never reaches the firmware.
+- **CLI install missing or wrong path.** If `carveraCliPath` in Settings is empty or stale, the abort spawn surfaces `ENOENT` and the operator sees an error toast instead of a stopped machine.
+- **Network drop mid-job.** A long-running cut over WiFi can outlive the network link if the access point reboots; the in-app abort cannot reach a machine the workstation has no route to.
+
+For each of those failure modes, the physical e-stop on the Carvera bezel works regardless.
+
+### What to verify on the bench
+
+Run this sub-step AFTER Step 5 has signed off on the upload path:
+
+1. Push a 5-minute air-cut job (Step 5 procedure, NC file with spindle commanded OFF and all Z raised by 50 mm). Start the job from the Carvera touchscreen.
+2. Two minutes in, click the AppHeader **E-stop** button. Confirm the native dialog.
+3. Outcome A (CLI abort succeeds): the Carvera stops within a few seconds, touchscreen reports the program aborted, success toast in WorkTrackCAM. Note the CLI version under **File -> Settings -> External tool paths** -- you've confirmed THIS version supports the abort path.
+4. Outcome B (CLI abort silently fails): the Carvera keeps running, no error toast or a misleading success toast. **Immediately press the physical e-stop on the machine.** After the spindle is down, note the CLI version -- you've confirmed THIS version does NOT support the abort path, and the operator should treat the in-app button as **inert** for this build of the CLI until upstream `carvera-cli` lands a verified abort.
+5. Outcome C (error toast): the CLI failed to spawn or returned non-zero. Read the toast for ENOENT / timeout / transport hints. Even with the error toast, **press the physical e-stop** -- the toast tells you nothing about whether the Carvera received any partial packet, only that the CLI did not exit cleanly.
+
+Either outcome B or C means **the in-app E-stop is not a reliable abort path for this Carvera + CLI combination**. Document the result and the CLI version below; the user must default to the physical e-stop until a verified-good CLI build is installed.
+
+Sign-off line for Jacob:
+- [ ] E-stop sub-step run (note outcome A / B / C and CLI version)  /  signed _________________  /  date __________  /  CLI version _________________  /  Outcome _____
+
+### Operating posture
+
+- **Always have a hand near the physical e-stop** when running a Carvera job started from WorkTrackCAM, regardless of whether you used the in-app push or the touchscreen.
+- **Do not rely on the in-app E-stop alone** for a job where a runaway would damage stock or the spindle. Use the physical e-stop. The in-app button is a convenience for "I noticed the wrong file is running, the spindle has not engaged yet, and I'd like to stop without walking 10 feet."
+- **If the in-app E-stop reports success**, still walk to the machine and visually verify the spindle is stopped before resuming any other action. A success toast means the CLI exited 0, not that the firmware acted on the packet.
+
+### Cross-references
+
+- IPC target: search `'fab:estop'` in [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts).
+- Spawn helper: [`src/main/carvera-cli-run.ts`](../src/main/carvera-cli-run.ts).
+- Higher-level architecture summary: [`docs/MACHINES.md`](MACHINES.md) "Emergency Stop (E-stop)" section.
+- Upstream CLI abort tracking: <https://github.com/hagmonk/carvera-cli> (check the CHANGELOG before relying on the in-app button in production).
+
 ## 6. Troubleshooting
 
 | Symptom | Likely cause | Fix |

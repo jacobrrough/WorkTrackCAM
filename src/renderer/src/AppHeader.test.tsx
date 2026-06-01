@@ -199,6 +199,63 @@ describe('AppHeader — E-stop button gating', () => {
     })
     expect(html).toMatch(/aria-label="Emergency stop"/)
   })
+
+  // Visibility pin #1 (Workflow F task 3) — both prerequisites present.
+  it('renders the E-stop button only when onEstop AND currentMachineId are both present', () => {
+    const html = render({
+      currentMachineId: 'laguna-swift-5x10',
+      onEstop: vi.fn()
+    })
+    expect(html).toMatch(/data-testid="app-header-estop-button"/)
+    expect(html).toMatch(/data-action="estop"/)
+  })
+
+  // Visibility pin #2 (Workflow F task 3) — onEstop missing.
+  it('hides the E-stop button when onEstop is undefined (no callback wired)', () => {
+    const html = render({
+      currentMachineId: 'laguna-swift-5x10'
+      // onEstop intentionally omitted
+    })
+    expect(html).not.toMatch(/data-testid="app-header-estop-button"/)
+    expect(html).not.toMatch(/data-action="estop"/)
+  })
+
+  // Visibility pin #3 (Workflow F task 3) — currentMachineId null.
+  it('hides the E-stop button when currentMachineId is null even if onEstop is provided', () => {
+    const html = render({
+      currentMachineId: null,
+      onEstop: vi.fn()
+    })
+    expect(html).not.toMatch(/data-testid="app-header-estop-button"/)
+    expect(html).not.toMatch(/data-action="estop"/)
+  })
+
+  // Safety-treatment pin — the button must render with a visually
+  // distinctive red surface so operators never confuse it with the
+  // normal toolbar pills. The treatment is driven by inline style + the
+  // `app-header__estop--active` class so we don't have to ship CSS for
+  // a one-off here.
+  it('renders the E-stop button with a distinctive red treatment when active', () => {
+    const html = render({
+      currentMachineId: 'creality-k2-plus',
+      onEstop: vi.fn()
+    })
+    // Class hook for any future CSS overrides.
+    expect(html).toMatch(/class="app-header__estop app-header__estop--active"/)
+    // Inline style ensures the danger treatment ships without depending
+    // on a CSS file the parallel agents might touch.
+    expect(html).toMatch(/var\(--err\)/)
+  })
+
+  // The button must carry the documented data-testid so end-to-end and
+  // render-pin suites can target it without scraping label text.
+  it('exposes data-testid="app-header-estop-button" so suites can target it', () => {
+    const html = render({
+      currentMachineId: 'makera-carvera-4axis',
+      onEstop: vi.fn()
+    })
+    expect(html).toMatch(/data-testid="app-header-estop-button"/)
+  })
 })
 
 // ── Poll lifecycle (single initial poll, no recurring tick) ────────────

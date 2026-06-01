@@ -86,6 +86,7 @@ try:
         execute_script as _execute_script_core,
         export_by_handle as _export_by_handle_core,
         list_operations as _list_operations_core,
+        tessellate_with_face_ids as _tessellate_with_face_ids_core,
     )
 except ImportError:  # pragma: no cover - frozen-app import path
     import sys
@@ -102,6 +103,7 @@ except ImportError:  # pragma: no cover - frozen-app import path
         execute_script as _execute_script_core,
         export_by_handle as _export_by_handle_core,
         list_operations as _list_operations_core,
+        tessellate_with_face_ids as _tessellate_with_face_ids_core,
     )
 
 
@@ -264,10 +266,58 @@ def list_operations(params: dict[str, Any]) -> dict[str, Any]:
     return _list_operations_core(script)
 
 
+# ── BUILD 2: face-tagged tessellation (CAD V1 selection foundation) ──────
+#
+# ``cad.tessellate_with_ids`` returns a flat-buffer mesh PLUS a ``faceIds``
+# parallel array (length == triangleCount) and a ``faceMap`` dict so the
+# renderer can map mouse-ray hits to CadQuery faces. The body must already
+# be in the handle table (from a prior ``cad.execute_script`` or
+# ``cad.import_step``); the in-memory handle table is process-local.
+#
+# Wire result (kept in lock-step with ``src/shared/sidecar-protocol.ts``)::
+#
+#     {
+#       "vertices":      [x0,y0,z0, x1,y1,z1, ...]   # flat float array
+#       "indices":       [i0,i1,i2, i0,i1,i2, ...]   # flat int array
+#       "faceIds":       [0, 0, 1, 1, ...]           # length == triangleCount
+#       "triangleCount": int,
+#       "bbox":          {"min":[..3], "max":[..3]},
+#       "faceMap":       {"<id>": {"kind":"face", "occtHash":int, "area":float}}
+#     }
+
+
+def tessellate_with_ids(params: dict[str, Any]) -> dict[str, Any]:
+    """Build a face-tagged tessellation for a body already in the handle table.
+
+    Toleranace defaults to 0.1 mm to match ``cad.execute_script`` so the
+    triangle counts line up across the two calls for the same body. The
+    handle MUST come from a prior ``cad.execute_script`` or
+    ``cad.import_step``; restarting the sidecar invalidates handles.
+    """
+    handle = _require_str(params, "handle")
+
+    # Optional toleranceMm; default matches execute_script's bake.
+    tol_raw = params.get("toleranceMm", 0.1)
+    if not isinstance(tol_raw, (int, float)) or isinstance(tol_raw, bool):
+        raise _CadHandlerError(
+            "invalid_numeric_params",
+            "toleranceMm must be a number when provided",
+        )
+    tolerance = float(tol_raw)
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise _CadHandlerError(
+            "invalid_numeric_params",
+            "toleranceMm must be a positive finite number",
+        )
+
+    return _tessellate_with_face_ids_core(handle, tolerance_mm=tolerance)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "import_step": import_step,
     "tessellate": tessellate,
     "execute_script": execute_script,
     "export": export,
     "list_operations": list_operations,
+    "tessellate_with_ids": tessellate_with_ids,
 }

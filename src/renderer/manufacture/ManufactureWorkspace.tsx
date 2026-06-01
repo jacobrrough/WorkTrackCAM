@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
@@ -7,6 +7,7 @@ import {
   listContourCandidatesFromDesign,
   type DerivedContourCandidate
 } from '../../shared/cam-2d-derive'
+import { EmptyState } from '../src/EmptyState'
 import { resolveManufactureSetupForCam } from '../../shared/cam-cut-params'
 import { MESH_IMPORT_FILE_EXTENSIONS } from '../../shared/mesh-import-formats'
 import type { ManufactureFile, ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
@@ -53,6 +54,7 @@ import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
 import { LagunaNestingPanel } from './LagunaNestingPanel'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
+import { ProfileStack } from './ProfileStack'
 
 
 /**
@@ -169,6 +171,132 @@ export function WorkflowStageTabs({ env, stage, onChange }: WorkflowStageTabsPro
         </button>
       ))}
     </div>
+  )
+}
+
+/**
+ * UX MOVE 5 — Layer preview body for the FDM `preview` workflow stage.
+ *
+ * When the operator switches the workflow stage to "Preview" the right-panel
+ * content swaps to this focused view. It surfaces a brief layer summary from
+ * the slicer's stdout (last log line) when a slice has run, and an EmptyState
+ * inviting the user to run a slice when nothing has been produced yet.
+ *
+ * Pure presentation; no IPC or G-code mutation. Exported so the
+ * `ManufactureWorkspace.stage-content.test.tsx` render-pin tests can mount
+ * it directly via `renderToStaticMarkup` without dragging in Three.js or
+ * the plate-state stack.
+ */
+export interface LayerPreviewBodyProps {
+  /** Slicer stdout text from the most recent `slice:orca` run. Empty when no slice yet. */
+  readonly sliceOut: string
+  /** Absolute path to the most recent successfully-sliced G-code (null if none). */
+  readonly lastSliceGcodePath: string | null
+}
+
+export function LayerPreviewBody({ sliceOut, lastSliceGcodePath }: LayerPreviewBodyProps): ReactNode {
+  const hasSlice = (lastSliceGcodePath?.trim() ?? '').length > 0
+  if (!hasSlice) {
+    return (
+      <section
+        className="panel workspace-stage-body workspace-stage-body--preview"
+        aria-labelledby="mfg-stage-preview-heading"
+        data-testid="workflow-stage-body-preview"
+      >
+        <h2 id="mfg-stage-preview-heading">Layer preview</h2>
+        <EmptyState
+          testId="workflow-stage-preview-empty"
+          title="Layer preview — slice first"
+          body="Run a slice from the Prepare stage to populate the layer-by-layer preview."
+        />
+      </section>
+    )
+  }
+  const trimmed = sliceOut.trim()
+  const lastLine = trimmed.length > 0 ? trimmed.split(/\r?\n/).slice(-1)[0] ?? '' : ''
+  const lineCount = trimmed.length > 0 ? trimmed.split(/\r?\n/).length : 0
+  return (
+    <section
+      className="panel workspace-stage-body workspace-stage-body--preview"
+      aria-labelledby="mfg-stage-preview-heading"
+      data-testid="workflow-stage-body-preview"
+    >
+      <h2 id="mfg-stage-preview-heading">Layer preview</h2>
+      <p className="msg msg--muted">
+        Latest slice: <code data-testid="workflow-stage-preview-path">{lastSliceGcodePath}</code>
+      </p>
+      <dl className="workflow-stage-preview-stats" data-testid="workflow-stage-preview-stats">
+        <div>
+          <dt>Slicer log lines</dt>
+          <dd data-testid="workflow-stage-preview-line-count">{lineCount}</dd>
+        </div>
+        {lastLine.length > 0 ? (
+          <div>
+            <dt>Last log line</dt>
+            <dd><code>{lastLine}</code></dd>
+          </div>
+        ) : null}
+      </dl>
+    </section>
+  )
+}
+
+/**
+ * UX MOVE 5 — Toolpath simulation body for the CNC `simulate` workflow stage.
+ *
+ * Shows an EmptyState when no G-code has been generated yet, and a basic
+ * toolpath-line statistics readout once `output/cam.nc` exists. The full 3D
+ * simulation lives behind the `panelTab='simulate'` sub-tab and still renders
+ * there — this stage body is the focused preview surface for the workflow
+ * strip itself.
+ */
+export interface ToolpathSimulationBodyProps {
+  /** G-code text from the most recent `cam:run` (empty when no toolpath yet). */
+  readonly camOut: string
+}
+
+export function ToolpathSimulationBody({ camOut }: ToolpathSimulationBodyProps): ReactNode {
+  const trimmed = camOut.trim()
+  if (trimmed.length === 0) {
+    return (
+      <section
+        className="panel workspace-stage-body workspace-stage-body--simulate"
+        aria-labelledby="mfg-stage-simulate-heading"
+        data-testid="workflow-stage-body-simulate"
+      >
+        <h2 id="mfg-stage-simulate-heading">Toolpath simulation</h2>
+        <EmptyState
+          testId="workflow-stage-simulate-empty"
+          title="No simulation yet — generate G-code first"
+          body="Generate a toolpath from the Toolpaths stage, then return here to inspect it."
+        />
+      </section>
+    )
+  }
+  const lines = trimmed.split(/\r?\n/)
+  const motionLines = lines.filter((line) => /^G0?[01]\b/i.test(line.trim().replace(/;.*$/, ''))).length
+  return (
+    <section
+      className="panel workspace-stage-body workspace-stage-body--simulate"
+      aria-labelledby="mfg-stage-simulate-heading"
+      data-testid="workflow-stage-body-simulate"
+    >
+      <h2 id="mfg-stage-simulate-heading">Toolpath simulation</h2>
+      <p className="msg msg--muted">
+        Switch to the <strong>Simulate</strong> sub-tab below for the full 3D visualization.
+        This summary surfaces only the high-level G-code line counts.
+      </p>
+      <dl className="workflow-stage-simulate-stats" data-testid="workflow-stage-simulate-stats">
+        <div>
+          <dt>Total lines</dt>
+          <dd data-testid="workflow-stage-simulate-total-lines">{lines.length}</dd>
+        </div>
+        <div>
+          <dt>Motion lines (G0 / G1)</dt>
+          <dd data-testid="workflow-stage-simulate-motion-lines">{motionLines}</dd>
+        </div>
+      </dl>
+    </section>
   )
 }
 
@@ -1302,6 +1430,189 @@ export function ManufactureWorkspace({
 
   const platesForStrip = useMemo(() => getPlates(mfg), [mfg])
 
+  // ── Workflow-stage content (UX MOVE 5) ───────────────────────────────────────
+  //
+  // The chrome (WorkflowStageTabs / PlateTabs / ManufactureSubTabStrip /
+  // CamProgressBar) renders unchanged across all stages. The body inside
+  // `#manufacture-workspace-panel` swaps based on `workflowStage`:
+  //
+  //   FDM:
+  //     - 'prepare' → existing panelTab dispatch (Plan / Setup / Simulate /
+  //                   Slice / CAM / Calibrate / Tools). This is the default.
+  //     - 'preview' → focused Layer-preview body with EmptyState fallback.
+  //     - 'device'  → focused Send-to-K2 view with FilamentPicker + ProfileStack.
+  //   CNC:
+  //     - 'setup'     → existing panelTab dispatch (Setup is the natural
+  //                     starting tab; operator can still navigate sub-tabs).
+  //     - 'toolpaths' → existing panelTab dispatch (Toolpaths == panelTab='cam').
+  //     - 'simulate'  → focused Toolpath-simulation summary + EmptyState fallback.
+  //     - 'send'      → focused Send body with Carvera CLI + Laguna setup
+  //                     sheet button + ProfileStack.
+  //
+  // No new state — `workflowStage` already exists. Existing
+  // `WorkflowStageTabs.test.tsx` keeps passing because the chrome itself
+  // is unchanged; only the body switches per stage.
+
+  /**
+   * Wraps the parent's `onSaveSettingsField` (`Partial<AppSettings> → void`)
+   * so it matches the ProfileStack's API (`(field, value) → void`). This
+   * keeps the ProfileStack contract loose and lets the parent stay strict-
+   * typed against AppSettings.
+   */
+  const profileStackSaveSettingsField = useCallback(
+    (field: string, value: unknown): void => {
+      onSaveSettingsField({ [field]: value } as Partial<AppSettings>)
+    },
+    [onSaveSettingsField]
+  )
+
+  // Existing `panelTab` dispatch — extracted into a local variable so the
+  // workflow-stage switch can reuse it for the "primary" stages.
+  const panelTabBody: ReactNode = (
+    panelTab === 'plan' ? (
+      planBody
+    ) : panelTab === 'setup' ? (
+      <ManufactureSetupTab
+        projectDir={projectDir}
+        mfg={effectiveMfg}
+        machines={machines}
+        selectedSetupIndex={selectedSetupIndex}
+        selectedOpIndex={selectedOpIndex}
+        fitStockPadMm={fitStockPadMm}
+        assetStlOptions={assetStlOptions}
+        onSetSelectedSetupIndex={setSelectedSetupIndex}
+        onAddSetup={addSetup}
+        onRemoveSetup={removeSetup}
+        onUpdateSetup={updateSetup}
+        onUpdateSetupStock={updateSetupStock}
+        onUpdateSetupMaterialType={updateSetupMaterialType}
+        onUpdateSetupWcsOrigin={updateSetupWcsOrigin}
+        onUpdateSetupAxisMode={updateSetupAxisMode}
+        onFitStockPadChange={setFitStockPadMm}
+        onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
+        onSave={() => void save()}
+      />
+    ) : panelTab === 'simulate' ? (
+      /* -- SIMULATE TAB: full-screen 3D toolpath viewer -- */
+      <section className="makera-simulate-panel" aria-labelledby="mfg-simulate-heading">
+        <div className="makera-simulate-header">
+          <h2 id="mfg-simulate-heading" className="makera-simulate-heading">3D Toolpath Simulation</h2>
+          <p className="msg msg--muted makera-simulate-hint">
+            Visualizes the generated G-code as feed (cyan) and rapid (amber) tubes over the part mesh.
+            Generate a toolpath first via the <strong>CAM</strong> tab.
+          </p>
+        </div>
+        <div className="makera-simulate-canvas-wrap">
+          {projectDir ? (
+            <ManufactureCamSimulationPanel
+              projectDir={projectDir}
+              mfg={effectiveMfg}
+              tools={tools ?? null}
+              machine={camSimMachine}
+              layout="workspace"
+              stockSetupIndex={camResolvedSetupIdx}
+              previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
+              previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
+              camOut={camOut}
+              camStaleMeshRelativePaths={camStaleMeshRelativePaths}
+            />
+          ) : (
+            <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>CAM</strong> tab to visualize it here.</p>
+          )}
+        </div>
+      </section>
+    ) : panelTab === 'slice' ? (
+      <SliceManufacturePanel {...auxPanelProps} />
+    ) : panelTab === 'cam' ? (
+      <CamManufacturePanel {...auxPanelProps} />
+    ) : panelTab === 'calibrate' ? (
+      <CalibrationPanel
+        activeMachine={activeMachine}
+        settings={settings}
+        projectDir={projectDir}
+        onStatus={onStatus}
+        onGoSettings={onGoSettings}
+      />
+    ) : (
+      <ToolsManufacturePanel {...auxPanelProps} />
+    )
+  )
+
+  // FDM 'preview' stage body — focused layer-preview summary.
+  const previewStageBody: ReactNode = (
+    <LayerPreviewBody sliceOut={sliceOut} lastSliceGcodePath={lastSliceGcodePath} />
+  )
+
+  // FDM 'device' stage body — Send-to-K2 view + ProfileStack.
+  const deviceStageBody: ReactNode = (
+    <div
+      className="workspace-stage-body workspace-stage-body--device"
+      data-testid="workflow-stage-body-device"
+    >
+      <SliceManufacturePanel {...auxPanelProps} />
+      <ProfileStack
+        machineMode="fdm"
+        machine={activeMachine ?? null}
+        activeJob={null}
+        settings={settings}
+        manufacture={effectiveMfg}
+        tools={tools ?? null}
+        onSaveSettingsField={profileStackSaveSettingsField}
+        onSend={null}
+      />
+    </div>
+  )
+
+  // CNC 'simulate' stage body — focused toolpath summary.
+  const simulateStageBody: ReactNode = (
+    <ToolpathSimulationBody camOut={camOut} />
+  )
+
+  // CNC 'send' stage body — Carvera upload + Laguna setup sheet + ProfileStack.
+  const sendStageBody: ReactNode = (
+    <div
+      className="workspace-stage-body workspace-stage-body--send"
+      data-testid="workflow-stage-body-send"
+    >
+      <CamManufacturePanel {...auxPanelProps} />
+      <ProfileStack
+        machineMode="cnc"
+        machine={activeMachine ?? null}
+        activeJob={null}
+        settings={settings}
+        manufacture={effectiveMfg}
+        tools={tools ?? null}
+        onSaveSettingsField={profileStackSaveSettingsField}
+        onSend={null}
+      />
+    </div>
+  )
+
+  // Stage-level body selector. Primary stages fall through to the existing
+  // panelTab dispatch so the operator can still drill into Plan / Setup /
+  // Simulate / Slice / CAM / Calibrate / Tools sub-tabs.
+  let stageBody: ReactNode
+  switch (workflowStage) {
+    case 'preview':
+      stageBody = previewStageBody
+      break
+    case 'device':
+      stageBody = deviceStageBody
+      break
+    case 'simulate':
+      stageBody = simulateStageBody
+      break
+    case 'send':
+      stageBody = sendStageBody
+      break
+    case 'prepare':
+    case 'setup':
+    case 'toolpaths':
+    default:
+      stageBody = panelTabBody
+      break
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -1321,74 +1632,9 @@ export function ManufactureWorkspace({
         id="manufacture-workspace-panel"
         role="tabpanel"
         aria-labelledby={`mfg-subtab-${panelTab}`}
+        data-stage-content={workflowStage}
       >
-        {panelTab === 'plan' ? (
-          planBody
-        ) : panelTab === 'setup' ? (
-          <ManufactureSetupTab
-            projectDir={projectDir}
-            mfg={effectiveMfg}
-            machines={machines}
-            selectedSetupIndex={selectedSetupIndex}
-            selectedOpIndex={selectedOpIndex}
-            fitStockPadMm={fitStockPadMm}
-            assetStlOptions={assetStlOptions}
-            onSetSelectedSetupIndex={setSelectedSetupIndex}
-            onAddSetup={addSetup}
-            onRemoveSetup={removeSetup}
-            onUpdateSetup={updateSetup}
-            onUpdateSetupStock={updateSetupStock}
-            onUpdateSetupMaterialType={updateSetupMaterialType}
-            onUpdateSetupWcsOrigin={updateSetupWcsOrigin}
-            onUpdateSetupAxisMode={updateSetupAxisMode}
-            onFitStockPadChange={setFitStockPadMm}
-            onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
-            onSave={() => void save()}
-          />
-        ) : panelTab === 'simulate' ? (
-          /* -- SIMULATE TAB: full-screen 3D toolpath viewer -- */
-          <section className="makera-simulate-panel" aria-labelledby="mfg-simulate-heading">
-            <div className="makera-simulate-header">
-              <h2 id="mfg-simulate-heading" className="makera-simulate-heading">3D Toolpath Simulation</h2>
-              <p className="msg msg--muted makera-simulate-hint">
-                Visualizes the generated G-code as feed (cyan) and rapid (amber) tubes over the part mesh.
-                Generate a toolpath first via the <strong>CAM</strong> tab.
-              </p>
-            </div>
-            <div className="makera-simulate-canvas-wrap">
-              {projectDir ? (
-                <ManufactureCamSimulationPanel
-                  projectDir={projectDir}
-                  mfg={effectiveMfg}
-                  tools={tools ?? null}
-                  machine={camSimMachine}
-                  layout="workspace"
-                  stockSetupIndex={camResolvedSetupIdx}
-                  previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
-                  previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
-                  camOut={camOut}
-                  camStaleMeshRelativePaths={camStaleMeshRelativePaths}
-                />
-              ) : (
-                <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>CAM</strong> tab to visualize it here.</p>
-              )}
-            </div>
-          </section>
-        ) : panelTab === 'slice' ? (
-          <SliceManufacturePanel {...auxPanelProps} />
-        ) : panelTab === 'cam' ? (
-          <CamManufacturePanel {...auxPanelProps} />
-        ) : panelTab === 'calibrate' ? (
-          <CalibrationPanel
-            activeMachine={activeMachine}
-            settings={settings}
-            projectDir={projectDir}
-            onStatus={onStatus}
-            onGoSettings={onGoSettings}
-          />
-        ) : (
-          <ToolsManufacturePanel {...auxPanelProps} />
-        )}
+        {stageBody}
       </div>
     </div>
   )

@@ -7,8 +7,12 @@ import type { Plate } from '../../shared/manufacture-schema'
  *
  * The strip replaces the original small text-tab layout with a row of tile-
  * shaped plate "thumbs" (120x80) each carrying:
- *   - a thumbnail preview area (placeholder colored rect in MVP - real
- *     thumbnail rendering lands in V2),
+ *   - a thumbnail preview area. UX Move #7 (V2 follow-up of the prior wave)
+ *     wires real 3D-preview thumbnails when the parent supplies a
+ *     `plateThumbnails[plate.id]` data-URL (computed via
+ *     `plate-thumbnail.ts`'s `renderPlateThumbnail`); when no data-URL is
+ *     available (no mesh yet, vitest `node` env, OffscreenCanvas missing),
+ *     the strip falls back to the original colored-rect placeholder.
  *   - the plate name (truncated),
  *   - a status pill ("Idle" / "Slicing..." / "Done" / "Error") sourced from
  *     the optional `plateStatuses` prop (`undefined` -> "Idle"),
@@ -31,6 +35,12 @@ import type { Plate } from '../../shared/manufacture-schema'
  * IPC: NONE. Plates live in `manufacture.json` saved via `manufacture:save`.
  * Slice IPC routes through the optional `onSlicePlate` / `onSliceAllPlates`
  * callbacks passed by `ManufactureWorkspace`.
+ *
+ * V3 follow-up: move the `renderPlateThumbnail` offscreen Three.js render
+ * (currently invoked synchronously on the main renderer thread by the
+ * parent `ManufactureWorkspace`) into a Web Worker so plate-strip refreshes
+ * never block paint. The data-URL prop wiring here is already worker-safe
+ * (the parent owns whichever side computes the URL).
  */
 
 /**
@@ -57,6 +67,23 @@ export type PlateTabsProps = {
    * pipeline is wired through; the strip works fine without it.
    */
   plateStatuses?: Readonly<Record<string, PlateStatus>>
+  /**
+   * Optional per-plate PNG data-URLs produced by
+   * `renderPlateThumbnail` (see `plate-thumbnail.ts`). The parent
+   * (`ManufactureWorkspace`) computes one URL per plate from the
+   * plate's Three.js mesh/BufferGeometry and passes the map down.
+   *
+   * Missing entries (or `null` values) trigger the colored-rect
+   * placeholder fallback so the strip always paints something. This
+   * keeps the markup deterministic for the vitest `node` environment
+   * where offscreen WebGL rendering is unavailable, and gives the
+   * parent freedom to skip rendering for empty/loading plates.
+   *
+   * V3 follow-up: the parent moves the offscreen render into a Web
+   * Worker so plate-strip refreshes never block paint. The prop
+   * contract here is unchanged.
+   */
+  plateThumbnails?: Readonly<Record<string, string | null>>
   /** Called when the user selects a different plate. */
   onSelectPlate: (plateId: string) => void
   /** Called when the user clicks the "+" tile to add a new plate. */
@@ -102,6 +129,7 @@ export function PlateTabs({
   plates,
   activePlateId,
   plateStatuses,
+  plateThumbnails,
   onSelectPlate,
   onAddPlate,
   onRemovePlate,
@@ -263,6 +291,7 @@ export function PlateTabs({
             const isEditing = plate.id === editingPlateId
             const status: PlateStatus = plateStatuses?.[plate.id] ?? 'idle'
             const statusLabel = PLATE_STATUS_LABEL[status]
+            const thumbnailDataUrl = plateThumbnails?.[plate.id] ?? null
             const thumbClass = [
               'plate-thumb',
               isActive ? 'plate-thumb--active' : '',
@@ -277,10 +306,21 @@ export function PlateTabs({
               >
                 {isEditing ? (
                   <div className={thumbClass}>
-                    <div
-                      className={`plate-thumb__preview ${previewHueClass(plate.id)}`}
-                      aria-hidden="true"
-                    />
+                    {thumbnailDataUrl ? (
+                      <img
+                        className="plate-thumb__preview plate-thumb__preview--image"
+                        src={thumbnailDataUrl}
+                        alt=""
+                        aria-hidden="true"
+                        width={120}
+                        height={80}
+                      />
+                    ) : (
+                      <div
+                        className={`plate-thumb__preview ${previewHueClass(plate.id)}`}
+                        aria-hidden="true"
+                      />
+                    )}
                     <input
                       ref={editInputRef}
                       type="text"
@@ -314,10 +354,21 @@ export function PlateTabs({
                     onDoubleClick={() => beginEdit(plate)}
                     onKeyDown={(e) => onTabKeyDown(e, plate.id)}
                   >
-                    <span
-                      className={`plate-thumb__preview ${previewHueClass(plate.id)}`}
-                      aria-hidden="true"
-                    />
+                    {thumbnailDataUrl ? (
+                      <img
+                        className="plate-thumb__preview plate-thumb__preview--image"
+                        src={thumbnailDataUrl}
+                        alt=""
+                        aria-hidden="true"
+                        width={120}
+                        height={80}
+                      />
+                    ) : (
+                      <span
+                        className={`plate-thumb__preview ${previewHueClass(plate.id)}`}
+                        aria-hidden="true"
+                      />
+                    )}
                     <span className="plate-thumb__name">{plate.label}</span>
                     <span
                       className={`plate-thumb__status plate-thumb__status--${status}`}

@@ -46,8 +46,11 @@ import type {
   CadExportPayload,
   CadExportResponse,
   CadListOperationsPayload,
-  CadListOperationsResponse
+  CadListOperationsResponse,
+  CadTessellateWithIdsPayload,
+  CadTessellateWithIdsResponse
 } from '../main/ipc-cad'
+import type { MachineEstopPayload, MachineEstopResult } from '../main/ipc-machine'
 
 export type Api = {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -513,6 +516,27 @@ export type Api = {
     opts?: NestOptions
   }) => Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }>
 
+  // ── Machine control (Workflow F: AppHeader STOP button) ─────────────────
+  /**
+   * Safety-critical e-stop dispatch keyed on `machineId`:
+   *   - `creality-k2-plus`     → POST Moonraker `/printer/emergency_stop`
+   *                              (canonical Klipper M112 abort path).
+   *   - `makera-carvera-*`     → structured fallback toast — the community
+   *                              carvera-cli does not expose an abort verb,
+   *                              so the operator must use the physical
+   *                              e-stop button.
+   *   - `laguna-swift-5x10`    → structured "no remote abort" toast —
+   *                              the RichAuto pendant's red mushroom
+   *                              button is the only abort channel.
+   *
+   * Errors NEVER throw — every failure folds into
+   * `{ ok: false, error, hint? }` so the AppHeader can render an
+   * advisory toast without try/catch.
+   */
+  machine: {
+    estop: (payload: MachineEstopPayload) => Promise<MachineEstopResult>
+  }
+
   // ── Parametric CAD Design workspace (BUILD 2) ───────────────────────────
   /**
    * Parametric CAD bridge over the Python sidecar. Backed by
@@ -544,6 +568,18 @@ export type Api = {
      * every keystroke for the Design workspace's read-only FeatureTree.
      */
     listOperations: (payload: CadListOperationsPayload) => Promise<CadListOperationsResponse>
+    /**
+     * Selection-grade tessellation (CAD V1 Workflow H foundation).
+     * Returns the same per-triangle vertex/index buffers as
+     * `cad.tessellate`, plus a parallel `faceIds` array so the renderer
+     * can map a clicked triangle back to the source CadQuery face. Used
+     * by the Design workspace to power 3D entity picking (the
+     * Viewport3D ray-pick handler stashes `faceIds` onto the mesh's
+     * `userData` so the click handler can resolve a face ID in O(1)).
+     */
+    tessellateWithIds: (
+      payload: CadTessellateWithIdsPayload
+    ) => Promise<CadTessellateWithIdsResponse>
   }
 }
 
@@ -699,12 +735,20 @@ const api: Api = {
   // Laguna true-shape nesting v1 (Gap #9)
   nestingNestPolygons: (payload) => ipcRenderer.invoke('nesting:nest-polygons', payload),
 
+  // Machine control (Workflow F: AppHeader STOP button)
+  machine: {
+    estop: (payload) =>
+      ipcRenderer.invoke('machine:estop', payload) as Promise<MachineEstopResult>
+  },
+
   // Parametric CAD Design workspace (BUILD 2)
   cad: {
     execute: (payload) => ipcRenderer.invoke('cad:execute', payload) as Promise<CadExecuteResponse>,
     export: (payload) => ipcRenderer.invoke('cad:export', payload) as Promise<CadExportResponse>,
     listOperations: (payload) =>
-      ipcRenderer.invoke('cad:listOperations', payload) as Promise<CadListOperationsResponse>
+      ipcRenderer.invoke('cad:listOperations', payload) as Promise<CadListOperationsResponse>,
+    tessellateWithIds: (payload) =>
+      ipcRenderer.invoke('cad:tessellateWithIds', payload) as Promise<CadTessellateWithIdsResponse>
   }
 }
 

@@ -2264,6 +2264,33 @@
   max-width: 80%;
 }
 
+/*
+  CAD V1 Workflow H — selection status chip. Anchored at the bottom of
+  the viewport summary so the operator's eye lands on it after a click
+  without obscuring the build metadata above it.
+
+  Reuses the design-token vocabulary (--bg-elev, --txt0, --sp-*, etc.)
+  so the chip inherits the active theme without any hard-coded colors.
+  The yellow accent (--accent-warning) matches the highlight overlay
+  drawn by Viewport3D so operators can mentally tie "yellow chip" to
+  "yellow face outline" at a glance.
+*/
+.design-workspace__selection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-elev, rgba(253, 224, 71, 0.12));
+  border: 1px solid var(--accent-warning, #fde047);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
 /* Feature-tree column sections — two stacked groups (Parameters /
    Operations) plus a bottom action row for Send-to-CAM. */
 .design-workspace__feature-section {
@@ -3028,4 +3055,271 @@
    than mutating the primary `.plate-slice-split-btn` block above. */
 .plate-slice-split-btn {
   position: relative;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROFILE STACK (Workflow C / Agent 2 — unified Slice/CAM panel)
+   ───────────────────────────────────────────────────────────────────────────
+   The ProfileStack consolidates the per-machine slice/CAM action surfaces
+   (Filament + Material picker + Setup + Stock + Send button) into one
+   vertical stack with a segmented mode-toggle at the top (FDM | CNC).
+   The stack lives inside the Manufacture workspace right rail and replaces
+   the previous "scroll down to find the send button" pattern with a sticky
+   primary action anchored to the bottom of the panel.
+   Wired by Agent 2 in ProfileStack.tsx. CSS-only here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.profile-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-8);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--txt0);
+  font-family: var(--font);
+  min-height: 0;
+  position: relative;
+}
+
+/* Segmented control at the top of the stack — FDM | CNC. Pill-shaped row
+   inside the lighter bg1 wash so the toggle reads as one cohesive control
+   even though each button is independently clickable. */
+.profile-stack__mode-toggle {
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  padding: var(--sp-2);
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.profile-stack__mode-btn {
+  flex: 1 1 0;
+  padding: var(--sp-2) var(--sp-4);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--txt1);
+  font-family: var(--font);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-base),
+              background var(--transition-base),
+              border-color var(--transition-base);
+}
+.profile-stack__mode-btn:hover:not(.profile-stack__mode-btn--active) {
+  color: var(--txt0);
+}
+.profile-stack__mode-btn--active {
+  color: var(--txt0);
+  background: var(--bg2);
+  border-bottom-color: var(--accent);
+}
+.profile-stack__mode-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* Vertically stacked section group — title + body of key:value rows. */
+.profile-stack__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.profile-stack__section-heading {
+  margin: 0 0 var(--sp-2) 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  line-height: var(--leading-tight);
+}
+
+/* Key:value row inside a section. Baseline-aligned so the mono numeric
+   values align to the label even when the label uses a non-mono font. */
+.profile-stack__row {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.profile-stack__row-key {
+  flex: 0 0 auto;
+  min-width: 100px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--txt2);
+}
+.profile-stack__row-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sticky-bottom primary action. Composes with .btn and .btn-primary —
+   this rule only adds the large-variant chrome + sticky positioning so the
+   action is always one click away regardless of stack height. */
+.profile-stack__send-button {
+  position: sticky;
+  bottom: 0;
+  width: 100%;
+  margin-top: auto;
+  padding: var(--sp-4) var(--sp-8);
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  cursor: pointer;
+  transition: background var(--transition-base),
+              border-color var(--transition-base),
+              filter var(--transition-base);
+}
+.profile-stack__send-button:hover:not(:disabled) {
+  background: var(--accent-hi);
+  border-color: var(--accent-hi);
+}
+.profile-stack__send-button:active:not(:disabled) {
+  transform: scale(0.99);
+}
+.profile-stack__send-button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+.profile-stack__send-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* Responsive: under 800px the stack collapses to a single column with
+   tighter padding so it fits the right rail when the user shrinks the
+   window. Mode toggle, sections, and send button all flow vertically. */
+@media (max-width: 800px) {
+  .profile-stack {
+    padding: var(--sp-5);
+    gap: var(--sp-5);
+  }
+  .profile-stack__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-1);
+  }
+  .profile-stack__row-key {
+    min-width: 0;
+  }
+  .profile-stack__send-button {
+    padding: var(--sp-3) var(--sp-6);
+    font-size: var(--text-base);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORKFLOW-STAGE CONTENT SWAP (Workflow C / Agent 1)
+   ───────────────────────────────────────────────────────────────────────────
+   The body that gets swapped when the operator changes workflow stage
+   (Prepare/Preview/Device for FDM; Setup/Toolpaths/Simulate/Send for CNC).
+   A subtle 150ms opacity transition cues the swap without a full slide
+   animation that would feel sluggish on hardware. Per-stage modifiers are
+   purely semantic data-state hooks so future per-stage tweaks (e.g. a
+   different background tint on the Simulate stage) have a one-line landing
+   pad. They're visually identical for now.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.workflow-stage-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg0);
+  color: var(--txt0);
+  transition: opacity 150ms var(--ease-out-expo);
+}
+.workflow-stage-content--prepare,
+.workflow-stage-content--preview,
+.workflow-stage-content--device,
+.workflow-stage-content--setup,
+.workflow-stage-content--toolpaths,
+.workflow-stage-content--simulate,
+.workflow-stage-content--send {
+  /* Reserved per-stage hooks. Identical to the base for now — Agent 1
+     can add per-stage tweaks later without rewiring CSS plumbing. */
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3D PLATE THUMBNAIL (Workflow C / Agent 3)
+   ───────────────────────────────────────────────────────────────────────────
+   Augments the existing .plate-thumb__preview (defined ~line 2614) with
+   three sub-elements:
+     - __preview-img: the actual <img> rendering of the plate
+     - __preview-placeholder: kept around to back the per-plate hue palette
+       when no real preview exists yet
+     - __preview-loading: small spinner overlay while a thumbnail is being
+       generated in the background
+
+   The wrapper (.plate-thumb__preview) is position: relative so the
+   loading overlay can be absolutely positioned within it without affecting
+   the layout of neighbouring thumb tiles.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.plate-thumb__preview {
+  position: relative;
+  /* Inherits the rest of its chrome from the existing .plate-thumb__preview
+     block above; the only new rule is positioning so the loading overlay can
+     anchor to the preview area. */
+}
+.plate-thumb__preview-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--bg1);
+  border-radius: var(--radius-sm);
+}
+.plate-thumb__preview-placeholder {
+  /* The per-plate hue palette (.plate-thumb__preview--hue-{0..5}) backs
+     this element; we only need the box-sizing here. The hue rules already
+     supply the background colour. */
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+}
+.plate-thumb__preview-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+/* If the global .spinner primitive isn't injected, a CSS-only pulse
+   keeps the loading overlay readable. The pulse keyframe is shared with
+   the running-status indicator in the op tree (pulse at the bottom of
+   this file) so we don't define a duplicate. */
+.plate-thumb__preview-loading:not(:has(.spinner))::after {
+  content: '';
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+  animation: pulse 1.2s ease-in-out infinite;
 }

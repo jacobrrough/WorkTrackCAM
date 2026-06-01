@@ -136,6 +136,56 @@ Beyond those two, the 4-axis post adds a third rule: the initial motion block pa
 
 If your controller is not on this list, copy the closest dialect, change the profile's `id`, and exercise [`post-process-dialect-safety.test.ts`](../src/main/post-process-dialect-safety.test.ts) against it before running a real cut.
 
+## Emergency Stop (E-stop)
+
+WorkTrackCAM hosts a red **E-stop** button in the **AppHeader** (top-right of the window, **always visible** regardless of which workspace you are in -- Design, Manufacture, Workshop, Settings). It is the single in-app affordance for "stop the active machine right now." This section is the architecture summary; the per-machine **bench drills** live in the SMOKE docs cross-referenced below.
+
+### Architecture in one paragraph
+
+The AppHeader button is a renderer-side component. Clicking it pops a **native confirm dialog** (browser/Electron `confirm()`) before any IPC fires -- this is the load-bearing guard against an accidental mouse click halting a real machine. On confirm, the renderer dispatches the **`fab:estop` IPC** (search [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts)). The main process resolves the **active machine** from the project state, looks at the machine's `kind` + `dialect` + transport fields, and picks the correct per-machine handler. There is exactly **one** AppHeader button and **one** IPC entry point; the per-machine branching happens server-side so the renderer never has to know which transport applies.
+
+### Per-machine E-stop summary
+
+| Machine | Path | Confirms first? | Recovery | Primary path |
+|---|---|---|---|---|
+| `creality-k2-plus` | **Network** -- `POST /printer/emergency_stop` (Moonraker) -> Klipper `M112` firmware halt | Yes (native confirm) | **Power-cycle required** -- `M112` is not resumable | In-app button is **safe to use as primary** (deterministic, observable, well-tested upstream) |
+| `makera-carvera-3axis` / `makera-carvera-4axis` | **Partial** -- spawn `carvera-cli` with an abort subcommand. CLI abort support is **not fully verified** across CLI versions | Yes (native confirm) | Depends on CLI outcome: success -> Carvera reports aborted; silent failure -> spindle keeps running and operator must hit physical e-stop | **Physical e-stop on the Carvera bezel** is the primary path. The in-app button is a backup that may or may not succeed |
+| `laguna-swift-5x10` | **None** -- no remote abort path exists by design. The RichAuto A-series pendant has no network abort API | Yes (native confirm) | n/a -- pendant or control-box E-stop required | **Physical pendant E-stop** (or control-box E-stop) is the only abort. The in-app button shows a reminder toast pointing the operator at the physical controls; **no bytes leave the workstation** |
+
+### Confirm-before-fire rule
+
+Every machine's E-stop path goes through the native confirm dialog **before** the IPC fires. The confirm wording is **machine-specific**: it tells the operator what is about to happen and what the recovery posture is. For the K2 the wording mentions the M112 halt and the power-cycle. For the Carvera the wording warns that the CLI abort is not fully verified and recommends the physical e-stop. For the Laguna the wording tells the operator there is no network abort path and points them at the pendant. This wording lives in the renderer-side button component, NOT in a per-machine string table, because the operator is reading it under stress and the words have to match exactly what the IPC is about to do.
+
+The confirm dialog cannot be bypassed. There is intentionally no keyboard shortcut for E-stop -- a typo on the keyboard during a 12-hour print or a 4-axis rotary cycle is exactly the kind of accident the confirm guard exists to prevent.
+
+### Why three different paths?
+
+The three machines have **three fundamentally different abort architectures** that WorkTrackCAM intentionally surfaces honestly rather than abstracting over:
+
+- **K2 Plus** ships an open, documented network API (Moonraker) that exposes a clean firmware-halt endpoint. The community ecosystem has used `M112`-over-Moonraker in production for years. WorkTrackCAM can safely target this as a first-class abort path.
+- **Carvera** ships a closed first-party desktop app (Makera Controller) that has no headless mode. The community CLI we use for uploads (`carvera-cli`) **also** offers an abort subcommand, but its abort path has not stabilized across the CLI version history. WorkTrackCAM exposes the partial path while being explicit that the **physical e-stop is the primary**.
+- **Laguna** runs through a closed pendant (RichAuto A-series) with no documented remote-abort API. The bytes leave WorkTrackCAM on a USB stick and the workstation has no path to the running cycle at all. Adding a fake remote abort would be **dangerous** (the operator might be misled into believing a network stop was in flight); a reminder toast is the safest possible behavior.
+
+Pretending all three machines have the same E-stop story would be a safety lie. The docs and the UI both call out the difference so the operator knows what they actually have.
+
+### Per-machine bench drills
+
+Each SMOKE doc has a dedicated **E-stop / abort** sub-step that the operator runs on hardware before treating the in-app button as load-bearing:
+
+- **K2 Plus**: [`docs/SMOKE-K2-MOONRAKER.md`](SMOKE-K2-MOONRAKER.md) -- "E-stop / abort (K2 Plus)" section. Includes a live-cycle drill that proves the M112 halt and the power-cycle recovery.
+- **Carvera**: [`docs/SMOKE-CARVERA-CLI.md`](SMOKE-CARVERA-CLI.md) -- "5a. E-stop / abort (Carvera)" section. Includes a CLI-abort drill that explicitly records which CLI version supports the abort path on the operator's machine.
+- **Laguna Swift 5x10**: [`docs/SMOKE-LAGUNA-RICHAUTO.md`](SMOKE-LAGUNA-RICHAUTO.md) -- "E-stop / abort (Laguna)" section. Includes a tabletop drill verifying the reminder toast wording and the physical E-stop reachability.
+
+Operators must run the relevant sub-step **once per machine** before relying on the AppHeader button.
+
+### Cross-references
+
+- AppHeader location: search `AppHeader` in [`src/renderer/src/`](../src/renderer/src/) -- the button is rendered at the top-right.
+- IPC entry point: `'fab:estop'` in [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts).
+- K2 transport: Moonraker `POST /printer/emergency_stop` -- documented at <https://moonraker.readthedocs.io/en/latest/web_api/#emergency-stop>; Klipper M112 documented at <https://www.klipper3d.org/G-Codes.html#m112-emergency-stop>.
+- Carvera transport: [`src/main/carvera-cli-run.ts`](../src/main/carvera-cli-run.ts) spawn helper, same path the upload pipeline uses.
+- Laguna transport: none (by design). The in-app button shows a toast and returns.
+
 ## Safety — verifying posted G-code
 
 Every G-code file WorkTrackCAM posts is **unverified** until you prove it out on your control. The post templates say so in the header comments. Do this every time, especially after a profile or post-template change.

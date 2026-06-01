@@ -47,7 +47,8 @@ resources/samples/
 └── cad/                                <- parametric CadQuery starters
     ├── bracket.cq.py                   <- L-bracket (K2 / Carvera 3-axis)
     ├── sign.cq.py                      <- Engraved sign-board (Laguna)
-    └── cylinder.cq.py                  <- Helical-groove cylinder (Carvera 4-axis)
+    ├── cylinder.cq.py                  <- Helical-groove cylinder (Carvera 4-axis)
+    └── sphere-with-fillet.cq.py        <- Filleted cube (CAD V1 selection target)
 ```
 
 The wizard reads the directory via the `samples:list` IPC handler

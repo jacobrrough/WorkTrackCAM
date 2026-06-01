@@ -19,6 +19,7 @@ import { CarveraSetupPanel } from './CarveraSetupPanel'
 import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
 import { EmptyState } from '../src/EmptyState'
+import { ProfileStack, type ProfileStackDisplayMode } from './ProfileStack'
 
 const CAM_PREVIEW = 8000
 const countVisibleLines = (text: string): number => text.split(/\r?\n/).length
@@ -1041,5 +1042,65 @@ export function ToolsManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
         </p>
       ) : null}
     </section>
+  )
+}
+
+// ─── Device / Send stack wrapper ─────────────────────────────────────────────
+//
+// UX deep-dive synthesis move #5: the right-side profile stack. The standalone
+// `ProfileStack` component owns the layout; this wrapper bridges the existing
+// `ManufactureAuxPanelsProps` surface (so `ManufactureWorkspace.tsx` can drop
+// it in next to `SliceManufacturePanel` / `CamManufacturePanel`) into the new
+// `ProfileStackProps` shape.
+//
+// Important: the wrapper does NOT touch G-code bytes or own the Send payload.
+// It accepts an `onSend` callback from the parent (typically a thin closure
+// around the existing K2 Moonraker push / Carvera upload / Laguna export
+// handler) and delegates the click through. Disabled when `onSend` is null.
+
+export type ProfileStackPanelProps = ManufactureAuxPanelsProps & {
+  /** Controlled Recommended ⇆ Pro toggle. Defaults to 'recommended'. */
+  readonly displayMode?: ProfileStackDisplayMode
+  /** Optional callback when the operator toggles the mode pill. */
+  readonly onDisplayModeChange?: (mode: ProfileStackDisplayMode) => void
+  /**
+   * Primary Send-to-machine action. Pass `null` to render the button
+   * disabled (e.g. when the slice hasn't produced an on-disk file yet).
+   */
+  readonly onSend?: (() => void) | null
+  /** Lightweight active-job hint (id + display name only). Null = idle. */
+  readonly activeJob?: { readonly id: string; readonly name: string } | null
+}
+
+/**
+ * Renders the ProfileStack from the existing ManufactureAuxPanelsProps
+ * surface. Exposed as an additional surface so the new "Device" / "Send"
+ * workspace stage can mount it without rewriting the sibling panels.
+ *
+ * Backward compat: the legacy `SliceManufacturePanel` / `CamManufacturePanel`
+ * / `ToolsManufacturePanel` exports stay in place. This wrapper is purely
+ * additive.
+ */
+export function ProfileStackPanel(p: ProfileStackPanelProps): ReactNode {
+  const machine = p.activeMachine ?? null
+  const machineMode: 'fdm' | 'cnc' = machine?.kind === 'fdm' ? 'fdm' : 'cnc'
+  return (
+    <ProfileStack
+      machineMode={machineMode}
+      machine={machine}
+      activeJob={p.activeJob ?? null}
+      settings={p.settings}
+      manufacture={p.manufacture}
+      tools={p.tools}
+      displayMode={p.displayMode}
+      onModeChange={p.onDisplayModeChange}
+      onSend={p.onSend}
+      onSaveSettingsField={(field, value) => {
+        // Map the (field, value) signature back onto the existing
+        // Partial<AppSettings> shape so callers wired up to the legacy
+        // panels do not need a second IPC path.
+        p.onSaveSettingsField({ [field]: value } as Parameters<typeof p.onSaveSettingsField>[0])
+      }}
+    />
   )
 }

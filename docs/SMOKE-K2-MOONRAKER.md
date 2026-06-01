@@ -158,6 +158,53 @@ Procedure:
 Sign-off line for Jacob:
 - [ ] Step 5 PASS  /  signed _________________  /  date __________
 
+## E-stop / abort (K2 Plus)
+
+The K2 Plus is the ONE machine in the My-Shop fleet that has a **clean network E-stop path**: the firmware exposes `POST /printer/emergency_stop` over Moonraker, and Klipper turns that into an `M112` firmware halt. WorkTrackCAM's red **E-stop** button in the AppHeader (top-right, always visible) targets this endpoint whenever the active machine is `creality-k2-plus`.
+
+### What the button does
+
+1. **Confirms first.** Clicking the AppHeader E-stop button pops a native confirm dialog (`Stop the K2 Plus now? This will halt the printer firmware (M112). Recovery requires power-cycling the printer.`). The dialog exists so a stray mouse click does not nuke a 12-hour print. There is intentionally no keyboard shortcut on the button -- you must aim and confirm.
+2. **Dispatches the IPC.** On confirm, the renderer fires the E-stop IPC; the main process resolves the active machine, looks up its `kind` and dialect, and selects the K2 transport: a POST to `http://<printer-host>:7125/printer/emergency_stop`. The Moonraker URL is the same one in **Settings -> Moonraker** that the upload pipeline already uses; there is NO separate E-stop URL field.
+3. **Server-side: Moonraker -> Klipper -> M112.** Moonraker translates the HTTP POST into the Klipper `EMERGENCY_STOP` command, which is the firmware-level `M112` halt. From the printer's point of view this is the **same code path** as the operator pressing M112 on the touchscreen.
+4. **What `M112` does on the K2 Plus**:
+   - All steppers de-energize immediately (gantry can be moved by hand from this point on, including the heavy CoreXY assembly -- support it before powering down if it is mid-air).
+   - All heaters shut off (nozzle, bed, chamber).
+   - The Klipper process enters a **`shutdown` state**; every subsequent G-code command in the queue is dropped.
+   - The touchscreen reports `Printer is shutdown` in red.
+
+### Recovery is power-cycle ONLY
+
+`M112` is **not resumable**. Per Klipper's docs, after a `shutdown` the only way back to a `ready` state is:
+
+1. Toggle the K2 Plus power switch OFF, wait 10 seconds, then ON.
+2. Wait for the touchscreen to come back to the Fluidd home screen and for `klippy_state` to report `ready`.
+3. Re-home the printer before any further moves (the M112 halt loses the homed position).
+
+You **cannot** just click `Firmware Restart` in Fluidd and resume mid-print -- the print job state is gone with the shutdown. If you needed to **pause** instead of E-stop, use the **Pause** button (Step 5 above), which is the resumable path. The AppHeader red button is the **halt-the-machine-right-now** path; the toolbar **Pause** button is the **fix-something-and-come-back** path.
+
+### What to verify on the bench
+
+Run this sub-step at the END of Step 5, before signing off on Step 5:
+
+1. Push a 10-minute air-print with start. Two minutes in, click the AppHeader **E-stop** button (NOT the Pause button). Confirm the native dialog.
+2. Expected within 1-2 seconds:
+   - The K2 Plus stops moving mid-line. Stepper torque drops audibly (faint click).
+   - Touchscreen flips to red `Printer is shutdown` state.
+   - `curl http://<printer-host>:7125/server/info` reports `"klippy_state":"shutdown"`.
+3. Expected app behavior: a toast `E-stop sent to K2 Plus. Power-cycle the printer to recover.` and no further status polling (the renderer drops the print job from the active panel).
+4. Power-cycle the printer. Confirm `klippy_state` returns to `ready` and the file list in Fluidd still contains the air-print (it was uploaded, only the run was aborted).
+
+Sign-off line for Jacob:
+- [ ] E-stop sub-step PASS (M112 halt observed, power-cycle recovered) / signed _________________ / date __________
+
+### Cross-references
+
+- IPC target: search `'fab:estop'` in [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts).
+- Moonraker endpoint: `POST /printer/emergency_stop` (documented at <https://moonraker.readthedocs.io/en/latest/web_api/#emergency-stop>).
+- Klipper `M112` reference: <https://www.klipper3d.org/G-Codes.html#m112-emergency-stop>.
+- Higher-level architecture summary: [`docs/MACHINES.md`](MACHINES.md) "Emergency Stop (E-stop)" section.
+
 ## Step 6 -- failure-mode dry runs (NO printer interaction)
 
 The objective: prove the error paths surface readable messages instead of silent hangs. Keep the printer powered on but do these from the workstation only.

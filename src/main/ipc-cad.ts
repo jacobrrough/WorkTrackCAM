@@ -1,11 +1,12 @@
 /**
- * IPC layer for the parametric CAD Design workspace (BUILD 2).
+ * IPC layer for the parametric CAD Design workspace (BUILD 2 + CAD V1
+ * selection foundation).
  *
  * This module bridges the renderer's Design workspace to the Python sidecar's
- * `cad.execute_script` / `cad.export` / `cad.list_operations` handlers
- * (BUILD 1, in `engines/sidecar/cad_handlers.py`). It follows the same
- * dispatch pattern as `ipc-fabrication.ts` / `ipc-core.ts` /
- * `ipc-modeling.ts`:
+ * `cad.execute_script` / `cad.export` / `cad.list_operations` /
+ * `cad.tessellate_with_ids` handlers (in `engines/sidecar/cad_handlers.py`).
+ * It follows the same dispatch pattern as `ipc-fabrication.ts` /
+ * `ipc-core.ts` / `ipc-modeling.ts`:
  *
  *   - `registerCadIpc(ctx)` is called from `src/main/index.ts` inside
  *     `app.whenReady()` BEFORE `createWindow()` (IPC ordering invariant).
@@ -44,11 +45,13 @@ import type {
   CadExecuteScriptResult,
   CadExportFormat,
   CadExportResult,
+  CadFaceMapEntry,
   CadListOperationsResult,
   CadOperationSummary,
   CadParseError,
   CadScriptError,
   CadScriptParamValue,
+  CadTessellateWithIdsResult,
 } from '../shared/sidecar-protocol'
 import { PythonBridge, type PythonBridgeError } from './sidecar/python-bridge'
 import { isPythonPathSafe } from './path-security'
@@ -72,6 +75,10 @@ export type CadListOperationsResponse =
   | { ok: true; result: CadListOperationsResult }
   | { ok: false; error: string; hint?: string }
 
+export type CadTessellateWithIdsResponse =
+  | { ok: true; result: CadTessellateWithIdsResult }
+  | { ok: false; error: string; hint?: string }
+
 // ── Payload contracts (cross-checked in ipc-cad.test.ts) ────────────────────
 
 export type CadExecutePayload = {
@@ -87,6 +94,11 @@ export type CadExportPayload = {
 }
 
 export type CadListOperationsPayload = { script: string }
+
+export type CadTessellateWithIdsPayload = {
+  handle: string
+  toleranceMm?: number
+}
 
 // ── Validation constants ────────────────────────────────────────────────────
 
@@ -245,6 +257,54 @@ export function validateListOperationsPayload(
     }
   }
   return { ok: true, payload: { script: p.script } }
+}
+
+/**
+ * Validate a payload for the `cad:tessellateWithIds` IPC handler.
+ *
+ * `handle` is the only REQUIRED field -- the Design viewport's selection
+ * call site only knows the handle from a prior `cad:execute` (or
+ * `cad:import-step`) round-trip. `toleranceMm` is optional; the sidecar
+ * defaults to 0.1 mm to match the bake in `cad.execute_script`. Mesh data
+ * is returned in-memory (no `outPath`) because the renderer wants direct
+ * buffer geometry input, not another file-IO round trip.
+ *
+ * Mirrors the validator pattern in `validateExportPayload` -- pure, no
+ * FS / spawn / electron globals, so the unit test can exercise every
+ * branch without standing up a sidecar.
+ */
+export function validateTessellateWithIdsPayload(
+  raw: unknown,
+): { ok: true; payload: CadTessellateWithIdsPayload } | CadTessellateWithIdsResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:tessellateWithIds requires { handle, toleranceMm? }',
+    }
+  }
+  const p = raw as { handle?: unknown; toleranceMm?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  let toleranceMm: number | undefined
+  if (p.toleranceMm !== undefined) {
+    if (typeof p.toleranceMm !== 'number' || !Number.isFinite(p.toleranceMm) || p.toleranceMm <= 0) {
+      return {
+        ok: false,
+        error: 'invalid_tolerance',
+        hint: 'toleranceMm must be a positive finite number',
+      }
+    }
+    toleranceMm = p.toleranceMm
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      ...(toleranceMm !== undefined ? { toleranceMm } : {}),
+    },
+  }
 }
 
 // ── Error mapping helpers (pure, exported for tests) ────────────────────────
@@ -414,11 +474,108 @@ export function coerceListOperationsResult(raw: Record<string, unknown>): CadLis
   return parseError ? { parameters, operations, parseError } : { parameters, operations }
 }
 
+/**
+ * Result shape guard for a single `faceMap` entry. The sidecar may bin
+ * malformed entries (e.g. ``occtHash`` missing on a binding mismatch) so we
+ * mirror its defaults at the IPC boundary instead of trusting Python.
+ */
+function looksLikeFaceMapEntry(value: unknown): value is CadFaceMapEntry {
+  if (!value || typeof value !== 'object') return false
+  const e = value as Record<string, unknown>
+  if (e.kind !== 'face') return false
+  if (typeof e.occtHash !== 'number' || !Number.isFinite(e.occtHash)) return false
+  return true
+}
+
+function looksLikeBbox(value: unknown): value is {
+  min: [number, number, number]
+  max: [number, number, number]
+} {
+  if (!value || typeof value !== 'object') return false
+  const b = value as Record<string, unknown>
+  return (
+    Array.isArray(b.min) &&
+    Array.isArray(b.max) &&
+    b.min.length === 3 &&
+    b.max.length === 3 &&
+    b.min.every((v) => typeof v === 'number' && Number.isFinite(v)) &&
+    b.max.every((v) => typeof v === 'number' && Number.isFinite(v))
+  )
+}
+
+/**
+ * Coerce the raw sidecar response for `cad.tessellate_with_ids` into the
+ * strongly-typed `CadTessellateWithIdsResult`.
+ *
+ * Returns `null` when the response is structurally unusable (e.g. missing
+ * `vertices` / `indices` / `faceIds`) -- the handler folds that into a
+ * deterministic `sidecar_protocol_error` envelope so the renderer never
+ * sees `undefined`.
+ *
+ * Defense-in-depth: malformed `faceMap` entries are dropped silently
+ * rather than throwing; the renderer can still raycast with a sparse map
+ * (it falls back to the generic `kind: 'face'` default for unknown ids).
+ */
+export function coerceTessellateWithIdsResult(
+  raw: Record<string, unknown>,
+): CadTessellateWithIdsResult | null {
+  if (!Array.isArray(raw.vertices)) return null
+  if (!Array.isArray(raw.indices)) return null
+  if (!Array.isArray(raw.faceIds)) return null
+  if (!looksLikeBbox(raw.bbox)) return null
+
+  // Coerce numeric arrays. Anything non-finite collapses to 0 (vertices /
+  // indices) or -1 (faceIds sentinel) to keep the array shape contract:
+  // length divisible by 3 for vertices/indices, parallel to indices/3 for
+  // faceIds. We do NOT silently trim because the renderer's BufferAttribute
+  // relies on the exact lengths.
+  const vertices: number[] = raw.vertices.map((v) =>
+    typeof v === 'number' && Number.isFinite(v) ? v : 0,
+  )
+  const indices: number[] = raw.indices.map((v) =>
+    typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v >= 0 ? v : 0,
+  )
+  const faceIds: number[] = raw.faceIds.map((v) =>
+    typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v >= 0 ? v : -1,
+  )
+
+  const triangleCount =
+    typeof raw.triangleCount === 'number' && Number.isFinite(raw.triangleCount)
+      ? raw.triangleCount
+      : faceIds.length
+
+  // Coerce the faceMap dict. Each id key is preserved as-is (string) but
+  // the entry must pass the shape guard; failures drop without throwing.
+  const rawFaceMap = raw.faceMap && typeof raw.faceMap === 'object' && !Array.isArray(raw.faceMap)
+    ? (raw.faceMap as Record<string, unknown>)
+    : {}
+  const faceMap: Record<string, CadFaceMapEntry> = {}
+  for (const [id, entry] of Object.entries(rawFaceMap)) {
+    if (looksLikeFaceMapEntry(entry)) {
+      // Re-pick just the documented fields so an upstream sidecar that
+      // adds extras doesn't leak them through to the renderer.
+      const out: CadFaceMapEntry = { kind: 'face', occtHash: entry.occtHash }
+      if (typeof entry.area === 'number' && Number.isFinite(entry.area)) out.area = entry.area
+      if (typeof entry.error === 'string') out.error = entry.error
+      faceMap[id] = out
+    }
+  }
+
+  return {
+    vertices,
+    indices,
+    faceIds,
+    triangleCount,
+    bbox: raw.bbox,
+    faceMap,
+  }
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerCadIpc(_ctx: MainIpcWindowContext): void {
   // The `ctx` is accepted for parity with the other `register*Ipc` functions
-  // -- none of the three handlers need a BrowserWindow today, but future
+  // -- none of the four handlers need a BrowserWindow today, but future
   // progress-event hooks (e.g. streaming `debug()` lines back to the
   // renderer) will reach for `ctx.getMainWindow()`. Keep the signature.
   void _ctx
@@ -488,4 +645,42 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
     if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
     return { ok: true, result: coerceListOperationsResult(r.result) }
   })
+
+  // cad:tessellateWithIds -- selection-grade tessellation. Returns the same
+  // mesh shape `cad:execute` emits, plus a per-triangle source-face id array
+  // so the Design viewport can ray-pick a triangle and map it back to the
+  // B-rep face. The renderer calls this once per execute-result body when
+  // the user enables face selection; it does NOT run on every keystroke.
+  ipcMain.handle(
+    'cad:tessellateWithIds',
+    async (_e, raw: unknown): Promise<CadTessellateWithIdsResponse> => {
+      const v = validateTessellateWithIdsPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      // 60 s ceiling -- a tessellation pass on the largest realistic body
+      // (Laguna full-sheet) stays comfortably below that even at fine
+      // tolerances, while still letting the renderer surface a sidecar
+      // hang to the operator instead of waiting forever.
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.tessellate_with_ids',
+        {
+          handle: v.payload.handle,
+          ...(v.payload.toleranceMm !== undefined ? { toleranceMm: v.payload.toleranceMm } : {}),
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceTessellateWithIdsResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.tessellate_with_ids returned a malformed vertices/indices/faceIds envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
 }

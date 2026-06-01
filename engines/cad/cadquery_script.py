@@ -304,6 +304,13 @@ def execute_script(
     # in turn uses the degenerate-filtering binary STL writer) so the on-disk
     # STL is byte-identical to what cad.tessellate produces from STEP imports
     # (Safety Rule 1: same path feeds OCL drop / waterline downstream).
+    #
+    # In addition we ALSO build a face-tagged tessellation (``faceMap``) per
+    # body so the renderer can map mesh triangles back to CadQuery faces for
+    # the CAD V1 selection foundation. The faceMap is small (10s-100s of
+    # entries even on complex parts) and the per-face tessellation cost is
+    # the same total work — we just call BRepMesh on each face individually
+    # instead of on the whole solid in one shot.
     meshes_out: List[Dict[str, Any]] = []
     face_count_total = 0
     stl_dir = Path(tempfile.gettempdir()) / "worktrackcam-cad-scripts"
@@ -311,7 +318,17 @@ def execute_script(
         handle, mesh_payload = _tessellate_and_register(
             body, tolerance_mm=0.1, stl_dir=stl_dir
         )
-        meshes_out.append({"handle": handle, **mesh_payload})
+        # Best-effort: a face-tagged tessellation failure must not break the
+        # STL path that downstream CAM strategies depend on. The renderer's
+        # 3D viewport falls back to the STL mesh without selection support.
+        face_tagged = _tessellate_with_face_ids_for_handle(
+            handle, tolerance_mm=0.1
+        )
+        mesh_entry: Dict[str, Any] = {"handle": handle, **mesh_payload}
+        if face_tagged is not None:
+            mesh_entry["faceMap"] = face_tagged["faceMap"]
+            mesh_entry["faceIds"] = face_tagged["faceIds"]
+        meshes_out.append(mesh_entry)
         face_count_total += int(mesh_payload["triangleCount"])
 
     return {
@@ -364,6 +381,207 @@ def _tessellate_and_register(
         "triangleCount": int(tess["triangleCount"]),
         "bbox": {"min": list(bbox_min), "max": list(bbox_max)},
     }
+
+
+# ── Face-tagged tessellation (CAD V1 selection foundation) ──────────────
+#
+# These helpers walk ``solid.Faces()`` and tessellate each face independently
+# so every output triangle carries the face index that produced it. The
+# renderer maps mouse-ray hits to mesh triangles and then to CadQuery faces
+# via the parallel ``faceIds`` array; ``faceMap`` carries per-face metadata
+# (kind, OCCT hash, area) for the inspector pane.
+#
+# Memory profile: a typical part has 10s-100s of faces and 1k-100k triangles.
+# The ``faceIds`` parallel array is ``triangleCount`` * 4 bytes (uint32) — a
+# rounding error next to the vertex buffer.
+#
+# Stability: face ordering inside ``solid.Faces()`` is deterministic per OCCT
+# build for a given construction history, so re-running the same script
+# produces the same face IDs. The ``occtHash`` is OCCT's TopoDS hash code
+# (``Shape.HashCode``) and gives a second stability axis that's resilient to
+# minor reorderings of the face list across CadQuery versions.
+
+
+def tessellate_with_face_ids(
+    handle: str, *, tolerance_mm: float = 0.1
+) -> Dict[str, Any]:
+    """Build a face-tagged tessellation for the body behind ``handle``.
+
+    Returns::
+
+        {
+          "vertices":      [x0,y0,z0, x1,y1,z1, ...]   # flat float list
+          "indices":       [i0,i1,i2, i0,i1,i2, ...]   # flat int list
+          "faceIds":       [0, 0, 1, 1, ...]           # length = triangleCount
+          "triangleCount": int,
+          "bbox":          {"min":[..3], "max":[..3]},
+          "faceMap":       {
+            "<faceId>": {
+              "kind":     "face",
+              "occtHash": int,
+              "area":     float,
+            },
+            ...
+          },
+        }
+
+    Raises ``_CadHandlerError`` with one of:
+      * ``invalid_handle``      — handle missing from the table.
+      * ``tessellation_error``  — CadQuery raised mid-tessellation.
+
+    Notes
+    -----
+    * Each face is tessellated independently via ``face.tessellate(tol)``;
+      vertex indices are remapped into the concatenated buffer.
+    * Degenerate triangles are filtered the same way as
+      ``cadquery_import._build_binary_stl`` (Safety Rule 1 parity — the STL
+      and the face-tagged mesh have the same triangle count for the same
+      tolerance, modulo per-face boundary stitching).
+    """
+    doc = _HANDLES.get(handle)
+    if doc is None:
+        raise _CadHandlerError(
+            "invalid_handle",
+            f"unknown CAD handle: {handle!r} "
+            f"(table holds {len(_HANDLES)} entries)",
+        )
+
+    try:
+        solid = doc.workplane.findSolid()
+        faces = list(solid.Faces())
+    except Exception as exc:  # noqa: BLE001 - CadQuery raises arbitrary types
+        raise _CadHandlerError(
+            "tessellation_error",
+            f"CadQuery face enumeration failed: {exc}",
+            detail=str(exc),
+        ) from exc
+
+    vertices_flat: List[float] = []
+    indices_flat: List[int] = []
+    face_ids: List[int] = []
+    face_map: Dict[str, Dict[str, Any]] = {}
+
+    for face_id, face in enumerate(faces):
+        try:
+            face_verts, face_tris = face.tessellate(float(tolerance_mm))
+        except Exception as exc:  # noqa: BLE001 - skip a bad face, keep mesh
+            # A single problem face shouldn't kill the whole tessellation;
+            # record an empty entry and continue so the renderer can still
+            # show the rest of the part. Selection on this face is impossible
+            # but the operator still gets the geometry.
+            face_map[str(face_id)] = {
+                "kind": "face",
+                "occtHash": 0,
+                "area": 0.0,
+                "error": f"tessellate failed: {exc}",
+            }
+            continue
+
+        # Remap per-face vertex indices into the global buffer. We never
+        # de-duplicate across faces because two adjacent faces legitimately
+        # share an edge in 3-space but each has its own normal — keeping
+        # them distinct preserves crease shading in the renderer.
+        base_index = len(vertices_flat) // 3
+        for v in face_verts:
+            if hasattr(v, "x") and hasattr(v, "y") and hasattr(v, "z"):
+                vertices_flat.append(float(v.x))
+                vertices_flat.append(float(v.y))
+                vertices_flat.append(float(v.z))
+            else:
+                vertices_flat.append(float(v[0]))
+                vertices_flat.append(float(v[1]))
+                vertices_flat.append(float(v[2]))
+
+        face_tri_count = 0
+        for tri in face_tris:
+            i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
+            if i0 == i1 or i1 == i2 or i0 == i2:
+                continue  # degenerate
+            if not (0 <= i0 < len(face_verts) and 0 <= i1 < len(face_verts)
+                    and 0 <= i2 < len(face_verts)):
+                continue  # out of range — guard against CadQuery edge cases
+            indices_flat.append(base_index + i0)
+            indices_flat.append(base_index + i1)
+            indices_flat.append(base_index + i2)
+            face_ids.append(face_id)
+            face_tri_count += 1
+
+        # Per-face metadata. ``Area()`` returns the parametric surface area in
+        # mm². ``HashCode()`` on the underlying TopoDS_Face is OCCT's stable
+        # hash — same shape, same construction history → same hash.
+        face_map[str(face_id)] = {
+            "kind": "face",
+            "occtHash": _safe_face_hash(face),
+            "area": _safe_face_area(face),
+        }
+
+    triangle_count = len(face_ids)
+    bbox_min, bbox_max = doc.bbox_min, doc.bbox_max
+
+    return {
+        "vertices": vertices_flat,
+        "indices": indices_flat,
+        "faceIds": face_ids,
+        "triangleCount": triangle_count,
+        "bbox": {"min": list(bbox_min), "max": list(bbox_max)},
+        "faceMap": face_map,
+    }
+
+
+def _tessellate_with_face_ids_for_handle(
+    handle: str, *, tolerance_mm: float
+) -> Optional[Dict[str, Any]]:
+    """Best-effort wrapper for embedding a face-tagged tessellation alongside
+    the STL path in ``execute_script``'s result.
+
+    Returns ``None`` if ``tessellate_with_face_ids`` raised — the caller
+    (``execute_script``) treats absence as "no selection info available"
+    and the renderer falls back to picking on the whole solid. This is the
+    right posture because the STL path is on the critical chain for CAM
+    downstream and must NEVER be blocked by a selection-only failure.
+    """
+    try:
+        return tessellate_with_face_ids(handle, tolerance_mm=tolerance_mm)
+    except _CadHandlerError:
+        return None
+    except Exception:  # noqa: BLE001 - selection info is non-critical
+        return None
+
+
+def _safe_face_hash(face: Any) -> int:
+    """Return OCCT's TopoDS hash code for ``face`` (or 0 on failure).
+
+    CadQuery exposes the wrapped OCCT shape via ``.wrapped``. The OCP/PythonOCC
+    binding provides ``HashCode(upper)`` on TopoDS_Shape. We pass a large
+    upper bound (sys.maxsize is too big for the OCCT signed-int API on Linux)
+    and fall back to 0 so a binding-version mismatch never kills the mesh.
+    """
+    try:
+        wrapped = face.wrapped
+    except Exception:  # noqa: BLE001 - fall through
+        return 0
+    if wrapped is None:
+        return 0
+    for upper in (2_147_483_647, 1_000_000_000, 1_000_000):
+        try:
+            h = wrapped.HashCode(upper)
+            return int(h) if h is not None else 0
+        except Exception:  # noqa: BLE001 - try next bound
+            continue
+    return 0
+
+
+def _safe_face_area(face: Any) -> float:
+    """Return ``face.Area()`` as a float, or 0.0 on failure.
+
+    A zero area is a strong "this face has no material" signal that the UI
+    can surface to the operator. We deliberately do NOT raise — the rest of
+    the face map is still useful even if a single face has a wonky area.
+    """
+    try:
+        return float(face.Area())
+    except Exception:  # noqa: BLE001 - area is best-effort
+        return 0.0
 
 
 def _coerce_to_workplane(body: Any) -> Any:
@@ -686,4 +904,5 @@ __all__ = [
     "export_by_handle",
     "list_operations",
     "scan_banned_tokens",
+    "tessellate_with_face_ids",
 ]

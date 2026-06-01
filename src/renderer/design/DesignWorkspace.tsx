@@ -67,11 +67,18 @@ import type {
   CadExecuteScriptMesh,
   CadExecuteScriptResult,
   CadDeclaredParameter,
+  CadFaceMapEntry,
   CadOperationSummary,
   CadParseError,
-  CadScriptParamValue
+  CadScriptParamValue,
+  CadTessellateWithIdsResult
 } from '../../shared/sidecar-protocol'
 import type { CadExportResponse } from '../../main/ipc-cad'
+import {
+  clearSelection,
+  setSelection,
+  type Selection
+} from './selection-state'
 
 /** Default starter script seeded when the user clicks the empty-state CTA. */
 export const STARTER_SCRIPT = `# WorkTrackCAM CadQuery starter — a parametric box.
@@ -207,6 +214,17 @@ export interface DesignWorkspaceProps {
   }) => void
   /** Toast hook from the host. Optional — falls back to a no-op. */
   readonly onToast?: (kind: 'ok' | 'err' | 'warn', message: string) => void
+  /**
+   * CAD V1 Workflow H — initial selection. Optional. Used by render-pin
+   * tests to assert the status chip shape without spinning up a viewport
+   * raycast, AND by future "restore last selection" project-store flows
+   * once selections persist beyond a single session.
+   *
+   * Treated as the SEED for the internal `selection` state; the operator
+   * can clear it via ESC or replace it via a viewport click just like
+   * any naturally-acquired selection.
+   */
+  readonly initialSelection?: Selection | null
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -235,7 +253,8 @@ export function DesignWorkspace({
   initialScript = '',
   onSave,
   onSendToCam,
-  onToast
+  onToast,
+  initialSelection = null,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   const [busy, setBusy] = useState(false)
@@ -258,6 +277,29 @@ export function DesignWorkspace({
   const [paramOverrides, setParamOverrides] = useState<
     Record<string, CadScriptParamValue> | null
   >(null)
+
+  /**
+   * CAD V1 Workflow H — current 3D entity selection. `null` when nothing
+   * is selected; a `Selection` union (face / edge / vertex; only `face`
+   * exercised in V1) when the operator has clicked an entity in the
+   * viewport. Mutated by:
+   *   - Viewport3D's `onSelect` callback (plain-click pick).
+   *   - The ESC key handler below (`clearSelection`).
+   *   - `handleRun` after a successful re-run (geometry changes, so
+   *     stale selection IDs become meaningless).
+   */
+  const [selection, setSelectionState] = useState<Selection | null>(initialSelection)
+
+  /**
+   * Latest selection-grade tessellation from `cad.tessellate_with_ids`.
+   * Carries the `faceMap` keyed by face id so the status chip can read
+   * a friendly label (area / OCCT hash); the `faceIds` parallel array
+   * is stashed directly on the BufferGeometry's `userData` so the
+   * viewport's click handler can resolve a triangle index in O(1)
+   * without re-loading state.
+   */
+  const [selectionTessellation, setSelectionTessellation] =
+    useState<CadTessellateWithIdsResult | null>(null)
 
   // Debounce timer for the listOperations refresh; cleared on unmount + on
   // every keystroke so we never call the sidecar mid-typing-burst.
@@ -302,10 +344,42 @@ export function DesignWorkspace({
           return
         }
         setLastTessellation(response.result)
+        // CAD V1 Workflow H — re-run produces a fresh geometry, so the
+        // previous face IDs are no longer meaningful. Clear selection
+        // BEFORE the new tessellation hits state so the operator never
+        // sees a stale highlight against new geometry.
+        setSelectionState(clearSelection())
         if (response.result.error) {
           setError(`Script error: ${response.result.error.message}`)
           toast('err', response.result.error.message)
+          setSelectionTessellation(null)
           return
+        }
+        // Selection-grade tessellation (parallel call, non-blocking for
+        // the success toast). Failures here are SILENT — selection is
+        // a progressive enhancement; the existing STL handoff still
+        // works without face IDs. We just log to the console so a
+        // developer can spot a regression.
+        const firstMesh = response.result.meshes[0]
+        if (firstMesh) {
+          try {
+            const tessResponse = await fab().cad.tessellateWithIds({
+              handle: firstMesh.handle,
+            })
+            if (tessResponse.ok) {
+              setSelectionTessellation(tessResponse.result)
+            } else {
+              setSelectionTessellation(null)
+              // eslint-disable-next-line no-console
+              console.debug('cad.tessellateWithIds failed', tessResponse.error)
+            }
+          } catch (e) {
+            setSelectionTessellation(null)
+            // eslint-disable-next-line no-console
+            console.debug('cad.tessellateWithIds threw', e)
+          }
+        } else {
+          setSelectionTessellation(null)
         }
         const meshCount = response.result.meshes.length
         const triCount = response.result.meshes.reduce(
@@ -444,6 +518,62 @@ export function DesignWorkspace({
     setError(null)
   }, [])
 
+  // ── CAD V1 Workflow H — selection plumbing ────────────────────────────────
+  /**
+   * Plain-click pick callback wired into `Viewport3D.onSelect`. Replaces
+   * the current selection unconditionally (toggle behavior lives in the
+   * pure helper but isn't exposed at this layer until the user has a
+   * second affordance — e.g. ctrl-click for multi-select — to avoid
+   * accidental deselects in V1).
+   */
+  const handleViewportSelect = useCallback((next: Selection): void => {
+    setSelectionState((prev) => setSelection(prev, next))
+  }, [])
+
+  /**
+   * ESC clears the active selection. Mounted as a document-level
+   * `keydown` listener so the operator can dismiss a selection from
+   * anywhere in the workspace — pressing ESC while focused on the
+   * editor textarea, the viewport, or the FeatureTree all work.
+   *
+   * The listener is bound only while the workspace is mounted AND a
+   * selection exists; this keeps the listener count bounded and avoids
+   * fighting with the editor's native ESC behavior (if any) when the
+   * user just wants to dismiss the IDE menu.
+   */
+  useEffect(() => {
+    if (selection === null) return undefined
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setSelectionState(clearSelection())
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [selection])
+
+  /**
+   * Derive a user-facing label for the selection chip. Pulls from the
+   * `faceMap` when available (so the chip can show "face 4 · 25.0 mm²"
+   * once the sidecar lands), and falls back to "Face N" when only the
+   * id is known.
+   */
+  const selectionLabel: string | null = useMemo(() => {
+    if (selection === null) return null
+    if (selection.kind === 'face') {
+      const entry: CadFaceMapEntry | undefined =
+        selectionTessellation?.faceMap?.[String(selection.faceId)]
+      if (entry?.area && Number.isFinite(entry.area)) {
+        return `Face ${selection.faceId} · ${entry.area.toFixed(1)} mm²`
+      }
+      return `Face ${selection.faceId}`
+    }
+    if (selection.kind === 'edge') return `Edge ${selection.faceId}`
+    return `Vertex ${selection.faceId}`
+  }, [selection, selectionTessellation])
+
   // ── Derived feature rows for the right panel ──────────────────────────────
   const featureRows: readonly FeatureTreeOperation[] = useMemo(
     () => operations.map(toFeatureRow),
@@ -566,6 +696,24 @@ export function DesignWorkspace({
             title="Click Run to see your design"
             body="Your built model will appear here after the CadQuery script executes."
           />
+        )}
+        {/*
+          CAD V1 Workflow H — selection status chip. Anchored at the
+          bottom of the viewport column (outside the build-summary /
+          empty-state branch) so the operator's eye lands on it after
+          a pick regardless of whether a mesh was rendered. ESC clears
+          (see the keydown effect above); the chip vanishes the moment
+          `selection` returns to null.
+        */}
+        {selectionLabel !== null && (
+          <div
+            className="design-workspace__selection-chip"
+            role="status"
+            data-testid="design-workspace-selection-chip"
+            aria-live="polite"
+          >
+            {selectionLabel}
+          </div>
         )}
       </section>
 

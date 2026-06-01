@@ -39,6 +39,7 @@ export type SidecarMethod =
   | 'shutdown'
   | 'cad.import_step'
   | 'cad.tessellate'
+  | 'cad.tessellate_with_ids'
   | 'cad.execute_script'
   | 'cad.export'
   | 'cad.list_operations'
@@ -60,6 +61,97 @@ export type CadTessellateParams = {
 export type CadTessellateResult = {
   stlPath: string
   triangleCount: number
+}
+
+// ── cad.tessellate_with_ids ────────────────────────────────────────────────
+//
+// Selection-grade tessellator (CAD V1 Workflow H foundation): walks
+// ``solid.Faces()`` and tessellates each face independently so every output
+// triangle carries the 0-based face index that produced it. The renderer's
+// ray-pick maps the hit triangle to the source CadQuery face via the
+// parallel ``faceIds`` array; ``faceMap`` carries per-face metadata for the
+// inspector panel.
+//
+// Why a flat ``vertices`` / ``indices`` pair and not the binary STL on disk?
+// Selection needs to live in memory: the renderer feeds it straight into a
+// BufferGeometry without a second file-IO round trip. The STL path
+// (``cad.tessellate``) remains the source of truth for CAM downstream
+// (Safety Rule 1).
+//
+// Wire contract
+// -------------
+// Params:
+//   - handle:       REQUIRED. Opaque handle from a prior
+//                   ``cad.execute_script`` / ``cad.import_step``.
+//   - toleranceMm:  OPTIONAL. Surface deviation tolerance (default 0.1 mm
+//                   to match ``cad.execute_script``'s bake).
+//
+// Result:
+//   - vertices:      flat ``Float32``-style array, length divisible by 3
+//                    (``[x0,y0,z0, x1,y1,z1, ...]``). Direct feed for
+//                    ``BufferAttribute(vertices, 3)``.
+//   - indices:       flat triangle index buffer, length divisible by 3.
+//   - faceIds:       parallel array; ``faceIds[i]`` is the 0-based face id
+//                    of triangle ``i``. ``faceIds.length === triangleCount``
+//                    after the degenerate-triangle filter.
+//   - triangleCount: equals ``faceIds.length`` and ``indices.length / 3``.
+//   - bbox:          axis-aligned bbox in mm (echoed from the handle's
+//                    cached bbox so the renderer can frame the part).
+//   - faceMap:       dict keyed by face id (as a string for JSON-friendly
+//                    serialization). Each entry carries ``kind`` (always
+//                    ``"face"`` in V1; reserved for ``"edge"`` / ``"vertex"``
+//                    in V2), ``occtHash`` (OCCT TopoDS hash for stability
+//                    across CadQuery versions; 0 on binding mismatch), and
+//                    an optional ``area`` in mm².
+//
+// Errors mirror ``cad.tessellate``'s vocabulary (``invalid_handle``,
+// ``tessellation_error``, ``bad_params``, ``invalid_numeric_params``,
+// ``cadquery_not_installed``).
+export type CadTessellateWithIdsParams = {
+  handle: string
+  /** Surface deviation tolerance in mm. Defaults to 0.1 mm in the sidecar. */
+  toleranceMm?: number
+}
+
+/**
+ * Per-face metadata in the ``faceMap`` dict. The renderer's inspector panel
+ * surfaces ``area`` and ``occtHash`` directly; ``kind`` is reserved for
+ * future ``"edge"`` / ``"vertex"`` entity kinds (V2 selection).
+ */
+export type CadFaceMapEntry = {
+  /** Reserved for future use; always ``"face"`` in V1. */
+  kind: 'face'
+  /**
+   * OCCT TopoDS hash code for the face. Stable across re-runs of the same
+   * script (same construction history → same hash). ``0`` if the OCP /
+   * PythonOCC binding does not expose ``HashCode`` on this version.
+   */
+  occtHash: number
+  /** Optional surface area in mm² (``Face.Area()``). ``0`` on failure. */
+  area?: number
+  /** Diagnostic; only present if a single face failed mid-tessellation. */
+  error?: string
+}
+
+export type CadTessellateWithIdsResult = {
+  /** Flat float array; length divisible by 3 (``x0,y0,z0, x1,y1,z1, ...``). */
+  vertices: number[]
+  /** Flat triangle index buffer; length divisible by 3. */
+  indices: number[]
+  /**
+   * Parallel face-id array. ``faceIds[i]`` is the 0-based face id of
+   * triangle ``i``. ``faceIds.length === triangleCount``.
+   */
+  faceIds: number[]
+  /** Equal to ``faceIds.length`` and ``indices.length / 3``. */
+  triangleCount: number
+  /** Axis-aligned bounding box of the source solid (mm). */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * Per-face metadata keyed by face id (as a string for JSON-friendly
+   * serialization). Renderer's selection inspector reads this.
+   */
+  faceMap: Record<string, CadFaceMapEntry>
 }
 
 // ── cad.execute_script ──────────────────────────────────────────────────────
@@ -94,6 +186,23 @@ export type CadExecuteScriptMesh = {
   triangleCount: number
   /** Axis-aligned bounding box in mm. */
   bbox: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * Optional per-triangle face id array (CAD V1 selection foundation). Same
+   * shape as ``cad.tessellate_with_ids``'s ``faceIds``: ``faceIds[i]`` is
+   * the 0-based face id of triangle ``i``. Absent when the sidecar could not
+   * build a face-tagged tessellation (e.g. CadQuery's per-face tessellate
+   * raised) — the renderer's 3D viewport then falls back to whole-solid
+   * picking. ``faceIds.length`` is NOT guaranteed to equal the STL's
+   * ``triangleCount`` because the per-face tessellator may bin triangles
+   * differently at face boundaries.
+   */
+  faceIds?: number[]
+  /**
+   * Optional per-face metadata dict (CAD V1 selection foundation). Keyed by
+   * face id (as a string) — see ``CadFaceMapEntry`` for the shape. Absent
+   * for the same reason ``faceIds`` is absent.
+   */
+  faceMap?: Record<string, CadFaceMapEntry>
 }
 
 export type CadScriptError = {
