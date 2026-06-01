@@ -29,12 +29,16 @@ export default defineConfig({
     // existing test relies on isolation between files; the perf-cycle
     // pin in src/shared/vitest-config-pool.test.ts guards against
     // accidental config drift.
+    //
+    // [Vitest 4 migration, 2026-06-01] poolOptions was flattened in
+    // Vitest 4 — the previous `poolOptions.threads.singleThread: true`
+    // is now expressed as `fileParallelism: false`, which the v4
+    // docstring guarantees "will override maxWorkers option to 1".
+    // Net effect identical: single worker reused across the whole
+    // suite. CVE GHSA-5xrq-8626-4rwp (CVSS 9.8) was the driver for
+    // the v3 → v4 upgrade.
     pool: 'threads',
-    poolOptions: {
-      threads: {
-        singleThread: true
-      }
-    },
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reportsDirectory: './coverage',

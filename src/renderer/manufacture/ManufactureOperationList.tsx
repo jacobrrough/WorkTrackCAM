@@ -1,8 +1,27 @@
 /**
- * ManufactureOperationList — operation filter bar + per-op detail rows.
- * Extracted from ManufactureWorkspace.tsx (pure refactoring).
+ * ManufactureOperationList — Setup-rooted operation tree with status icons.
+ *
+ * UX MOVE 6 (Fusion / Mastercam pattern): operations nest under their parent
+ * Setup. Each Setup is a collapsible group with the setup label, an op-count
+ * badge and a chevron. Operations without a `setupId` fall under a synthetic
+ * "(Unassigned)" group at the top so they remain discoverable.
+ *
+ * Per-row status icon (.op-tree-op-status) is derived from existing readiness
+ * data (opReadiness + isOperationSourceMeshStale):
+ *   - error   (red)    : missing geometry
+ *   - stale   (yellow) : stale geometry / mesh newer than posted G-code
+ *   - done    (green)  : ready
+ *   - idle    (gray)   : suppressed / non-cam
+ *   - running (blue)   : reserved — currently no per-op live-running signal,
+ *                       but the className is in place for future CAM runs.
+ *
+ * Setup collapse is owned by the native <details> element so users can fold
+ * finished setups while iterating on a new one. We avoid React state here
+ * because the existing empty-state tests invoke this component as a plain
+ * function — a hookless component keeps that pattern working. Persistence
+ * across reloads is intentionally not wired (no IPC churn for ephemeral UI).
  */
-import type { ManufactureOperation } from '../../shared/manufacture-schema'
+import type { ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import type { DerivedContourCandidate } from '../../shared/cam-2d-derive'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
@@ -21,9 +40,83 @@ import {
 } from './manufacture-op-helpers'
 import { isOperationSourceMeshStale } from '../../shared/cam-source-stale'
 
+/** Status variant rendered as the .op-tree-op-status indicator. */
+export type OpTreeStatus = 'error' | 'stale' | 'done' | 'idle' | 'running'
+
+/** Synthetic group id used for operations that have no `setupId`. */
+export const UNASSIGNED_SETUP_ID = '__unassigned__'
+
+/**
+ * Resolve the parent setup-id for an operation.
+ *
+ * Linkage convention (additive, backward-compatible with v1/v2 schemas):
+ * `op.params.setupId` is a string. Operations without it group under the
+ * synthetic "(Unassigned)" group.
+ */
+export function getOpSetupId(op: ManufactureOperation): string | undefined {
+  const raw = op.params?.['setupId']
+  if (typeof raw === 'string' && raw.trim() !== '') return raw.trim()
+  return undefined
+}
+
+/**
+ * Map readiness + stale-mesh state to a single status variant for the
+ * tree-row indicator. Pure function — easy to pin in tests.
+ */
+export function deriveOpTreeStatus(
+  op: ManufactureOperation,
+  contourCandidates: DerivedContourCandidate[],
+  camStaleMeshRelativePaths: readonly string[]
+): OpTreeStatus {
+  const readiness = opReadiness(op, contourCandidates).label
+  if (readiness === 'suppressed' || readiness === 'non-cam') return 'idle'
+  if (readiness === 'missing geometry') return 'error'
+  if (readiness === 'stale geometry') return 'stale'
+  // ready — check whether the source STL is newer than the posted cam.nc
+  if (cncOp(op.kind) && isOperationSourceMeshStale(op.sourceMesh, camStaleMeshRelativePaths)) {
+    return 'stale'
+  }
+  return 'done'
+}
+
+/** Group filtered operations under their parent setup id, preserving order. */
+export function groupOpsBySetup(
+  setups: readonly ManufactureSetup[],
+  filteredOps: readonly ManufactureOperation[]
+): Array<{ setup: ManufactureSetup | null; ops: ManufactureOperation[] }> {
+  const groups = new Map<string, ManufactureOperation[]>()
+  const unassigned: ManufactureOperation[] = []
+  for (const op of filteredOps) {
+    const sid = getOpSetupId(op)
+    if (!sid) {
+      unassigned.push(op)
+      continue
+    }
+    const known = setups.find((s) => s.id === sid)
+    if (!known) {
+      // Operation references a setup that has been removed — surface it under
+      // (Unassigned) rather than dropping it silently.
+      unassigned.push(op)
+      continue
+    }
+    const arr = groups.get(sid) ?? []
+    arr.push(op)
+    groups.set(sid, arr)
+  }
+  const result: Array<{ setup: ManufactureSetup | null; ops: ManufactureOperation[] }> = []
+  if (unassigned.length > 0) result.push({ setup: null, ops: unassigned })
+  for (const s of setups) {
+    const ops = groups.get(s.id)
+    if (ops && ops.length > 0) result.push({ setup: s, ops })
+  }
+  return result
+}
+
 type Props = {
   operations: ManufactureOperation[]
   filteredOps: ManufactureOperation[]
+  /** Parent setups for tree grouping. Optional for back-compat with older callers/tests. */
+  setups?: ManufactureSetup[]
   selectedOpIndex: number
   contourCandidates: DerivedContourCandidate[]
   tools: ToolLibraryFile | null
@@ -54,6 +147,7 @@ type Props = {
 export function ManufactureOperationList({
   operations,
   filteredOps,
+  setups = [],
   selectedOpIndex,
   contourCandidates,
   tools,
@@ -78,6 +172,10 @@ export function ManufactureOperationList({
   onRunFdmSlice,
   onAddOp
 }: Props): React.ReactElement {
+  // Collapse state is owned by the browser via the native <details> element.
+  // No React state needed — the harness is intentionally hookless so renderer
+  // tests can invoke the component as a plain function (see empty-state tests).
+  const groups = groupOpsBySetup(setups, filteredOps)
   return (
     <>
       <h3 className="subh">Operations</h3>
@@ -213,11 +311,62 @@ export function ManufactureOperationList({
           </button>
         </div>
       ) : null}
-      <ul className="tools entity-list entity-list--stack">
-        {filteredOps.map((op) => {
-          const i = operations.findIndex((x) => x.id === op.id)
+      <div className="op-tree" role="tree" aria-label="Operations grouped by setup">
+        {groups.map((group) => {
+          const groupId = group.setup?.id ?? UNASSIGNED_SETUP_ID
+          const groupName = group.setup?.label ?? '(Unassigned)'
+          const setupTestId = `op-tree-setup-${groupId}`
           return (
-          <li key={op.id} className={selectedOpIndex === i ? 'manufacture-op-li manufacture-op-li--selected' : 'manufacture-op-li'}>
+            <details
+              key={groupId}
+              open
+              className={`op-tree-setup${group.setup ? '' : ' op-tree-setup--unassigned'}`}
+              data-testid={setupTestId}
+            >
+              <summary
+                className="op-tree-setup__header"
+                aria-label={`Setup ${groupName} — ${group.ops.length} operation${group.ops.length === 1 ? '' : 's'}`}
+              >
+                <span
+                  className="op-tree-setup__chevron"
+                  aria-hidden="true"
+                  data-testid={`op-tree-setup-chevron-${groupId}`}
+                />
+                <span className="op-tree-setup__name">{groupName}</span>
+                <span
+                  className="op-tree-setup__count"
+                  aria-label={`${group.ops.length} operation${group.ops.length === 1 ? '' : 's'}`}
+                >
+                  {group.ops.length}
+                </span>
+              </summary>
+              <ul className="op-tree-ops tools entity-list entity-list--stack" role="group">
+                  {group.ops.map((op) => {
+                    const i = operations.findIndex((x) => x.id === op.id)
+                    const status = deriveOpTreeStatus(op, contourCandidates, camStaleMeshRelativePaths)
+                    return (
+          <li
+            key={op.id}
+            className={`op-tree-op-row manufacture-op-li${selectedOpIndex === i ? ' manufacture-op-li--selected' : ''} op-tree-op-row--${status}`}
+            role="treeitem"
+            data-testid={`op-tree-op-row-${op.id}`}
+          >
+            <span
+              className={`op-tree-op-status op-tree-op-status--${status}`}
+              aria-label={`Status: ${status}`}
+              data-testid={`op-tree-op-status-${op.id}`}
+              title={
+                status === 'error'
+                  ? 'Missing geometry — operation cannot generate G-code'
+                  : status === 'stale'
+                    ? 'Geometry / source mesh has changed since last generate'
+                    : status === 'done'
+                      ? 'Ready — geometry is in sync'
+                      : status === 'running'
+                        ? 'Running'
+                        : 'Idle (suppressed or not a CAM op)'
+              }
+            />
             <div className="row">
               <button
                 type="button"
@@ -1423,9 +1572,13 @@ export function ManufactureOperationList({
               </details>
             ) : null}
           </li>
+                    )
+                  })}
+                </ul>
+            </details>
           )
         })}
-      </ul>
+      </div>
     </>
   )
 }

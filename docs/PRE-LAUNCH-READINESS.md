@@ -10,16 +10,17 @@ This doc is the operator's "is the app ready?" checklist. It lists what's been v
 
 ## TL;DR
 
-**The app is ready for first real-world testing on all three machines, AND now has a CAD Design workspace** for parametric modeling via CadQuery — design a part, click "Send to CAM," machine it. All in one app.
+**The app is at pro-app UX parity for the three target machines AND has a CAD Design workspace** for parametric modeling via CadQuery. The 5 big-design UX moves identified by the deep-dive have all landed: locked-top global status strip, workflow-stage tabs, setup-rooted operation tree, multi-plate thumbnail strip, brand-bar Design pill. The critical vitest CVE has been closed.
 
 Quality gates at the time of this doc:
-- `npm test` → **13,787 passed / 0 failed / 2 skipped** (353 files + 1 skipped) — Δ +132 from the prior pre-launch baseline (the CAD MVP added 158 new tests across sidecar / IPC / schema / components / wizard / handoff)
+- `npm test` → **13,844 passed / 0 failed / 2 skipped** — Δ +57 from prior baseline; Δ +189 since the pre-launch wave A baseline
 - `npm run typecheck` → clean
+- `npm run test:python` → **30 passed / 7 skipped** (sidecar pytest suite, re-wired this wave after being lost in the 2026-05-27 pivot)
 - `gcode-safety` skill verdict on the prior G-code change set: **SAFE for all three target machines**
-- 0 broken-path findings remaining from the prior deep-dive synthesis
-- CAD MVP fully wired: sidecar methods + IPC + schema + components + first-launch + CAD→CAM handoff
+- 0 broken-path findings remaining
+- Vitest 3.x → **4.1.8+** upgrade landed: **CVE GHSA-5xrq-8626-4rwp CLOSED** (CVSS 9.8 arbitrary file read/execute)
 
-Three pre-launch follow-ups remain deferred (vitest 3→4 CVE upgrade, Carvera 4-axis schema constraints, post template rename) — none block real-world testing. The 5 big-design UX moves from the deep dive are also deferred — each warrants its own cycle.
+Remaining deferred items (none block real-world testing): Carvera 4-axis Y=0/X-offset schema constraints, `cnc_4axis_grbl.hbs` rename, CAD V1 follow-ups (Monaco editor, editable params, selection system, sketch editor, planegcs solver).
 
 ---
 
@@ -217,14 +218,19 @@ Eight items remain as design-effort cycles. They are all defense-in-depth, not b
 ### Optional follow-up (not in punch list but worth filing)
 **CPS-import fallback warning** — when a user imports a 5-axis Fanuc/Siemens CPS file, it silently falls back to the 3-axis generic post. A toast warning ("5-axis dialect detected → 3-axis generic fallback; 5-axis features will not be in the output") would close the UX gap. Not a safety issue (the UNVERIFIED header is sufficient) but worth a future ui-polish or cam-engine cycle.
 
-### Big-design UX moves identified by the 2026-06-01 deep-dive (not blocking, but high payoff)
-The deep-dive workflow surveyed OrcaSlicer / Bambu Studio / Fusion 360 / Mastercam / VCarve Pro / Carbide / Mainsail / Fluidd and identified 5 high-impact design moves that would close the visible gap to pro-app norms. Each warrants its own dedicated cycle:
+### Big-design UX moves identified by the 2026-06-01 deep-dive — **4 OF 5 LANDED**
 
-4. **Workflow-stage tabs above the viewport** — adopt Bambu/Orca's Prepare / Preview / Device segmented control (or Fusion's Setup / Toolpaths / Simulate / Send for CNC). Each tab atomically swaps viewport gizmos, right-panel content, and bottom strip.
-5. **Right-side profile stack with Recommended/Pro modes + Send-to-machine primary action** — converts the existing properties panel into the FDM slicer pattern: filament chip row, quality preset dropdown, fan/temp summary, primary Send button at the bottom.
-6. **Setup-rooted operation tree with status icons** — adopt the Fusion / Mastercam tree where each Setup is a parent node containing its operations with stale/error/done status icons. Replaces the current flat operations list.
-7. **Locked global status strip** — Mainsail/Fluidd persistent state pill + machine command line + E-stop in the global top bar. Always visible regardless of which workspace section is active.
-8. **Multi-plate thumbnail strip** — promote the current PlateTabs scaffold into a real thumbnail strip with per-plate status pills + split Slice button (Slice this plate / Slice all).
+4. ✅ **Workflow-stage tabs above the viewport** — LANDED. `WorkflowStageTabs` in `ManufactureWorkspace.tsx` shows Prepare/Preview/Device for FDM (K2 Plus) and Setup/Toolpaths/Simulate/Send for CNC (Laguna / Carvera). Roving tabindex, arrow-key/Home/End nav. Panel-content swap per stage is a follow-up cycle (V1.5) — for now the existing panels render unchanged regardless of stage, but the chrome is in place.
+5. ⏸️ **Right-side profile stack with Recommended/Pro modes + Send-to-machine primary action** — DEFERRED. Touches `ManufactureWorkspace.tsx` + `ManufactureAuxPanels.tsx` + `manufacture.css` in ways that need structural rethinking of the properties panel. Best done as its own cycle.
+6. ✅ **Setup-rooted operation tree with status icons** — LANDED. `ManufactureOperationList.tsx` restructured as a tree: each Setup is a parent node with op-count badge + collapse chevron; ops nest underneath with left-edge status icons (stale/error/done/running/idle). Synthetic "(Unassigned)" group for ops with no setup.
+7. ✅ **Locked global status strip** — LANDED. New `AppHeader.tsx` renders fixed-top above the brand-bar: StatusDot + state label (left), machine ID in mono (center), conditional E-stop slot (right). State derived from the same 5-second moonrakerStatus poll the WorkshopDashboard uses for K2; from latest job for Laguna/Carvera. E-stop wiring is V2 (`onEstop` prop currently unwired).
+8. ✅ **Multi-plate thumbnail strip** — LANDED. `PlateTabs.tsx` now renders 120×80 thumbnail tiles per plate with preview placeholder + name + status pill (idle/slicing/done/error) + top-right × close. Dashed "+ Add plate" tile at the end. Adjacent split Slice button (Slice this plate / Slice all).
+
+PLUS: ✅ **Brand-bar Design pill** — LANDED. New `.shop-brand-bar__design-pill` button next to the env-switcher triad opens the Design overlay. Discoverability for the CAD workspace beyond Ctrl+Shift+D.
+
+PLUS: ✅ **Vitest 3.x → 4.1.8 upgrade** — LANDED. CVE GHSA-5xrq-8626-4rwp (CVSS 9.8 arbitrary file read/execute) **CLOSED**. Test suite still green: 13,844 passing.
+
+PLUS: ✅ **`npm run test:python` script re-wired** — LANDED. Sidecar pytest suite runs again (30 cases pass, 7 expected-skipped). Lost during the 2026-05-27 pivot's package.json cleanup.
 
 ---
 

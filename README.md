@@ -4,7 +4,8 @@
 Parametric CAD modeling, CNC toolpath generation, 4-axis machining, heightfield strategies, FDM slicing, and full machine management — all in one Electron app for a one-shop workflow. Built to rival Fusion 360 / Mastercam quality.
 
 ## Features
-- **Parametric CAD Design workspace** (`Ctrl+Shift+D`) — script-first paradigm powered by **CadQuery** (`cad.execute_script` / `cad.export` / `cad.list_operations` sidecar methods). Read-only feature tree, 3D viewport, one-click "Send to CAM" handoff that exports STL and loads it into the active machine's CAM workspace.
+- **Parametric CAD Design workspace** (`Ctrl+Shift+D` or brand-bar Design pill) — script-first paradigm powered by **CadQuery** (`cad.execute_script` / `cad.export` / `cad.list_operations` sidecar methods). Read-only feature tree, 3D viewport, one-click "Send to CAM" handoff that exports STL and loads it into the active machine's CAM workspace.
+- **Pro-app chrome**: locked-top global status strip (always-visible machine state + ID + E-stop slot, Mainsail/Fluidd pattern); workflow-stage tabs above the viewport (Prepare/Preview/Device for FDM, Setup/Toolpaths/Simulate/Send for CNC, Bambu/Orca/Fusion pattern); setup-rooted operation tree with per-op status icons (Fusion / Mastercam pattern); multi-plate thumbnail strip with status pills + split Slice button (Bambu Studio pattern).
 - Advanced CAM: 2D / 2.5D / 4-axis, waterline, adaptive raster, scallop, voxel removal (**CadQuery + OpenCAMLib** Python sidecar)
 - FDM slicing via **bundled OrcaSlicer** 2.3.2+ with K2 Plus presets + Moonraker direct push
 - Carvera 3-axis + 4-axis rotary toolpaths with chuck/tailstock collision sweep
@@ -64,14 +65,19 @@ The .wtcam project file holds both the CAD designs and the CAM jobs, so you can 
 
 ## Development
 - `npm test` + `npm run typecheck` before every change (mandatory per CLAUDE.md)
+- `npm run test:python` runs the Python sidecar pytest suite (30 sidecar cases at last count). Re-wired 2026-06-01 after being lost in the pivot.
 - IPC handlers MUST be registered before `createWindow()` runs — see the comment block in `src/main/index.ts`. Adding a new handler? Put its `register*Ipc` call inside the `app.whenReady()` callback before `createWindow()`.
 - Use `EmptyState` (`src/renderer/src/EmptyState.tsx`) for any panel that can render with no data — consistent visual treatment across the app
+- Use `AppHeader` (`src/renderer/src/AppHeader.tsx`) for the locked-top global status strip — it derives machine state from the Moonraker poll (K2) or latest job (Laguna/Carvera) and surfaces an E-stop slot
 - The Design workspace lives at `src/renderer/design/DesignWorkspace.tsx`; CAD sidecar methods are in `engines/sidecar/cad_handlers.py`; CadQuery script execution core is in `engines/cad/cadquery_script.py`
+- Workflow-stage tabs (`WorkflowStageTabs`) live inline in `src/renderer/manufacture/ManufactureWorkspace.tsx` — adopts the Bambu/Orca/Fusion segmented-control pattern
+- Setup-rooted operation tree lives in `src/renderer/manufacture/ManufactureOperationList.tsx` — operations nest under their parent Setup with per-op status icons
+- Multi-plate thumbnail strip lives in `src/renderer/manufacture/PlateTabs.tsx` — replaces the old text-tab row with 120×80 thumbnail tiles + split Slice button
 - Large-file edits (>800 lines or any `.claude/` log file) follow [`docs/EDIT-WORKFLOW.md`](docs/EDIT-WORKFLOW.md) — bypass the Edit tool, use Python-via-bash
 - Full docs in `CLAUDE.md` for autonomous improvement cycles
 
 ## Tech
-Electron • React 19 • TypeScript • Three.js • Python sidecar (CadQuery for CAD + OpenCAMLib for CAM) • OrcaSlicer • Zod • Vite • Vitest
+Electron • React 19 • TypeScript • Three.js • Python sidecar (CadQuery for CAD + OpenCAMLib for CAM) • OrcaSlicer • Zod • Vite • **Vitest 4** • pytest
 
 **License**: MIT (see LICENSE)
 

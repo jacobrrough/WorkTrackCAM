@@ -16,7 +16,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { PlateTabs, type PlateTabsProps } from './PlateTabs'
+import { PlateTabs, type PlateStatus, type PlateTabsProps } from './PlateTabs'
 import type { Plate } from '../../shared/manufacture-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 
@@ -198,5 +198,157 @@ describe('PlateTabs accessibility invariants', () => {
   it('strip exposes aria-orientation="horizontal"', () => {
     const html = render(baseProps({}))
     expect(html).toContain('aria-orientation="horizontal"')
+  })
+})
+
+// -- UX Move 8: thumbnail strip + status pills + split slice button --
+describe('PlateTabs UX Move 8 -- thumbnail strip + status pills', () => {
+  it('emits the plate-thumb-strip container with thumb tiles', () => {
+    const html = render(baseProps({}))
+    expect(html).toContain('plate-thumb-strip')
+    expect(html).toContain('plate-thumb')
+    // Thumbnail preview placeholder is present
+    expect(html).toContain('plate-thumb__preview')
+    // Name span is present
+    expect(html).toContain('plate-thumb__name')
+  })
+
+  it('renders a status pill on every tile, defaulting to Idle when no statuses are supplied', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1'
+      })
+    )
+    expect(html).toContain('plate-thumb__status')
+    expect(html).toContain('plate-thumb--status-idle')
+    // The default 'Idle' label shows up at least once per plate
+    const idleMatches = html.match(/Idle/g) ?? []
+    expect(idleMatches.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('renders the supplied per-plate status pill labels', () => {
+    const statuses: Record<string, PlateStatus> = {
+      p1: 'slicing',
+      p2: 'done',
+      p3: 'error'
+    }
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B'), plate('p3', 'C')],
+        activePlateId: 'p1',
+        plateStatuses: statuses
+      })
+    )
+    expect(html).toContain('plate-thumb--status-slicing')
+    expect(html).toContain('plate-thumb--status-done')
+    expect(html).toContain('plate-thumb--status-error')
+    expect(html).toContain('Slicing')
+    expect(html).toContain('Done')
+    expect(html).toContain('Error')
+  })
+
+  it('adds the .plate-thumb--active modifier to the active tile only', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B'), plate('p3', 'C')],
+        activePlateId: 'p2'
+      })
+    )
+    // p2 must contain the active class on the same element as its id
+    expect(html).toMatch(/id="plate-tab-p2"[^>]*plate-thumb--active/)
+    // p1 / p3 must not be flagged active on their tile element
+    expect(html).not.toMatch(/id="plate-tab-p1"[^>]*plate-thumb--active/)
+    expect(html).not.toMatch(/id="plate-tab-p3"[^>]*plate-thumb--active/)
+  })
+
+  it('renders the dashed-border "+ Add plate" tile after the strip', () => {
+    const html = render(baseProps({}))
+    expect(html).toContain('plate-thumb-add')
+    expect(html).toContain('plate-thumb-add__label')
+    expect(html).toContain('New plate')
+    expect(html).toContain('aria-label="Add new plate"')
+  })
+
+  it('assigns a stable preview-hue class per plate id (deterministic palette)', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1'
+      })
+    )
+    expect(html).toMatch(/plate-thumb__preview--hue-\d/)
+  })
+})
+
+describe('PlateTabs UX Move 8 -- split slice button', () => {
+  it('renders the split slice button with primary + caret', () => {
+    const html = render(
+      baseProps({
+        onSlicePlate: vi.fn()
+      })
+    )
+    expect(html).toContain('plate-slice-split-btn')
+    expect(html).toContain('plate-slice-split-btn__primary')
+    expect(html).toContain('plate-slice-split-btn__caret')
+    expect(html).toContain('aria-label="Slice this plate"')
+    expect(html).toContain('aria-label="Slice all plates"')
+  })
+
+  it('the split button is grouped via role="group" for screen reader semantics', () => {
+    const html = render(
+      baseProps({
+        onSlicePlate: vi.fn()
+      })
+    )
+    expect(html).toMatch(/role="group"[^>]*aria-label="Slice plates"/)
+  })
+
+  it('disables the split button when no onSlicePlate is wired', () => {
+    const html = render(baseProps({}))
+    // Both buttons must be disabled when slicing is not wired
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('No active plate to slice')
+  })
+
+  it('disables the split button when there is no active plate even if onSlicePlate is wired', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A')],
+        activePlateId: null,
+        onSlicePlate: vi.fn()
+      })
+    )
+    expect(html).toContain('No active plate to slice')
+  })
+
+  it('renders the primary "Slice this plate" label when wiring is present', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p7', 'Slice me')],
+        activePlateId: 'p7',
+        onSlicePlate: vi.fn()
+      })
+    )
+    expect(html).toContain('Slice this plate')
+    expect(html).not.toContain('No active plate to slice')
+  })
+
+  it('hides the dropdown menu by default and reflects aria-expanded="false"', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1',
+        onSlicePlate: vi.fn(),
+        onSliceAllPlates: vi.fn()
+      })
+    )
+    expect(html).not.toContain('role="menu"')
+    expect(html).toContain('aria-expanded="false"')
+  })
+
+  it('emits an sr-only kbd hint mentioning the new Slice button affordance', () => {
+    const html = render(baseProps({}))
+    expect(html).toContain('Slice button slices the active plate')
   })
 })

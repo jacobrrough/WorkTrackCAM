@@ -16592,3 +16592,136 @@ vitest 13,655 → **13,787** (delta +132 wired into npm test; the +30 pytest cas
 6. **Constraint solver** — add `planegcs` (the same solver FreeCAD uses). V1 scope with sketch editor.
 7. **Brand-bar Design pill** — if discoverability becomes a real issue, add a brand-bar button next to the env switcher that opens the Design overlay
 8. **Assembly + drawings** — V2 scope
+
+
+---
+
+## BIG UX OVERHAUL + VITEST CVE — 2026-06-01 — agent stack: 4-of-5 pro-app design moves + critical security upgrade
+
+> User directive: "keep going with a new agent stck". 7-agent workflow
+> shipping 4 of the 5 big-design UX moves identified by the prior
+> deep-dive PLUS the critical vitest 3->4 CVE upgrade PLUS re-wiring the
+> test:python script that was lost in the 2026-05-27 pivot. NOT a
+> numbered cycle.
+
+### Workflow run (task w7t3q4cwq)
+- **7 agents, 13.7 min, 840K tokens**
+- **Phase 1 (Build, 6 parallel agents)** grouped strictly by target file to avoid concurrent-write collisions
+- **Phase 2 (Validator, 1 sequential agent)** runs gates + 6-surface verification grep
+
+All 7 agents returned `done`. Validator: vitest 13,844/0/2 (+57 from baseline 13,787), tsc clean, pytest sidecar 30 passed/7 skipped via the newly-wired npm run test:python script.
+
+### 4 of 5 big-design UX moves LANDED
+
+**1. Locked-top global status strip (Mainsail/Fluidd pattern)**
+- NEW `src/renderer/src/AppHeader.tsx` — fixed-top app-wide status strip
+  - Left: StatusDot + state label (reuses DASHBOARD_STATUS_COLORS/LABELS from workshop-dashboard-helpers so all 8 status kinds render identically across surfaces)
+  - Center: machine ID in mono font
+  - Right: conditional E-stop button (renders only when onEstop AND currentMachineId both supplied — V2 will wire actual M112/M5 commands)
+  - K2 state derives via the SAME 5-second moonrakerStatus poll the WorkshopDashboard uses (shared via workshop-dashboard-helpers.ts)
+  - Non-K2 machines derive state from the latest matching job; Carvera 3-axis + 4-axis bucketed together
+- 17 render-pin tests added in AppHeader.test.tsx
+- AppHeader.tsx also exports `ShopBrandBar` (legacy Control Center header) to keep the existing `shop-app-toolbar-button-types.test.ts` pin happy without renaming a class
+
+**2. Workflow-stage tabs above the viewport (Bambu/Orca/Fusion pattern)**
+- `src/renderer/manufacture/ManufactureWorkspace.tsx` — new `WorkflowStageTabs` segmented control above the existing sub-tab strip
+  - FDM (K2 Plus): "Prepare" / "Preview" / "Device" (3 tabs)
+  - CNC (Laguna / Carvera 3-axis / Carvera 4-axis): "Setup" / "Toolpaths" / "Simulate" / "Send" (4 tabs)
+- `workflowStage` state defaults to `'prepare'` (FDM) or `'setup'` (CNC); snap-back effect re-defaults when machine type changes so a CNC stage is never highlighted under an FDM machine
+- Full ARIA tablist semantics, roving tabindex, arrow-key/Home/End navigation matching the existing `ManufactureSubTabStrip`
+- Panel-content swap per stage is V1.5 — for now the existing panels render unchanged regardless of stage, but the chrome is in place
+- 10 render-pin tests added in WorkflowStageTabs.test.tsx
+
+**3. Setup-rooted operation tree with status icons (Fusion / Mastercam pattern)**
+- `src/renderer/manufacture/ManufactureOperationList.tsx` restructured as a tree
+- Each Setup is an `.op-tree-setup` parent node: chevron + name + op-count badge + collapse
+- Ops nest under their parent Setup via the existing setup-id linkage
+- Ops with no assigned setup go under a synthetic "(Unassigned)" group at the top
+- Each op row has a left-edge status icon (.op-tree-op-status with --stale/--error/--done/--running/--idle modifiers)
+- Existing filter bar + empty-state branches preserved (now operate on the tree)
+- Setup-collapse state persists per-project
+- 18 render-pin tests added in ManufactureOperationList.tree.test.tsx
+
+**4. Multi-plate thumbnail strip with status pills + split Slice button (Bambu Studio / OrcaSlicer pattern)**
+- `src/renderer/manufacture/PlateTabs.tsx` rewritten from text-tab row to thumbnail strip
+- 120x80 thumbnail tiles per plate: preview placeholder + name (truncate) + status pill (idle/slicing/done/error) + top-right x close
+- Active plate gets `.plate-thumb--active` (accent border + focus ring)
+- Dashed-border "+ Add plate" tile at the end
+- Horizontal scroll (overflow-x: auto) when plates exceed strip width
+- Adjacent split Slice button: primary "Slice this plate" + dropdown caret "Slice all plates" (sequential calls to existing slice handler per plate)
+- 12 render-pin tests added in PlateTabs.test.tsx
+
+**Plus brand-bar Design pill**
+- New `.shop-brand-bar__design-pill` button next to the env-switcher triad — discoverability for the CAD workspace beyond Ctrl+Shift+D / command palette / first-launch wizard
+- `data-active={designOpen}` so the CSS modifier styles the pressed state
+- Wired through ShopBrandBar in AppHeader.tsx to ShopApp's existing `setDesignOpen` state
+
+### Critical security: vitest 3 -> 4 upgrade
+- CVE **GHSA-5xrq-8626-4rwp** (CVSS 9.8 arbitrary file read/execute) **CLOSED**
+- Upgraded vitest + @vitest/coverage-v8 from 3.x to ^4.1.8
+- Minor API breakages fixed inline (vitest 4 pool config + a `vitest-config-pool.test.ts` adjustment)
+- Wall-clock duration went from ~17s to ~63s (vitest 4 has different startup costs in our config — still fast enough; if it matters, V1 follow-up can tune)
+- Test suite stayed green: 13,787 -> 13,844 (+57 new tests from this wave's surfaces)
+
+### test:python re-wired
+- NEW `scripts/run-python-tests.cjs` — Node wrapper that runs pytest against `engines/sidecar/__tests__/` and other Python test directories
+- `npm run test:python` script restored in package.json (was deleted during the 2026-05-27 pivot's package.json cleanup)
+- Sidecar pytest now: **30 passed / 7 skipped** in 0.05s (Python 3.14.3 / pytest 9.0.2)
+- The 30 sidecar pytest cases from the CAD MVP (test_cad_script_handlers.py) are now part of the routine gate
+
+### File coordination success
+File-collision guard worked: each agent owned its target files exclusively.
+- Agent 1 (CSS): manufacture.css, layout.css, tokens.css only
+- Agent 2 (ShopApp + AppHeader): ShopApp.tsx + AppHeader.tsx + AppHeader.test.tsx
+- Agent 3 (ManufactureWorkspace): ManufactureWorkspace.tsx + WorkflowStageTabs.test.tsx
+- Agent 4 (OpList): ManufactureOperationList.tsx + .tree.test.tsx
+- Agent 5 (PlateTabs): PlateTabs.tsx + PlateTabs.test.tsx
+- Agent 6 (vitest upgrade): package.json + package-lock.json + vitest.config.ts + vitest-config-pool.test.ts + scripts/run-python-tests.cjs
+
+Zero parallel-write collisions across 6 agents. Agent 1's CSS hooks for sibling agents' markup were specified upfront in the spec, eliminating round-trip coordination.
+
+### Test deltas (+57)
+| Surface | New tests |
+| --- | --- |
+| AppHeader render pins | 17 |
+| WorkflowStageTabs render pins | 10 |
+| Setup-rooted op tree | 18 |
+| PlateTabs multi-plate strip | 12 |
+| **Total vitest** | **+57** (13,787 -> 13,844) |
+
+PLUS: 30 sidecar pytest cases now wired into npm run test:python (were green but unreachable from the npm gate before).
+
+### Quality gates
+| Checkpoint | npm test | tsc | test:python |
+| --- | --- | --- | --- |
+| Pre-flight (HEAD f7112e6) | 13,787 / 0 / 2 | clean | not wired |
+| Validator final | 13,844 / 0 / 2 | clean | 30 / 0 / 7-skipped |
+| After docs sync (this commit) | 13,844 / 0 / 2 | clean | 30 / 0 / 7-skipped |
+
+### G-code safety status
+**N/A this wave** — no edits under `engines/cam/`, `src/main/cam-*`, `resources/posts/`, `resources/machines/`, or the post-process pipeline. Pure UI + tooling + security work. Safety Rule 1 preserved by construction.
+
+### Architectural notes
+- **AppHeader.tsx file shape:** task spec said "create NEW AppHeader.tsx" but the file existed (legacy Control Center header). To honor both the spec AND the existing pin contract in `shop-app-toolbar-button-types.test.ts` (which parses AppHeader.tsx for `cc-header__*` buttons), Agent 2 split: AppHeader is now the new status strip, legacy header lives in the same file as `ShopBrandBar` export. Smallest blast radius — no CSS rename, no other file edits, no broken pins.
+- **Workflow-stage tabs panel-content swap deferred:** the tabs render as chrome above the workspace but DON'T yet swap viewport gizmos / right-panel content / bottom strip per stage. Spec called this V1.5 scope — landing the chrome first, content-swap follow-up.
+- **PlateTabs thumbnails are placeholders:** for MVP the thumbnail area is a colored rect (one of 6 hues per plate index); real 3D-preview thumbnail rendering is V2 scope.
+- **E-stop wiring deferred:** `AppHeader` accepts an `onEstop` prop but `ShopApp` doesn't pass one yet — V2 will wire actual M112 (FDM emergency stop), M5 (CNC spindle off), and a future Smoothieware abort sequence.
+
+### Docs synced this wave
+- `README.md` — Features section gained "Pro-app chrome" bullet covering all 4 landed UX moves; Development section gained AppHeader pointer + workflow-stage / op-tree / plate-strip file pointers + `test:python` script + Vitest 4 tag in Tech
+- `CLAUDE.md` — Architecture Quick Reference gained `AppHeader.tsx` entry (status-strip + legacy ShopBrandBar coexistence), `ManufactureWorkspace.tsx` workflow-stage-tabs note, `ManufactureOperationList.tsx` setup-rooted tree note, `PlateTabs.tsx` multi-plate thumbnail strip note
+- `docs/PRE-LAUNCH-READINESS.md` — TL;DR refreshed with new gate numbers (13,844 / 0 / 2 + 30 pytest); 4 of 5 big-design UX moves marked DONE (move #5 right-side profile stack still deferred); brand-bar Design pill + vitest upgrade + test:python re-wire added as PLUS items
+- `.claude/improvement-log.md` — this entry
+
+### Hand-off (still deferred, none blocking)
+1. **Right-side profile stack with Recommended/Pro modes + Send-to-machine primary action** (deep-dive move #5) — touches ManufactureWorkspace + ManufactureAuxPanels + manufacture.css in ways that need structural rethinking. Best done as its own cycle.
+2. **Carvera 4-axis Y=0 + rotaryHeadstockXOffsetMm schema constraints** (pre-launch punch-list rank 13) — defense-in-depth; current engine + operator sanity table provide safety
+3. **`cnc_4axis_grbl.hbs` rename** (pre-launch punch-list rank 16) — clarity, not safety
+4. **CAD V1 progressions**: Monaco editor, editable parameters in FeatureTree, selection system, sketch editor, planegcs constraint solver
+5. **Workflow-stage tabs content-swap per stage** (V1.5 follow-up to this wave's chrome landing)
+6. **E-stop wiring** in AppHeader (V2: M112 for FDM, M5 + spindle-off for CNC, Smoothieware abort for Carvera)
+7. **Real 3D-preview thumbnails** in PlateTabs (V2 follow-up to the colored-rect placeholders)
+8. **Assemblies + 2D drawings** in CAD workspace (V2)
+
+### Pace check
+3 major workflows in one session: CAD MVP (14 agents) + UI deep-dive (9 agents) + this big UX wave (7 agents). Cumulative: ~30 agents, ~4.5M tokens, ~1h of wall-clock workflow time. vitest baseline: 13,611 (session start) -> **13,844** (session end), Δ **+233** tests, zero net regressions across the whole session.

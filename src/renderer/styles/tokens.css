@@ -123,6 +123,20 @@
   --accent-20: rgba(77,138,255,0.20);
   --accent-28: rgba(77,138,255,0.28);
 
+  /* ── Design accent (parametric workspace — peer of the three machine envs)
+     Kept as standalone tokens so cross-env design surfaces (the brand-bar
+     design pill, the Ctrl+Shift+D launch chip) stay purple regardless of
+     which machine env is currently active. The [data-environment='design']
+     override (below) re-maps --accent and friends inside the Design
+     overlay; these tokens stay constant so the cross-env affordances read
+     consistently as "design = purple". */
+  --design-accent: #7c5cff;
+  --design-accent-hi: #9579ff;
+  --design-accent-text: #c4b5fd;
+  --design-accent-text-hi: #d6caff;
+  --design-accent-12: rgba(124, 92, 255, 0.12);
+  --design-accent-20: rgba(124, 92, 255, 0.20);
+
   /* ── Shell dimensions (legacy compat) ── */
   --shell-header-h: 40px;
   --shell-status-h: 24px;

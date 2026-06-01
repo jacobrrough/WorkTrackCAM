@@ -85,7 +85,7 @@ import { MyShopDrawer } from '../shell/MyShopDrawer'
 import { NavRail, type NavSection } from './NavRail'
 import { PropertyPanel } from './PropertyPanel'
 import { OpSequencer } from './OpSequencer'
-import { AppHeader } from './AppHeader'
+import { AppHeader, ShopBrandBar } from './AppHeader'
 import { AppStatusBar } from './AppStatusBar'
 import type { MyShopPreset, MyShopMachineId } from './environments/my-shop-presets'
 import { composePresetLaunchPlan } from './environments/preset-launch-plan'
@@ -2205,8 +2205,19 @@ function ShopAppInner(): React.ReactElement {
   // ── v2 Control Center layout ──
   return (
     <div className="cc-shell" data-environment={activeEnv?.id ?? undefined}>
-      {/* Header */}
+      {/* UX MOVE 7 — locked global status strip (Mainsail/Fluidd pattern).
+          Pinned at the very top so machine state never scrolls out of
+          sight. For K2 Plus, derives state from the shared 5-second
+          Moonraker poll used by the WorkshopDashboard. E-stop is
+          intentionally left unwired here — V2 will route M112/M5. */}
       <AppHeader
+        currentMachineId={sessionMachine?.id ?? null}
+        jobs={jobs}
+        moonrakerUrl={moonrakerUrl}
+      />
+
+      {/* Brand-bar (legacy Control Center header) sits below the status strip. */}
+      <ShopBrandBar
         sessionMachine={sessionMachine}
         activeEnv={activeEnv}
         mode={mode}
@@ -2214,6 +2225,7 @@ function ShopAppInner(): React.ReactElement {
         running={running}
         isFdm={isFdm}
         savedIndicator={savedIndicator}
+        designOpen={designOpen}
         onSwitchEnv={handleQuickSwitchEnv}
         onChangeMachine={() => setPhase('splash')}
         onCmdOpen={() => setCmdOpen(true)}
@@ -2229,6 +2241,7 @@ function ShopAppInner(): React.ReactElement {
         onOpenProject={loadProjectFile}
         onSaveProject={saveProjectFile}
         onSetupSheet={openSetupSheet}
+        onToggleDesign={() => setDesignOpen(x => !x)}
       />
 
       {isFdm && (

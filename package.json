@@ -2,7 +2,7 @@
   "name": "worktrack-cam",
   "version": "0.1.0",
   "private": true,
-  "description": "WorkTrackCAM \u2014 CNC toolpath generation, FDM slicing, and machine management",
+  "description": "WorkTrackCAM — CNC toolpath generation, FDM slicing, and machine management",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:python": "node scripts/run-python-tests.cjs",
     "typecheck": "tsc --noEmit",
     "check:no-dump-stubs": "node scripts/check-no-dump-stubs.cjs",
     "verify:release-gate": "node scripts/verify-release-gate.mjs"
@@ -33,7 +34,7 @@
     "@types/react-dom": "^19.0.4",
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^4.1.8",
     "cross-env": "^7.0.3",
     "electron": "^39.8.5",
     "electron-builder": "^25.1.8",
@@ -42,7 +43,7 @@
     "react-dom": "^19.0.0",
     "typescript": "^5.8.2",
     "vite": "^6.4.2",
-    "vitest": "^3.0.8"
+    "vitest": "^4.1.8"
   },
   "build": {
     "productName": "WorkTrackCAM",

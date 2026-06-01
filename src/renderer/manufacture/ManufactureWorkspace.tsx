@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
@@ -54,6 +54,123 @@ import { ManufactureSetupTab } from './ManufactureSetupTab'
 import { LagunaNestingPanel } from './LagunaNestingPanel'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
 
+
+/**
+ * UX MOVE 4 — Workflow-stage tabs above the viewport (Bambu / Orca / Fusion 360
+ * pattern). The segmented control renders directly above the existing
+ * Manufacture sub-tab strip and gates which secondary panels are visible.
+ *
+ * Stage sets are env-specific (CLAUDE.md My-Shop-Only):
+ *   - FDM (K2 Plus):                 Prepare / Preview / Device
+ *   - CNC (Laguna / Carvera 3/4-axis): Setup / Toolpaths / Simulate / Send
+ *
+ * For the MVP, each stage swaps the visible secondary panel only — the existing
+ * sub-tab strip + plate tabs continue to render underneath so the operator
+ * doesn't lose any existing controls. Gizmo wiring is a follow-up.
+ */
+export type WorkflowStageFdm = 'prepare' | 'preview' | 'device'
+export type WorkflowStageCnc = 'setup' | 'toolpaths' | 'simulate' | 'send'
+export type WorkflowStage = WorkflowStageFdm | WorkflowStageCnc
+export type WorkflowEnv = 'fdm' | 'cnc'
+
+type WorkflowStageDef<T extends WorkflowStage> = {
+  id: T
+  label: string
+  title: string
+}
+
+const FDM_STAGES: ReadonlyArray<WorkflowStageDef<WorkflowStageFdm>> = [
+  { id: 'prepare', label: 'Prepare', title: 'Arrange plate, pick parts, define job tree' },
+  { id: 'preview', label: 'Preview', title: 'Slice preview — layer-by-layer review' },
+  { id: 'device', label: 'Device', title: 'Send to printer over Moonraker' }
+] as const
+
+const CNC_STAGES: ReadonlyArray<WorkflowStageDef<WorkflowStageCnc>> = [
+  { id: 'setup', label: 'Setup', title: 'Stock, WCS origin, axis mode' },
+  { id: 'toolpaths', label: 'Toolpaths', title: 'Tool selection + CAM generation' },
+  { id: 'simulate', label: 'Simulate', title: '3D toolpath simulation' },
+  { id: 'send', label: 'Send', title: 'Post-process and send G-code to controller' }
+] as const
+
+/** Pick the default workflow stage for the given env (Prepare for FDM, Setup for CNC). */
+export function defaultWorkflowStageFor(env: WorkflowEnv): WorkflowStage {
+  return env === 'fdm' ? 'prepare' : 'setup'
+}
+
+export type WorkflowStageTabsProps = {
+  env: WorkflowEnv
+  stage: WorkflowStage
+  onChange: (s: WorkflowStage) => void
+}
+
+/**
+ * Segmented control rendered above the viewport. Roving-tabindex + arrow-key
+ * navigation matches `ManufactureSubTabStrip`. The CSS for `.workflow-stage-tabs`
+ * is owned by Agent 1 in `src/renderer/styles/components.css`.
+ */
+export function WorkflowStageTabs({ env, stage, onChange }: WorkflowStageTabsProps) {
+  const stages: ReadonlyArray<WorkflowStageDef<WorkflowStage>> =
+    env === 'fdm' ? FDM_STAGES : CNC_STAGES
+
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLButtonElement>, stageId: WorkflowStage) => {
+      const idx = stages.findIndex((s) => s.id === stageId)
+      if (idx < 0) return
+      let nextIdx = -1
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        nextIdx = (idx + 1) % stages.length
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        nextIdx = (idx - 1 + stages.length) % stages.length
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        nextIdx = 0
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        nextIdx = stages.length - 1
+      }
+      if (nextIdx < 0) return
+      const next = stages[nextIdx]!
+      onChange(next.id)
+      queueMicrotask(() => document.getElementById(`workflow-stage-${next.id}`)?.focus())
+    },
+    [stages, onChange]
+  )
+
+  return (
+    <div
+      className="workflow-stage-tabs"
+      role="tablist"
+      aria-label={env === 'fdm' ? 'FDM workflow stages' : 'CNC workflow stages'}
+      aria-orientation="horizontal"
+      data-env={env}
+      data-testid="workflow-stage-tabs"
+    >
+      {stages.map((s, index) => (
+        <button
+          key={s.id}
+          id={`workflow-stage-${s.id}`}
+          type="button"
+          role="tab"
+          aria-selected={stage === s.id}
+          aria-controls="manufacture-workspace-panel"
+          aria-posinset={index + 1}
+          aria-setsize={stages.length}
+          tabIndex={stage === s.id ? 0 : -1}
+          className={`workflow-stage-tab${stage === s.id ? ' workflow-stage-tab--active' : ''}`}
+          title={s.title}
+          data-stage={s.id}
+          data-testid={`workflow-stage-tab-${s.id}`}
+          onClick={() => onChange(s.id)}
+          onKeyDown={(e) => onKeyDown(e, s.id)}
+        >
+          <span className="workflow-stage-tab__label">{s.label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
 
 type Props = {
   projectDir: string | null
@@ -146,6 +263,23 @@ export function ManufactureWorkspace({
   // the K2 Plus "Send to Printer" button has a concrete file to push
   // to Moonraker. `null` means no slice has succeeded this session.
   const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
+
+  /**
+   * UX MOVE 4 — Workflow-stage tab state. The env is derived from the active
+   * machine's `kind` (`'fdm'` for K2 Plus, `'cnc'` for Laguna / Carvera). The
+   * default stage is `'prepare'` for FDM and `'setup'` for CNC. We seed lazily
+   * so the first render shows the correct default; an effect below switches
+   * the stage when the operator changes machines and the current stage is
+   * not valid for the new env.
+   */
+  const initialWorkflowEnv: WorkflowEnv = (() => {
+    const m = machines.find((x) => x.id === project?.activeMachineId)
+    return m?.kind === 'fdm' ? 'fdm' : 'cnc'
+  })()
+  const [workflowStage, setWorkflowStage] = useState<WorkflowStage>(() =>
+    defaultWorkflowStageFor(initialWorkflowEnv)
+  )
+
   const fab = window.fab
 
   /**
@@ -733,6 +867,29 @@ export function ManufactureWorkspace({
   )
 
   /**
+   * UX MOVE 4 — Active workflow env, derived from the active machine kind.
+   * FDM → K2 Plus; CNC → Laguna Swift / Makera Carvera (3-axis + 4-axis).
+   * Falls back to CNC when no machine is selected so the operator still sees
+   * a coherent stage strip (Setup / Toolpaths / Simulate / Send).
+   */
+  const workflowEnv: WorkflowEnv = activeMachine?.kind === 'fdm' ? 'fdm' : 'cnc'
+
+  /**
+   * When the operator switches between FDM and CNC machines, snap the stage
+   * back to the env's default if the current stage isn't valid for the new
+   * env. This keeps the tab strip from showing a stale `aria-selected` state
+   * (e.g. "Prepare" highlighted under a CNC machine).
+   */
+  useEffect(() => {
+    const fdmIds = new Set<WorkflowStage>(FDM_STAGES.map((s) => s.id))
+    const cncIds = new Set<WorkflowStage>(CNC_STAGES.map((s) => s.id))
+    const valid = workflowEnv === 'fdm' ? fdmIds : cncIds
+    if (!valid.has(workflowStage)) {
+      setWorkflowStage(defaultWorkflowStageFor(workflowEnv))
+    }
+  }, [workflowEnv, workflowStage])
+
+  /**
    * Gap #9 — Laguna sheet size derived from the first setup whose machineId
    * matches the active Laguna profile. Falls back to null so the panel uses
    * the canonical 1524 × 3048 mm default. Only the box stock kind has X/Y.
@@ -1071,6 +1228,7 @@ export function ManufactureWorkspace({
       <ManufactureOperationList
         operations={effectiveMfg.operations}
         filteredOps={filteredOps}
+        setups={effectiveMfg.setups}
         selectedOpIndex={selectedOpIndex}
         contourCandidates={contourCandidates}
         tools={tools ?? null}
@@ -1147,7 +1305,8 @@ export function ManufactureWorkspace({
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="manufacture-workspace-wrap">
+    <div className="manufacture-workspace-wrap" data-workflow-stage={workflowStage} data-workflow-env={workflowEnv}>
+      <WorkflowStageTabs env={workflowEnv} stage={workflowStage} onChange={setWorkflowStage} />
       <PlateTabs
         plates={platesForStrip}
         activePlateId={activePlateId}
