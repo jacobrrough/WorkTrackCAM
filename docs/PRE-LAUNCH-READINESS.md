@@ -10,17 +10,19 @@ This doc is the operator's "is the app ready?" checklist. It lists what's been v
 
 ## TL;DR
 
-**The app is at pro-app UX parity for the three target machines AND has a CAD Design workspace** for parametric modeling via CadQuery. The 5 big-design UX moves identified by the deep-dive have all landed: locked-top global status strip, workflow-stage tabs, setup-rooted operation tree, multi-plate thumbnail strip, brand-bar Design pill. The critical vitest CVE has been closed.
+**The app is at pro-app UX parity for the three target machines, has a CAD Design workspace with face-selection foundation, has a wired global E-stop, and ALL 5 big-design UX moves from the deep-dive have landed including per-stage content swap and the right-side ProfileStack.** The critical vitest CVE has been closed.
 
 Quality gates at the time of this doc:
-- `npm test` → **13,844 passed / 0 failed / 2 skipped** — Δ +57 from prior baseline; Δ +189 since the pre-launch wave A baseline
+- `npm test` → **14,030 passed / 0 failed / 2 skipped** — Δ +142 from prior baseline; **Δ +419** since the session start (13,611)
 - `npm run typecheck` → clean
-- `npm run test:python` → **30 passed / 7 skipped** (sidecar pytest suite, re-wired this wave after being lost in the 2026-05-27 pivot)
-- `gcode-safety` skill verdict on the prior G-code change set: **SAFE for all three target machines**
+- `npm run test:python` → **34 passed / 13 skipped** (sidecar pytest suite; the 13 skips are all `@requires_cadquery`-gated and will run anywhere cadquery is installed)
+- `gcode-safety` skill verdict on prior G-code change sets: **SAFE for all three target machines**
 - 0 broken-path findings remaining
 - Vitest 3.x → **4.1.8+** upgrade landed: **CVE GHSA-5xrq-8626-4rwp CLOSED** (CVSS 9.8 arbitrary file read/execute)
+- **E-stop wired** end-to-end: AppHeader red button → native confirm → IPC dispatch → K2 Moonraker `/printer/emergency_stop` (canonical Klipper M112), Carvera + Laguna toast advisories pointing at physical e-stop
+- **CAD face selection** wired: `cad.tessellate_with_ids` returns per-triangle face IDs; Viewport3D raycasts hit triangles → CadQuery face entity → LineSegments overlay highlight + status badge in DesignWorkspace
 
-Remaining deferred items (none block real-world testing): Carvera 4-axis Y=0/X-offset schema constraints, CAD V1 follow-ups (Monaco editor, editable params, selection system, sketch editor, planegcs solver). The `cnc_4axis_grbl.hbs` → `carvera_4axis_grbl.hbs` rename (rank 16) landed in the pre-launch punch-list closeout.
+Remaining deferred items (none block real-world testing): CAD V1 sketcher + planegcs constraint solver, CAD V2 assemblies + 2D drawings.
 
 ---
 

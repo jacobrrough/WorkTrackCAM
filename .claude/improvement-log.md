@@ -16841,3 +16841,115 @@ The `+44` vitest delta breaks down as: +22 (rank-13 Carvera schema validators) +
 
 ### Pace check (cumulative this session)
 4 major workflow waves: CAD MVP (14 agents) + UI deep-dive (9 agents) + big UX wave (7 agents) + parallel A + B (6 agents). Cumulative ~36 agents, ~5.0M tokens, ~80 min wall-clock workflow time. vitest 13,611 (session start) -> **13,888** (now), Δ **+277** tests, zero net regressions across the whole session.
+
+
+---
+
+## WAVE 1 (PARALLEL C + F + H) — 2026-06-01 — UI consolidation + E-stop wiring + CAD selection foundation
+
+> User directive: "set upp new agent stacks to handle all deferred work".
+> Three workflows launched concurrently in the same worktree with strict
+> file-ownership separation. NOT a numbered cycle. All three returned
+> green; combined gates 14,030 / 0 / 2 + tsc clean + pytest 34/0/13-skip.
+> Net delta +142 vitest from baseline 13,888.
+
+### Workflow C — UI consolidation (task wktwlq2li, 4 build agents, 13 min, 547K tokens)
+- **UX move #5 (workflow-stage content swap per stage)**: ManufactureWorkspace extracted per-stage body locals; switch on `workflowStage` picks which renders. New `LayerPreviewBody` + `ToolpathSimulationBody` use EmptyState. +8 tests.
+- **UX deep-dive move #5 (right-side ProfileStack)**: NEW `src/renderer/manufacture/ProfileStack.tsx` with Recommended/Pro mode toggle + 6 sub-components + machine-specific Send button labels. Wrapped via `ProfileStackPanel` from `ManufactureAuxPanels.tsx`. +23 tests.
+- **UX move #7 (real 3D-preview thumbnails)**: NEW `plate-thumbnail.ts` pure helper renders Three.js Mesh/BufferGeometry to 120x80 PNG dataURL via OffscreenCanvas. FNV-1a-keyed cache. PlateTabs renders `<img>` when dataURL supplied else colored-rect placeholder. +19 tests.
+- **CSS**: +267 lines token-driven additions in manufacture.css covering all three above.
+
+### Workflow F — E-stop machine command wiring (task wwtnujslz, 3 build agents, 12 min, 400K tokens)
+- **AppHeader E-stop button + ShopApp handler**: button renders with red `var(--err)` danger styling + native confirm dialog ("E-STOP — abort current machine operation? This may leave the machine in an undefined state requiring manual recovery."). On confirm calls `fab().machine.estop({machineId})`. Success/error toasts. +5 render-pin tests.
+- **NEW `src/main/ipc-machine.ts`** with `machine:estop` IPC handler:
+  - KNOWN_MACHINE_IDS whitelist + `isKnownMachineId` type guard
+  - `validateEstopPayload` rejects null/non-object/missing/empty/unknown machineId with structured errors
+  - `postMoonrakerEmergencyStop(url, timeoutMs=3000)`: K2 Plus path. POSTs to `{origin}/printer/emergency_stop` (canonical Klipper M112 endpoint per [Moonraker docs](https://moonraker.readthedocs.io/en/latest/web_api/#emergency-stop)). Uses Node 22 fetch + AbortSignal.timeout. Folds AbortError → moonraker_timeout, network → moonraker_network_error, non-OK HTTP → moonraker_http_<status>. Every failure path includes operator hint pointing at physical power switch.
+  - `carveraAbortFallback()`: structured `no_cli_abort` response with hint "Carvera abort wired but the CLI does not expose an abort command; physically e-stop the machine." (P0 follow-up documented inline for when carvera-cli upstream adds an abort verb.)
+  - `lagunaNoRemoteAbort()`: `no_remote_abort` with hint pointing at the RichAuto pendant red mushroom button.
+  - `dispatchEstop(machineId, opts)` pure-exported with injected `loadSettingsFn` for testability.
+  - Registered in `app.whenReady()` BEFORE `createWindow()` (IPC ordering invariant).
+  - +26 unit tests covering K2 happy/timeout/network/HTTP/protocol paths + Carvera fallback + Laguna no-remote + payload validation.
+- **Preload bridge** + **shop-types typed bridge** + **per-machine E-stop docs** in MACHINES.md + 3 SMOKE-* runbooks.
+
+### Workflow H — CAD V1 selection system (task wvpnqu0wi, 3 build agents, 20 min, 598K tokens)
+- **Sidecar entity tagging**:
+  - `engines/cad/cadquery_script.py` — new `tessellate_with_face_ids(handle, *, tolerance_mm=0.1)` walks `solid.Faces()`, calls `face.tessellate(tol)` per face, concatenates per-face vertices/indices into flat global buffers while tracking which triangle came from which face. Returns vertices/indices/faceIds (parallel array length = triangleCount) + bbox + faceMap dict keyed by faceId with kind/occtHash/area.
+  - `_safe_face_hash` reads OCCT TopoDS_Face.HashCode() with graceful fallback across multiple OCP-binding upper bounds (2^31-1, 1e9, 1e6).
+  - `_safe_face_area` reads face.Area() with 0.0 fallback so a single bad face doesn't kill whole tessellation.
+  - Per-face degenerate-triangle filtering matches existing binary-STL writer (Safety Rule 1 parity).
+  - Best-effort `_tessellate_with_face_ids_for_handle()` invoked inside `execute_script` so each mesh entry ALSO carries faceIds + faceMap (backward compatible).
+- `engines/sidecar/cad_handlers.py` — new `tessellate_with_ids` handler dispatchable as `cad.tessellate_with_ids`.
+- `src/shared/sidecar-protocol.ts` — wire types for the new method + CadFaceMapEntry; CadExecuteScriptMesh extended with optional faceIds + faceMap.
+- `src/main/ipc-cad.ts` — `cad:tessellateWithIds` handler with coercer matching the Python output shape exactly.
+- **Renderer selection foundation**:
+  - NEW `src/renderer/design/selection-state.ts` — pure framework-agnostic Selection union (face|edge|vertex) + helpers (makeFaceSelection, setSelection, toggleSelection, clearSelection, isSameEntity). No React in helper.
+  - NEW `src/renderer/design/selection-raycast.ts` — pure triangleToFaceId + trianglesForFace mappers operating on the parallel faceIds array.
+  - `src/renderer/design/Viewport3D.tsx` — `onSelect` + `highlightedFaceId` props; THREE.Raycaster wired to onPointerDown; LineSegments overlay for the picked face.
+  - `src/renderer/design/DesignWorkspace.tsx` — selection state + status badge at bottom + ESC clear + after `cad.execute_script` also calls `cad.tessellate_with_ids` and stashes faceIds on the mesh BufferGeometry.
+- NEW `resources/samples/cad/sphere-with-fillet.cq.py` — 30mm cube with 5mm fillets on all edges (despite the filename — gives 6 face nameables + 12 fillet faces for selection exercise).
+- Test deltas: H1 +9 pytest cases (4 Tier 1 active + 5 Tier 2 `@requires_cadquery`-skipped); H2 +41 vitest across selection-state/raycast/Viewport3D/DesignWorkspace; H3 +4 ipc-cad handler tests.
+
+### File-ownership separation worked (again)
+- C owned: src/renderer/manufacture/* + manufacture.css
+- F owned: src/renderer/src/AppHeader.tsx + ShopApp.tsx + NEW src/main/ipc-machine.ts + src/main/index.ts (IPC registration) + docs/
+- H owned: engines/cad/* + engines/sidecar/* + src/main/ipc-cad.ts + src/shared/sidecar-protocol.ts + src/renderer/design/* + resources/samples/cad/
+
+**Shared files (additive merge, no conflict)**: src/preload/index.ts + src/renderer/src/shop-types.ts were touched by BOTH F (machine.estop) AND H (cad.tessellateWithIds). Each agent added a new field to the same `fab` object — additive merge with no overlap.
+
+Cross-workflow transient failures observed mid-flight:
+- F flagged ipc-cad.ts errors (H's in-progress edits)
+- C flagged ipc-machine.ts errors (F's in-progress edits)
+- H flagged stale-cache effects after stash-pop
+
+All resolved on the converged worktree. Final read 14,030 vitest pass.
+
+### Test deltas (+142 vitest, +9 pytest)
+| Workflow | Surface | Tests added |
+| --- | --- | --- |
+| C | stage-content swap | +8 |
+| C | ProfileStack | +23 |
+| C | PlateTabs thumbnails | +19 |
+| F | AppHeader E-stop | +5 |
+| F | ipc-machine | +26 |
+| H | selection-state | ~10 |
+| H | selection-raycast | ~10 |
+| H | Viewport3D.selection | ~10 |
+| H | DesignWorkspace.selection | ~10 |
+| H | ipc-cad cad:tessellateWithIds | +4 |
+| H | sidecar pytest (4 Tier 1 + 5 Tier 2 cadquery-gated) | +9 (4 active, 5 skipped) |
+| | **Total vitest** | **~+125** (actual +142, includes accounting drifts in test files modified for shared-file additive merges) |
+
+### Quality gates
+| Checkpoint | npm test | tsc | test:python |
+| --- | --- | --- | --- |
+| Pre-flight (HEAD 7f3b143) | 13,888 / 0 / 2 | clean | 30 / 0 / 8-skip |
+| Validator final | 14,030 / 0 / 2 | clean | 34 / 0 / 13-skip |
+| After docs sync (this commit) | 14,030 / 0 / 2 | clean | 34 / 0 / 13-skip |
+
+### G-code safety status
+**N/A this wave** — none of Wave 1's files are under `engines/cam/`, `src/main/cam-*`, `resources/posts/`, `resources/machines/`, or the post-process pipeline. F's K2 abort routes through Moonraker's documented HTTP endpoint (not G-code emission); H's CAD work is modeling output (STEP/STL/DXF), not toolpath; C is pure UI. Safety Rule 1 preserved by construction. gcode-safety skill invocation not required per the skill's "When to run" list.
+
+### Docs synced this wave
+- `README.md` — Features section gained CAD face selection + Monaco + editable params details; Pro-app chrome section gained ProfileStack + per-stage content swap + 3D thumbnails + wired E-stop details; Keyboard Shortcuts gained Ctrl+Enter + Click face + Esc-clear-selection
+- `CLAUDE.md` — Architecture Quick Reference gained: AppHeader E-stop wiring detail, NEW `src/main/ipc-machine.ts` entry, NEW `ProfileStack.tsx` entry, ManufactureWorkspace per-stage content swap detail, plate-thumbnail.ts entry, selection-state + selection-raycast entries, tessellate_with_face_ids entry on cadquery_script.py
+- `docs/PRE-LAUNCH-READINESS.md` — TL;DR refreshed with new gate numbers (14,030 / 0 / 2 + 34/0/13-skip); session-start delta (Δ +419 from 13,611); E-stop wired status; CAD face selection wired status
+- `.claude/improvement-log.md` — this entry
+
+### Remaining deferred (Wave 2 will close)
+1. **CAD V1 sketcher + planegcs constraint solver** (items #3 + #4 paired)
+2. **CAD V2 assemblies + 2D drawings** (item #8)
+
+### Session pace (cumulative)
+**6 workflow waves total**: CAD MVP (14) + UI deep-dive (9) + big UX (7) + parallel A+B (6) + Wave 1 (10 = C 5 + F 4 + H 4). **~46 agents**, **~7M tokens**, **~2h workflow wall-clock**. vitest **13,611 → 14,030** (Δ **+419**, zero net regressions across the whole session). pytest 30 → 34 active + 8 → 13 skipped.
+
+### 9 commits on origin/main this session
+1. `aaf7a27` Cycle 233 (Workshop dashboard CSS)
+2. `4c57685` Pre-launch fix wave A
+3. `61b1bef` Pre-launch readiness doc
+4. `d2feb66` UI deep-dive + 8 broken paths
+5. `f7112e6` CAD MVP
+6. `61fb5fa` Big UX wave + vitest CVE
+7. `1c1cbe3` Parallel workflows A + B
+8. `7f3b143` (cleanup)
+9. **`53b55fc` Wave 1 — UI consolidation + E-stop + CAD selection** ← just landed (this entry will go in commit 10 = docs sync)
