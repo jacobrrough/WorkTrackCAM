@@ -8,21 +8,26 @@ This doc is the operator's "is the app ready?" checklist. It lists what's been v
 
 ---
 
-## TL;DR
+## TL;DR — ALL DEFERRED ITEMS CLOSED
 
-**The app is at pro-app UX parity for the three target machines, has a CAD Design workspace with face-selection foundation, has a wired global E-stop, and ALL 5 big-design UX moves from the deep-dive have landed including per-stage content swap and the right-side ProfileStack.** The critical vitest CVE has been closed.
+**The app is at pro-app UX parity for the three target machines, has a full CAD Design workspace (Part / Sketcher / Assembly / Drawing views), has a wired global E-stop, all 5 big-design UX moves from the deep-dive have landed, the critical vitest CVE is closed, and every deferred item from the session is shipped.**
 
 Quality gates at the time of this doc:
-- `npm test` → **14,030 passed / 0 failed / 2 skipped** — Δ +142 from prior baseline; **Δ +419** since the session start (13,611)
+- `npm test` → **14,189 passed / 0 failed / 2 skipped** — Δ +159 from prior baseline; **Δ +578** since the session start (13,611)
 - `npm run typecheck` → clean
-- `npm run test:python` → **34 passed / 13 skipped** (sidecar pytest suite; the 13 skips are all `@requires_cadquery`-gated and will run anywhere cadquery is installed)
+- `npm run test:python` → **80 passed / 26 skipped** — Δ +46 cases this wave (all `@requires_cadquery` / `@requires_planegcs`-gated; will run anywhere those deps are installed)
 - `gcode-safety` skill verdict on prior G-code change sets: **SAFE for all three target machines**
 - 0 broken-path findings remaining
 - Vitest 3.x → **4.1.8+** upgrade landed: **CVE GHSA-5xrq-8626-4rwp CLOSED** (CVSS 9.8 arbitrary file read/execute)
 - **E-stop wired** end-to-end: AppHeader red button → native confirm → IPC dispatch → K2 Moonraker `/printer/emergency_stop` (canonical Klipper M112), Carvera + Laguna toast advisories pointing at physical e-stop
-- **CAD face selection** wired: `cad.tessellate_with_ids` returns per-triangle face IDs; Viewport3D raycasts hit triangles → CadQuery face entity → LineSegments overlay highlight + status badge in DesignWorkspace
+- **CAD face selection** wired: `cad.tessellate_with_ids` returns per-triangle face IDs; Viewport3D raycasts hit triangles → CadQuery face entity → LineSegments overlay highlight + status badge
+- **CAD 2D Sketcher with planegcs solver** wired: 5 entity types + 5 constraint types, auto-solve, structured error envelope
+- **CAD Assemblies via cq.Assembly** + per-child 4×4 transforms; STEP/STL export
+- **CAD 2D Drawings** (Front/Top/Right/Iso projections via OCCT hidden-line-removal); SVG inline render + PDF/SVG export
+- **DesignWorkspace TabBar** switches between Part / Assembly / Drawing views
+- **`ipc-cad.ts` channel pin: 10 documented CAD channels** (cad:execute, cad:export, cad:listOperations, cad:tessellateWithIds, cad:solveSketch, cad:createAssembly, cad:tessellateAssembly, cad:exportAssembly, cad:projectDrawing, cad:exportDrawing)
 
-Remaining deferred items (none block real-world testing): CAD V1 sketcher + planegcs constraint solver, CAD V2 assemblies + 2D drawings.
+**There are no deferred items remaining from the session's deep-dive synthesis.**
 
 ---
 

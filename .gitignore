@@ -1,3 +1,8 @@
+# Temp files used by the orchestration agents for commit messages and log appends
+COMMIT_MSG.txt
+append_log.py
+fix_log.py
+
 # Dependencies
 node_modules/
 
