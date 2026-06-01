@@ -60,20 +60,37 @@ vi.mock('./sidecar/python-bridge', () => {
 })
 
 import {
+  CAD_DRAWING_EXPORT_FORMATS,
   CAD_EXPORT_FORMATS,
   CAD_SCRIPT_MAX_BYTES,
+  coerceCreateAssemblyResult,
   coerceExecuteResult,
   coerceListOperationsResult,
+  coerceProjectDrawingResult,
+  coerceSolveSketchResult,
+  coerceTessellateAssemblyResult,
   coerceTessellateWithIdsResult,
   mapBridgeError,
   registerCadIpc,
+  validateCreateAssemblyPayload,
   validateExecutePayload,
+  validateExportAssemblyPayload,
+  validateExportDrawingPayload,
   validateExportPayload,
   validateListOperationsPayload,
+  validateProjectDrawingPayload,
+  validateSolveSketchPayload,
+  validateTessellateAssemblyPayload,
   validateTessellateWithIdsPayload,
+  type CadCreateAssemblyResponse,
   type CadExecuteResponse,
+  type CadExportAssemblyResponse,
+  type CadExportDrawingResponse,
   type CadExportResponse,
   type CadListOperationsResponse,
+  type CadProjectDrawingResponse,
+  type CadSolveSketchResponse,
+  type CadTessellateAssemblyResponse,
   type CadTessellateWithIdsResponse
 } from './ipc-cad'
 import type { MainIpcWindowContext } from './ipc-context'
@@ -104,9 +121,21 @@ beforeEach(() => {
 // ── A. Handler-shape pin ────────────────────────────────────────────────────
 
 describe('registerCadIpc', () => {
-  it('registers the four documented CAD channels', () => {
+  it('registers the ten documented CAD channels', () => {
     registerCadIpc(createMockContext())
-    for (const ch of ['cad:execute', 'cad:export', 'cad:listOperations', 'cad:tessellateWithIds']) {
+    for (const ch of [
+      'cad:execute',
+      'cad:export',
+      'cad:listOperations',
+      'cad:tessellateWithIds',
+      'cad:solveSketch',
+      // CAD V2 assembly + drawing channels (parallel work).
+      'cad:createAssembly',
+      'cad:tessellateAssembly',
+      'cad:exportAssembly',
+      'cad:projectDrawing',
+      'cad:exportDrawing'
+    ]) {
       expect(handlers.has(ch), `missing handler for channel "${ch}"`).toBe(true)
     }
   })
@@ -119,6 +148,11 @@ describe('registerCadIpc', () => {
 
   it('exposes a 100 KB script length cap', () => {
     expect(CAD_SCRIPT_MAX_BYTES).toBe(100 * 1024)
+  })
+
+  it('exposes the drawing-export format whitelist (pdf / dxf only)', () => {
+    // CAD V2 drawing exports are 2D documentation -- STEP/STL are 3D-only.
+    expect([...CAD_DRAWING_EXPORT_FORMATS].sort()).toEqual(['dxf', 'pdf'])
   })
 })
 
@@ -752,5 +786,784 @@ describe('cad:tessellateWithIds handler', () => {
     const r = (await handler({}, { handle: 'h1' })) as CadTessellateWithIdsResponse
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
+  })
+})
+
+// ── G. cad.solve_sketch -- validator + coercer + handler ────────────────────
+//
+// CAD V1 sketcher (Agent S1 sidecar method ``cad.solve_sketch``). The IPC
+// layer enforces:
+//   - ``sketch`` is an object at the boundary (no spawn until validated).
+//   - ``constraints`` is an array at the boundary.
+//   - malformed sidecar envelopes (missing ``points`` map) coerce to
+//     ``sidecar_protocol_error``.
+//   - the wire ``cad.solve_sketch`` method name is the dispatch key.
+
+describe('validateSolveSketchPayload', () => {
+  it('rejects null / non-object payloads', () => {
+    const r = validateSolveSketchPayload(null) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+  })
+
+  it('rejects missing sketch', () => {
+    const r = validateSolveSketchPayload({ constraints: [] }) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_sketch')
+  })
+
+  it('rejects non-object sketch (array)', () => {
+    const r = validateSolveSketchPayload({
+      sketch: [],
+      constraints: []
+    }) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_sketch')
+  })
+
+  it('rejects missing constraints', () => {
+    const r = validateSolveSketchPayload({
+      sketch: { points: {} }
+    }) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_constraints')
+  })
+
+  it('rejects non-array constraints', () => {
+    const r = validateSolveSketchPayload({
+      sketch: { points: {} },
+      constraints: 'nope'
+    }) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_constraints')
+  })
+
+  it('accepts a minimal valid payload (empty constraints allowed)', () => {
+    const r = validateSolveSketchPayload({
+      sketch: { points: { p1: { x: 0, y: 0 } } },
+      constraints: []
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.sketch).toEqual({ points: { p1: { x: 0, y: 0 } } })
+      expect(r.payload.constraints).toEqual([])
+    }
+  })
+
+  it('round-trips a non-empty constraints array', () => {
+    const cons = [{ id: 'c1', type: 'horizontal', a: { pointId: 'p1' }, b: { pointId: 'p2' } }]
+    const r = validateSolveSketchPayload({
+      sketch: { points: { p1: { x: 0, y: 0 }, p2: { x: 5, y: 1 } } },
+      constraints: cons
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.constraints).toEqual(cons)
+    }
+  })
+})
+
+describe('coerceSolveSketchResult', () => {
+  it('returns null when points map is missing', () => {
+    expect(coerceSolveSketchResult({})).toBeNull()
+  })
+
+  it('returns null when points is an array', () => {
+    expect(coerceSolveSketchResult({ points: [] })).toBeNull()
+  })
+
+  it('coerces a minimal valid points map', () => {
+    const r = coerceSolveSketchResult({
+      points: { p1: { x: 1.5, y: -2.25 }, p2: { x: 3, y: 4, fixed: true } }
+    })
+    expect(r).not.toBeNull()
+    expect(r?.points.p1).toEqual({ x: 1.5, y: -2.25 })
+    expect(r?.points.p2).toEqual({ x: 3, y: 4, fixed: true })
+  })
+
+  it('collapses malformed point entries to (0, 0)', () => {
+    // Defense-in-depth: drop the key would cause coordinate drift in the
+    // renderer's points dict; we keep the key with a deterministic value.
+    const r = coerceSolveSketchResult({
+      points: {
+        good: { x: 1, y: 2 },
+        broken: { x: 'nope', y: Number.NaN }
+      }
+    })
+    expect(r).not.toBeNull()
+    expect(r?.points.good).toEqual({ x: 1, y: 2 })
+    expect(r?.points.broken).toEqual({ x: 0, y: 0 })
+  })
+
+  it('preserves optional residual / iterations / converged / log fields', () => {
+    const r = coerceSolveSketchResult({
+      points: { p1: { x: 0, y: 0 } },
+      residual: 1e-9,
+      iterations: 42,
+      converged: true,
+      log: ['solved in 42 iters', 99]
+    })
+    expect(r?.residual).toBe(1e-9)
+    expect(r?.iterations).toBe(42)
+    expect(r?.converged).toBe(true)
+    expect(r?.log).toEqual(['solved in 42 iters'])
+  })
+
+  it('drops malformed optional fields silently', () => {
+    const r = coerceSolveSketchResult({
+      points: { p1: { x: 0, y: 0 } },
+      residual: 'nope',
+      iterations: -1,
+      converged: 'truthy',
+      log: 'not-an-array'
+    })
+    expect(r?.residual).toBeUndefined()
+    expect(r?.iterations).toBeUndefined()
+    expect(r?.converged).toBeUndefined()
+    expect(r?.log).toBeUndefined()
+  })
+})
+
+describe('cad:solveSketch handler', () => {
+  function validSketchPayload(): { sketch: Record<string, unknown>; constraints: unknown[] } {
+    return {
+      sketch: { points: { p1: { x: 0, y: 0 }, p2: { x: 10, y: 0 } }, parameters: {} },
+      constraints: [
+        { id: 'c1', type: 'horizontal', a: { pointId: 'p1' }, b: { pointId: 'p2' } }
+      ]
+    }
+  }
+
+  function validBridgeResponse(): Record<string, unknown> {
+    return {
+      points: { p1: { x: 0, y: 0 }, p2: { x: 10, y: 0 } },
+      residual: 0,
+      iterations: 5,
+      converged: true,
+      log: ['converged at iter 5']
+    }
+  }
+
+  it('short-circuits on invalid payload BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const r = (await handler({}, null)) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('short-circuits on missing sketch BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const r = (await handler({}, { constraints: [] })) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_sketch')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('short-circuits on missing constraints BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const r = (await handler({}, { sketch: { points: {} } })) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_constraints')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.solve_sketch with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce(validBridgeResponse())
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const payload = validSketchPayload()
+    const r = (await handler({}, payload)) as CadSolveSketchResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.points.p2).toEqual({ x: 10, y: 0 })
+      expect(r.result.iterations).toBe(5)
+      expect(r.result.converged).toBe(true)
+    }
+    expect(bridgeCallMock).toHaveBeenCalledTimes(1)
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.solve_sketch')
+    expect(paramsArg).toEqual({ sketch: payload.sketch, constraints: payload.constraints })
+  })
+
+  it('translates sidecar error envelopes to the documented error code', async () => {
+    bridgeCallMock.mockRejectedValueOnce({
+      code: 'sidecar_error',
+      message: 'unknown point id',
+      sidecarCode: 'invalid_constraint'
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const r = (await handler({}, validSketchPayload())) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_constraint')
+    expect(bridgeStopMock).toHaveBeenCalled()
+  })
+
+  it('folds malformed sidecar responses into sidecar_protocol_error', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ residual: 0 }) // no points key
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:solveSketch')!
+    const r = (await handler({}, validSketchPayload())) as CadSolveSketchResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
+  })
+})
+
+// ── G. CAD V2 Assembly + Drawing IPC plumbing ──────────────────────────────
+//
+// Five new channels bridge the renderer's CAD V2 Assembly + Drawing views
+// to the sidecar (Agents A1 + A2 own the Python). The IPC layer enforces
+// envelope shape only -- payload bodies (the assembly tree, the sheet
+// blob) are intentionally permissive ``Record<string, unknown>`` at the
+// boundary; the sidecar owns the deep validation.
+//
+// What's pinned here
+// ------------------
+//   - Validator coverage for all 5 payloads (missing fields, null-byte
+//     paths, unknown formats, non-positive tolerance).
+//   - Result coercers drop malformed entries (defense-in-depth) rather
+//     than letting ``undefined`` propagate.
+//   - End-to-end handler behavior: handlers short-circuit BEFORE
+//     spawning Python on invalid payloads; sidecar errors translate to
+//     the documented error codes; wire method names are pinned.
+
+describe('validateCreateAssemblyPayload', () => {
+  it('rejects null / non-object payloads', () => {
+    const r = validateCreateAssemblyPayload(null) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+  })
+
+  it('rejects missing assembly', () => {
+    const r = validateCreateAssemblyPayload({}) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_assembly')
+  })
+
+  it('rejects an array assembly (must be an object)', () => {
+    const r = validateCreateAssemblyPayload({ assembly: [] }) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_assembly')
+  })
+
+  it('accepts a minimal valid payload', () => {
+    const r = validateCreateAssemblyPayload({
+      assembly: { rootName: 'Assembly', instances: [], parts: [] }
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.assembly.rootName).toBe('Assembly')
+    }
+  })
+})
+
+describe('validateTessellateAssemblyPayload', () => {
+  it('rejects missing handle', () => {
+    const r = validateTessellateAssemblyPayload({}) as CadTessellateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects non-positive toleranceMm', () => {
+    const r = validateTessellateAssemblyPayload({
+      handle: 'asm-1',
+      toleranceMm: -0.001
+    }) as CadTessellateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_tolerance')
+  })
+
+  it('round-trips an explicit toleranceMm', () => {
+    const r = validateTessellateAssemblyPayload({ handle: 'asm-1', toleranceMm: 0.05 })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) expect(r.payload.toleranceMm).toBe(0.05)
+  })
+})
+
+describe('validateExportAssemblyPayload', () => {
+  it('rejects missing handle / outPath / format', () => {
+    const noHandle = validateExportAssemblyPayload({
+      outPath: '/a/b.step',
+      format: 'step'
+    }) as CadExportAssemblyResponse
+    expect(noHandle.ok).toBe(false)
+    if (!noHandle.ok) expect(noHandle.error).toBe('missing_handle')
+
+    const noOut = validateExportAssemblyPayload({
+      handle: 'asm-1',
+      format: 'step'
+    }) as CadExportAssemblyResponse
+    expect(noOut.ok).toBe(false)
+    if (!noOut.ok) expect(noOut.error).toBe('missing_out_path')
+  })
+
+  it('rejects null-byte in outPath', () => {
+    const r = validateExportAssemblyPayload({
+      handle: 'asm-1',
+      outPath: '/a/b\0.step',
+      format: 'step'
+    }) as CadExportAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_path')
+  })
+
+  it('rejects dxf format (3D assembly must be step or stl)', () => {
+    const r = validateExportAssemblyPayload({
+      handle: 'asm-1',
+      outPath: '/a/b.dxf',
+      format: 'dxf'
+    }) as CadExportAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_format')
+  })
+
+  it('accepts step + stl whitelist', () => {
+    for (const fmt of ['step', 'stl'] as const) {
+      const r = validateExportAssemblyPayload({
+        handle: 'asm-1',
+        outPath: `/a/b.${fmt}`,
+        format: fmt
+      })
+      expect('payload' in r, `expected ok for format=${fmt}`).toBe(true)
+      if ('payload' in r) expect(r.payload.format).toBe(fmt)
+    }
+  })
+})
+
+describe('validateProjectDrawingPayload', () => {
+  it('rejects missing handle', () => {
+    const r = validateProjectDrawingPayload({
+      sheet: { id: 's1', name: 'Sheet 1' }
+    }) as CadProjectDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects missing sheet', () => {
+    const r = validateProjectDrawingPayload({ handle: 'part-1' }) as CadProjectDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_sheet')
+  })
+
+  it('accepts a minimal valid payload', () => {
+    const sheet = { id: 's1', name: 'Sheet 1', viewPlaceholders: [] }
+    const r = validateProjectDrawingPayload({ handle: 'part-1', sheet })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.handle).toBe('part-1')
+      expect(r.payload.sheet).toEqual(sheet)
+    }
+  })
+})
+
+describe('validateExportDrawingPayload', () => {
+  it('rejects missing handle / outPath / format / sheet', () => {
+    const r = validateExportDrawingPayload({}) as CadExportDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects null-byte in outPath', () => {
+    const r = validateExportDrawingPayload({
+      handle: 'part-1',
+      outPath: '/a/b\0.pdf',
+      format: 'pdf',
+      sheet: { id: 's1', name: 'Sheet 1' }
+    }) as CadExportDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_path')
+  })
+
+  it('rejects formats outside the drawing whitelist (pdf / dxf)', () => {
+    const r = validateExportDrawingPayload({
+      handle: 'part-1',
+      outPath: '/a/b.step',
+      format: 'step',
+      sheet: { id: 's1', name: 'Sheet 1' }
+    }) as CadExportDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_format')
+  })
+
+  it('accepts pdf + dxf', () => {
+    for (const fmt of CAD_DRAWING_EXPORT_FORMATS) {
+      const r = validateExportDrawingPayload({
+        handle: 'part-1',
+        outPath: `/a/b.${fmt}`,
+        format: fmt,
+        sheet: { id: 's1', name: 'Sheet 1' }
+      })
+      expect('payload' in r, `expected ok for format=${fmt}`).toBe(true)
+      if ('payload' in r) expect(r.payload.format).toBe(fmt)
+    }
+  })
+})
+
+describe('coerceCreateAssemblyResult', () => {
+  it('returns null on missing handle', () => {
+    const r = coerceCreateAssemblyResult({
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+    })
+    expect(r).toBeNull()
+  })
+
+  it('returns null on malformed bbox', () => {
+    const r = coerceCreateAssemblyResult({
+      handle: 'asm-1',
+      bbox: { min: [0, 0], max: [1, 1] }
+    })
+    expect(r).toBeNull()
+  })
+
+  it('defaults non-integer instanceCount to 0', () => {
+    const r = coerceCreateAssemblyResult({
+      handle: 'asm-1',
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] },
+      instanceCount: 'bogus'
+    })
+    expect(r?.instanceCount).toBe(0)
+  })
+
+  it('preserves a well-formed envelope', () => {
+    const r = coerceCreateAssemblyResult({
+      handle: 'asm-1',
+      bbox: { min: [0, 0, 0], max: [10, 5, 2] },
+      instanceCount: 3
+    })
+    expect(r?.handle).toBe('asm-1')
+    expect(r?.instanceCount).toBe(3)
+  })
+})
+
+describe('coerceTessellateAssemblyResult', () => {
+  it('returns null when meshes is missing', () => {
+    const r = coerceTessellateAssemblyResult({
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+    })
+    expect(r).toBeNull()
+  })
+
+  it('drops malformed per-instance entries', () => {
+    const r = coerceTessellateAssemblyResult({
+      meshes: [
+        {
+          instanceId: 'i1',
+          handle: 'h1',
+          stlPath: '/tmp/i1.stl',
+          triangleCount: 12,
+          bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+        },
+        { instanceId: 'broken' }, // missing fields
+        null,
+        42
+      ],
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+    })
+    expect(r?.meshes).toHaveLength(1)
+    expect(r?.meshes[0]?.instanceId).toBe('i1')
+  })
+})
+
+describe('coerceProjectDrawingResult', () => {
+  it('returns null when views is missing', () => {
+    expect(coerceProjectDrawingResult({})).toBeNull()
+  })
+
+  it('drops malformed segments inside a view', () => {
+    const r = coerceProjectDrawingResult({
+      views: [
+        {
+          placeholderId: 'top',
+          segments: [
+            [[0, 0], [1, 0]],
+            [[0, 0]], // wrong arity
+            'not a segment',
+            [[0, 0], [Number.NaN, 0]] // NaN coord
+          ],
+          hiddenSegments: [],
+          bbox: { min: [0, 0], max: [1, 1] }
+        },
+        // Drop this entry -- placeholder id is missing.
+        {
+          segments: [[[0, 0], [1, 0]]],
+          hiddenSegments: [],
+          bbox: { min: [0, 0], max: [1, 1] }
+        }
+      ]
+    })
+    expect(r?.views).toHaveLength(1)
+    expect(r?.views[0]?.segments).toHaveLength(1)
+  })
+
+  it('passes through an optional log array', () => {
+    const r = coerceProjectDrawingResult({
+      views: [],
+      log: ['fell back to tier B', 42, 'ok']
+    })
+    expect(r?.log).toEqual(['fell back to tier B', 'ok'])
+  })
+})
+
+// ── End-to-end handler behavior for the 5 new channels ─────────────────────
+
+describe('cad:createAssembly handler', () => {
+  it('short-circuits on missing assembly BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:createAssembly')!
+    const r = (await handler({}, {})) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_assembly')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.create_assembly', async () => {
+    bridgeCallMock.mockResolvedValueOnce({
+      handle: 'asm-1',
+      bbox: { min: [0, 0, 0], max: [10, 5, 2] },
+      instanceCount: 4
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:createAssembly')!
+    const assembly = { rootName: 'Robot', instances: [], parts: [] }
+    const r = (await handler({}, { assembly })) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.handle).toBe('asm-1')
+      expect(r.result.instanceCount).toBe(4)
+    }
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.create_assembly')
+    expect(paramsArg).toEqual({ assembly })
+  })
+
+  it('translates sidecar invalid_assembly error envelopes', async () => {
+    bridgeCallMock.mockRejectedValueOnce({
+      code: 'sidecar_error',
+      message: 'instance references missing part',
+      sidecarCode: 'invalid_assembly'
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:createAssembly')!
+    const r = (await handler({}, { assembly: {} })) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_assembly')
+    expect(bridgeStopMock).toHaveBeenCalled()
+  })
+
+  it('folds malformed sidecar responses into sidecar_protocol_error', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ bbox: { min: [0, 0, 0], max: [1, 1, 1] } }) // no handle
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:createAssembly')!
+    const r = (await handler({}, { assembly: {} })) as CadCreateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
+  })
+})
+
+describe('cad:tessellateAssembly handler', () => {
+  it('short-circuits on missing handle BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateAssembly')!
+    const r = (await handler({}, {})) as CadTessellateAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.tessellate_assembly with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce({
+      meshes: [
+        {
+          instanceId: 'i1',
+          handle: 'h1',
+          stlPath: '/tmp/i1.stl',
+          triangleCount: 12,
+          bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+        }
+      ],
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateAssembly')!
+    const r = (await handler({}, { handle: 'asm-1', toleranceMm: 0.05 })) as CadTessellateAssemblyResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.meshes).toHaveLength(1)
+      expect(r.result.meshes[0]?.instanceId).toBe('i1')
+    }
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.tessellate_assembly')
+    expect(paramsArg).toEqual({ handle: 'asm-1', toleranceMm: 0.05 })
+  })
+
+  it('omits toleranceMm from the wire payload when not supplied', async () => {
+    bridgeCallMock.mockResolvedValueOnce({
+      meshes: [],
+      bbox: { min: [0, 0, 0], max: [1, 1, 1] }
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:tessellateAssembly')!
+    await handler({}, { handle: 'asm-1' })
+    const [, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(paramsArg).toEqual({ handle: 'asm-1' })
+  })
+})
+
+describe('cad:exportAssembly handler', () => {
+  it('short-circuits on null-byte outPath BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportAssembly')!
+    const r = (await handler({}, {
+      handle: 'asm-1',
+      outPath: '/a/b\0.step',
+      format: 'step'
+    })) as CadExportAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_path')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.export_assembly with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ outPath: '/a/b.step', bytesWritten: 4096 })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportAssembly')!
+    const r = (await handler({}, {
+      handle: 'asm-1',
+      outPath: '/a/b.step',
+      format: 'step'
+    })) as CadExportAssemblyResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.outPath).toBe('/a/b.step')
+      expect(r.result.bytesWritten).toBe(4096)
+    }
+    const [methodArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.export_assembly')
+  })
+
+  it('translates sidecar invalid_handle error envelopes', async () => {
+    bridgeCallMock.mockRejectedValueOnce({
+      code: 'sidecar_error',
+      message: 'no such assembly handle',
+      sidecarCode: 'invalid_handle'
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportAssembly')!
+    const r = (await handler({}, {
+      handle: 'stale',
+      outPath: '/a/b.step',
+      format: 'step'
+    })) as CadExportAssemblyResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_handle')
+  })
+})
+
+describe('cad:projectDrawing handler', () => {
+  it('short-circuits on missing sheet BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:projectDrawing')!
+    const r = (await handler({}, { handle: 'part-1' })) as CadProjectDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_sheet')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.project_drawing with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce({
+      views: [
+        {
+          placeholderId: 'top',
+          segments: [[[0, 0], [10, 0]]],
+          hiddenSegments: [],
+          bbox: { min: [0, 0], max: [10, 0] }
+        }
+      ],
+      log: ['ok']
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:projectDrawing')!
+    const sheet = { id: 's1', name: 'Sheet 1', viewPlaceholders: [{ id: 'top', kind: 'base' }] }
+    const r = (await handler({}, { handle: 'part-1', sheet })) as CadProjectDrawingResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.views).toHaveLength(1)
+      expect(r.result.views[0]?.placeholderId).toBe('top')
+    }
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.project_drawing')
+    expect(paramsArg).toEqual({ handle: 'part-1', sheet })
+  })
+
+  it('folds malformed sidecar responses into sidecar_protocol_error', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ log: ['no views key'] })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:projectDrawing')!
+    const r = (await handler({}, {
+      handle: 'part-1',
+      sheet: { id: 's1', name: 'Sheet 1' }
+    })) as CadProjectDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
+  })
+})
+
+describe('cad:exportDrawing handler', () => {
+  it('short-circuits on unsupported format BEFORE spawning the bridge', async () => {
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportDrawing')!
+    const r = (await handler({}, {
+      handle: 'part-1',
+      outPath: '/a/b.stl',
+      format: 'stl',
+      sheet: { id: 's1', name: 'Sheet 1' }
+    })) as CadExportDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_format')
+    expect(bridgeStartMock).not.toHaveBeenCalled()
+  })
+
+  it('dispatches valid payload to cad.export_drawing with the right method name', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ outPath: '/a/b.pdf', bytesWritten: 8192 })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportDrawing')!
+    const sheet = { id: 's1', name: 'Sheet 1', viewPlaceholders: [] }
+    const r = (await handler({}, {
+      handle: 'part-1',
+      outPath: '/a/b.pdf',
+      format: 'pdf',
+      sheet
+    })) as CadExportDrawingResponse
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.result.outPath).toBe('/a/b.pdf')
+      expect(r.result.bytesWritten).toBe(8192)
+    }
+    const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
+    expect(methodArg).toBe('cad.export_drawing')
+    expect(paramsArg).toEqual({ handle: 'part-1', outPath: '/a/b.pdf', format: 'pdf', sheet })
+  })
+
+  it('translates sidecar export errors', async () => {
+    bridgeCallMock.mockRejectedValueOnce({
+      code: 'sidecar_error',
+      message: 'no view placeholders projected',
+      sidecarCode: 'empty_drawing'
+    })
+    registerCadIpc(createMockContext())
+    const handler = handlers.get('cad:exportDrawing')!
+    const r = (await handler({}, {
+      handle: 'part-1',
+      outPath: '/a/b.pdf',
+      format: 'pdf',
+      sheet: { id: 's1', name: 'Sheet 1' }
+    })) as CadExportDrawingResponse
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('empty_drawing')
+    expect(bridgeStopMock).toHaveBeenCalled()
   })
 })

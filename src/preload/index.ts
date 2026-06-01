@@ -41,12 +41,24 @@ import type {
   SheetSpec
 } from '../main/nesting/true-shape-v1'
 import type {
+  CadCreateAssemblyPayload,
+  CadCreateAssemblyResponse,
   CadExecutePayload,
   CadExecuteResponse,
+  CadExportAssemblyPayload,
+  CadExportAssemblyResponse,
+  CadExportDrawingPayload,
+  CadExportDrawingResponse,
   CadExportPayload,
   CadExportResponse,
   CadListOperationsPayload,
   CadListOperationsResponse,
+  CadProjectDrawingPayload,
+  CadProjectDrawingResponse,
+  CadSolveSketchPayload,
+  CadSolveSketchResponse,
+  CadTessellateAssemblyPayload,
+  CadTessellateAssemblyResponse,
   CadTessellateWithIdsPayload,
   CadTessellateWithIdsResponse
 } from '../main/ipc-cad'
@@ -580,6 +592,62 @@ export type Api = {
     tessellateWithIds: (
       payload: CadTessellateWithIdsPayload
     ) => Promise<CadTessellateWithIdsResponse>
+    /**
+     * CAD V1 sketcher: solve a 2D constraint system server-side via
+     * the sidecar's `cad.solve_sketch` handler. The renderer's
+     * Sketch2DCanvas dispatches this whenever constraints / parameters
+     * change so the solved positions stay in sync with the geometry
+     * engine the rest of the CAD pipeline uses.
+     */
+    solveSketch: (
+      payload: CadSolveSketchPayload
+    ) => Promise<CadSolveSketchResponse>
+    /**
+     * CAD V2 Assembly view (Wave 2): resolve an assembly tree
+     * (instances / parts / joints) into the sidecar handle table.
+     * Returns the parent assembly handle + a union bbox so the renderer
+     * can frame the assembly before a separate `tessellateAssembly` call.
+     * Delegates to the sidecar's `cad.create_assembly` (Agent A1).
+     */
+    createAssembly: (
+      payload: CadCreateAssemblyPayload
+    ) => Promise<CadCreateAssemblyResponse>
+    /**
+     * CAD V2 Assembly view: per-instance binary STL emission for the
+     * Assembly viewport. Returns one mesh per visible instance so the
+     * renderer can place each STL in world space. Delegates to
+     * `cad.tessellate_assembly`.
+     */
+    tessellateAssembly: (
+      payload: CadTessellateAssemblyPayload
+    ) => Promise<CadTessellateAssemblyResponse>
+    /**
+     * CAD V2 Assembly view: export the assembled body referenced by
+     * `handle` to STEP or STL on disk. DXF is rejected at the IPC
+     * validator -- it makes no sense for a multi-part 3D body.
+     * Delegates to `cad.export_assembly`.
+     */
+    exportAssembly: (
+      payload: CadExportAssemblyPayload
+    ) => Promise<CadExportAssemblyResponse>
+    /**
+     * CAD V2 Drawing view (Wave 2): run the documentation projection
+     * pipeline for a single `DrawingSheet`. Returns projected linework
+     * (visible + hidden segments) per `viewPlaceholder` so the renderer
+     * can draw the 2D documentation canvas. Delegates to
+     * `cad.project_drawing` (Agent A2). No G-code involved.
+     */
+    projectDrawing: (
+      payload: CadProjectDrawingPayload
+    ) => Promise<CadProjectDrawingResponse>
+    /**
+     * CAD V2 Drawing view: render the projected linework into PDF or
+     * DXF on disk. Whitelist enforced at the validator
+     * (`CAD_DRAWING_EXPORT_FORMATS`). Delegates to `cad.export_drawing`.
+     */
+    exportDrawing: (
+      payload: CadExportDrawingPayload
+    ) => Promise<CadExportDrawingResponse>
   }
 }
 
@@ -741,14 +809,28 @@ const api: Api = {
       ipcRenderer.invoke('machine:estop', payload) as Promise<MachineEstopResult>
   },
 
-  // Parametric CAD Design workspace (BUILD 2)
+  // Parametric CAD Design workspace (BUILD 2 + CAD V1 sketcher + CAD V2 assembly/drawing)
   cad: {
     execute: (payload) => ipcRenderer.invoke('cad:execute', payload) as Promise<CadExecuteResponse>,
     export: (payload) => ipcRenderer.invoke('cad:export', payload) as Promise<CadExportResponse>,
     listOperations: (payload) =>
       ipcRenderer.invoke('cad:listOperations', payload) as Promise<CadListOperationsResponse>,
     tessellateWithIds: (payload) =>
-      ipcRenderer.invoke('cad:tessellateWithIds', payload) as Promise<CadTessellateWithIdsResponse>
+      ipcRenderer.invoke('cad:tessellateWithIds', payload) as Promise<CadTessellateWithIdsResponse>,
+    solveSketch: (payload) =>
+      ipcRenderer.invoke('cad:solveSketch', payload) as Promise<CadSolveSketchResponse>,
+    // CAD V2 — Assembly view
+    createAssembly: (payload) =>
+      ipcRenderer.invoke('cad:createAssembly', payload) as Promise<CadCreateAssemblyResponse>,
+    tessellateAssembly: (payload) =>
+      ipcRenderer.invoke('cad:tessellateAssembly', payload) as Promise<CadTessellateAssemblyResponse>,
+    exportAssembly: (payload) =>
+      ipcRenderer.invoke('cad:exportAssembly', payload) as Promise<CadExportAssemblyResponse>,
+    // CAD V2 — Drawing view
+    projectDrawing: (payload) =>
+      ipcRenderer.invoke('cad:projectDrawing', payload) as Promise<CadProjectDrawingResponse>,
+    exportDrawing: (payload) =>
+      ipcRenderer.invoke('cad:exportDrawing', payload) as Promise<CadExportDrawingResponse>
   }
 }
 

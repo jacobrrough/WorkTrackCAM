@@ -43,6 +43,12 @@ export type SidecarMethod =
   | 'cad.execute_script'
   | 'cad.export'
   | 'cad.list_operations'
+  | 'cad.project_drawing'
+  | 'cad.export_drawing'
+  | 'cad.solve_sketch'
+  | 'cad.create_assembly'
+  | 'cad.tessellate_assembly'
+  | 'cad.export_assembly'
   | 'cam.run_toolpath'
 
 export type PingResult = { pong: true; version: string }
@@ -326,6 +332,324 @@ export type CamRunToolpathResult = {
   toolpathLines: string[]
   strategy: CamStrategy
   lineCount: number
+}
+
+// ── cad.project_drawing / cad.export_drawing ─────────────────────────────
+//
+// CAD V2 — Wave 2 Workflow A2 (Drawings). Projects a 3D body handle into a
+// 2D SVG drawing for the renderer's Drawings panel. Two methods so the
+// renderer can stream inline markup for live previews AND export to disk on
+// operator click without paying for two sidecar projections.
+//
+// View directions match standard third-angle mechanical drafting:
+//   * 'front' — viewer looks down +Y, sees XZ plane (width × height)
+//   * 'top'   — viewer looks down +Z, sees XY plane (width × depth)
+//   * 'right' — viewer looks down +X, sees YZ plane (depth × height)
+//   * 'iso'   — isometric (1, 1, 1) corner view
+//
+// Errors:
+//   * 'bad_params'            — empty handle, unknown view, null-byte path
+//   * 'invalid_handle'        — handle not in the sidecar's table
+//   * 'cadquery_not_installed' — pip dep missing
+//   * 'drawing_error'         — CadQuery raised during SVG projection
+//   * 'svg_write_error'       — disk write failed (export_drawing only)
+//
+// Safety Rule 1: this path does NOT touch STL / G-code; SVG is renderer-only.
+
+export type CadDrawingView = 'front' | 'top' | 'right' | 'iso'
+
+export type CadProjectDrawingParams = {
+  /** Opaque handle from cad.execute_script or cad.import_step. */
+  handle: string
+  /** View direction; see CadDrawingView for the standard names. */
+  view: CadDrawingView
+}
+
+export type CadProjectDrawingResult = {
+  /** Inline SVG markup for the projection (UTF-8). */
+  svg: string
+  /** Echoed view name for round-trip diagnostics. */
+  view: CadDrawingView
+  /** Byte length of the SVG after UTF-8 encode (= svg.length in mostly-ASCII output). */
+  bytes: number
+}
+
+export type CadExportDrawingParams = {
+  handle: string
+  view: CadDrawingView
+  /** Absolute path. Null-byte is rejected by the sidecar with bad_params. */
+  outPath: string
+}
+
+export type CadExportDrawingResult = {
+  /** Echo of outPath (now exists on disk). */
+  outPath: string
+  /** Echoed view name for round-trip diagnostics. */
+  view: CadDrawingView
+  /** Stat() size of the written SVG file in bytes. */
+  bytesWritten: number
+}
+
+// ── cad.solve_sketch ─────────────────────────────────────────────────────
+//
+// CAD V1 — Wave 2 Workflow Sketcher. Runs the planegcs 2D constraint solver
+// over a sketch (points / lines / circles / arcs) plus a typed constraint
+// list. The renderer's Sketch2DCanvas pushes a fresh payload every time the
+// user adds or moves geometry and re-solves; the result feeds back into the
+// canvas, which redraws the moved points.
+//
+// Why not pass planegcs IDs over the wire?
+// The renderer keeps its own DOM-friendly string ids (`pt1`, `line_top`,
+// etc.) so the user can hover / select / undo with stable handles across
+// re-solves. The sidecar translates those strings into planegcs typed-ids
+// internally; the wire surface stays string-keyed.
+//
+// Constraint kinds supported in V1:
+//   * 'horizontal'    — line is horizontal (constrains a LineEntity)
+//   * 'vertical'      — line is vertical
+//   * 'coincident'    — two points share a location
+//   * 'distance'      — point-to-point distance equals a fixed value (mm)
+//   * 'radius'        — circle OR arc radius equals a fixed value (mm)
+//   * 'parallel'      — two lines parallel
+//   * 'perpendicular' — two lines perpendicular
+//
+// Error vocabulary (codes mirror the Python core's `_CadHandlerError`):
+//   * 'bad_params'                — sketchState / constraintList missing or wrong type
+//   * 'invalid_sketch'            — sketch shape is malformed (bad ids, NaN, etc.)
+//   * 'invalid_constraint'        — references a missing entity or wrong type
+//   * 'planegcs_not_installed'    — pip dep missing in the sidecar env
+//   * 'solver_under_constrained'  — solve technically succeeded but dof > 0;
+//                                    renderer prompts the operator to add constraints
+//   * 'solver_over_constrained'   — constraints conflict; renderer highlights the
+//                                    offending source ids (carried in the message)
+//   * 'solver_failed'             — planegcs returned a non-convergent status
+
+/** A 2D point in the sketch plane. `fixed` anchors the point. */
+export type SketchPoint = {
+  id: string
+  x: number
+  y: number
+  /** When true the solver will not move this point. Defaults to false. */
+  fixed?: boolean
+}
+
+/** A 2D line segment between two point ids in the sketch. */
+export type SketchLine = {
+  id: string
+  /** Point ids; must reference entries in `sketch.points`. */
+  p1: string
+  p2: string
+}
+
+/** A 2D circle: center point id + radius (mm). */
+export type SketchCircle = {
+  id: string
+  /** Point id of the center; must reference an entry in `sketch.points`. */
+  center: string
+  /** Radius in mm. Must be positive. */
+  radius: number
+}
+
+/**
+ * A 2D arc by center / start / end point ids and a (radius, sweep) pair.
+ * Angles in radians, CCW from positive x-axis (planegcs convention).
+ */
+export type SketchArc = {
+  id: string
+  center: string
+  start: string
+  end: string
+  /** Radius in mm. Must be positive. */
+  radius: number
+  /** Start angle in radians, CCW from +x. */
+  startAngle: number
+  /** End angle in radians, CCW from +x. */
+  endAngle: number
+}
+
+export type SketchState = {
+  points: SketchPoint[]
+  lines: SketchLine[]
+  circles: SketchCircle[]
+  arcs: SketchArc[]
+}
+
+/** Discriminated union of every constraint kind supported in V1. */
+export type SketchConstraint =
+  | { id: string; kind: 'horizontal'; line: string }
+  | { id: string; kind: 'vertical'; line: string }
+  | { id: string; kind: 'coincident'; p1: string; p2: string }
+  | { id: string; kind: 'distance'; p1: string; p2: string; distance: number }
+  | { id: string; kind: 'radius'; entity: string; radius: number }
+  | { id: string; kind: 'parallel'; l1: string; l2: string }
+  | { id: string; kind: 'perpendicular'; l1: string; l2: string }
+
+export type CadSolveSketchParams = {
+  sketchState: SketchState
+  constraintList: SketchConstraint[]
+}
+
+export type CadSolveSketchResult = {
+  /**
+   * Updated sketch with points moved to satisfy the constraints. Lines /
+   * circles / arcs are echoed with the same ids; the renderer rebuilds
+   * their visual geometry from the moved points. Circle / arc radii reflect
+   * any radius constraint applied during the solve.
+   */
+  sketch: SketchState
+  /**
+   * Degrees of freedom remaining after the solve. Always `0` on success in
+   * V1 — the handler raises `solver_under_constrained` when dof > 0 so this
+   * field is informational only. A future iteration may surface partial
+   * solutions and let the renderer decide whether to apply them.
+   */
+  dof: number
+}
+
+// ── cad.create_assembly / cad.tessellate_assembly / cad.export_assembly ──
+//
+// CAD V2 — Wave 2 Workflow A1 (Assemblies). Wraps multiple existing part
+// handles (each from a prior cad.execute_script / cad.import_step) in a
+// single cq.Assembly via per-child 4x4 transforms, then either tessellates
+// the assembly into a flat-buffer mesh for the renderer or exports it to
+// STEP (hierarchy-preserving) / STL (flattened-mesh) on disk.
+//
+// Why three methods instead of one fat call?
+// The renderer needs to react to operator edits (drag a part, change a
+// transform) without re-uploading the entire assembly definition. The
+// create→handle→tessellate split lets the renderer:
+//   1. Build the assembly once, stash the assembly handle.
+//   2. Tessellate (or re-tessellate at higher tolerance) on demand.
+//   3. Export to disk only when the operator clicks "Save".
+//
+// The wire shape of tessellate_assembly intentionally mirrors
+// tessellate_with_ids so the renderer's selection logic does not need to
+// fork on assembly vs. single body. The faceMap dict gains a `childName`
+// field so the inspector panel can attribute selected faces to the right part.
+//
+// Errors mirror cad.export / cad.tessellate_with_ids vocabulary:
+//   * 'bad_params'              — empty parts, malformed transform shape,
+//                                   non-finite transform value, null-byte
+//                                   path, unsupported format
+//   * 'invalid_handle'          — a child handle (create_assembly) or the
+//                                   assembly handle (tessellate / export)
+//                                   is not in the sidecar's _HANDLES table
+//   * 'invalid_numeric_params'  — toleranceMm non-positive / non-finite
+//   * 'not_an_assembly'         — caller passed a single-body handle to a
+//                                   tessellate_assembly / export_assembly
+//                                   method; renderer should fall back to
+//                                   cad.tessellate_with_ids / cad.export
+//   * 'cadquery_not_installed'  — pip dep missing
+//   * 'assembly_not_supported'  — cq.Assembly not exposed in this CadQuery
+//                                   build; renderer falls back to single-body
+//   * 'tessellation_error'      — CadQuery raised mid-tessellate
+//   * 'export_error'            — CadQuery raised mid-export
+//   * 'assembly_build_error'    — cq.Assembly construction raised (e.g.
+//                                   degenerate transform matrix)
+//
+// Safety Rule 1: STL export from an assembly flows through the same
+// degenerate-triangle filter + post-write size check used by cad.export, so
+// downstream cam.run_toolpath numerics are byte-identical regardless of
+// whether the source was a single body or a flattened assembly.
+
+/** Formats supported by cad.export_assembly. DXF is excluded by design — it
+ * has no assembly / component concept. STEP preserves the hierarchy via
+ * cq.Assembly.save; STL flattens to a single mesh via the per-child
+ * tessellation path. */
+export type CadAssemblyExportFormat = 'step' | 'stl'
+
+/**
+ * A single child in an assembly. The `handle` must already be in the
+ * sidecar's handle table (from a prior cad.execute_script or
+ * cad.import_step); restarting the sidecar invalidates handles.
+ *
+ * `transform` accepts:
+ *   * the literal string `'identity'` as a compact shortcut for no offset, OR
+ *   * a row-major 4x4 affine matrix (last row implicitly [0,0,0,1] but the
+ *     wire requires it to be passed explicitly so the shape is uniform).
+ *
+ * `name` is optional; the sidecar defaults to `"part_<index>"` when absent.
+ * Renderer should pass a stable name (e.g. the source filename without
+ * extension) so face-map entries' `childName` field stays meaningful.
+ */
+export type CadAssemblyChild = {
+  handle: string
+  name?: string
+  /** Either 'identity' or a row-major 4x4 transform matrix. */
+  transform: 'identity' | [
+    [number, number, number, number],
+    [number, number, number, number],
+    [number, number, number, number],
+    [number, number, number, number],
+  ]
+}
+
+export type CadCreateAssemblyParams = {
+  /** Must be a non-empty array. */
+  parts: CadAssemblyChild[]
+  /** Optional display name (defaults to "WorkTrackCAM-Assembly"). */
+  name?: string
+}
+
+export type CadCreateAssemblyResult = {
+  /** Opaque handle prefixed with "assembly:". */
+  handle: string
+  /** Number of children added to the assembly. */
+  childCount: number
+  /** Axis-aligned union bbox in mm. */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+}
+
+/**
+ * Per-face metadata in the assembly's `faceMap` dict. Extends `CadFaceMapEntry`
+ * with a `childName` field so the renderer's inspector panel can attribute
+ * the selected face to the right part.
+ */
+export type CadAssemblyFaceMapEntry = CadFaceMapEntry & {
+  /**
+   * The child name (set via `CadAssemblyChild.name` or defaulted to
+   * `"part_<index>"`) that contributed this face. Stable across re-runs of
+   * the same create_assembly + tessellate_assembly pair.
+   */
+  childName: string
+}
+
+export type CadTessellateAssemblyParams = {
+  /** Assembly handle from cad.create_assembly. */
+  handle: string
+  /** Surface deviation tolerance in mm. Defaults to 0.1 mm in the sidecar. */
+  toleranceMm?: number
+}
+
+export type CadTessellateAssemblyResult = {
+  /** Flat float array; length divisible by 3. */
+  vertices: number[]
+  /** Flat triangle index buffer; length divisible by 3. */
+  indices: number[]
+  /** Parallel face-id array; faceIds[i] is the 0-based id of triangle i. */
+  faceIds: number[]
+  /** Equal to faceIds.length and indices.length / 3. */
+  triangleCount: number
+  /** Axis-aligned bbox of the assembly (mm). */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * Per-face metadata keyed by face id (as a string). Same shape as
+   * `CadTessellateWithIdsResult.faceMap` plus a `childName` field.
+   */
+  faceMap: Record<string, CadAssemblyFaceMapEntry>
+}
+
+export type CadExportAssemblyParams = {
+  handle: string
+  outPath: string
+  format: CadAssemblyExportFormat
+  /** Required for STL; defaults to 0.1 mm. Ignored for STEP. */
+  toleranceMm?: number
+}
+
+export type CadExportAssemblyResult = {
+  outPath: string
+  bytesWritten: number
 }
 
 /** Type guard: is this a valid sidecar response envelope? */

@@ -4,7 +4,8 @@
  *
  * This module bridges the renderer's Design workspace to the Python sidecar's
  * `cad.execute_script` / `cad.export` / `cad.list_operations` /
- * `cad.tessellate_with_ids` handlers (in `engines/sidecar/cad_handlers.py`).
+ * `cad.tessellate_with_ids` / `cad.solve_sketch` handlers (in
+ * `engines/sidecar/cad_handlers.py`).
  * It follows the same dispatch pattern as `ipc-fabrication.ts` /
  * `ipc-core.ts` / `ipc-modeling.ts`:
  *
@@ -79,6 +80,195 @@ export type CadTessellateWithIdsResponse =
   | { ok: true; result: CadTessellateWithIdsResult }
   | { ok: false; error: string; hint?: string }
 
+// ── cad:solveSketch types (CAD V1 sketcher) ──────────────────────────────────
+//
+// Bridges the renderer's Sketch2DCanvas to Agent S1's sidecar method
+// ``cad.solve_sketch``. The sidecar owns the deep validation (point-id
+// references / parameter resolution / constraint discriminator) -- the IPC
+// boundary only enforces the envelope shape so a runaway renderer cannot
+// funnel garbage at the JSON-RPC pipe.
+//
+// Wire contract (must match Agent S1's sidecar)
+// ----------------------------------------------
+// Params:
+//   - sketch:      REQUIRED. The full sketch state (mirrors the design-schema
+//                  shape -- ``points``, ``parameters``, ``entities``).
+//   - constraints: REQUIRED. Array of constraint records (discriminated by
+//                  ``type`` -- ``coincident`` / ``distance`` / ... see
+//                  ``shared/design-schema.ts``).
+//
+// Result (best-effort permissive shape):
+//   - points:    Record<string, { x, y, fixed? }> -- the solved positions.
+//   - residual:  Optional scalar (sum of squared constraint residuals after
+//                solve), surfaced by the Diagnostics panel.
+//   - iterations: Optional integer iteration count.
+//   - converged: Optional boolean -- ``true`` if the solver hit the
+//                convergence threshold before the iteration cap.
+//   - log:       Optional array of human-readable diagnostic strings.
+/**
+ * Solved point map -- echoes the input ``points`` shape but with updated
+ * coordinates. ``fixed`` is preserved so the renderer's gizmo can keep
+ * locked points pinned after a round-trip.
+ */
+export type CadSolveSketchPoint = {
+  x: number
+  y: number
+  fixed?: boolean
+}
+
+export type CadSolveSketchResult = {
+  /**
+   * Solved positions keyed by point id. Always present on success; may
+   * echo the original positions when ``constraints`` is empty.
+   */
+  points: Record<string, CadSolveSketchPoint>
+  /** Sum-of-squared residual after solve (smaller is better). */
+  residual?: number
+  /** Iteration count consumed by the sidecar solver. */
+  iterations?: number
+  /** ``true`` when the solver converged below its residual threshold. */
+  converged?: boolean
+  /** Human-readable diagnostic lines (mirrors ``cad.execute_script`` log). */
+  log?: string[]
+}
+
+export type CadSolveSketchResponse =
+  | { ok: true; result: CadSolveSketchResult }
+  | { ok: false; error: string; hint?: string }
+
+// ── cad:createAssembly / tessellateAssembly / exportAssembly (CAD V2) ───────
+//
+// Bridges the renderer's Assembly view to the sidecar's
+// ``cad.create_assembly`` / ``cad.tessellate_assembly`` / ``cad.export_assembly``
+// methods (Agent A1's work). The IPC boundary enforces the envelope only --
+// the sidecar owns deep validation of the assembly tree (instance references,
+// joint kinds, transform shapes, etc.) since that schema mirrors
+// ``shared/assembly-schema.ts`` and would drift if duplicated.
+//
+// Why a single ``assembly: Record<string, unknown>`` blob instead of
+// re-typing the full assembly DAG here?
+//
+//   - The renderer's assembly state is already a Zod-validated
+//     ``AssemblyFile`` (see ``shared/assembly-schema.ts``); the IPC layer
+//     would either re-validate (slow + duplicate maintenance burden) or
+//     trust the renderer (then the type at the boundary is fiction).
+//   - The sidecar will validate the same fields. One source of truth.
+//   - This mirrors ``CadSolveSketchPayload``'s permissive shape -- same
+//     trade-off, same precedent.
+
+/**
+ * Per-instance tessellated mesh emitted by ``cad.tessellate_assembly``. One
+ * entry per visible part instance in the assembly tree. Mirrors the
+ * ``CadExecuteScriptMesh`` shape with an extra ``instanceId`` so the renderer
+ * can route a mesh to its corresponding row in the assembly tree.
+ */
+export type CadAssemblyInstanceMesh = {
+  /** Stable instance id from the source ``assembly.json`` (same as the persisted shape). */
+  instanceId: string
+  /** Opaque per-instance handle (subordinate to the parent assembly handle). */
+  handle: string
+  /** Absolute path to the binary STL written by the sidecar (Safety Rule 1 degenerate filter applied). */
+  stlPath: string
+  /** Triangle count in the STL. */
+  triangleCount: number
+  /** Axis-aligned bbox in mm of THIS instance (already transformed into world space). */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+}
+
+export type CadCreateAssemblyResult = {
+  /** Opaque parent assembly handle -- pass back into tessellate/export. */
+  handle: string
+  /** Axis-aligned bbox of the whole assembly in mm (union of every instance). */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+  /** Instance count after resolving the tree (excludes hidden/suppressed instances). */
+  instanceCount: number
+}
+
+export type CadTessellateAssemblyResult = {
+  /** Per-instance meshes; renderer indexes by ``instanceId``. */
+  meshes: CadAssemblyInstanceMesh[]
+  /** Axis-aligned bbox of the whole assembly (echoed from ``createAssembly``). */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+}
+
+export type CadExportAssemblyResult = {
+  outPath: string
+  bytesWritten: number
+}
+
+export type CadCreateAssemblyResponse =
+  | { ok: true; result: CadCreateAssemblyResult }
+  | { ok: false; error: string; hint?: string }
+
+export type CadTessellateAssemblyResponse =
+  | { ok: true; result: CadTessellateAssemblyResult }
+  | { ok: false; error: string; hint?: string }
+
+export type CadExportAssemblyResponse =
+  | { ok: true; result: CadExportAssemblyResult }
+  | { ok: false; error: string; hint?: string }
+
+// ── cad:projectDrawing / exportDrawing (CAD V2 -- 2D documentation) ─────────
+//
+// Bridges the renderer's Drawing view to the sidecar's
+// ``cad.project_drawing`` / ``cad.export_drawing`` methods (Agent A2's
+// work). The drawing pipeline takes an assembly OR a part handle plus a
+// drawing-sheet description (mirrors ``shared/drawing-sheet-schema.ts``)
+// and emits projected linework for each ``viewPlaceholder``.
+//
+// Wire contract notes:
+//   - ``handle`` references a body already in the sidecar handle table
+//     (from ``cad.execute_script`` / ``cad.create_assembly`` / etc.).
+//   - ``sheet`` is the full ``DrawingSheet`` blob -- permissive object at
+//     the IPC layer, sidecar walks the ``viewPlaceholders`` array and
+//     projects each entry per its ``viewFrom`` / ``projectionDirection``.
+//   - ``format`` for exportDrawing is restricted to ``pdf`` / ``dxf`` --
+//     STEP / STL are part-level only.
+
+export const CAD_DRAWING_EXPORT_FORMATS = ['pdf', 'dxf'] as const
+export type CadDrawingExportFormat = (typeof CAD_DRAWING_EXPORT_FORMATS)[number]
+
+/**
+ * Projected view emitted by ``cad.project_drawing``. One entry per
+ * ``DrawingViewPlaceholder`` in the source sheet. Carries the raw
+ * line-segment list (``[[x0,y0],[x1,y1]]``) plus the placeholder id so the
+ * renderer can route segments to the correct viewport slot.
+ *
+ * Segments are 2D (sheet-space mm). Hidden / dashed segments live on a
+ * separate ``hiddenSegments`` array so the renderer can style them
+ * differently without re-running an HLR pass.
+ */
+export type CadDrawingProjectedView = {
+  /** Source ``DrawingViewPlaceholder.id`` -- pin to the sheet's placeholder list. */
+  placeholderId: string
+  /** Visible (solid) line segments in mm. Each segment is ``[[x0,y0],[x1,y1]]``. */
+  segments: Array<[[number, number], [number, number]]>
+  /** Hidden (dashed) line segments behind the silhouette. Always present; may be empty. */
+  hiddenSegments: Array<[[number, number], [number, number]]>
+  /** Bounding box of the projected linework in sheet-space mm. */
+  bbox: { min: [number, number]; max: [number, number] }
+}
+
+export type CadProjectDrawingResult = {
+  /** One entry per ``viewPlaceholder`` in the source sheet (best-effort -- failures bin per-view). */
+  views: CadDrawingProjectedView[]
+  /** Optional diagnostic log (e.g. "view 'top' fell back to mesh projection tier B"). */
+  log?: string[]
+}
+
+export type CadExportDrawingResult = {
+  outPath: string
+  bytesWritten: number
+}
+
+export type CadProjectDrawingResponse =
+  | { ok: true; result: CadProjectDrawingResult }
+  | { ok: false; error: string; hint?: string }
+
+export type CadExportDrawingResponse =
+  | { ok: true; result: CadExportDrawingResult }
+  | { ok: false; error: string; hint?: string }
+
 // ── Payload contracts (cross-checked in ipc-cad.test.ts) ────────────────────
 
 export type CadExecutePayload = {
@@ -98,6 +288,110 @@ export type CadListOperationsPayload = { script: string }
 export type CadTessellateWithIdsPayload = {
   handle: string
   toleranceMm?: number
+}
+
+/**
+ * Payload for the ``cad:solveSketch`` IPC handler.
+ *
+ * Boundary contract only -- the sidecar owns the deep validation. We keep
+ * the wire shape permissive (``Record<string, unknown>`` / ``unknown[]``)
+ * because the sketch state matches the renderer's full design-schema dict
+ * (points + parameters + entities) and the constraint list is the same
+ * discriminated union the design-schema Zod parser owns. Defining the rich
+ * shape twice (Zod here AND in Python) would drift faster than it stayed
+ * useful.
+ */
+export type CadSolveSketchPayload = {
+  /**
+   * Full sketch state: typically the ``DesignFileV2`` slice the renderer
+   * carries (points / parameters / entities / metadata). The sidecar
+   * unpacks these into its own ``Sketch`` model.
+   */
+  sketch: Record<string, unknown>
+  /**
+   * Discriminated constraint list -- each entry carries a ``type`` field
+   * and constraint-specific point references / parameter keys (see
+   * ``shared/design-schema.ts``). The sidecar walks the array and routes
+   * each constraint to the matching residual term.
+   */
+  constraints: unknown[]
+}
+
+/**
+ * Payload for ``cad:createAssembly``. The renderer ships the full assembly
+ * tree (mirrors ``shared/assembly-schema.ts`` -- ``parts`` / ``instances`` /
+ * ``rootName`` etc.) so the sidecar can resolve part handles, joints, and
+ * transforms in a single round-trip.
+ *
+ * Permissive at the IPC boundary -- the Zod parser on the renderer side and
+ * the sidecar's own validation own the deep shape. See the rationale on the
+ * ``CadSolveSketchPayload`` comment.
+ */
+export type CadCreateAssemblyPayload = {
+  /** Full assembly tree -- typically the persisted ``AssemblyFile`` blob. */
+  assembly: Record<string, unknown>
+}
+
+/**
+ * Payload for ``cad:tessellateAssembly``. Mirrors
+ * ``CadTessellateWithIdsPayload`` but the ``handle`` references an assembly
+ * (from ``cad:createAssembly``) rather than a part. Returns one mesh per
+ * visible instance so the renderer can place each STL in world space.
+ */
+export type CadTessellateAssemblyPayload = {
+  /** Opaque handle from a prior ``cad:createAssembly`` round-trip. */
+  handle: string
+  /** Optional surface deviation tolerance in mm. Sidecar default 0.1 mm. */
+  toleranceMm?: number
+}
+
+/**
+ * Payload for ``cad:exportAssembly``. Same shape as ``cad:export`` -- the
+ * sidecar wires the assembly into a single combined body (STEP) or a
+ * tessellated container STL before writing. Format whitelist mirrors the
+ * part-level exporter (``step`` / ``stl`` -- DXF is not meaningful for an
+ * assembled multi-part body).
+ */
+export type CadExportAssemblyPayload = {
+  handle: string
+  outPath: string
+  /** ``dxf`` is rejected -- DXF makes no sense for a 3D assembled body. */
+  format: 'step' | 'stl'
+  /** Optional STL tolerance (mm). Ignored for STEP. */
+  toleranceMm?: number
+}
+
+/**
+ * Payload for ``cad:projectDrawing``. The renderer ships the
+ * ``DrawingSheet`` blob (mirrors ``shared/drawing-sheet-schema.ts``) along
+ * with the source body's ``handle`` so the sidecar can run the projection
+ * pipeline (mesh tier A/B/C, or true BRep HLR when CadQuery succeeds).
+ *
+ * Permissive at the IPC boundary for the same reason as
+ * ``CadSolveSketchPayload`` / ``CadCreateAssemblyPayload``: the renderer's
+ * Zod parser owns the schema; duplicating it here would drift.
+ */
+export type CadProjectDrawingPayload = {
+  /** Source body handle (part from ``cad:execute`` or assembly from ``cad:createAssembly``). */
+  handle: string
+  /** Full ``DrawingSheet`` blob -- sidecar walks ``viewPlaceholders``. */
+  sheet: Record<string, unknown>
+}
+
+/**
+ * Payload for ``cad:exportDrawing``. Renders the projected linework from
+ * ``cad:projectDrawing`` into PDF or DXF on disk. Title-block metadata
+ * (sheet name / scale / template hint) travels in the ``sheet`` blob so the
+ * sidecar can stamp the export shell.
+ */
+export type CadExportDrawingPayload = {
+  /** Source body handle -- same as ``cad:projectDrawing``'s ``handle``. */
+  handle: string
+  outPath: string
+  /** Whitelisted via ``CAD_DRAWING_EXPORT_FORMATS``. */
+  format: CadDrawingExportFormat
+  /** Full ``DrawingSheet`` blob, including ``viewPlaceholders``. */
+  sheet: Record<string, unknown>
 }
 
 // ── Validation constants ────────────────────────────────────────────────────
@@ -303,6 +597,265 @@ export function validateTessellateWithIdsPayload(
     payload: {
       handle: p.handle,
       ...(toleranceMm !== undefined ? { toleranceMm } : {}),
+    },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:solveSketch`` IPC handler.
+ *
+ * Pure -- enforces only the envelope shape so the sidecar can do the deep
+ * validation (point-id resolution, parameter lookup, constraint
+ * discriminator). Both ``sketch`` and ``constraints`` are REQUIRED; we
+ * keep the inner shapes permissive (object / array) so the renderer's
+ * design-schema can evolve without dragging the IPC layer along.
+ */
+export function validateSolveSketchPayload(
+  raw: unknown,
+): { ok: true; payload: CadSolveSketchPayload } | CadSolveSketchResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:solveSketch requires { sketch, constraints }',
+    }
+  }
+  const p = raw as { sketch?: unknown; constraints?: unknown }
+  if (!p.sketch || typeof p.sketch !== 'object' || Array.isArray(p.sketch)) {
+    return {
+      ok: false,
+      error: 'missing_sketch',
+      hint: 'sketch must be an object describing the sketch state (points / parameters / entities)',
+    }
+  }
+  if (!Array.isArray(p.constraints)) {
+    return {
+      ok: false,
+      error: 'missing_constraints',
+      hint: 'constraints must be an array of constraint records',
+    }
+  }
+  return {
+    ok: true,
+    payload: {
+      sketch: p.sketch as Record<string, unknown>,
+      constraints: p.constraints,
+    },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:createAssembly`` IPC handler.
+ *
+ * Pure -- enforces only the envelope shape (``assembly`` must be a non-array
+ * object). The sidecar owns the deep validation of the assembly tree.
+ */
+export function validateCreateAssemblyPayload(
+  raw: unknown,
+): { ok: true; payload: CadCreateAssemblyPayload } | CadCreateAssemblyResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:createAssembly requires { assembly }',
+    }
+  }
+  const p = raw as { assembly?: unknown }
+  if (!p.assembly || typeof p.assembly !== 'object' || Array.isArray(p.assembly)) {
+    return {
+      ok: false,
+      error: 'missing_assembly',
+      hint: 'assembly must be an object describing the assembly tree (instances / parts / rootName)',
+    }
+  }
+  return {
+    ok: true,
+    payload: { assembly: p.assembly as Record<string, unknown> },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:tessellateAssembly`` IPC handler.
+ *
+ * Mirrors ``validateTessellateWithIdsPayload`` -- ``handle`` is required,
+ * ``toleranceMm`` is optional but must be a finite positive number when
+ * present.
+ */
+export function validateTessellateAssemblyPayload(
+  raw: unknown,
+): { ok: true; payload: CadTessellateAssemblyPayload } | CadTessellateAssemblyResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:tessellateAssembly requires { handle, toleranceMm? }',
+    }
+  }
+  const p = raw as { handle?: unknown; toleranceMm?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  let toleranceMm: number | undefined
+  if (p.toleranceMm !== undefined) {
+    if (typeof p.toleranceMm !== 'number' || !Number.isFinite(p.toleranceMm) || p.toleranceMm <= 0) {
+      return {
+        ok: false,
+        error: 'invalid_tolerance',
+        hint: 'toleranceMm must be a positive finite number',
+      }
+    }
+    toleranceMm = p.toleranceMm
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      ...(toleranceMm !== undefined ? { toleranceMm } : {}),
+    },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:exportAssembly`` IPC handler.
+ *
+ * Same envelope shape as ``validateExportPayload`` but with a narrower
+ * format whitelist (``step`` / ``stl`` only -- DXF rejected) and the
+ * mandatory null-byte path check.
+ */
+export function validateExportAssemblyPayload(
+  raw: unknown,
+): { ok: true; payload: CadExportAssemblyPayload } | CadExportAssemblyResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:exportAssembly requires { handle, outPath, format, toleranceMm? }',
+    }
+  }
+  const p = raw as { handle?: unknown; outPath?: unknown; format?: unknown; toleranceMm?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.outPath !== 'string' || p.outPath.length === 0) {
+    return { ok: false, error: 'missing_out_path' }
+  }
+  if (p.outPath.includes('\0')) {
+    return { ok: false, error: 'invalid_path', hint: 'outPath contains a null byte' }
+  }
+  if (p.format !== 'step' && p.format !== 'stl') {
+    return {
+      ok: false,
+      error: 'invalid_format',
+      hint: 'format must be one of: step, stl (dxf is not supported for assembly exports)',
+    }
+  }
+  let toleranceMm: number | undefined
+  if (p.toleranceMm !== undefined) {
+    if (typeof p.toleranceMm !== 'number' || !Number.isFinite(p.toleranceMm) || p.toleranceMm <= 0) {
+      return {
+        ok: false,
+        error: 'invalid_tolerance',
+        hint: 'toleranceMm must be a positive finite number',
+      }
+    }
+    toleranceMm = p.toleranceMm
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      outPath: p.outPath,
+      format: p.format,
+      ...(toleranceMm !== undefined ? { toleranceMm } : {}),
+    },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:projectDrawing`` IPC handler.
+ *
+ * Pure -- envelope-only. The sidecar walks the ``sheet.viewPlaceholders``
+ * array and projects each entry; the deep schema check is owned by the
+ * renderer's ``drawingSheetSchema`` Zod parser.
+ */
+export function validateProjectDrawingPayload(
+  raw: unknown,
+): { ok: true; payload: CadProjectDrawingPayload } | CadProjectDrawingResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:projectDrawing requires { handle, sheet }',
+    }
+  }
+  const p = raw as { handle?: unknown; sheet?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (!p.sheet || typeof p.sheet !== 'object' || Array.isArray(p.sheet)) {
+    return {
+      ok: false,
+      error: 'missing_sheet',
+      hint: 'sheet must be an object describing the drawing sheet (id, name, viewPlaceholders)',
+    }
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      sheet: p.sheet as Record<string, unknown>,
+    },
+  }
+}
+
+/**
+ * Validate a payload for the ``cad:exportDrawing`` IPC handler.
+ *
+ * Combines the handle / sheet checks from ``validateProjectDrawingPayload``
+ * with the out-path + format whitelist from ``validateExportPayload``.
+ * Format whitelist is ``pdf`` / ``dxf`` -- ``CAD_DRAWING_EXPORT_FORMATS``.
+ */
+export function validateExportDrawingPayload(
+  raw: unknown,
+): { ok: true; payload: CadExportDrawingPayload } | CadExportDrawingResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:exportDrawing requires { handle, outPath, format, sheet }',
+    }
+  }
+  const p = raw as { handle?: unknown; outPath?: unknown; format?: unknown; sheet?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.outPath !== 'string' || p.outPath.length === 0) {
+    return { ok: false, error: 'missing_out_path' }
+  }
+  if (p.outPath.includes('\0')) {
+    return { ok: false, error: 'invalid_path', hint: 'outPath contains a null byte' }
+  }
+  if (typeof p.format !== 'string' || !(CAD_DRAWING_EXPORT_FORMATS as readonly string[]).includes(p.format)) {
+    return {
+      ok: false,
+      error: 'invalid_format',
+      hint: `format must be one of: ${CAD_DRAWING_EXPORT_FORMATS.join(', ')}`,
+    }
+  }
+  if (!p.sheet || typeof p.sheet !== 'object' || Array.isArray(p.sheet)) {
+    return {
+      ok: false,
+      error: 'missing_sheet',
+      hint: 'sheet must be an object describing the drawing sheet (id, name, viewPlaceholders)',
+    }
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      outPath: p.outPath,
+      format: p.format as CadDrawingExportFormat,
+      sheet: p.sheet as Record<string, unknown>,
     },
   }
 }
@@ -571,11 +1124,185 @@ export function coerceTessellateWithIdsResult(
   }
 }
 
+/**
+ * Coerce the raw ``cad.solve_sketch`` response into the typed
+ * ``CadSolveSketchResult``. Returns ``null`` when the response cannot be
+ * trusted (missing or malformed ``points`` map) so the handler can fold it
+ * into a ``sidecar_protocol_error`` envelope instead of letting the
+ * renderer see ``undefined``.
+ *
+ * Defense-in-depth: per-point entries that fail the shape guard collapse
+ * to ``{ x: 0, y: 0 }`` rather than dropping the key -- the renderer
+ * relies on the keys to line up with its existing ``points`` dictionary,
+ * so dropping silently would cause coordinate drift.
+ */
+export function coerceSolveSketchResult(
+  raw: Record<string, unknown>,
+): CadSolveSketchResult | null {
+  if (!raw.points || typeof raw.points !== 'object' || Array.isArray(raw.points)) {
+    return null
+  }
+  const rawPoints = raw.points as Record<string, unknown>
+  const points: Record<string, CadSolveSketchPoint> = {}
+  for (const [id, entry] of Object.entries(rawPoints)) {
+    if (!entry || typeof entry !== 'object') {
+      points[id] = { x: 0, y: 0 }
+      continue
+    }
+    const pt = entry as { x?: unknown; y?: unknown; fixed?: unknown }
+    const x = typeof pt.x === 'number' && Number.isFinite(pt.x) ? pt.x : 0
+    const y = typeof pt.y === 'number' && Number.isFinite(pt.y) ? pt.y : 0
+    const out: CadSolveSketchPoint = { x, y }
+    if (typeof pt.fixed === 'boolean') out.fixed = pt.fixed
+    points[id] = out
+  }
+  const result: CadSolveSketchResult = { points }
+  if (typeof raw.residual === 'number' && Number.isFinite(raw.residual)) {
+    result.residual = raw.residual
+  }
+  if (
+    typeof raw.iterations === 'number' &&
+    Number.isFinite(raw.iterations) &&
+    Number.isInteger(raw.iterations) &&
+    raw.iterations >= 0
+  ) {
+    result.iterations = raw.iterations
+  }
+  if (typeof raw.converged === 'boolean') {
+    result.converged = raw.converged
+  }
+  if (Array.isArray(raw.log)) {
+    result.log = raw.log.filter((l): l is string => typeof l === 'string')
+  }
+  return result
+}
+
+// ── Assembly / drawing result coercers (CAD V2) ─────────────────────────────
+
+/**
+ * Shape guard for an assembly instance mesh entry. Mirrors ``looksLikeMesh``
+ * but adds the required ``instanceId`` field.
+ */
+function looksLikeAssemblyInstanceMesh(value: unknown): value is CadAssemblyInstanceMesh {
+  if (!value || typeof value !== 'object') return false
+  const m = value as Record<string, unknown>
+  if (typeof m.instanceId !== 'string') return false
+  if (typeof m.handle !== 'string') return false
+  if (typeof m.stlPath !== 'string') return false
+  if (typeof m.triangleCount !== 'number' || !Number.isFinite(m.triangleCount)) return false
+  return looksLikeBbox(m.bbox)
+}
+
+/** Shape guard for a 2D bbox (``{ min: [x,y], max: [x,y] }``). */
+function looksLike2dBbox(value: unknown): value is {
+  min: [number, number]
+  max: [number, number]
+} {
+  if (!value || typeof value !== 'object') return false
+  const b = value as Record<string, unknown>
+  return (
+    Array.isArray(b.min) &&
+    Array.isArray(b.max) &&
+    b.min.length === 2 &&
+    b.max.length === 2 &&
+    b.min.every((v) => typeof v === 'number' && Number.isFinite(v)) &&
+    b.max.every((v) => typeof v === 'number' && Number.isFinite(v))
+  )
+}
+
+/** Shape guard for a 2D line segment ``[[x0,y0],[x1,y1]]``. */
+function looksLike2dSegment(value: unknown): value is [[number, number], [number, number]] {
+  if (!Array.isArray(value) || value.length !== 2) return false
+  for (const pt of value) {
+    if (!Array.isArray(pt) || pt.length !== 2) return false
+    if (typeof pt[0] !== 'number' || !Number.isFinite(pt[0])) return false
+    if (typeof pt[1] !== 'number' || !Number.isFinite(pt[1])) return false
+  }
+  return true
+}
+
+/**
+ * Coerce the raw sidecar payload into the strongly-typed
+ * ``CadCreateAssemblyResult``. Returns ``null`` when the response is
+ * structurally unusable (missing handle / bbox) so the handler can fold it
+ * into a ``sidecar_protocol_error`` envelope.
+ */
+export function coerceCreateAssemblyResult(
+  raw: Record<string, unknown>,
+): CadCreateAssemblyResult | null {
+  if (typeof raw.handle !== 'string' || raw.handle.length === 0) return null
+  if (!looksLikeBbox(raw.bbox)) return null
+  const instanceCount =
+    typeof raw.instanceCount === 'number' &&
+    Number.isFinite(raw.instanceCount) &&
+    Number.isInteger(raw.instanceCount) &&
+    raw.instanceCount >= 0
+      ? raw.instanceCount
+      : 0
+  return {
+    handle: raw.handle,
+    bbox: raw.bbox,
+    instanceCount,
+  }
+}
+
+/**
+ * Coerce the raw sidecar payload into the strongly-typed
+ * ``CadTessellateAssemblyResult``. Malformed per-instance entries drop
+ * silently (defense-in-depth) -- the renderer falls back to whatever
+ * instances did make it through.
+ */
+export function coerceTessellateAssemblyResult(
+  raw: Record<string, unknown>,
+): CadTessellateAssemblyResult | null {
+  if (!Array.isArray(raw.meshes)) return null
+  if (!looksLikeBbox(raw.bbox)) return null
+  const meshes: CadAssemblyInstanceMesh[] = raw.meshes.filter(looksLikeAssemblyInstanceMesh)
+  return { meshes, bbox: raw.bbox }
+}
+
+/**
+ * Coerce the raw sidecar payload into the strongly-typed
+ * ``CadProjectDrawingResult``. Malformed per-view entries drop silently;
+ * malformed segments within a view drop silently too. Returns ``null`` only
+ * if ``views`` itself is missing (then the handler folds to
+ * ``sidecar_protocol_error``).
+ */
+export function coerceProjectDrawingResult(
+  raw: Record<string, unknown>,
+): CadProjectDrawingResult | null {
+  if (!Array.isArray(raw.views)) return null
+  const views: CadDrawingProjectedView[] = []
+  for (const v of raw.views) {
+    if (!v || typeof v !== 'object') continue
+    const view = v as Record<string, unknown>
+    if (typeof view.placeholderId !== 'string' || view.placeholderId.length === 0) continue
+    if (!looksLike2dBbox(view.bbox)) continue
+    const segments: Array<[[number, number], [number, number]]> = Array.isArray(view.segments)
+      ? view.segments.filter(looksLike2dSegment)
+      : []
+    const hiddenSegments: Array<[[number, number], [number, number]]> = Array.isArray(view.hiddenSegments)
+      ? view.hiddenSegments.filter(looksLike2dSegment)
+      : []
+    views.push({
+      placeholderId: view.placeholderId,
+      segments,
+      hiddenSegments,
+      bbox: view.bbox,
+    })
+  }
+  const result: CadProjectDrawingResult = { views }
+  if (Array.isArray(raw.log)) {
+    result.log = raw.log.filter((l): l is string => typeof l === 'string')
+  }
+  return result
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerCadIpc(_ctx: MainIpcWindowContext): void {
   // The `ctx` is accepted for parity with the other `register*Ipc` functions
-  // -- none of the four handlers need a BrowserWindow today, but future
+  // -- none of the handlers need a BrowserWindow today, but future
   // progress-event hooks (e.g. streaming `debug()` lines back to the
   // renderer) will reach for `ctx.getMainWindow()`. Keep the signature.
   void _ctx
@@ -681,6 +1408,209 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
         }
       }
       return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:solveSketch -- CAD V1 sketcher: run the 2D constraint solver
+  // against a sketch state + constraint list. Delegates to Agent S1's
+  // sidecar handler ``cad.solve_sketch``. The renderer's Sketch2DCanvas
+  // dispatches this on every constraint change (debounced) so the solver
+  // budget stays in the single-digit-millisecond range -- a 30 s ceiling
+  // is overkill but matches the conservative budget for the other
+  // CadQuery handlers.
+  ipcMain.handle(
+    'cad:solveSketch',
+    async (_e, raw: unknown): Promise<CadSolveSketchResponse> => {
+      const v = validateSolveSketchPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.solve_sketch',
+        {
+          sketch: v.payload.sketch,
+          constraints: v.payload.constraints,
+        },
+        pyCtx,
+        30_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceSolveSketchResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.solve_sketch returned a malformed points envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:createAssembly -- resolve an assembly tree into the sidecar handle
+  // table. Returns the parent handle + a union bbox so the renderer can
+  // frame the assembly before the (separate) tessellate call. Delegates to
+  // Agent A1's ``cad.create_assembly``.
+  ipcMain.handle(
+    'cad:createAssembly',
+    async (_e, raw: unknown): Promise<CadCreateAssemblyResponse> => {
+      const v = validateCreateAssemblyPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      // 2 min ceiling -- the slow path is resolving every sub-part STEP /
+      // CadQuery handle, which scales with the deepest assembly the user
+      // can stomach in the BUILD 2 UI.
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.create_assembly',
+        { assembly: v.payload.assembly },
+        pyCtx,
+        120_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceCreateAssemblyResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.create_assembly returned a malformed handle/bbox envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:tessellateAssembly -- per-instance binary STL emission for the
+  // renderer's Assembly view. Mirrors ``cad:tessellateWithIds`` budget-wise
+  // (60 s ceiling) since per-instance tessellation is O(instances) but each
+  // pass is still a single CadQuery call.
+  ipcMain.handle(
+    'cad:tessellateAssembly',
+    async (_e, raw: unknown): Promise<CadTessellateAssemblyResponse> => {
+      const v = validateTessellateAssemblyPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.tessellate_assembly',
+        {
+          handle: v.payload.handle,
+          ...(v.payload.toleranceMm !== undefined ? { toleranceMm: v.payload.toleranceMm } : {}),
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceTessellateAssemblyResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.tessellate_assembly returned a malformed meshes/bbox envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:exportAssembly -- write the assembled body referenced by `handle`
+  // to STEP / STL. DXF is rejected at the validator -- it makes no sense
+  // for a multi-part assembled body. Path-safety mirrors `cad:export`:
+  // null-byte filter at the boundary, sidecar enforces project-root prefix.
+  ipcMain.handle(
+    'cad:exportAssembly',
+    async (_e, raw: unknown): Promise<CadExportAssemblyResponse> => {
+      const v = validateExportAssemblyPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.export_assembly',
+        {
+          handle: v.payload.handle,
+          outPath: v.payload.outPath,
+          format: v.payload.format,
+          ...(v.payload.toleranceMm !== undefined ? { toleranceMm: v.payload.toleranceMm } : {}),
+        },
+        pyCtx,
+        120_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const outPath = typeof r.result.outPath === 'string' ? r.result.outPath : v.payload.outPath
+      const bytesWritten =
+        typeof r.result.bytesWritten === 'number' && Number.isFinite(r.result.bytesWritten)
+          ? r.result.bytesWritten
+          : 0
+      return { ok: true, result: { outPath, bytesWritten } }
+    },
+  )
+
+  // cad:projectDrawing -- run the documentation projection pipeline (Agent
+  // A2's ``cad.project_drawing``). The sidecar walks the sheet's
+  // ``viewPlaceholders`` and projects each entry per its ``viewFrom`` /
+  // ``projectionDirection``. Renderer's DrawingView feeds this into a 2D
+  // canvas; no G-code involved.
+  ipcMain.handle(
+    'cad:projectDrawing',
+    async (_e, raw: unknown): Promise<CadProjectDrawingResponse> => {
+      const v = validateProjectDrawingPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      // 90 s -- projection (especially BRep HLR tier C) can scale with
+      // edge count; conservative ceiling so the renderer can surface a
+      // hang to the operator rather than waiting forever.
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.project_drawing',
+        {
+          handle: v.payload.handle,
+          sheet: v.payload.sheet,
+        },
+        pyCtx,
+        90_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceProjectDrawingResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.project_drawing returned a malformed views envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:exportDrawing -- render the projected linework into PDF/DXF on
+  // disk. Validator enforces the ``CAD_DRAWING_EXPORT_FORMATS`` whitelist
+  // and rejects null-byte paths. The sidecar stamps title-block metadata
+  // from the ``sheet`` blob before writing.
+  ipcMain.handle(
+    'cad:exportDrawing',
+    async (_e, raw: unknown): Promise<CadExportDrawingResponse> => {
+      const v = validateExportDrawingPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.export_drawing',
+        {
+          handle: v.payload.handle,
+          outPath: v.payload.outPath,
+          format: v.payload.format,
+          sheet: v.payload.sheet,
+        },
+        pyCtx,
+        120_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const outPath = typeof r.result.outPath === 'string' ? r.result.outPath : v.payload.outPath
+      const bytesWritten =
+        typeof r.result.bytesWritten === 'number' && Number.isFinite(r.result.bytesWritten)
+          ? r.result.bytesWritten
+          : 0
+      return { ok: true, result: { outPath, bytesWritten } }
     },
   )
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { DesignFileV2 } from '../../shared/design-schema'
 import {
   constraintPickPointIdEdges,
@@ -7,6 +7,24 @@ import {
 } from '../../shared/sketch-profile'
 import { clientToCanvasLocal, distSqPointSegment, screenToWorld, snap } from './sketch2d-canvas-coords'
 import { drawSketch2D, type ConstraintPickHit } from './sketch2d-draw'
+import {
+  categoriseSolveResult,
+  initialSketchState,
+  sketchReducer,
+  sketchToDesign,
+  type Sketch,
+  type SketchSolveError
+} from './sketch-state'
+import {
+  emptyDraft,
+  handleSketchToolClick,
+  makeDeterministicIdFactory,
+  SKETCH_TOOLS,
+  type SketchPick,
+  type SketchToolDraft,
+  type SketchToolId
+} from './sketch-tools'
+import { cloneDesign, solveSketch as runLocalSketchSolve, energy } from './solver2d'
 import {
   handleFilletClick,
   handleChamferClick,
@@ -1554,3 +1572,558 @@ export function Sketch2DCanvas({
     </div>
   )
 }
+
+// ============================================================================
+// MvpSketchCanvas (CAD V1 MVP sketcher)
+// ============================================================================
+//
+// Self-contained 2D sketch editor built on the new ``sketch-state.ts`` +
+// ``sketch-tools.ts`` modules. Renders to its own ``<canvas>`` -- it does
+// NOT share the legacy ``Sketch2DCanvas`` pipeline above. The MVP path is
+// deliberately independent so the existing DesignWorkspace flow keeps
+// rendering through the legacy code while the new sketcher matures.
+//
+// Layout (column-stacked, token-driven):
+//   ┌───────────────────────────────────────────────────────┐
+//   │ [tool palette]      [solve / clear ribbon]            │
+//   ├──────────┬────────────────────────────────────────────┤
+//   │          │                                            │
+//   │  Tool    │   <canvas>  (grid + entities + draft)      │
+//   │  list    │                                            │
+//   │          │                                            │
+//   └──────────┴────────────────────────────────────────────┘
+//   [solver banner: hidden | success | error]
+//
+// All non-canvas chrome uses ``.sketch-mvp-*`` BEM classes (no Tailwind);
+// inline styles fall back to design-token vars so a follow-on CSS pass
+// can theme without touching this file. The canvas itself uses fixed
+// integer width / height (parent supplies via props -- defaults to a
+// reasonable 800 x 600).
+
+type MvpProps = {
+  width?: number
+  height?: number
+  gridMm?: number
+  /** Debounce window (ms) for auto-solve. 0 disables auto-solve. */
+  autoSolveDebounceMs?: number
+  /** Override the global crypto-based id factory (tests). */
+  idFactory?: (prefix: 'p' | 'e' | 'c') => string
+  /** Disable the canvas + render path (tests / SSR). */
+  headless?: boolean
+}
+
+/** Vertex-pick tolerance in screen pixels (converted to world mm via scale). */
+const MVP_PICK_PX = 10
+/** Entity-pick tolerance (for radius constraints) in screen pixels. */
+const MVP_ENTITY_PICK_PX = 12
+
+export function MvpSketchCanvas({
+  width = 800,
+  height = 600,
+  gridMm = 5,
+  autoSolveDebounceMs = 250,
+  idFactory,
+  headless = false
+}: MvpProps): React.ReactElement {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [state, dispatch] = useReducer(sketchReducer, undefined, initialSketchState)
+  const [activeToolId, setActiveToolId] = useState<SketchToolId>('select')
+  const [draft, setDraft] = useState<SketchToolDraft>(emptyDraft)
+  const [numericInput, setNumericInput] = useState('')
+  const [hint, setHint] = useState<string | null>(null)
+  const [solverError, setSolverError] = useState<SketchSolveError | null>(null)
+  const [lastResidual, setLastResidual] = useState<number | null>(null)
+  // View transform (mm per pixel + origin); fixed in the MVP -- no pan/zoom yet.
+  const scale = 4
+  const ox = 0
+  const oy = 0
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const tool = useMemo(() => SKETCH_TOOLS.find((t) => t.id === activeToolId)!, [activeToolId])
+
+  // Reset draft + numeric input when the user switches tools.
+  useEffect(() => {
+    setDraft(emptyDraft)
+    setNumericInput('')
+  }, [activeToolId])
+
+  const runSolve = useCallback(
+    (sketch: Sketch) => {
+      if (sketch.constraints.length === 0) {
+        setSolverError(null)
+        setLastResidual(null)
+        return
+      }
+      // Local solver path. The sidecar bridge ``window.fab.cad.solveSketch``
+      // will be wired by the sister agent; for the MVP we use the
+      // existing in-renderer solver so the round-trip works today.
+      let solved: DesignFileV2
+      let residual: number | undefined
+      try {
+        const designIn = sketchToDesign(sketch)
+        const cloned = cloneDesign(designIn)
+        solved = runLocalSketchSolve(cloned, 80, 0.35)
+        residual = energy(solved)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        setSolverError({ kind: 'numerical', message: `Solver crashed: ${message}` })
+        setLastResidual(null)
+        return
+      }
+      const outcome = categoriseSolveResult(
+        sketch,
+        Object.fromEntries(
+          Object.entries(solved.points).map(([k, v]) => [k, { x: v.x, y: v.y, fixed: v.fixed }])
+        ),
+        residual
+      )
+      if (!outcome.ok) {
+        setSolverError(outcome.error)
+        setLastResidual(outcome.error.residual ?? null)
+        return
+      }
+      setSolverError(null)
+      setLastResidual(outcome.residual ?? null)
+      dispatch({ type: 'mergeSolvedPoints', points: outcome.points })
+    },
+    [dispatch]
+  )
+
+  // Auto-solve debounce: any sketch mutation schedules a solve.
+  useEffect(() => {
+    if (autoSolveDebounceMs <= 0) return
+    if (state.sketch.constraints.length === 0) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      runSolve(state.sketch)
+    }, autoSolveDebounceMs)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [state.sketch, autoSolveDebounceMs, runSolve])
+
+  // ── Render the canvas (entities + grid + draft preview). ──────────────────
+  const draw = useCallback(() => {
+    if (headless) return
+    const c = canvasRef.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = 'rgba(20, 24, 32, 1)' // matches var(--bg2) approx
+    ctx.fillRect(0, 0, width, height)
+    // Grid -- light vertical/horizontal lines every gridMm.
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+    ctx.lineWidth = 1
+    const cx = width / 2
+    const cy = height / 2
+    const gridPx = gridMm * scale
+    for (let x = cx % gridPx; x < width; x += gridPx) {
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, height)
+      ctx.stroke()
+    }
+    for (let y = cy % gridPx; y < height; y += gridPx) {
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(width, y)
+      ctx.stroke()
+    }
+    // Axes
+    ctx.strokeStyle = 'rgba(160,160,160,0.25)'
+    ctx.beginPath()
+    ctx.moveTo(cx, 0)
+    ctx.lineTo(cx, height)
+    ctx.moveTo(0, cy)
+    ctx.lineTo(width, cy)
+    ctx.stroke()
+    // Entities
+    const wp = (wx: number, wy: number): [number, number] => [
+      cx + (wx - ox) * scale,
+      cy - (wy - oy) * scale
+    ]
+    for (const e of state.sketch.entities) {
+      if (e.kind === 'line') {
+        const a = state.sketch.points[e.startId]
+        const b = state.sketch.points[e.endId]
+        if (!a || !b) continue
+        const [ax, ay] = wp(a.x, a.y)
+        const [bx, by] = wp(b.x, b.y)
+        ctx.strokeStyle = 'rgba(220,220,220,0.95)'
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(ax, ay)
+        ctx.lineTo(bx, by)
+        ctx.stroke()
+      } else if (e.kind === 'circle') {
+        const c0 = state.sketch.points[e.centerId]
+        if (!c0) continue
+        const [px, py] = wp(c0.x, c0.y)
+        ctx.strokeStyle = 'rgba(220,220,220,0.95)'
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.arc(px, py, e.radius * scale, 0, Math.PI * 2)
+        ctx.stroke()
+      } else if (e.kind === 'arc') {
+        // Tessellate via three points (no analytic arc for MVP).
+        const s = state.sketch.points[e.startId]
+        const v = state.sketch.points[e.viaId]
+        const en = state.sketch.points[e.endId]
+        if (!s || !v || !en) continue
+        ctx.strokeStyle = 'rgba(255,200,120,0.95)'
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        const [sx, sy] = wp(s.x, s.y)
+        const [vx, vy] = wp(v.x, v.y)
+        const [ex, ey] = wp(en.x, en.y)
+        ctx.moveTo(sx, sy)
+        ctx.quadraticCurveTo(vx, vy, ex, ey)
+        ctx.stroke()
+      } else if (e.kind === 'point') {
+        const p = state.sketch.points[e.pointId]
+        if (!p) continue
+        const [px, py] = wp(p.x, p.y)
+        ctx.fillStyle = 'rgba(80,200,255,0.95)'
+        ctx.beginPath()
+        ctx.arc(px, py, 4, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    // Points (small dots for any point that's referenced)
+    ctx.fillStyle = 'rgba(80,200,255,0.9)'
+    for (const p of Object.values(state.sketch.points)) {
+      const [px, py] = wp(p.x, p.y)
+      ctx.beginPath()
+      ctx.arc(px, py, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    // Draft (in-progress picks)
+    if (draft.picks.length > 0) {
+      ctx.strokeStyle = 'rgba(255,180,80,0.95)'
+      ctx.fillStyle = 'rgba(255,180,80,0.95)'
+      ctx.lineWidth = 1
+      for (const p of draft.picks) {
+        const [px, py] = wp(p.x, p.y)
+        ctx.beginPath()
+        ctx.arc(px, py, 4, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  }, [headless, state.sketch, draft, width, height, gridMm])
+
+  useEffect(() => {
+    draw()
+  }, [draw])
+
+  // ── Pointer routing ───────────────────────────────────────────────────────
+  function probePointId(wx: number, wy: number): string | null {
+    const r = MVP_PICK_PX / scale
+    const r2 = r * r
+    let best: { id: string; d2: number } | null = null
+    for (const [id, p] of Object.entries(state.sketch.points)) {
+      const dx = p.x - wx
+      const dy = p.y - wy
+      const d2 = dx * dx + dy * dy
+      if (d2 <= r2 && (!best || d2 < best.d2)) best = { id, d2 }
+    }
+    return best?.id ?? null
+  }
+
+  function probeEntityId(wx: number, wy: number): string | null {
+    const tol = MVP_ENTITY_PICK_PX / scale
+    const tol2 = tol * tol
+    let best: { id: string; d2: number } | null = null
+    for (const e of state.sketch.entities) {
+      if (e.kind === 'circle') {
+        const c = state.sketch.points[e.centerId]
+        if (!c) continue
+        const dr = Math.hypot(wx - c.x, wy - c.y) - e.radius
+        const d2 = dr * dr
+        if (d2 <= tol2 && (!best || d2 < best.d2)) best = { id: e.id, d2 }
+      } else if (e.kind === 'arc') {
+        const s = state.sketch.points[e.startId]
+        const v = state.sketch.points[e.viaId]
+        const en = state.sketch.points[e.endId]
+        if (!s || !v || !en) continue
+        // Approximate: closest of the three knot distances.
+        const dKnot = Math.min(
+          Math.hypot(wx - s.x, wy - s.y),
+          Math.hypot(wx - v.x, wy - v.y),
+          Math.hypot(wx - en.x, wy - en.y)
+        )
+        const d2 = dKnot * dKnot
+        if (d2 <= tol2 && (!best || d2 < best.d2)) best = { id: e.id, d2 }
+      }
+    }
+    return best?.id ?? null
+  }
+
+  function onCanvasClick(ev: React.MouseEvent<HTMLCanvasElement>) {
+    const c = canvasRef.current
+    if (!c) return
+    const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
+    const [rawX, rawY] = screenToWorld(lx, ly, width, height, scale, ox, oy)
+    const snapped: [number, number] = [snap(rawX, gridMm), snap(rawY, gridMm)]
+    const pointId = probePointId(rawX, rawY) ?? undefined
+    const entityId = probeEntityId(rawX, rawY) ?? undefined
+    const pick: SketchPick = {
+      x: pointId ? state.sketch.points[pointId]!.x : snapped[0],
+      y: pointId ? state.sketch.points[pointId]!.y : snapped[1],
+      pointId,
+      entityId
+    }
+    const numericValue = numericInput.trim().length > 0 ? Number.parseFloat(numericInput) : undefined
+    const draftWithValue: SketchToolDraft = { ...draft, numericValue }
+    const result = handleSketchToolClick(activeToolId, draftWithValue, pick, {
+      entities: state.sketch.entities,
+      nextId: idFactory
+    })
+    if (result.kind === 'updateDraft') {
+      setDraft(result.draft)
+      setHint(`${tool.label}: ${draft.picks.length + 1}/${tool.requiredPicks} picks.`)
+      return
+    }
+    if (result.kind === 'commit') {
+      dispatch(result.action)
+      setDraft(emptyDraft)
+      if (result.hint) setHint(result.hint)
+      return
+    }
+    if (result.kind === 'commitMany') {
+      for (const a of result.actions) dispatch(a)
+      setDraft(emptyDraft)
+      if (result.hint) setHint(result.hint)
+      return
+    }
+    if (result.kind === 'error') {
+      setHint(`Error: ${result.message}`)
+      return
+    }
+    setHint(null)
+  }
+
+  // ── Tokenised inline styles (no Tailwind). ────────────────────────────────
+  const wrapStyle: React.CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: '180px 1fr',
+    gap: '8px',
+    padding: '8px',
+    background: 'var(--bg1, #0e1117)',
+    color: 'var(--fg, #e6e6e6)',
+    border: '1px solid var(--border, #2a2f37)',
+    borderRadius: '6px'
+  }
+  const paletteStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    padding: '4px',
+    background: 'var(--bg2, #151a22)',
+    border: '1px solid var(--border, #2a2f37)',
+    borderRadius: '4px'
+  }
+  const headerStyle: React.CSSProperties = {
+    fontSize: '11px',
+    color: 'var(--muted, #9aa4b2)',
+    padding: '4px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em'
+  }
+  const toolButtonStyle = (active: boolean): React.CSSProperties => ({
+    background: active ? 'var(--accent, #5b9aff)' : 'transparent',
+    color: active ? 'var(--bg0, #000)' : 'var(--fg, #e6e6e6)',
+    border: `1px solid ${active ? 'var(--accent, #5b9aff)' : 'var(--border, #2a2f37)'}`,
+    padding: '6px 8px',
+    borderRadius: '3px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    textAlign: 'left'
+  })
+  const canvasColStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px'
+  }
+  const ribbonStyle: React.CSSProperties = {
+    display: 'flex',
+    gap: '6px',
+    alignItems: 'center',
+    padding: '4px 6px',
+    background: 'var(--bg2, #151a22)',
+    border: '1px solid var(--border, #2a2f37)',
+    borderRadius: '4px'
+  }
+  const ribbonLabelStyle: React.CSSProperties = {
+    fontSize: '11px',
+    color: 'var(--muted, #9aa4b2)'
+  }
+  const inputStyle: React.CSSProperties = {
+    width: '70px',
+    padding: '3px 6px',
+    fontSize: '12px',
+    background: 'var(--bg0, #0b0d12)',
+    color: 'var(--fg, #e6e6e6)',
+    border: '1px solid var(--border, #2a2f37)',
+    borderRadius: '3px'
+  }
+  const btnStyle: React.CSSProperties = {
+    background: 'var(--bg0, #0b0d12)',
+    color: 'var(--fg, #e6e6e6)',
+    border: '1px solid var(--border, #2a2f37)',
+    padding: '4px 10px',
+    fontSize: '12px',
+    borderRadius: '3px',
+    cursor: 'pointer'
+  }
+  const canvasStyle: React.CSSProperties = {
+    display: 'block',
+    cursor: tool.kind === 'select' ? 'default' : 'crosshair',
+    background: 'var(--bg2, #151a22)',
+    border: '1px solid var(--border, #2a2f37)',
+    borderRadius: '4px'
+  }
+  const bannerStyle = (kind: 'ok' | 'err'): React.CSSProperties => ({
+    padding: '6px 10px',
+    fontSize: '12px',
+    borderRadius: '3px',
+    background: kind === 'ok' ? 'var(--accent-soft, rgba(91,154,255,0.15))' : 'rgba(220,80,80,0.18)',
+    border: `1px solid ${kind === 'ok' ? 'var(--accent, #5b9aff)' : 'rgba(220,80,80,0.8)'}`,
+    color: 'var(--fg, #e6e6e6)'
+  })
+
+  const showNumericInput =
+    activeToolId === 'distanceConstraint' || activeToolId === 'radiusConstraint'
+
+  return (
+    <div
+      className="sketch-mvp-wrap"
+      data-testid="sketch-mvp-wrap"
+      data-active-tool={activeToolId}
+      style={wrapStyle}
+    >
+      <div className="sketch-mvp-palette" data-testid="sketch-mvp-palette" style={paletteStyle}>
+        <div className="sketch-mvp-palette__header" style={headerStyle}>
+          Tools
+        </div>
+        {SKETCH_TOOLS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`sketch-mvp-tool sketch-mvp-tool--${t.id} ${activeToolId === t.id ? 'is-active' : ''}`}
+            data-testid={`sketch-mvp-tool-${t.id}`}
+            data-tool-active={activeToolId === t.id ? 'true' : 'false'}
+            title={t.description}
+            aria-pressed={activeToolId === t.id}
+            onClick={() => setActiveToolId(t.id)}
+            style={toolButtonStyle(activeToolId === t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="sketch-mvp-canvas-col" style={canvasColStyle}>
+        <div className="sketch-mvp-ribbon" data-testid="sketch-mvp-ribbon" style={ribbonStyle}>
+          <span className="sketch-mvp-ribbon__current" style={ribbonLabelStyle}>
+            Current: <strong data-testid="sketch-mvp-current-tool">{tool.label}</strong>
+          </span>
+          {showNumericInput && (
+            <label className="sketch-mvp-ribbon__numeric" style={ribbonLabelStyle}>
+              Value (mm)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={numericInput}
+                onChange={(e) => setNumericInput(e.target.value)}
+                style={{ ...inputStyle, marginLeft: '4px' }}
+                data-testid="sketch-mvp-numeric-input"
+              />
+            </label>
+          )}
+          <button
+            type="button"
+            onClick={() => runSolve(state.sketch)}
+            disabled={state.sketch.constraints.length === 0}
+            style={btnStyle}
+            data-testid="sketch-mvp-solve"
+          >
+            Solve
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'undo' })}
+            disabled={state.past.length === 0}
+            style={btnStyle}
+            data-testid="sketch-mvp-undo"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'redo' })}
+            disabled={state.future.length === 0}
+            style={btnStyle}
+            data-testid="sketch-mvp-redo"
+          >
+            Redo
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              dispatch({ type: 'clear' })
+              setDraft(emptyDraft)
+              setSolverError(null)
+              setLastResidual(null)
+              setHint(null)
+            }}
+            style={btnStyle}
+            data-testid="sketch-mvp-clear"
+          >
+            Clear
+          </button>
+          <span
+            className="sketch-mvp-ribbon__hint"
+            style={{ ...ribbonLabelStyle, marginLeft: 'auto' }}
+            data-testid="sketch-mvp-hint"
+          >
+            {hint ?? tool.description}
+          </span>
+        </div>
+        {!headless && (
+          <canvas
+            ref={canvasRef}
+            width={width}
+            height={height}
+            data-testid="sketch-mvp-canvas"
+            className="sketch-mvp-canvas"
+            style={canvasStyle}
+            onClick={onCanvasClick}
+          />
+        )}
+        {solverError && (
+          <div
+            role="alert"
+            className="sketch-mvp-banner sketch-mvp-banner--err"
+            data-testid="sketch-mvp-error-banner"
+            data-error-kind={solverError.kind}
+            style={bannerStyle('err')}
+          >
+            <strong>{solverError.kind}:</strong> {solverError.message}
+          </div>
+        )}
+        {!solverError && lastResidual !== null && (
+          <div
+            className="sketch-mvp-banner sketch-mvp-banner--ok"
+            data-testid="sketch-mvp-ok-banner"
+            style={bannerStyle('ok')}
+          >
+            Solved (residual {lastResidual.toExponential(2)}).
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Test-only helper -- expose a deterministic id factory creator for harnesses. */
+export { makeDeterministicIdFactory as createMvpDeterministicIdFactory } from './sketch-tools'
+

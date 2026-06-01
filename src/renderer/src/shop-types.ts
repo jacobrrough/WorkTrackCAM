@@ -16,12 +16,24 @@ import type { DxfParseResult } from '../../shared/dxf-parser'
 import type { MaterialAuditResult } from '../../shared/material-audit'
 import type { EnvironmentId } from './environments/registry'
 import type {
+  CadCreateAssemblyPayload,
+  CadCreateAssemblyResponse,
   CadExecutePayload,
   CadExecuteResponse,
+  CadExportAssemblyPayload,
+  CadExportAssemblyResponse,
+  CadExportDrawingPayload,
+  CadExportDrawingResponse,
   CadExportPayload,
   CadExportResponse,
   CadListOperationsPayload,
   CadListOperationsResponse,
+  CadProjectDrawingPayload,
+  CadProjectDrawingResponse,
+  CadSolveSketchPayload,
+  CadSolveSketchResponse,
+  CadTessellateAssemblyPayload,
+  CadTessellateAssemblyResponse,
   CadTessellateWithIdsPayload,
   CadTessellateWithIdsResponse
 } from '../../main/ipc-cad'
@@ -322,6 +334,52 @@ export declare const window: Window & {
       tessellateWithIds: (
         payload: CadTessellateWithIdsPayload,
       ) => Promise<CadTessellateWithIdsResponse>
+      /**
+       * CAD V1 sketcher: dispatch a sketch state + constraint list to the
+       * sidecar's `cad.solve_sketch` handler and receive the solved point
+       * positions back. Used by Sketch2DCanvas to round-trip the
+       * server-side constraint solver as the user edits constraints.
+       */
+      solveSketch: (
+        payload: CadSolveSketchPayload,
+      ) => Promise<CadSolveSketchResponse>
+      /**
+       * CAD V2 Assembly view (Wave 2): resolve an assembly tree
+       * (instances / parts / joints) into the sidecar handle table.
+       * Returns the parent handle + union bbox + instance count.
+       */
+      createAssembly: (
+        payload: CadCreateAssemblyPayload,
+      ) => Promise<CadCreateAssemblyResponse>
+      /**
+       * CAD V2 Assembly view: per-instance binary STL tessellation for the
+       * Assembly viewport. Returns one mesh per visible instance.
+       */
+      tessellateAssembly: (
+        payload: CadTessellateAssemblyPayload,
+      ) => Promise<CadTessellateAssemblyResponse>
+      /**
+       * CAD V2 Assembly view: export the assembled body to STEP or STL
+       * (DXF not supported for assembled 3D bodies).
+       */
+      exportAssembly: (
+        payload: CadExportAssemblyPayload,
+      ) => Promise<CadExportAssemblyResponse>
+      /**
+       * CAD V2 Drawing view (Wave 2): run the documentation projection
+       * pipeline for a single `DrawingSheet`. Returns projected linework
+       * (visible + hidden segments) per `viewPlaceholder`.
+       */
+      projectDrawing: (
+        payload: CadProjectDrawingPayload,
+      ) => Promise<CadProjectDrawingResponse>
+      /**
+       * CAD V2 Drawing view: export the projected drawing to PDF or DXF on
+       * disk. Whitelist enforced by `CAD_DRAWING_EXPORT_FORMATS`.
+       */
+      exportDrawing: (
+        payload: CadExportDrawingPayload,
+      ) => Promise<CadExportDrawingResponse>
     }
     /**
      * Workflow F: machine:estop — AppHeader STOP button safety dispatch.

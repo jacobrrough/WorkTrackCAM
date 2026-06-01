@@ -8,6 +8,12 @@
 # cadquery: parametric B-rep modeling on OpenCascade (Apache 2)
 cadquery>=2.4,<3
 
+# planegcs: Python binding to FreeCAD's 2D geometric constraint solver
+# (LGPL). Powers the CAD V1 Sketcher's planegcs-backed constraint solve.
+# Wheel availability is platform-specific (cp39–cp311 + manylinux/win/macOS);
+# the sidecar gracefully degrades to ``planegcs_not_installed`` when absent.
+planegcs>=0.6.0,<1
+
 # ── CAM toolpath generation ───────────────────────────────────────────
 # opencamlib: drop-cutter / push-cutter / waterline (LGPL)
 opencamlib>=2023.1

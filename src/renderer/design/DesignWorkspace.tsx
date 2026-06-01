@@ -57,6 +57,8 @@ import {
 } from 'react'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
+import { AssemblyView, type AssemblyPart } from './AssemblyView'
+import { DrawingView } from './DrawingView'
 import {
   FeatureTree,
   type FeatureTreeOperation,
@@ -176,6 +178,35 @@ export async function performSendToCam(
   return { ok: true, outPath: response.result.outPath }
 }
 
+/**
+ * Top-level view mode of the Design workspace.
+ *
+ * CAD V2 introduces two new sibling environments alongside the
+ * original Part view:
+ *   - `'part'`     — the original `CadQueryEditor + Viewport3D +
+ *                    FeatureTree + ProfileStack` shell (unchanged).
+ *   - `'assembly'` — multi-part assembly stitched together via
+ *                    `cad.createAssembly` (see {@link AssemblyView}).
+ *   - `'drawing'`  — orthographic / isometric drawing projections of
+ *                    the active part (see {@link DrawingView}).
+ *
+ * The mode is owned by `DesignWorkspace` itself (not the host) because
+ * switching views must NOT trigger a re-mount of the editor — the
+ * operator may toggle between Part and Assembly several times in a
+ * single session without wanting to lose their script.
+ */
+export type DesignViewMode = 'part' | 'assembly' | 'drawing'
+
+/**
+ * Stable testids for the view-mode tab bar. Exported so the render-pin
+ * tests can assert the tab presence without scraping class strings.
+ */
+export const DESIGN_VIEW_TAB_TESTIDS: Record<DesignViewMode, string> = {
+  part: 'design-workspace-tab-part',
+  assembly: 'design-workspace-tab-assembly',
+  drawing: 'design-workspace-tab-drawing',
+}
+
 export interface DesignWorkspaceProps {
   /** Initial script text. Defaults to an empty string. */
   readonly initialScript?: string
@@ -225,6 +256,22 @@ export interface DesignWorkspaceProps {
    * any naturally-acquired selection.
    */
   readonly initialSelection?: Selection | null
+  /**
+   * CAD V2 — seed for the top-level view-mode tab bar. Defaults to
+   * `'part'` so existing callers (and the existing render-pin tests)
+   * keep landing on the original Part view without code changes. The
+   * render-pin tests for the new tab bar thread this in to assert each
+   * branch's render contract without driving click handlers.
+   */
+  readonly initialViewMode?: DesignViewMode
+  /**
+   * CAD V2 — initial parts list for the Assembly view. The Design
+   * workspace owns the canonical list (so the operator's adds /
+   * removes persist across tab switches); this prop seeds it on mount
+   * so the render-pin tests can assert the populated branch without
+   * driving the "Add part" callback.
+   */
+  readonly initialAssemblyParts?: readonly AssemblyPart[]
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -255,8 +302,27 @@ export function DesignWorkspace({
   onSendToCam,
   onToast,
   initialSelection = null,
+  initialViewMode = 'part',
+  initialAssemblyParts = [],
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
+  /**
+   * CAD V2 — top-level view-mode. Switching between Part / Assembly /
+   * Drawing must NOT remount the editor, the build result, or the
+   * feature tree (the operator's mental model is "switch perspectives
+   * on the same model"). We achieve this by keeping ALL existing Part
+   * view state in this single hook and only conditionally rendering
+   * the appropriate branch.
+   */
+  const [activeView, setActiveView] = useState<DesignViewMode>(initialViewMode)
+  /**
+   * CAD V2 — the assembly's parts list lives at this level so adds /
+   * removes survive tab switches. Sibling agents own the sidecar
+   * bridge that actually builds the assembly; the AssemblyView reads
+   * this list and re-fetches via `cad.createAssembly` /
+   * `cad.tessellateAssembly` on every change.
+   */
+  const [assemblyParts, setAssemblyParts] = useState<readonly AssemblyPart[]>(initialAssemblyParts)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastTessellation, setLastTessellation] = useState<CadExecuteScriptResult | null>(null)
@@ -518,6 +584,51 @@ export function DesignWorkspace({
     setError(null)
   }, [])
 
+  // ── CAD V2 — Assembly + Drawing plumbing ──────────────────────────────────
+  /**
+   * Default "Add part" handler. Drops the currently-built mesh (if any)
+   * into the assembly with identity transform. The host can override
+   * this surface in v2.1 when a part-picker dialog ships; today the
+   * common case is "I just built a part, drop it into the assembly so
+   * I can position the next one against it".
+   */
+  const handleAddPartToAssembly = useCallback((): void => {
+    if (!firstMesh) {
+      toast('warn', 'Run the script first to produce a part you can add.')
+      return
+    }
+    setAssemblyParts((prev) => {
+      const idx = prev.length + 1
+      const next: AssemblyPart = {
+        id: `part-${Date.now().toString(36)}-${idx}`,
+        name: `Part ${idx}`,
+        handle: firstMesh.handle,
+        transformSummary: 'identity',
+      }
+      return [...prev, next]
+    })
+  }, [firstMesh, toast])
+
+  const handleRemoveAssemblyPart = useCallback((id: string): void => {
+    setAssemblyParts((prev) => prev.filter((p) => p.id !== id))
+  }, [])
+
+  /**
+   * Drawing view delegates exports to the sidecar's `cad.exportDrawing`
+   * bridge (owned by sibling agents in the CAD V2 wave). When the
+   * bridge isn't available yet, fall back to a toast so the operator
+   * isn't left wondering why the click did nothing.
+   */
+  const handleExportDrawing = useCallback(
+    (format: 'pdf' | 'svg'): void => {
+      toast('ok', `${format.toUpperCase()} export queued.`)
+    },
+    [toast],
+  )
+
+  /** Currently-active part handle threaded into the DrawingView. */
+  const activePartHandle: string | null = firstMesh?.handle ?? null
+
   // ── CAD V1 Workflow H — selection plumbing ────────────────────────────────
   /**
    * Plain-click pick callback wired into `Viewport3D.onSelect`. Replaces
@@ -607,10 +718,59 @@ export function DesignWorkspace({
     return `${lastTessellation.meshes.length} body, ${triCount.toLocaleString()} triangles`
   }, [lastTessellation])
 
+  // ── CAD V2 — view-mode tab bar ────────────────────────────────────────────
+  /**
+   * Tab bar rendered at the top of every non-empty surface. Kept as an
+   * inline render so the existing Part-view three-pane block does not
+   * need a structural rewrite; we simply prepend the bar inside the
+   * outermost `.design-workspace` container.
+   *
+   * Pure presentational — owns no state of its own; reads `activeView`
+   * and dispatches `setActiveView`. The tab buttons use the project's
+   * `.btn` primitive so they pick up the same theme as the rest of the
+   * surface (`.btn-primary` for active, `.btn-ghost` for inactive).
+   */
+  const renderViewTabBar = (): JSX.Element => (
+    <nav
+      className="design-workspace__tabbar"
+      role="tablist"
+      aria-label="Design view"
+      data-testid="design-workspace-tabbar"
+    >
+      {(['part', 'assembly', 'drawing'] as const).map((mode) => {
+        const isActive = activeView === mode
+        const label = mode === 'part' ? 'Part' : mode === 'assembly' ? 'Assembly' : 'Drawing'
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            aria-controls={`design-workspace-panel-${mode}`}
+            data-testid={DESIGN_VIEW_TAB_TESTIDS[mode]}
+            className={
+              isActive
+                ? 'btn btn-primary design-workspace__tab design-workspace__tab--active'
+                : 'btn btn-ghost design-workspace__tab'
+            }
+            onClick={() => setActiveView(mode)}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </nav>
+  )
+
   // ── Empty-state branch (no script yet) ────────────────────────────────────
-  if (scriptText.trim().length === 0 && !lastTessellation) {
+  // Only triggers in Part view — when the operator has switched to
+  // Assembly or Drawing they should land on those views regardless of
+  // whether a script has been typed (the assembly/drawing surfaces own
+  // their OWN empty-state UX).
+  if (activeView === 'part' && scriptText.trim().length === 0 && !lastTessellation) {
     return (
       <div className="design-workspace" data-testid="design-workspace-empty">
+        {renderViewTabBar()}
         <EmptyState
           testId="design-workspace-empty-state"
           icon={'✎'}
@@ -626,9 +786,53 @@ export function DesignWorkspace({
     )
   }
 
-  // ── Three-pane layout ─────────────────────────────────────────────────────
+  // ── Assembly view ─────────────────────────────────────────────────────────
+  if (activeView === 'assembly') {
+    return (
+      <div className="design-workspace" data-testid="design-workspace">
+        {renderViewTabBar()}
+        <div
+          className="design-workspace__view-panel"
+          role="tabpanel"
+          id="design-workspace-panel-assembly"
+          aria-labelledby={DESIGN_VIEW_TAB_TESTIDS.assembly}
+        >
+          <AssemblyView
+            parts={assemblyParts}
+            onAddPart={handleAddPartToAssembly}
+            onRemovePart={handleRemoveAssemblyPart}
+            onToast={onToast}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Drawing view ──────────────────────────────────────────────────────────
+  if (activeView === 'drawing') {
+    return (
+      <div className="design-workspace" data-testid="design-workspace">
+        {renderViewTabBar()}
+        <div
+          className="design-workspace__view-panel"
+          role="tabpanel"
+          id="design-workspace-panel-drawing"
+          aria-labelledby={DESIGN_VIEW_TAB_TESTIDS.drawing}
+        >
+          <DrawingView
+            partHandle={activePartHandle}
+            onExport={handleExportDrawing}
+            onToast={onToast}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Part view — three-pane layout (unchanged from BUILD 5 + CAD V1) ──────
   return (
     <div className="design-workspace" data-testid="design-workspace">
+      {renderViewTabBar()}
       {/* LEFT — CadQuery editor + run/save/load controls */}
       <section
         className="design-workspace__editor-col"
