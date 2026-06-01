@@ -105,10 +105,10 @@ describe('G-code snapshot — cnc_generic_mm.hbs', () => {
 
 // ─── 4-axis GRBL (Carvera) template snapshot ─────────────────────────────────
 
-describe('G-code snapshot — cnc_4axis_grbl.hbs', () => {
+describe('G-code snapshot — carvera_4axis_grbl.hbs', () => {
   const machine4axGrbl: MachineProfile = {
     ...baseMachine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4,
     aAxisRangeDeg: 360

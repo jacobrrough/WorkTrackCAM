@@ -372,7 +372,7 @@ describe('Snapshot — tool changes (Carvera ATC)', () => {
 describe('Snapshot — inverse time feed mode', () => {
   const grbl4ax: MachineProfile = {
     ...baseMachine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4,
     aAxisRangeDeg: 360,
@@ -636,7 +636,7 @@ describe('Snapshot — every dialect with tool change and WCS', () => {
       name: 'GRBL 4-axis',
       machine: {
         ...baseMachine,
-        postTemplate: 'cnc_4axis_grbl.hbs',
+        postTemplate: 'carvera_4axis_grbl.hbs',
         dialect: 'grbl_4axis' as const,
         axisCount: 4,
         aAxisRangeDeg: 360,

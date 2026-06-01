@@ -24,7 +24,7 @@ describe('renderPost dialect compliance — existing templates', () => {
   // subsystem rewrite. CPS imports for those dialects are repointed at GRBL.
   const dialectTemplates: Array<{ dialect: MachineProfile['dialect']; template: string; label: string }> = [
     { dialect: 'grbl', template: 'cnc_generic_mm.hbs', label: 'GRBL + generic_mm' },
-    { dialect: 'grbl_4axis', template: 'cnc_4axis_grbl.hbs', label: 'GRBL 4-axis' },
+    { dialect: 'grbl_4axis', template: 'carvera_4axis_grbl.hbs', label: 'GRBL 4-axis' },
     { dialect: 'grbl', template: 'carvera_3axis.hbs', label: 'Carvera 3-axis (GRBL)' },
     { dialect: 'grbl_4axis', template: 'carvera_4axis.hbs', label: 'Carvera 4-axis (GRBL)' },
     { dialect: 'fanuc', template: 'cnc_generic_mm.hbs', label: 'Fanuc + generic_mm' },

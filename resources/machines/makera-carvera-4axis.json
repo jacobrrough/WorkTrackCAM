@@ -11,6 +11,8 @@
   "aAxisOrientation": "x",
   "maxRotaryRpm": 6,
   "rotaryChuckOuterRadiusMm": 46,
+  "yAxisMustBeZero": true,
+  "rotaryHeadstockXOffsetMm": 5,
   "maxSpindleRpm": 15000,
   "minSpindleRpm": 6000,
   "meta": {

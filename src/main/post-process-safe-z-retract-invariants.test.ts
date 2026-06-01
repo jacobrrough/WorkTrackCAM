@@ -341,7 +341,7 @@ describe('[ID-0110] renderPost -- three-machine safe-Z retract invariants', () =
   //
   // Pin that the safe-Z retract validator's modal-Z walker is robust to the
   // G93/G94 inverse-time-feed mode toggles emitted by carvera_4axis.hbs and
-  // cnc_4axis_grbl.hbs when `inverseTimeFeed: true` is threaded through
+  // carvera_4axis_grbl.hbs when `inverseTimeFeed: true` is threaded through
   // renderPost(). G93 / G94 are non-motion mode words; the validator's
   // motion-mode regex (`G0*[0-3]` token-bound) intentionally does NOT
   // match G93/G94, so they should be transparent to the modal walker.

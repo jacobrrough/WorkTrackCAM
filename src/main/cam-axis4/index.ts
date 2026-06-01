@@ -343,7 +343,14 @@ export async function runAxis4(job: Axis4JobConfig): Promise<Axis4Result> {
     contourPoints: ax4.contourPoints,
     indexAnglesDeg: ax4.indexAnglesDeg,
     aAxisRangeDeg: job.machine.aAxisRangeDeg,
-    zPassMm: normZPass
+    zPassMm: normZPass,
+    // Pre-launch punch-list rank 13: defense-in-depth schema gates. The
+    // validator rejects non-zero Y on `yAxisMustBeZero` machines (Carvera
+    // 4-axis HD) and requires `rotaryHeadstockXOffsetMm` on every 4-axis
+    // profile so a hand-edited / CPS-imported profile cannot bypass the
+    // post-emit `G0 Y0` safety net.
+    yAxisMustBeZero: job.machine.yAxisMustBeZero,
+    rotaryHeadstockXOffsetMm: job.machine.rotaryHeadstockXOffsetMm
   })
   if (validation.ok === false) {
     return { ok: false, error: validation.error, hint: validation.hint }

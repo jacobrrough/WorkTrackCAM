@@ -148,7 +148,7 @@ describe('Carvera 4-axis pipeline (real machine profile, full pipe)', () => {
     // ── Carvera header identifier ────────────────────────────────────────────
     // The 4-axis post template opens with a specific identifier string. If
     // this fails, we're probably running through the wrong template (e.g. the
-    // generic cnc_4axis_grbl.hbs).
+    // generic carvera_4axis_grbl.hbs fallback).
     expect(gcode).toMatch(/;\s*Makera Carvera — 4-Axis Rotary G-code/)
 
     // ── Units, absolute mode, plane select ──────────────────────────────────

@@ -252,3 +252,69 @@ describe('CadQueryEditor — render contract (BUILD 4)', () => {
     }
   })
 })
+
+describe('CadQueryEditor — Monaco / SSR fallback contract (CAD V1)', () => {
+  // The component lazy-branches between Monaco (browser) and the legacy
+  // textarea (SSR / node-env vitest) at render time. These tests pin
+  // the fallback contract — Vitest currently runs in the `node`
+  // environment, so `typeof window === 'undefined'` and we MUST hit
+  // the textarea branch. If a future environment flip ever lands jsdom
+  // in this suite, these tests will start failing loudly, which is
+  // the desired signal: any harness change here must be accompanied
+  // by an explicit Monaco-mount story so the SSR contract isn't lost.
+
+  it('uses the SSR/textarea fallback in the node test environment (no window)', () => {
+    // Node-env vitest has no `window`, so the component MUST render
+    // the legacy textarea path — not the Monaco wrapper.
+    expect(typeof window).toBe('undefined')
+    const html = renderToStaticMarkup(createElement(CadQueryEditor, baseProps()))
+    expect(html).toContain('data-testid="cad-editor-textarea"')
+    expect(html).not.toContain('data-testid="cad-editor-monaco"')
+  })
+
+  it('SSR fallback preserves the cad-editor-root + cad-editor-run + cad-editor-textarea testid trio', () => {
+    // The DesignWorkspace integration tests scope-select on these
+    // exact ids. Renaming any one would silently break the wider
+    // suite, so they're pinned together in one assertion.
+    const html = renderToStaticMarkup(createElement(CadQueryEditor, baseProps()))
+    expect(html).toContain('data-testid="cad-editor-root"')
+    expect(html).toContain('data-testid="cad-editor-run"')
+    expect(html).toContain('data-testid="cad-editor-textarea"')
+  })
+
+  it('Monaco import does not crash at module-load time in node', () => {
+    // The `@monaco-editor/react` package itself is safe to require()
+    // in node — it only touches `window` when its `<Editor>` mounts.
+    // If a future upgrade ever moves a side-effecting `window` access
+    // into module top-level (Monaco has done this in past 0.x bumps),
+    // this test will fail at import time and we'll know to pin an
+    // older version.
+    const result = renderToStaticMarkup(createElement(CadQueryEditor, baseProps()))
+    expect(typeof result).toBe('string')
+    expect(result.length).toBeGreaterThan(0)
+  })
+
+  it('SSR fallback keeps Ctrl+Enter / Cmd+Enter shortcut wired (no regression vs BUILD 4)', () => {
+    // The Monaco-active path registers the shortcut via
+    // `editor.onKeyDown` at mount time; the SSR path must continue to
+    // wire the same shortcut on the textarea so the operator never
+    // loses the keyboard contract just because the editor falls back.
+    const onRun = vi.fn()
+    const tree = renderToTree(baseProps({ onRun })) as AnyNode
+    const textarea = findByTestId(tree, 'cad-editor-textarea')
+    expect(textarea).not.toBeNull()
+    const handler = (
+      textarea?.props as {
+        onKeyDown?: (e: {
+          key: string
+          ctrlKey: boolean
+          metaKey: boolean
+          preventDefault: () => void
+        }) => void
+      } | undefined
+    )?.onKeyDown
+    expect(typeof handler).toBe('function')
+    handler!({ key: 'Enter', ctrlKey: true, metaKey: false, preventDefault: vi.fn() })
+    expect(onRun).toHaveBeenCalledTimes(1)
+  })
+})

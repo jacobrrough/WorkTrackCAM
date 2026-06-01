@@ -402,6 +402,49 @@ result = cq.Workplane('XY').box(length, width, height)
 
 
 @requires_cadquery
+def test_execute_script_build_parameters_round_trip_changes_bbox() -> None:
+    """CAD V1 round-trip pin: the same script run twice with different
+    ``buildParameters`` overrides MUST produce different geometry.
+
+    This is the load-bearing contract for the FeatureTree's editable
+    parameter UX — clicking "Apply" with a new value must re-run the
+    script through cqgi so the bbox actually reflects the override
+    (otherwise the operator is editing dead UI). We assert max-X of
+    the resulting bbox tracks the ``L`` override because the script
+    uses ``L`` as the box X dimension and ``cq.Workplane('XY').box``
+    centers the solid at the origin (max-X = L / 2).
+    """
+    script = """
+import cadquery as cq
+L = 10
+result = cq.Workplane('XY').box(L, 1, 1)
+"""
+
+    # First run: no override -> script default L = 10 -> max-X = 5.
+    r1 = cad_handlers.execute_script({"script": script})
+    bbox1 = r1["meshes"][0]["bbox"]
+    assert abs(bbox1["max"][0] - 5.0) < 0.01, (
+        f"default L=10 should produce max-X≈5, got {bbox1['max'][0]!r}"
+    )
+
+    # Second run: override L to 25 -> max-X = 12.5. Same script body.
+    r2 = cad_handlers.execute_script({
+        "script": script,
+        "buildParameters": {"L": 25},
+    })
+    bbox2 = r2["meshes"][0]["bbox"]
+    assert abs(bbox2["max"][0] - 12.5) < 0.01, (
+        f"override L=25 should produce max-X≈12.5, got {bbox2['max'][0]!r}"
+    )
+
+    # And the two runs MUST land on different handles — the override
+    # path goes through the same _tessellate_and_register helper, so a
+    # collision would indicate the handle table is keyed by script text
+    # instead of execution.
+    assert r1["meshes"][0]["handle"] != r2["meshes"][0]["handle"]
+
+
+@requires_cadquery
 def test_execute_script_captures_show_object_results() -> None:
     """A CQGI-style script using ``show_object`` must produce one mesh per
     call, in source order, even without a top-level ``result`` assignment.

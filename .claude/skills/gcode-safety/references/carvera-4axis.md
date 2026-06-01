@@ -108,5 +108,6 @@ After the last toolpath line:
 - Post template: `resources/posts/carvera_4axis.hbs`
 - Machine profile: `resources/machines/makera-carvera-4axis.json`
 - Contract pins: `src/main/post-process-carvera-4axis-contract.test.ts`
-- 4-axis integration test: `src/main/post-process-4axis-integration.test.ts` (covers `cnc_4axis_grbl.hbs` against synthetic baseMachine)
+- 4-axis integration test: `src/main/post-process-4axis-integration.test.ts` (covers `carvera_4axis_grbl.hbs`, the CPS-fallback template; renamed from `cnc_4axis_grbl.hbs` in the 2026-06-01 pre-launch rank-16 cleanup)
 - Dialect resolver: `src/main/post-process-dialects.ts`
+- Schema defense-in-depth gates (added 2026-06-01, rank-13): `machineProfileSchema.yAxisMustBeZero` + `machineProfileSchema.rotaryHeadstockXOffsetMm` (in `src/shared/machine-schema.ts`); validators `assertYAxisIsZeroForProfile` + `assertRotaryHeadstockXOffsetSet` (in `src/main/cam-axis4/validation.ts`). Bundled Carvera 4-axis profile sets both. The Y-zero gate scans an explicit `toolpathYValues` array — production toolpaths build machine-Y=0 by construction so the gate is a no-op for typical jobs; it exists to reject CPS imports or hand-edited profiles that omit the field.

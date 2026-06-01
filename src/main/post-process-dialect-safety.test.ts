@@ -167,10 +167,10 @@ describe('Dialect safety — cnc_generic_mm.hbs (Heidenhain)', () => {
 // 4-axis GRBL (Carvera rotary)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('Dialect safety — cnc_4axis_grbl.hbs', () => {
+describe('Dialect safety — carvera_4axis_grbl.hbs', () => {
   const machine: MachineProfile = {
     ...baseMachine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4,
     aAxisRangeDeg: 360
@@ -211,8 +211,10 @@ describe('Dialect safety — cnc_4axis_grbl.hbs', () => {
 })
 
 // Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis post templates were
-// removed in the April 2026 4-axis subsystem rewrite — only `cnc_4axis_grbl.hbs`
-// is exercised. CPS imports for those dialects now repoint at GRBL.
+// removed in the April 2026 4-axis subsystem rewrite — only
+// `carvera_4axis_grbl.hbs` (renamed from `cnc_4axis_grbl.hbs` in the
+// pre-launch rank-16 cleanup) is exercised. CPS imports for those dialects
+// now repoint at GRBL.
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Carvera 3-axis

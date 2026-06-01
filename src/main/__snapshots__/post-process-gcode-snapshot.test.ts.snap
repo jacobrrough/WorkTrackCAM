@@ -108,7 +108,7 @@ M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
 "
 `;
 
-exports[`G-code snapshot — cnc_4axis_grbl.hbs > grbl_4axis dialect 1`] = `
+exports[`G-code snapshot — carvera_4axis_grbl.hbs > grbl_4axis dialect 1`] = `
 "; Snapshot Mill — snapshot-mill
 ; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect
 ; ---------------------------------------------------------------------------

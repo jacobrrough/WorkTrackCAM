@@ -231,7 +231,11 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
   // to the GRBL/Carvera dialect. The non-GRBL 4-axis templates were deleted but
   // the dialect enum is preserved so existing user machine profiles in
   // %APPDATA%/WorkTrackCAM/machines/ continue to load. Imported CPS files for
-  // those dialects now point at `cnc_4axis_grbl.hbs` instead.
+  // those dialects now point at `carvera_4axis_grbl.hbs` instead (renamed from
+  // `cnc_4axis_grbl.hbs` in the pre-launch punch-list rank-16 cleanup -- the
+  // "grbl" suffix is retained because the dialect enum entry is `grbl_4axis`,
+  // but the file is Carvera-flavored Smoothieware, same family as
+  // `carvera_4axis.hbs`).
   //
   // My-Shop-Only enforcement (June 2026): the speculative 5-axis Fanuc and
   // Siemens post templates were removed — none of the three target shops
@@ -240,12 +244,12 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
   // imported CPS files now fall back to the generic-mm post.
   const postTemplateMap: Record<MachineProfile['dialect'], string> = {
     grbl:            'cnc_generic_mm.hbs',
-    grbl_4axis:      'cnc_4axis_grbl.hbs',
-    fanuc_4axis:     'cnc_4axis_grbl.hbs',
-    mach3_4axis:     'cnc_4axis_grbl.hbs',
-    linuxcnc_4axis:  'cnc_4axis_grbl.hbs',
-    siemens_4axis:   'cnc_4axis_grbl.hbs',
-    heidenhain_4axis: 'cnc_4axis_grbl.hbs',
+    grbl_4axis:      'carvera_4axis_grbl.hbs',
+    fanuc_4axis:     'carvera_4axis_grbl.hbs',
+    mach3_4axis:     'carvera_4axis_grbl.hbs',
+    linuxcnc_4axis:  'carvera_4axis_grbl.hbs',
+    siemens_4axis:   'carvera_4axis_grbl.hbs',
+    heidenhain_4axis: 'carvera_4axis_grbl.hbs',
     mach3:           'cnc_generic_mm.hbs',
     generic_mm:      'cnc_generic_mm.hbs',
     fanuc:           'cnc_generic_mm.hbs',
@@ -264,7 +268,7 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
   ) {
     console.warn(
       `[machine-cps-import] dialect "${dialect}" no longer has a dedicated post template; ` +
-      `falling back to cnc_4axis_grbl.hbs. Output is GRBL/Carvera-compatible only.`
+      `falling back to carvera_4axis_grbl.hbs. Output is GRBL/Carvera-compatible only.`
     )
   }
 

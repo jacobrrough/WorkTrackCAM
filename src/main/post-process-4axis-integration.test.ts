@@ -13,7 +13,7 @@ import { renderPost } from './post-process'
  * - GRBL/Carvera-specific conventions
  *
  * The non-GRBL 4-axis post templates were removed in the April 2026 4-axis
- * subsystem rewrite — only `cnc_4axis_grbl.hbs` is exercised here now.
+ * subsystem rewrite — only `carvera_4axis_grbl.hbs` is exercised here now.
  */
 
 const resourcesRoot = join(process.cwd(), 'resources')
@@ -53,7 +53,7 @@ const baseMachine: MachineProfile = {
   kind: 'cnc',
   workAreaMm: { x: 300, y: 200, z: 100 },
   maxFeedMmMin: 5000,
-  postTemplate: 'cnc_4axis_grbl.hbs',
+  postTemplate: 'carvera_4axis_grbl.hbs',
   dialect: 'grbl_4axis',
   axisCount: 4,
   aAxisRangeDeg: 360,
@@ -71,7 +71,7 @@ type DialectConfig = {
 }
 
 const DIALECTS: DialectConfig[] = [
-  { dialect: 'grbl_4axis', postTemplate: 'cnc_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' }
+  { dialect: 'grbl_4axis', postTemplate: 'carvera_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' }
 ]
 
 // ─── Common safety structure tests (all 6 dialects) ──────────────────────────
@@ -179,7 +179,7 @@ describe('4-axis post-process integration — common safety structure', () => {
 
 describe('4-axis post-process integration — dialect-specific conventions', () => {
   it('GRBL does not emit tool change (no M6 support)', async () => {
-    const machine: MachineProfile = { ...baseMachine, dialect: 'grbl_4axis', postTemplate: 'cnc_4axis_grbl.hbs' }
+    const machine: MachineProfile = { ...baseMachine, dialect: 'grbl_4axis', postTemplate: 'carvera_4axis_grbl.hbs' }
     const { gcode: g } = await renderPost(resourcesRoot, machine, REALISTIC_4AXIS_TOOLPATH)
     // GRBL typically doesn't support M6 tool changes
     expect(g).not.toContain('M6')

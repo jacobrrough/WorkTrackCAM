@@ -20,7 +20,7 @@ Quality gates at the time of this doc:
 - 0 broken-path findings remaining
 - Vitest 3.x → **4.1.8+** upgrade landed: **CVE GHSA-5xrq-8626-4rwp CLOSED** (CVSS 9.8 arbitrary file read/execute)
 
-Remaining deferred items (none block real-world testing): Carvera 4-axis Y=0/X-offset schema constraints, `cnc_4axis_grbl.hbs` rename, CAD V1 follow-ups (Monaco editor, editable params, selection system, sketch editor, planegcs solver).
+Remaining deferred items (none block real-world testing): Carvera 4-axis Y=0/X-offset schema constraints, CAD V1 follow-ups (Monaco editor, editable params, selection system, sketch editor, planegcs solver). The `cnc_4axis_grbl.hbs` → `carvera_4axis_grbl.hbs` rename (rank 16) landed in the pre-launch punch-list closeout.
 
 ---
 
@@ -209,11 +209,10 @@ Eight items remain as design-effort cycles. They are all defense-in-depth, not b
 - **Today's safety net**: the hardcoded `G0 Y0` in `carvera_4axis.hbs:73` and the engine's chuck-span validator catch most cases; the operator pre-cut sanity table catches the rest
 - **Decision needed**: cam-engine cycle to design + land the validator changes
 
-### 3. Rename `cnc_4axis_grbl.hbs` → `carvera_4axis_grbl.hbs` (rank 16)
-- **Severity**: medium (clarity)
-- **Scope**: rename file + update `postTemplateMap` + update tests + add header comment block explaining the April-2026 CPS fallback collapse
-- **Today's behavior**: works correctly; just badly named
-- **Decision needed**: post-processing cycle to migrate carefully
+### 3. Rename `cnc_4axis_grbl.hbs` → `carvera_4axis_grbl.hbs` (rank 16) — **LANDED**
+- **Severity**: medium (clarity) — closed in the pre-launch punch-list closeout
+- **Scope landed**: file renamed via `git mv`; `postTemplateMap` in `src/main/machine-cps-import.ts` repointed (all six 4-axis dialect entries); `COMMON_POST_TEMPLATE_FILENAMES` hint list updated; all relevant `src/main/post-process-*.test.ts` + `src/shared/machine-post-template-hints*.test.ts` pins updated; header comment block added to the renamed file documenting the April-2026 CPS fallback collapse and the rationale for the "carvera_" prefix
+- **What did NOT change**: the schema dialect enum (still `grbl_4axis`); the legacy dialect-string `'cnc_4axis_grbl'` used in `src/main/cam-axis4/validation.ts` (it's a dialect identifier, not a filename); G-code emission is byte-for-byte identical (same template content); pinned snapshot keys updated to the new describe-block label, snapshot bodies unchanged
 
 ### Optional follow-up (not in punch list but worth filing)
 **CPS-import fallback warning** — when a user imports a 5-axis Fanuc/Siemens CPS file, it silently falls back to the 3-axis generic post. A toast warning ("5-axis dialect detected → 3-axis generic fallback; 5-axis features will not be in the output") would close the UX gap. Not a safety issue (the UNVERIFIED header is sufficient) but worth a future ui-polish or cam-engine cycle.

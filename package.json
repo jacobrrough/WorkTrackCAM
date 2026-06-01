@@ -18,11 +18,13 @@
     "verify:release-gate": "node scripts/verify-release-gate.mjs"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "electron-updater": "^6.8.3",
     "handlebars": "^4.7.8",
     "json5": "^2.2.3",
+    "monaco-editor": "^0.55.1",
     "smol-toml": "^1.6.1",
     "three": "^0.183.2",
     "yaml": "^2.8.3",
@@ -43,6 +45,7 @@
     "react-dom": "^19.0.0",
     "typescript": "^5.8.2",
     "vite": "^6.4.2",
+    "vite-plugin-monaco-editor": "^1.1.0",
     "vitest": "^4.1.8"
   },
   "build": {

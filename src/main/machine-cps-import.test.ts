@@ -116,7 +116,7 @@ describe('machineProfileWithSummaryFromCps', () => {
     expect(profile.axisCount).toBe(4)
     // April 2026 4-axis rewrite: non-GRBL 4-axis templates were removed; the
     // dialect enum is preserved but all 4-axis post templates repoint to GRBL.
-    expect(profile.postTemplate).toBe('cnc_4axis_grbl.hbs')
+    expect(profile.postTemplate).toBe('carvera_4axis_grbl.hbs')
   })
 
   it('detects mach3_4axis when Mach3 keywords + aOutput present', () => {
@@ -124,7 +124,7 @@ describe('machineProfileWithSummaryFromCps', () => {
     const { profile } = machineProfileWithSummaryFromCps('mach3_rotary.cps', cps)
     expect(profile.dialect).toBe('mach3_4axis')
     expect(profile.axisCount).toBe(4)
-    expect(profile.postTemplate).toBe('cnc_4axis_grbl.hbs')
+    expect(profile.postTemplate).toBe('carvera_4axis_grbl.hbs')
   })
 
   it('detects mach3 (not mach3_4axis) when Mach3 keywords but no 4-axis', () => {
@@ -138,7 +138,7 @@ describe('machineProfileWithSummaryFromCps', () => {
     const { profile } = machineProfileWithSummaryFromCps('siemens_rotary.cps', cps)
     expect(profile.dialect).toBe('siemens_4axis')
     expect(profile.axisCount).toBe(4)
-    expect(profile.postTemplate).toBe('cnc_4axis_grbl.hbs')
+    expect(profile.postTemplate).toBe('carvera_4axis_grbl.hbs')
   })
 
   it('detects siemens (not siemens_4axis) when Siemens keywords but no 4-axis', () => {
@@ -152,7 +152,7 @@ describe('machineProfileWithSummaryFromCps', () => {
     const { profile } = machineProfileWithSummaryFromCps('heidenhain_rotary.cps', cps)
     expect(profile.dialect).toBe('heidenhain_4axis')
     expect(profile.axisCount).toBe(4)
-    expect(profile.postTemplate).toBe('cnc_4axis_grbl.hbs')
+    expect(profile.postTemplate).toBe('carvera_4axis_grbl.hbs')
   })
 
   it('detects heidenhain (not heidenhain_4axis) when Heidenhain keywords but no 4-axis', () => {

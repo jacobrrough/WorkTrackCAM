@@ -2069,6 +2069,41 @@
   box-shadow: var(--focus-ring);
 }
 
+/* Monaco editor wrapper (CAD V1). Owns the box around the live Monaco
+   surface so it fills the available space inside the CAD editor pane.
+   The `.monaco-editor` itself paints its own border/background, so we
+   only own the outer chrome (border, radius, focus ring on the wrapper
+   when the inner editor has focus-within). */
+.cad-editor__monaco {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color var(--transition-base);
+}
+.cad-editor__monaco:hover {
+  border-color: var(--border-hi);
+}
+.cad-editor__monaco:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+.cad-editor__monaco-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  background: var(--bg1);
+}
+
 /* Editor action row (Run, Save, Reset). Buttons inherit .btn primitive
    chrome — this only owns the row layout. */
 .cad-editor__actions {
@@ -2289,6 +2324,97 @@
 .design-workspace__parameter-value {
   color: var(--txt0);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── FeatureTree-owned parameter editor (BUILD 6 / CAD V1) ────────────────
+ *
+ * Lives inside the FeatureTree component now, NOT DesignWorkspace, so
+ * the parametric edit flow ships as one cohesive component. Naming
+ * mirrors the operations row classes (`cad-feature-row__*`) so the two
+ * sections read as one family.
+ *
+ * Layout: vertically stacked rows of [name] [input] [Reset]. The Apply
+ * button anchors the bottom of the section. Tokens come from
+ * `src/renderer/styles/tokens.css` — no hard-coded colors or sizes.
+ */
+.cad-feature-tree-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.cad-feature-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.cad-feature-params__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cad-feature-params__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg2);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+}
+.cad-feature-params__row[data-param-dirty='true'] {
+  /* Dirty rows get a left accent stripe so the operator can see at a
+     glance which values are pending Apply. */
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.cad-feature-params__name {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+  /* Truncate long parameter names so the input column keeps its width. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-feature-params__equals {
+  color: var(--txt2);
+}
+.cad-feature-params__value {
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+}
+.cad-feature-params__input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg0);
+  color: var(--txt0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.cad-feature-params__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.cad-feature-params__input--checkbox {
+  width: auto;
+  justify-self: start;
+}
+.cad-feature-params__reset {
+  /* Compact secondary action — the existing .btn-xs token sets the
+     base sizing; here we just keep it tight to the row. */
+  white-space: nowrap;
+}
+.cad-feature-params__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
 
 /* Bottom action row in the feature column — Send-to-CAM CTA. */

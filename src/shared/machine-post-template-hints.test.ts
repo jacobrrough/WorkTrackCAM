@@ -24,8 +24,8 @@ describe('machine-post-template-hints', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('cnc_generic_mm.hbs')
   })
 
-  it('includes 4-axis GRBL template', () => {
-    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('cnc_4axis_grbl.hbs')
+  it('includes 4-axis GRBL/Carvera fallback template (renamed from cnc_4axis_grbl in pre-launch rank-16)', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('carvera_4axis_grbl.hbs')
   })
 
   it('contains no 5-axis templates (June 2026 My-Shop-Only enforcement)', () => {

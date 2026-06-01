@@ -5,6 +5,72 @@
   - Lines starting with ";" are operator-visible comments in output.
   - Template context keys: resources/posts/README.md (PostContext / renderPost).
   - Additional context for 4-axis: axisCount, aAxisRangeDeg, aAxisOrientation.
+
+  ---------------------------------------------------------------------------
+  HISTORY / ROLE
+  ---------------------------------------------------------------------------
+  This file was renamed from `cnc_4axis_grbl.hbs` to `carvera_4axis_grbl.hbs`
+  (pre-launch punch-list rank 16) to reflect what it actually is. The "grbl"
+  suffix is retained because the schema dialect enum entry is `grbl_4axis`,
+  but the template family is Carvera-flavored Smoothieware -- the same
+  dialect parent as the production `carvera_4axis.hbs` post (both emit
+  Smoothieware-compatible 4-axis G-code using G21 / G90 / G17, M3 / M5
+  spindle, A-axis rotation around X).
+
+  ---------------------------------------------------------------------------
+  CPS DIALECT-COLLAPSE FALLBACK (April 2026)
+  ---------------------------------------------------------------------------
+  The April-2026 4-axis subsystem rewrite collapsed every non-GRBL 4-axis
+  post template. The deleted templates were:
+
+      cnc_4axis_fanuc.hbs        cnc_4axis_mach3.hbs
+      cnc_4axis_linuxcnc.hbs     cnc_4axis_siemens.hbs
+      cnc_4axis_heidenhain.hbs
+
+  All five dialects (`fanuc_4axis` / `mach3_4axis` / `linuxcnc_4axis` /
+  `siemens_4axis` / `heidenhain_4axis`) now route through THIS file via
+  `src/main/machine-cps-import.ts` `postTemplateMap`. The dialect-enum
+  entries are preserved in `src/shared/machine-schema.ts` so existing
+  user machine profiles in %APPDATA%/WorkTrackCAM/machines/ still load
+  (Safety Rule 2: never break saved projects). CPS-imported machines that
+  declare those dialects emit Carvera/Smoothieware-compatible G-code, with
+  a console warning from `machine-cps-import.ts` describing the fallback.
+
+  Why "carvera_*" prefix is accurate: this template's invariants (G21 mm
+  units, G90 absolute, G17 plane, M3/M5 spindle, A around X, M30 program
+  end, semicolon comment style, no M6 ATC) match the Smoothieware family
+  used by Makera Carvera. The 3-axis sibling is `carvera_3axis.hbs`; the
+  production 4-axis post is `carvera_4axis.hbs`. This file is the
+  *fallback* 4-axis post -- it covers CPS imports for foreign 4-axis
+  dialects with output the Carvera can execute.
+
+  ---------------------------------------------------------------------------
+  SAFETY INVARIANTS
+  ---------------------------------------------------------------------------
+  Read `.claude/skills/gcode-safety/references/carvera-4axis.md` BEFORE
+  editing this template. Key invariants that MUST hold in every render:
+    - G21 / G90 / G17 in header (mm / absolute / XY plane).
+    - `G0 Y0` in header before any feed move (centering on rotation axis;
+      A rotates around X so tool must stay in the rotation plane).
+    - No `M6` tool change emitted (rotary attachment occupies the ATC slot
+      on Carvera; tool changes are operator-initiated via M0/M1 pause).
+    - M5 spindle-off before final retract.
+    - Final retract uses `G0 Z<workAreaZ>` then `G0 X0 Y0` park.
+    - Program end via M30 (this template) -- `carvera_4axis.hbs` uses M2
+      instead because Smoothieware community firmware may delete the file
+      from SD on M30; this fallback template ships M30 because the legacy
+      `grbl_4axis` dialect contract has emitted M30 since [ID-0156], and a
+      unilateral switch here would change pinned snapshots. The Carvera
+      production post is the safe path for actual Carvera hardware; this
+      template is fallback-only for CPS-imported foreign dialects.
+
+  Related contracts:
+    - `src/main/post-process-carvera-4axis-contract.test.ts`
+      (carvera_4axis.hbs contract pins)
+    - `src/main/post-process-4axis-integration.test.ts`
+      (this template integration coverage)
+    - `src/main/post-process-dialect-safety.test.ts`
+      (per-dialect header/footer pins)
 --}}
 ; {{machine.name}} — {{machine.id}}
 ; 4-AXIS (A-ROTARY) G-CODE — grbl_4axis dialect

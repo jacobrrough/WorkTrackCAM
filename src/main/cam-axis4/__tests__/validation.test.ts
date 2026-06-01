@@ -8,7 +8,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { MeshFrameResult } from '../frame'
-import { validateAxis4Job, type ValidationContext } from '../validation'
+import {
+  assertRotaryHeadstockXOffsetSet,
+  assertYAxisIsZeroForProfile,
+  validateAxis4Job,
+  type ValidationContext
+} from '../validation'
 
 const BASE_FRAME: MeshFrameResult = {
   triangles: [],
@@ -29,6 +34,11 @@ function ctx(over: Partial<ValidationContext> = {}): ValidationContext {
     machXStartMm: 5,
     machXEndMm: 95,
     zPassMm: -2,
+    // Pre-launch punch-list rank 13: 4-axis machines REQUIRE a rotary
+    // headstock X offset. Default to 5 (the bundled Carvera value) so the
+    // happy-path tests skip the new validator gate; tests that exercise the
+    // gate override this field.
+    rotaryHeadstockXOffsetMm: 5,
     ...over
   }
 }
@@ -307,6 +317,235 @@ describe('validateAxis4Job — indexed mode', () => {
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(r.warnings.every((w) => !/exceed machine A-axis range/.test(w))).toBe(true)
+    }
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pre-launch punch-list rank 13 — defense-in-depth validators
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Two new standalone validators that close the upstream-caller gap left open
+// by the existing safety stack: today's belt-and-suspenders is the post-emit
+// `G0 Y0` hardcode in `resources/posts/carvera_4axis.hbs:73` (silent re-
+// center) plus the chuck-span validator (catches some misconfig). Neither
+// stops a hand-edited or CPS-imported profile from omitting the X-offset
+// field or sending non-zero Y. These tests prove the validators surface
+// those misconfigurations as ValidationFailure envelopes BEFORE G-code is
+// generated.
+
+describe('assertYAxisIsZeroForProfile (rank 13)', () => {
+  it('passes through (returns null) when yAxisMustBeZero is undefined', () => {
+    const r = assertYAxisIsZeroForProfile({
+      toolpathYValues: [5, -3] // non-zero Y but the flag is off
+    })
+    expect(r).toBeNull()
+  })
+
+  it('passes through (returns null) when yAxisMustBeZero is false', () => {
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: false,
+      toolpathYValues: [5]
+    })
+    expect(r).toBeNull()
+  })
+
+  it('returns null when yAxisMustBeZero is true and all Y values are zero', () => {
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: true,
+      toolpathYValues: [0, 0, 0]
+    })
+    expect(r).toBeNull()
+  })
+
+  it('returns null when no toolpathYValues are provided (strategies build Y=0)', () => {
+    // The 4-axis strategies (contour/pattern/indexed/etc.) build machine Y=0
+    // by construction -- they never expose Y to the caller. The validator
+    // is a defense-in-depth gate for FUTURE callers that author raw G-code;
+    // omitting toolpathYValues is the typical case and must be a no-op.
+    const r = assertYAxisIsZeroForProfile({ yAxisMustBeZero: true })
+    expect(r).toBeNull()
+  })
+
+  it('rejects a toolpath segment with non-zero Y when yAxisMustBeZero is true', () => {
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: true,
+      toolpathYValues: [0, 3.5, 0]
+    })
+    expect(r).not.toBeNull()
+    if (r) {
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/Y=0 \(yAxisMustBeZero\)/)
+      expect(r.error).toMatch(/toolpath segment 1/)
+      expect(r.error).toMatch(/Y=3\.5000/)
+      expect(r.hint).toMatch(/Carvera 4-axis HD/)
+      expect(r.hint).toMatch(/centered on the rotary axis/)
+    }
+  })
+
+  it('rejects a tiny negative Y value (sign-agnostic |Y| > epsilon)', () => {
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: true,
+      toolpathYValues: [-0.001]
+    })
+    expect(r).not.toBeNull()
+    if (r) {
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/toolpath segment 0/)
+    }
+  })
+
+  it('accepts Y values smaller than the 1e-6 epsilon as effectively zero', () => {
+    // Float precision floor — a Y component of 1e-9 (from frame rounding /
+    // unwrap math) must NOT trip the validator.
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: true,
+      toolpathYValues: [1e-9, -1e-9]
+    })
+    expect(r).toBeNull()
+  })
+})
+
+describe('assertRotaryHeadstockXOffsetSet (rank 13)', () => {
+  it('passes through (returns null) when axisCount is 3 (3-axis CNC)', () => {
+    // 3-axis machines have no rotary fixture — the field is meaningless.
+    const r = assertRotaryHeadstockXOffsetSet({ axisCount: 3 })
+    expect(r).toBeNull()
+  })
+
+  it('passes through (returns null) when axisCount is 5', () => {
+    // Future 5-axis machines have their own headstock model; this validator
+    // only fires for exact 4-axis profiles where the field is mandatory.
+    const r = assertRotaryHeadstockXOffsetSet({ axisCount: 5 })
+    expect(r).toBeNull()
+  })
+
+  it('rejects axisCount 4 with no rotaryHeadstockXOffsetMm', () => {
+    const r = assertRotaryHeadstockXOffsetSet({ axisCount: 4 })
+    expect(r).not.toBeNull()
+    if (r) {
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/missing rotaryHeadstockXOffsetMm/)
+      expect(r.hint).toMatch(/Add `rotaryHeadstockXOffsetMm`/)
+      expect(r.hint).toMatch(/Carvera 4-axis profile uses 5 mm/)
+    }
+  })
+
+  it('rejects axisCount 4 with rotaryHeadstockXOffsetMm = NaN', () => {
+    const r = assertRotaryHeadstockXOffsetSet({
+      axisCount: 4,
+      rotaryHeadstockXOffsetMm: Number.NaN
+    })
+    expect(r).not.toBeNull()
+    if (r) {
+      expect(r.error).toMatch(/missing rotaryHeadstockXOffsetMm/)
+    }
+  })
+
+  it('accepts axisCount 4 with rotaryHeadstockXOffsetMm = 0 (boundary inclusive)', () => {
+    // The Zod schema permits non-negative values, including 0 (some operators
+    // may set G54 X=0 directly at the chuck face). The validator must not
+    // reject a legitimately-zero offset.
+    const r = assertRotaryHeadstockXOffsetSet({
+      axisCount: 4,
+      rotaryHeadstockXOffsetMm: 0
+    })
+    expect(r).toBeNull()
+  })
+
+  it('accepts axisCount 4 with the bundled Carvera value (5 mm)', () => {
+    const r = assertRotaryHeadstockXOffsetSet({
+      axisCount: 4,
+      rotaryHeadstockXOffsetMm: 5
+    })
+    expect(r).toBeNull()
+  })
+})
+
+describe('validateAxis4Job — rank 13 integration (composed gates)', () => {
+  it('rejects a job whose machine profile omits rotaryHeadstockXOffsetMm', () => {
+    // Drop the default-5 from the test ctx() so we exercise the gate.
+    const r = validateAxis4Job(
+      ctx({ rotaryHeadstockXOffsetMm: undefined })
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/missing rotaryHeadstockXOffsetMm/)
+      expect(r.hint).toMatch(/bundled Makera Carvera 4-axis profile uses 5 mm/)
+    }
+  })
+
+  it('rejects a job whose explicit toolpathYValues include non-zero Y on a yAxisMustBeZero machine', () => {
+    // Note: 4-axis contour points use [axialX, unwrapDistance] (the second
+    // component is NOT machine Y; the strategy maps it to A-axis angles).
+    // The yAxisMustBeZero gate fires on explicit machine-Y values, which
+    // strategies build internally as 0. A caller that authors raw G-code
+    // segments with Y values (e.g. hand-edited toolpath or `.cps` import)
+    // must surface those through `toolpathYValues` so this gate fires
+    // before the post-emit `G0 Y0` silently re-centers.
+    const r = validateAxis4Job(
+      ctx({
+        operationKind: 'cnc_4axis_roughing',
+        yAxisMustBeZero: true,
+        toolpathYValues: [0, 12.5, 0] // off-axis Y -- should be rejected
+      })
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/Y=0 \(yAxisMustBeZero\)/)
+      expect(r.error).toMatch(/Y=12\.5000/)
+    }
+  })
+
+  it('accepts a job with Y=0 throughout on a yAxisMustBeZero machine', () => {
+    const r = validateAxis4Job(
+      ctx({
+        operationKind: 'cnc_4axis_roughing',
+        yAxisMustBeZero: true,
+        toolpathYValues: [0, 0, 0]
+      })
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('contour job with valid unwrap-Y in contourPoints passes (contour Y is unwrap-space, not machine Y)', () => {
+    // This is the load-bearing pin for the "validator does NOT scan
+    // contour points" contract: the second component of contourPoints is
+    // the unwrap-circumference distance which the strategy maps to A
+    // angles. If the validator misinterpreted it as machine Y, the
+    // bundled Carvera contour jobs (Y values up to pi*D) would fail to
+    // pre-validate.
+    const r = validateAxis4Job(
+      ctx({
+        operationKind: 'cnc_4axis_contour',
+        yAxisMustBeZero: true,
+        contourPoints: [
+          [20, 0],
+          [40, 94.248], // pi*30, real unwrap distance from a contour job
+          [60, 188.496]
+        ] as ReadonlyArray<readonly [number, number]>
+      })
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('headstock-missing error wins over yAxisMustBeZero error (precedence)', () => {
+    // When BOTH gates would fire, the headstock check fires first. This
+    // pins the deterministic error-message order so a future refactor that
+    // swaps the gates is caught.
+    const r = validateAxis4Job(
+      ctx({
+        operationKind: 'cnc_4axis_roughing',
+        rotaryHeadstockXOffsetMm: undefined,
+        yAxisMustBeZero: true,
+        toolpathYValues: [5]
+      })
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/missing rotaryHeadstockXOffsetMm/)
+      // Should NOT mention the Y=0 invariant — that gate is downstream.
+      expect(r.error).not.toMatch(/yAxisMustBeZero/)
     }
   })
 })

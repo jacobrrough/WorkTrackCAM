@@ -144,14 +144,18 @@ const carvera4ax: MachineProfile = {
   kind: 'cnc',
   workAreaMm: { x: 360, y: 240, z: 140 },
   maxFeedMmMin: 5000,
-  postTemplate: 'cnc_4axis_grbl.hbs',
+  postTemplate: 'carvera_4axis_grbl.hbs',
   dialect: 'grbl_4axis',
   axisCount: 4,
   aAxisRangeDeg: 360,
   aAxisOrientation: 'x',
   minSpindleRpm: 6000,
   maxSpindleRpm: 15000,
-  maxRotaryRpm: 60
+  maxRotaryRpm: 60,
+  // Pre-launch punch-list rank 13: 4-axis CNC profiles require this field
+  // so the new validator gate accepts the synthetic profile. Mirrors the
+  // bundled Carvera 4-axis value.
+  rotaryHeadstockXOffsetMm: 5
 }
 
 function baseJob(over: Partial<CamJobConfig>): CamJobConfig {

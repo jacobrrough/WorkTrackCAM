@@ -146,7 +146,7 @@ describe('renderPost — operationLabel injection', () => {
   })
 
   it('injects operation label comment in 4-axis template', async () => {
-    const m4ax: MachineProfile = { ...machine, postTemplate: 'cnc_4axis_grbl.hbs', dialect: 'grbl_4axis', axisCount: 4 }
+    const m4ax: MachineProfile = { ...machine, postTemplate: 'carvera_4axis_grbl.hbs', dialect: 'grbl_4axis', axisCount: 4 }
     const { gcode: g } = await renderPost(resourcesRoot, m4ax, [], { operationLabel: 'Rotary Contour' })
     expect(g).toContain('; Operation: Rotary Contour')
   })
@@ -165,11 +165,11 @@ describe('renderPost — operationLabel injection', () => {
   })
 })
 
-// ─── 4-axis template (cnc_4axis_grbl.hbs) ─────────────────────────────────────
-describe('renderPost — cnc_4axis_grbl.hbs safety structure', () => {
+// ─── 4-axis template (carvera_4axis_grbl.hbs) ─────────────────────────────────
+describe('renderPost — carvera_4axis_grbl.hbs safety structure', () => {
   const machine4ax: MachineProfile = {
     ...machine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4
   }
@@ -180,7 +180,7 @@ describe('renderPost — cnc_4axis_grbl.hbs safety structure', () => {
   })
 
   it('emits safe Z retract using machine workAreaMm.z before M30', async () => {
-    // cnc_4axis_grbl.hbs uses {{machine.workAreaMm.z}} for the clearance retract
+    // carvera_4axis_grbl.hbs uses {{machine.workAreaMm.z}} for the clearance retract
     const { gcode: g } = await renderPost(resourcesRoot, machine4ax, [])
     expect(g).toContain(`G0 Z${machine4ax.workAreaMm.z}`)
   })
@@ -221,8 +221,9 @@ describe('renderPost — cnc_4axis_grbl.hbs safety structure', () => {
 
 // Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis safety/structure
 // describe blocks were removed in the April 2026 4-axis subsystem rewrite —
-// only `cnc_4axis_grbl.hbs` is exercised. CPS imports for those dialects now
-// repoint at GRBL.
+// only `carvera_4axis_grbl.hbs` (renamed from `cnc_4axis_grbl.hbs` in the
+// pre-launch rank-16 cleanup) is exercised. CPS imports for those dialects
+// now repoint at GRBL.
 
 // Note: the 5-axis Fanuc and 5-axis Siemens safety-structure describe
 // blocks were removed in the June 2026 My-Shop-Only cleanup — the
@@ -285,7 +286,7 @@ describe('renderPost — G93 inverse-time feed mode', () => {
   // GRBL 4-axis post.
   const machine4axGrbl: MachineProfile = {
     ...machine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4
   }

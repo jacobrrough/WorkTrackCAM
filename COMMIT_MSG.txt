@@ -1,0 +1,156 @@
+Parallel workflows A + B — G-code finishers (rank 13/16) + CAD V1 (Monaco + editable params)
+
+Two workflows launched in parallel with strict file-ownership separation
+so they could run concurrently in the same worktree without collisions.
+Both returned green; combined gates 13,888 / 0 / 2 + tsc clean.
+
+WORKFLOW A — G-CODE-ADJACENT PRE-LAUNCH FINISHERS (3 agents, 21 min)
+
+Rank 13 — Carvera 4-axis Y=0 + X-offset schema constraints
+  * src/shared/machine-schema.ts — yAxisMustBeZero (z.boolean().optional())
+    + rotaryHeadstockXOffsetMm (z.number().nonnegative().optional()).
+    Both optional with backward-compat (Safety Rule 2).
+  * resources/machines/makera-carvera-4axis.json — bundled profile now
+    sets yAxisMustBeZero: true + rotaryHeadstockXOffsetMm: 5.
+  * src/main/cam-axis4/validation.ts — two new validators:
+      assertRotaryHeadstockXOffsetSet (requires field on axisCount=4;
+        rejects CPS imports or hand-edited profiles that omit it)
+      assertYAxisIsZeroForProfile (scans explicit toolpathYValues array;
+        production strategies build Y=0 by construction so the gate
+        is a no-op for typical jobs; exists for future callers
+        authoring raw G-code with explicit Y)
+  * +22 new tests covering standalone validators + composed-gate
+    integration + precedence + bundled-profile pin + Safety Rule 2
+    backward compat.
+
+Rank 16 — cnc_4axis_grbl.hbs to carvera_4axis_grbl.hbs rename
+  * Renamed resources/posts/cnc_4axis_grbl.hbs to .../carvera_4axis_grbl.hbs.
+    Added a 60+ line Handlebars comment header documenting the
+    April-2026 CPS dialect-collapse rationale, the Smoothieware-family
+    invariants this template shares with carvera_4axis.hbs and
+    carvera_3axis.hbs, and a cross-reference to the gcode-safety
+    carvera-4axis reference doc.
+  * src/main/machine-cps-import.ts — postTemplateMap updated for all
+    6 four-axis dialect entries (grbl_4axis / fanuc_4axis /
+    mach3_4axis / linuxcnc_4axis / siemens_4axis / heidenhain_4axis)
+    to point at the new filename. The dialect ENUM string
+    cnc_4axis_grbl (identifier, not filename) is unchanged —
+    saved profiles still load.
+  * 12 test files + 2 snapshot files updated for the rename;
+    G-code emission is byte-identical (snapshot diff shows ONLY the
+    describe-block label changed).
+
+WORKFLOW B — CAD V1 PROGRESSIONS (3 agents, 19 min)
+
+Monaco editor in CadQueryEditor
+  * Installed monaco-editor + @monaco-editor/react +
+    vite-plugin-monaco-editor.
+  * electron.vite.config.ts — registered monacoEditorPlugin with
+    languageWorkers: editorWorkerService only (trims ~2 MB vs the
+    default set since CadQuery scripts are Python only).
+  * src/renderer/design/CadQueryEditor.tsx — Editor swap with
+    SSR-safe fallback: render-time branch on hasBrowserDom() to
+    Monaco when window exists, legacy textarea (100%-fidelity replica
+    with same testid / className / shortcut / aria) when window is
+    undefined. Vitest runs in node env so existing render-pin tests
+    hit the textarea fallback without modification. Ctrl+Enter /
+    Cmd+Enter shortcut wired in both paths.
+  * Bundle size: +~3 MB for Monaco — acceptable V1 trade-off for a
+    desktop Electron build (no web-app constraint).
+  * +4 new tests covering the SSR fallback contract.
+
+Editable parameters in FeatureTree (CQGI buildParameters wiring)
+  * src/renderer/design/FeatureTree.tsx — extracted EditableParameters
+    (with useState draft buffer) and ReadOnlyParameters sub-components.
+    New props: parameters, paramOverrides, onParamsChange. Editable
+    when onParamsChange supplied; read-only fallback otherwise.
+    Kind-matched inputs (number/checkbox/text). Per-row Reset +
+    global Apply. Dirty-row accent stripe via data-param-dirty=true.
+  * src/renderer/design/DesignWorkspace.tsx — added paramOverrides
+    state. Refactored handleRun to runScriptWithOverrides (avoids
+    stale-state read after setParamOverrides). New handleParamsChange
+    callback immediately re-runs script with new overrides via
+    cad.execute with buildParameters.
+  * engines/sidecar/__tests__/test_cad_script_handlers.py — pytest
+    round-trip case asserts L=10 default to bbox max-X=5;
+    buildParameters L=25 to max-X=12.5; two runs return different
+    handles. Test is gated on import cadquery (skipped here, will
+    run wherever cadquery is installed).
+  * +19 new React tests on the editable params path.
+  * Pre-existing wire surfaces (sidecar-protocol, ipc-cad, shop-types,
+    cad_handlers) already supported buildParameters from the CAD MVP
+    spec — no schema work needed.
+
+GCODE-SAFETY VERDICT (Workflow A only — Workflow B touches no G-code)
+SAFE for all four target machines:
+  (a) Rename byte-identity: snapshot diff shows ONLY the
+      describe-block label changed; emitted G-code unchanged.
+  (b) Handlebars comment header is stripped at render time, not
+      emitted.
+  (c) Schema additions are backward-compatible optionals — old saved
+      profiles parse with undefined and validators skip the check.
+  (d) Y-zero gate scans explicit toolpathYValues array (undefined
+      by default) — no-op for typical 4-axis production jobs.
+  (e) cnc_4axis_grbl still appears in validation.ts and tests as a
+      DIALECT IDENTIFIER (not a filename) — correct and intentional.
+Updated .claude/skills/gcode-safety/references/carvera-4axis.md to
+point at the new filename + document the new schema gates.
+
+FILE-OWNERSHIP SEPARATION (the load-bearing pre-condition)
+A owned: machine-schema.ts, makera-carvera-4axis.json,
+  cam-axis4/validation.ts + tests, resources/posts/ (rename + new
+  header), machine-cps-import.ts + tests, 12 post-process test
+  files + 2 snapshot files.
+B owned: src/renderer/design/*.tsx, engines/sidecar/__tests__/
+  test_cad_script_handlers.py, package.json + package-lock.json,
+  electron.vite.config.ts.
+Shared (additive-only, no conflict): src/renderer/styles/
+  manufacture.css (A added nothing; B added .cad-feature-params*).
+Agents observed each other's mid-flight state but resolved as
+soon as both phases completed.
+
+QUALITY GATES
+  Pre-flight (HEAD 61fb5fa):  npm test 13,844/0/2;  tsc clean;
+    test:python 30/0/7-skip
+  Post:                       npm test 13,888/0/2 (delta +44);
+    tsc clean;  test:python 30/0/8-skip
+  +44 vitest = +22 (rank-13 Carvera schema validators) + +22
+  (Workflow B: +4 Monaco SSR + +19 FeatureTree editable params + a
+  couple of accounting drifts in test files updated for the rename).
+  2 new pytest cases land but are gated on import cadquery and skip
+  here.
+
+CLEANED UP
+  Deleted resources/unused-out.nc (agent-exploration artifact from
+  Workflow A's validator development, 56 lines, not from any test
+  file).
+
+DOCS SYNCED
+  * docs/PRE-LAUNCH-READINESS.md — TL;DR refreshed to note the
+    cnc_4axis_grbl.hbs rename has LANDED (was listed as deferred);
+    Workflow A + B deliverables noted.
+  * .claude/skills/gcode-safety/references/carvera-4axis.md — line
+    111 filename updated; new section documents rank-13 schema gates
+    + validators.
+  * .claude/improvement-log.md — +116 line entry covering both
+    workflows, validator results, gcode-safety verdict, hand-off.
+
+REMAINING DEFERRED (none blocking real-world testing)
+  * Deep-dive UX move #5 — right-side profile stack with
+    Recommended/Pro modes
+  * CAD V1: selection system (faces/edges to CadQuery entity IDs),
+    sketch editor with constraints, planegcs solver
+  * Workflow-stage tabs panel-content swap per stage (V1.5)
+  * E-stop wiring in AppHeader (V2)
+  * Real 3D-preview thumbnails in PlateTabs (V2)
+  * Assemblies + 2D drawings in CAD workspace (V2)
+
+ALL 19 PRE-LAUNCH PUNCH-LIST ITEMS NOW CLOSED.
+
+SESSION PACE (cumulative)
+  4 workflow waves: CAD MVP (14 agents) + UI deep-dive (9) + big
+  UX wave (7) + parallel A+B (6). ~36 agents, ~5.0M tokens, ~80 min
+  workflow wall-clock. vitest 13,611 (session start) to 13,888
+  (now), delta +277 tests, zero net regressions.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

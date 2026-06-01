@@ -29,7 +29,7 @@
  *     work, AND `carvera_4axis.hbs` for the rotary cylindrical /
  *     full-4-axis-simultaneous path. Loss of either silently regresses
  *     the Carvera path: 3-axis loss falls back to generic-mm which has
- *     wrong spindle warm-up; 4-axis loss falls back to cnc_4axis_grbl
+ *     wrong spindle warm-up; 4-axis loss falls back to carvera_4axis_grbl
  *     which has wrong rotary-origin handling.
  *
  * June 2026 My-Shop-Only cleanup: the speculative 5-axis Fanuc and
@@ -124,7 +124,7 @@ const EXPECTED_HINTS = [
   'carvera_4axis.hbs',
   // Generic / fallback infrastructure (index 4..5)
   'cnc_generic_mm.hbs',
-  'cnc_4axis_grbl.hbs'
+  'carvera_4axis_grbl.hbs'
 ] as const
 
 const PRODUCTION_SLICE = EXPECTED_HINTS.slice(0, 4)
@@ -244,8 +244,8 @@ describe('[ID-0235] exact-byte equality table', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES[4]).toBe('cnc_generic_mm.hbs')
   })
 
-  it('index 5 is cnc_4axis_grbl fallback (April 2026 4-axis rewrite repointing target)', () => {
-    expect(COMMON_POST_TEMPLATE_FILENAMES[5]).toBe('cnc_4axis_grbl.hbs')
+  it('index 5 is carvera_4axis_grbl fallback (renamed from cnc_4axis_grbl in pre-launch rank-16; April 2026 4-axis rewrite repointing target)', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES[5]).toBe('carvera_4axis_grbl.hbs')
   })
 })
 
@@ -272,9 +272,15 @@ describe('[ID-0235] production-vs-fallback partition', () => {
     }
   })
 
-  it('fallback slice consists exclusively of cnc_-prefixed entries', () => {
+  // Pre-launch rank-16 rename: the legacy `cnc_4axis_grbl.hbs` fallback
+  // was renamed to `carvera_4axis_grbl.hbs` to reflect its Smoothieware
+  // dialect family (matches the production carvera_4axis.hbs). The
+  // fallback slice now contains one `cnc_*` entry (the 3-axis
+  // generic-mm) and one `carvera_*` entry (the 4-axis GRBL/Carvera
+  // fallback). The allow-set covers both prefixes.
+  it('fallback slice consists exclusively of cnc_- or carvera_-prefixed entries', () => {
     for (const f of FALLBACK_SLICE) {
-      expect(f).toMatch(/^cnc_/)
+      expect(f).toMatch(/^(cnc_|carvera_)/)
     }
   })
 
@@ -341,7 +347,12 @@ describe('[ID-0235] three-machine production-post coverage', () => {
   })
 
   it('production slice does NOT contain the GRBL 4-axis fallback (Carvera uses dedicated post)', () => {
+    // The fallback was renamed `cnc_4axis_grbl.hbs` -> `carvera_4axis_grbl.hbs`
+    // in the pre-launch rank-16 cleanup. Pin both names so a regression that
+    // re-introduced either the old or new fallback into the production slice
+    // would trip this check.
     expect(PRODUCTION_SLICE).not.toContain('cnc_4axis_grbl.hbs')
+    expect(PRODUCTION_SLICE).not.toContain('carvera_4axis_grbl.hbs')
   })
 
   it('production slice does NOT contain the generic-mm fallback', () => {
@@ -544,7 +555,11 @@ describe('[ID-0235] source-text whitelist', () => {
     expect(SRC).toMatch(/April\s*2026/)
   })
 
-  it('JSDoc explains that non-GRBL 4-axis templates were removed and CPS imports repoint to cnc_4axis_grbl', () => {
+  it('JSDoc explains that non-GRBL 4-axis templates were removed and CPS imports repoint to the 4-axis GRBL/Carvera fallback', () => {
+    // Pre-launch rank-16: the fallback was renamed `cnc_4axis_grbl.hbs` ->
+    // `carvera_4axis_grbl.hbs`. The JSDoc preserves both names so future
+    // maintainers can grep for either; the canonical filename is the new one.
+    expect(SRC).toMatch(/carvera_4axis_grbl/)
     expect(SRC).toMatch(/cnc_4axis_grbl/)
     expect(SRC).toMatch(/repointed/)
   })
@@ -732,9 +747,9 @@ describe('[ID-0235] cross-cutting safety + invariants', () => {
     expect(PRODUCTION_SLICE[3]).toBe('carvera_4axis.hbs')
   })
 
-  it('fallback slice is sorted by axis count (3-axis generic, then 4-axis GRBL)', () => {
+  it('fallback slice is sorted by axis count (3-axis generic, then 4-axis GRBL/Carvera fallback)', () => {
     expect(FALLBACK_SLICE[0]).toBe('cnc_generic_mm.hbs')
-    expect(FALLBACK_SLICE[1]).toBe('cnc_4axis_grbl.hbs')
+    expect(FALLBACK_SLICE[1]).toBe('carvera_4axis_grbl.hbs')
   })
 
   it('hint list never accidentally surfaces a 5-axis post in the production slice', () => {
@@ -746,11 +761,27 @@ describe('[ID-0235] cross-cutting safety + invariants', () => {
     expect(fiveAxis).toHaveLength(0)
   })
 
-  it('hint list contains EXACTLY 1 4-axis post entry beyond Carvera (the GRBL fallback)', () => {
-    const fourAxisFallback = COMMON_POST_TEMPLATE_FILENAMES.filter(
-      (f) => f.includes('4axis') && !f.startsWith('carvera_')
+  // Pre-launch rank-16: the fallback `cnc_4axis_grbl.hbs` was renamed
+  // `carvera_4axis_grbl.hbs` -- the file is Smoothieware-family, the
+  // same dialect parent as the production carvera_4axis.hbs. The
+  // 4-axis post inventory is now THREE entries, all with the
+  // `carvera_` prefix: the production `carvera_4axis.hbs`, plus the
+  // GRBL-flavored fallback `carvera_4axis_grbl.hbs`. (The third
+  // carvera_ entry is the 3-axis carvera_3axis.hbs which is NOT 4-axis
+  // and not included here.) Pin: there is no `cnc_*4axis*` fallback
+  // anymore.
+  it('hint list contains EXACTLY 2 4-axis Carvera-family post entries (production + GRBL fallback)', () => {
+    const fourAxisCarvera = COMMON_POST_TEMPLATE_FILENAMES.filter(
+      (f) => f.includes('4axis') && f.startsWith('carvera_')
     )
-    expect(fourAxisFallback).toEqual(['cnc_4axis_grbl.hbs'])
+    expect(fourAxisCarvera).toEqual(['carvera_4axis.hbs', 'carvera_4axis_grbl.hbs'])
+  })
+
+  it('hint list contains ZERO cnc_-prefixed 4-axis post entries (post-rank-16 rename)', () => {
+    const cncFourAxis = COMMON_POST_TEMPLATE_FILENAMES.filter(
+      (f) => f.includes('4axis') && f.startsWith('cnc_')
+    )
+    expect(cncFourAxis).toEqual([])
   })
 
   it('hint list contains EXACTLY 1 fdm post entry (the K2 Plus passthrough)', () => {
@@ -763,14 +794,21 @@ describe('[ID-0235] cross-cutting safety + invariants', () => {
     expect(vcarve).toEqual(['vcarve_mach3.hbs'])
   })
 
-  it('hint list contains EXACTLY 2 carvera post entries (3-axis + 4-axis)', () => {
+  // Pre-launch rank-16 rename: the carvera prefix now covers THREE entries --
+  // production 3-axis (carvera_3axis.hbs), production 4-axis
+  // (carvera_4axis.hbs), and the renamed 4-axis fallback
+  // (carvera_4axis_grbl.hbs).
+  it('hint list contains EXACTLY 3 carvera post entries (3-axis prod + 4-axis prod + 4-axis GRBL fallback)', () => {
     const carvera = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('carvera_'))
-    expect(carvera).toEqual(['carvera_3axis.hbs', 'carvera_4axis.hbs'])
+    expect(carvera).toEqual(['carvera_3axis.hbs', 'carvera_4axis.hbs', 'carvera_4axis_grbl.hbs'])
   })
 
-  it('hint list contains EXACTLY 2 cnc-prefixed fallback entries', () => {
+  // After the rank-16 rename the `cnc_*` bucket holds only the 3-axis
+  // generic-mm fallback (the 4-axis fallback moved to the carvera_*
+  // bucket).
+  it('hint list contains EXACTLY 1 cnc-prefixed fallback entry (cnc_generic_mm.hbs only)', () => {
     const cnc = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('cnc_'))
-    expect(cnc).toHaveLength(2)
+    expect(cnc).toEqual(['cnc_generic_mm.hbs'])
   })
 
   it('every prefix bucket (cnc_/carvera_/vcarve_/fdm_) sums to 6 total entries (partition exhaustive)', () => {

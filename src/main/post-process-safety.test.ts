@@ -144,7 +144,7 @@ const dialects: DialectConfig[] = [
     name: 'GRBL 4-axis',
     machine: {
       ...baseMachine,
-      postTemplate: 'cnc_4axis_grbl.hbs',
+      postTemplate: 'carvera_4axis_grbl.hbs',
       dialect: 'grbl_4axis',
       axisCount: 4,
       aAxisRangeDeg: 360,
@@ -789,7 +789,7 @@ describe('Safety: combined options do not break safety invariants', () => {
   it('inverse time feed + tool change on GRBL 4-axis: complete safety', async () => {
     const grbl4ax: MachineProfile = {
       ...baseMachine,
-      postTemplate: 'cnc_4axis_grbl.hbs',
+      postTemplate: 'carvera_4axis_grbl.hbs',
       dialect: 'grbl_4axis',
       axisCount: 4,
       aAxisRangeDeg: 360,
@@ -829,7 +829,7 @@ describe('Safety: 4-axis Y=0 centering on rotation axis', () => {
 
   const grbl4ax: MachineProfile = {
     ...baseMachine,
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4,
     aAxisRangeDeg: 360,
@@ -884,7 +884,7 @@ describe('Safety: 4-axis Y=0 centering on rotation axis', () => {
 //   (a) 4-axis ATC-bypass: when the rotary attachment is mounted, the
 //       Carvera ATC is mechanically bypassed (the rotary occupies the
 //       table). The carvera_4axis.hbs template intentionally omits M6
-//       anywhere in its body. The cnc_4axis_grbl.hbs template likewise
+//       anywhere in its body. The carvera_4axis_grbl.hbs template likewise
 //       omits M6 because GRBL has no native ATC support. Operators may
 //       still pass `toolNumber` (it is a generic post-context flag and
 //       gets used by the 3-axis Carvera post for M6 + G43); the
@@ -930,7 +930,7 @@ describe('Safety: 4-axis ATC-bypass + wood-routing inverseTimeFeed isolation [ID
     ...baseMachine,
     id: 'grbl-4ax-atc-bypass',
     name: 'GRBL 4-Axis ATC-Bypass Test',
-    postTemplate: 'cnc_4axis_grbl.hbs',
+    postTemplate: 'carvera_4axis_grbl.hbs',
     dialect: 'grbl_4axis',
     axisCount: 4,
     aAxisRangeDeg: 360,
@@ -987,7 +987,7 @@ describe('Safety: 4-axis ATC-bypass + wood-routing inverseTimeFeed isolation [ID
     expect(gcode).toContain(`G0 Z${carvera4ax.workAreaMm.z}`)
   })
 
-  it('GRBL 4-axis: no M6 emitted even with explicit toolNumber: 5 (cnc_4axis_grbl ATC-bypass)', async () => {
+  it('GRBL 4-axis: no M6 emitted even with explicit toolNumber: 5 (carvera_4axis_grbl ATC-bypass)', async () => {
     const { gcode } = await renderPost(resourcesRoot, grbl4ax, fourAxisLines, {
       toolNumber: 5,
     })

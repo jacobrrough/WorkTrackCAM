@@ -57,14 +57,19 @@ import {
 } from 'react'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
-import { FeatureTree, type FeatureTreeOperation } from './FeatureTree'
+import {
+  FeatureTree,
+  type FeatureTreeOperation,
+  type FeatureTreeParameter
+} from './FeatureTree'
 import { fab } from '../src/shop-types'
 import type {
   CadExecuteScriptMesh,
   CadExecuteScriptResult,
   CadDeclaredParameter,
   CadOperationSummary,
-  CadParseError
+  CadParseError,
+  CadScriptParamValue
 } from '../../shared/sidecar-protocol'
 import type { CadExportResponse } from '../../main/ipc-cad'
 
@@ -239,6 +244,20 @@ export function DesignWorkspace({
   const [operations, setOperations] = useState<readonly CadOperationSummary[]>([])
   const [parameters, setParameters] = useState<readonly CadDeclaredParameter[]>([])
   const [parseError, setParseError] = useState<CadParseError | null>(null)
+  /**
+   * Active CQGI `build_parameters` overrides keyed by parameter name.
+   * Set by the FeatureTree's Apply button (BUILD 6, CAD V1). When
+   * non-null, every `handleRun` round-trip threads the map through to
+   * `cad.execute({ script, buildParameters })` so the user can re-run
+   * with a tweaked length / radius / etc. without touching the script.
+   *
+   * Stored as a discriminated null (rather than `{}`) so a freshly-
+   * mounted workspace doesn't ship an empty buildParameters envelope
+   * the sidecar would still have to validate.
+   */
+  const [paramOverrides, setParamOverrides] = useState<
+    Record<string, CadScriptParamValue> | null
+  >(null)
 
   // Debounce timer for the listOperations refresh; cleared on unmount + on
   // every keystroke so we never call the sidecar mid-typing-burst.
@@ -252,43 +271,80 @@ export function DesignWorkspace({
   )
 
   // ── Run handler ───────────────────────────────────────────────────────────
+  //
+  // Extracted as a helper so the public Run button and the Apply-from-
+  // FeatureTree path both share the same execute/handle plumbing. The
+  // helper accepts an explicit override map rather than reading state
+  // because `setParamOverrides(...)` is async — clicking Apply needs to
+  // run with the freshly-passed overrides, not the stale snapshot.
+  const runScriptWithOverrides = useCallback(
+    async (
+      overrides: Record<string, CadScriptParamValue> | null,
+    ): Promise<void> => {
+      if (busy) return
+      if (!scriptText.trim()) {
+        setError('Script is empty — type a CadQuery expression and try again.')
+        toast('warn', 'Cannot run an empty script.')
+        return
+      }
+      setBusy(true)
+      setError(null)
+      try {
+        const response = await fab().cad.execute(
+          overrides && Object.keys(overrides).length > 0
+            ? { script: scriptText, buildParameters: overrides }
+            : { script: scriptText },
+        )
+        if (!response.ok) {
+          const detail = response.hint ? ` — ${response.hint}` : ''
+          setError(`Run failed: ${response.error}${detail}`)
+          toast('err', `Run failed: ${response.error}`)
+          return
+        }
+        setLastTessellation(response.result)
+        if (response.result.error) {
+          setError(`Script error: ${response.result.error.message}`)
+          toast('err', response.result.error.message)
+          return
+        }
+        const meshCount = response.result.meshes.length
+        const triCount = response.result.meshes.reduce(
+          (sum, mesh) => sum + mesh.triangleCount,
+          0
+        )
+        toast('ok', `Built ${meshCount} body / ${triCount.toLocaleString()} triangles.`)
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        setError(`Run failed: ${message}`)
+        toast('err', `Run failed: ${message}`)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [busy, scriptText, toast],
+  )
+
   const handleRun = useCallback(async (): Promise<void> => {
-    if (busy) return
-    if (!scriptText.trim()) {
-      setError('Script is empty — type a CadQuery expression and try again.')
-      toast('warn', 'Cannot run an empty script.')
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const response = await fab().cad.execute({ script: scriptText })
-      if (!response.ok) {
-        const detail = response.hint ? ` — ${response.hint}` : ''
-        setError(`Run failed: ${response.error}${detail}`)
-        toast('err', `Run failed: ${response.error}`)
-        return
-      }
-      setLastTessellation(response.result)
-      if (response.result.error) {
-        setError(`Script error: ${response.result.error.message}`)
-        toast('err', response.result.error.message)
-        return
-      }
-      const meshCount = response.result.meshes.length
-      const triCount = response.result.meshes.reduce(
-        (sum, mesh) => sum + mesh.triangleCount,
-        0
-      )
-      toast('ok', `Built ${meshCount} body / ${triCount.toLocaleString()} triangles.`)
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(`Run failed: ${message}`)
-      toast('err', `Run failed: ${message}`)
-    } finally {
-      setBusy(false)
-    }
-  }, [busy, scriptText, toast])
+    await runScriptWithOverrides(paramOverrides)
+  }, [runScriptWithOverrides, paramOverrides])
+
+  /**
+   * Fired by FeatureTree's Apply button. Stash the new overrides so
+   * future Run clicks reuse them, then immediately re-run the script
+   * with the fresh values — the operator's mental model is "Apply =
+   * see the change", not "Apply, then click Run separately".
+   */
+  const handleParamsChange = useCallback(
+    (overrides: Record<string, CadScriptParamValue>): void => {
+      // Empty object means the operator reset every row before
+      // hitting Apply. Treat that as "drop overrides entirely" so
+      // subsequent Runs go back to the script defaults.
+      const next = Object.keys(overrides).length > 0 ? overrides : null
+      setParamOverrides(next)
+      void runScriptWithOverrides(next)
+    },
+    [runScriptWithOverrides],
+  )
 
   // ── Debounced FeatureTree refresh ─────────────────────────────────────────
   useEffect(() => {
@@ -392,6 +448,24 @@ export function DesignWorkspace({
   const featureRows: readonly FeatureTreeOperation[] = useMemo(
     () => operations.map(toFeatureRow),
     [operations]
+  )
+
+  /**
+   * Reshape sidecar `CadDeclaredParameter` rows into the FeatureTree's
+   * wire-isolated `FeatureTreeParameter` type. The two shapes are
+   * intentionally identical today; the conversion exists so a future
+   * sidecar schema change (e.g. units / clamps) can extend
+   * `CadDeclaredParameter` without dragging FeatureTree's public API
+   * along for the ride.
+   */
+  const featureParameters: readonly FeatureTreeParameter[] = useMemo(
+    () =>
+      parameters.map<FeatureTreeParameter>((p) => ({
+        name: p.name,
+        value: p.value,
+        kind: p.kind,
+      })),
+    [parameters]
   )
 
   const triangleSummary: string | null = useMemo(() => {
@@ -502,33 +576,27 @@ export function DesignWorkspace({
       >
         <div className="design-workspace__feature-section">
           <h3 className="design-workspace__feature-title">Parameters</h3>
-          {parameters.length === 0 ? (
+          {featureParameters.length === 0 ? (
             <div className="design-workspace__feature-empty">
               No parameters declared.
             </div>
           ) : (
-            <ul
-              className="design-workspace__parameter-list"
-              data-testid="design-workspace-parameters"
-            >
-              {parameters.map((param) => (
-                <li
-                  key={param.name}
-                  className="design-workspace__parameter-row"
-                  data-param-name={param.name}
-                >
-                  <span className="design-workspace__parameter-name">
-                    {param.name}
-                  </span>
-                  <span className="design-workspace__parameter-equals" aria-hidden="true">
-                    =
-                  </span>
-                  <span className="design-workspace__parameter-value">
-                    {String(param.value)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div data-testid="design-workspace-parameters">
+              {/*
+                FeatureTree's params section owns the editable inputs
+                and the Apply / Reset wiring (BUILD 6). We feed it an
+                empty operations array so the operations rendering
+                path is suppressed inside this instance — the ops
+                FeatureTree below renders those separately under its
+                own "Operations" header.
+              */}
+              <FeatureTree
+                operations={[]}
+                parameters={featureParameters}
+                paramOverrides={paramOverrides ?? undefined}
+                onParamsChange={handleParamsChange}
+              />
+            </div>
           )}
         </div>
 

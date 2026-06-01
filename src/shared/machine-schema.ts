@@ -100,6 +100,65 @@ export const machineProfileSchema = z.object({
       'Outer radius (mm) of the fixed rotary chuck/module body. Used as the default chuck radius by the 4-axis collision sweep.'
     ),
   /**
+   * CNC 4-axis -- defense-in-depth flag that, when true, forces every job
+   * planned for this machine to keep the Y-axis at zero throughout the entire
+   * toolpath. The Makera Carvera 4-axis HD setup REQUIRES Y=0 because the
+   * tool must stay centered on the rotation axis (the harmonic-drive
+   * headstock centers the stock on Y=0). Any non-zero Y motion would drive
+   * the cutter off-axis relative to the rotating cylinder, causing under-cut
+   * on the high side and chuck-jaw collision on the low side.
+   *
+   * Today's belt-and-suspenders pipeline already enforces this at multiple
+   * layers (post-template `G0 Y0` hardcoded centering, chuck-span validator,
+   * operator pre-cut sanity check). This flag pushes the invariant one layer
+   * further upstream into the SCHEMA so a hand-edited profile, imported CPS
+   * file, or future caller cannot accidentally request Y motion on this
+   * machine. Validators in `src/main/cam-axis4/validation.ts` consume this
+   * flag to reject non-zero Y in contour points / pattern offsets BEFORE
+   * G-code is generated, surfacing the misconfiguration as a clear error
+   * with an actionable hint rather than silently being overwritten by the
+   * post-emit hardcoded `G0 Y0`.
+   *
+   * Safety Rule 2: additive/optional. Absent means "no schema-level Y=0
+   * enforcement"; existing saved projects parse unchanged. When true,
+   * downstream validators must reject any toolpath segment with non-zero Y.
+   */
+  yAxisMustBeZero: z
+    .boolean()
+    .optional()
+    .describe(
+      'CNC 4-axis -- when true, validators reject any non-zero Y motion. Defense-in-depth for rotary-axis centering (Carvera 4-axis HD).'
+    ),
+  /**
+   * CNC 4-axis -- operator-measured X-offset (mm) from spindle X=0 (machine
+   * home) to the face of the rotary chuck. Currently the operator enters
+   * this into G54 X via the runbook; encoding it on the machine profile
+   * makes it first-class so it can drive validation, UI hints, and post-
+   * emitted WCS setup. Per CLAUDE.md USER CONTEXT for the Makera Carvera
+   * 4th-Axis HD module, the chuck face sits roughly 5 mm in front of
+   * machine X=0 once the rotary attachment is bolted to the table (the
+   * exact value depends on the operator's fixturing; the bundled profile
+   * uses 5 mm as the de-facto default measured against test fixtures).
+   *
+   * For 4-axis CNC machines, validators in
+   * `src/main/cam-axis4/validation.ts` REQUIRE this field to be set, so
+   * a profile imported from a `.cps` file or hand-edited without it will
+   * be rejected with an actionable hint instead of producing G-code
+   * against an unknown chuck position.
+   *
+   * Safety Rule 2: additive/optional at the schema layer (so the schema
+   * accepts profiles that omit it for backward compat) but downstream
+   * 4-axis validators enforce its presence per-job, surfacing the gap as
+   * a clear error rather than a silent crash into the chuck face.
+   */
+  rotaryHeadstockXOffsetMm: z
+    .number()
+    .nonnegative()
+    .optional()
+    .describe(
+      'CNC 4-axis -- X offset (mm) from spindle X=0 to the rotary chuck face. Required by 4-axis validators; the bundled Carvera profile uses 5 mm.'
+    ),
+  /**
    * CNC -- number of slots in the machine's automatic tool changer (ATC),
    * counting *cutting* tool slots only (the wireless probe slot is tracked
    * separately by `atcProbeSlot`). Absent or zero means "no ATC; tool

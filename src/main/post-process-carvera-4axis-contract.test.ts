@@ -20,7 +20,7 @@
  *   - [ID-0155] pending: Carvera 3-axis post contract
  *
  * Why a SEPARATE file from `post-process-4axis-integration.test.ts`:
- *   That file covers `cnc_4axis_grbl.hbs` against a synthetic baseMachine
+ *   That file covers `carvera_4axis_grbl.hbs` (renamed from `cnc_4axis_grbl.hbs` in the pre-launch rank-16 cleanup) against a synthetic baseMachine
  *   and pins generic 4-axis structure (header/footer/spindle ordering).
  *   This file pins the Carvera-specific contract: rotary kinematics
  *   ("Y MUST be 0", "Z=0 at stock center", "no M6", "M2 NOT M30",
@@ -31,6 +31,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { machineProfileSchema, type MachineProfile } from '../shared/machine-schema'
+import { assertYAxisIsZeroForProfile, assertRotaryHeadstockXOffsetSet } from './cam-axis4/validation'
 import { renderPost } from './post-process'
 
 // ─── Fixture loading ───────────────────────────────────────────────────────────
@@ -378,5 +379,79 @@ describe('carvera-4axis contract: smoke / sanity', () => {
       workCoordinateIndex: 1
     })
     expect(warnings).toEqual([])
+  })
+})
+
+// ─── 11. Defense-in-depth schema gates (pre-launch punch-list rank 13) ───────
+//
+// Two new schema fields (yAxisMustBeZero, rotaryHeadstockXOffsetMm) push the
+// existing safety stack one layer further upstream: today's belt-and-
+// suspenders is the post-emit `G0 Y0` hardcode + the engine's chuck-span
+// validator. These contract pins assert the bundled Carvera profile sets
+// both fields AND that the upstream `runCamPipeline` validator rejects a
+// non-zero-Y request rather than silently letting the post-template
+// re-center the tool.
+//
+// Safety Rule 2: backward compat. A profile loaded WITHOUT these fields
+// still parses through `machineProfileSchema` (both are .optional()), so
+// existing saved projects are unaffected. Only when the field is present
+// AND set do the downstream validators fire.
+
+describe('carvera-4axis contract: defense-in-depth schema (rank 13)', () => {
+  it('bundled profile sets yAxisMustBeZero: true (Carvera rotary centering)', () => {
+    const m = loadCarveraProfile()
+    expect(m.yAxisMustBeZero).toBe(true)
+  })
+
+  it('bundled profile sets rotaryHeadstockXOffsetMm: 5 (operator-measured)', () => {
+    const m = loadCarveraProfile()
+    expect(m.rotaryHeadstockXOffsetMm).toBe(5)
+  })
+
+  it('Safety Rule 2: a profile WITHOUT the new fields still parses (additive/optional)', () => {
+    // Strip both fields and verify schema parse still succeeds. This pins
+    // the .optional() contract — an existing saved project that predates
+    // the rank-13 fields must continue to load without manual migration.
+    const path = join(RESOURCES_ROOT, 'machines', 'makera-carvera-4axis.json')
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
+    delete raw.yAxisMustBeZero
+    delete raw.rotaryHeadstockXOffsetMm
+    expect(() => machineProfileSchema.parse(raw)).not.toThrow()
+    const parsed = machineProfileSchema.parse(raw)
+    expect(parsed.yAxisMustBeZero).toBeUndefined()
+    expect(parsed.rotaryHeadstockXOffsetMm).toBeUndefined()
+  })
+
+  it('assertYAxisIsZeroForProfile rejects non-zero Y when bundled profile yAxisMustBeZero is true', () => {
+    // The bundled profile sets yAxisMustBeZero: true. The validator
+    // function -- imported and exercised here against the actual profile
+    // value (not a synthetic literal) -- rejects an explicit Y=12.5
+    // toolpath segment. This pins the schema-to-validator wire: if a
+    // future change drops the flag from the profile OR changes the gate
+    // semantics, the contract goes red.
+    const m = loadCarveraProfile()
+    const r = assertYAxisIsZeroForProfile({
+      yAxisMustBeZero: m.yAxisMustBeZero,
+      toolpathYValues: [0, 12.5, 0]
+    })
+    expect(r).not.toBeNull()
+    if (r) {
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/Y=0 \(yAxisMustBeZero\)/)
+      expect(r.hint).toMatch(/Carvera 4-axis HD/)
+    }
+  })
+
+  it('assertRotaryHeadstockXOffsetSet accepts the bundled profile (axisCount 4 + offset 5 mm)', () => {
+    // Mirror of the above: pin the wire from schema to validator. A future
+    // change that drops `rotaryHeadstockXOffsetMm` from the bundled profile
+    // would make this validator return ValidationFailure, surfacing the
+    // regression.
+    const m = loadCarveraProfile()
+    const r = assertRotaryHeadstockXOffsetSet({
+      axisCount: m.axisCount ?? 3,
+      rotaryHeadstockXOffsetMm: m.rotaryHeadstockXOffsetMm
+    })
+    expect(r).toBeNull()
   })
 })

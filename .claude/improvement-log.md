@@ -16725,3 +16725,119 @@ PLUS: 30 sidecar pytest cases now wired into npm run test:python (were green but
 
 ### Pace check
 3 major workflows in one session: CAD MVP (14 agents) + UI deep-dive (9 agents) + this big UX wave (7 agents). Cumulative: ~30 agents, ~4.5M tokens, ~1h of wall-clock workflow time. vitest baseline: 13,611 (session start) -> **13,844** (session end), Δ **+233** tests, zero net regressions across the whole session.
+
+
+---
+
+## PARALLEL WORKFLOWS A + B — 2026-06-01 — G-code finishers + CAD V1 progressions
+
+> User directive: "KEEP GOING WITH MULTIPLE AGENT STACKS". Two
+> workflows launched in parallel with strict file-ownership separation
+> to avoid concurrent-write collisions in the shared worktree.
+
+### Workflow A — G-code-adjacent pre-launch finishers (task wkpmu18wy)
+- **3 agents, 20.7 min, 503K tokens**
+- Closed the last two pre-launch punch-list items (rank 13 + rank 16)
+
+**Rank 13 — Carvera 4-axis Y=0 + X-offset schema constraints (defense-in-depth)**
+- `src/shared/machine-schema.ts` — added two new optional fields:
+  - `yAxisMustBeZero: z.boolean().optional()`
+  - `rotaryHeadstockXOffsetMm: z.number().nonnegative().optional()`
+- `resources/machines/makera-carvera-4axis.json` — bundled profile sets both (`true` / `5 mm`)
+- `src/main/cam-axis4/validation.ts` — added two new validators wired into `validateAxis4Job`:
+  - `assertRotaryHeadstockXOffsetSet(ctx)` — requires the field on `axisCount === 4` profiles; rejects CPS imports or hand-edited profiles that omit it
+  - `assertYAxisIsZeroForProfile(ctx)` — scans an explicit `toolpathYValues` array (production toolpaths build Y=0 by construction → no-op for typical jobs; gate exists for future callers authoring raw G-code)
+- 22 new tests covering: standalone validators, composed-gate integration, precedence (X-offset gate fires before Y-zero), bundled-profile pin, Safety Rule 2 backward-compat with profiles that omit the new fields
+- Important design note: `contour-points[i][1]` is unwrap-circumference (not machine Y) and is NOT scanned by the Y-zero gate; the validator added an explicit `toolpathYValues` field to ValidationContext to surface only true machine-frame Y values
+
+**Rank 16 — `cnc_4axis_grbl.hbs` → `carvera_4axis_grbl.hbs` rename**
+- Renamed `resources/posts/cnc_4axis_grbl.hbs` → `resources/posts/carvera_4axis_grbl.hbs`
+- Added a 60+ line `{{!-- ... --}}` Handlebars header documenting:
+  - April-2026 CPS dialect-collapse rationale (5 deleted non-GRBL 4-axis templates all route here)
+  - Why "carvera_*" prefix is accurate (Smoothieware-dialect family invariants match `carvera_4axis.hbs` / `carvera_3axis.hbs`)
+  - Cross-reference to `.claude/skills/gcode-safety/references/carvera-4axis.md`
+- `src/main/machine-cps-import.ts` — `postTemplateMap` updated for all 6 four-axis dialect entries (grbl_4axis / fanuc_4axis / mach3_4axis / linuxcnc_4axis / siemens_4axis / heidenhain_4axis) to point at the new filename
+- 12 test files + 2 snapshot files updated for the rename
+- Safety Rule 1: G-code emission is byte-identical — the `{{!-- comments --}}` are stripped at render time. Snapshot diff confirms only the describe-block label changed; emitted G-code lines unchanged
+- Safety Rule 2: dialect enum `'cnc_4axis_grbl'` (the dialect IDENTIFIER, not a filename) is unchanged — saved profiles still load
+
+### Workflow B — CAD V1 progressions (task wwy6vdhuw)
+- **3 agents, 19.1 min, 366K tokens**
+
+**Monaco editor in CadQueryEditor**
+- Installed `monaco-editor@^0.55.1`, `@monaco-editor/react@^4.7.0` (deps), `vite-plugin-monaco-editor@^1.1.0` (devDep)
+- `electron.vite.config.ts` — registered `monacoEditorPlugin({ languageWorkers: ['editorWorkerService'] })` — trims ~2 MB vs the default worker set since CadQuery scripts are Python only (no TS/CSS/HTML/JSON server needed)
+- `src/renderer/design/CadQueryEditor.tsx` — Editor swap with **SSR-safe fallback**: render-time branch on `hasBrowserDom()` → Monaco when `window` exists, legacy `<textarea>` (100%-fidelity replica with same testid, className, shortcut, aria) when `window` is undefined. Vitest runs in node env so SSR-based render-pin tests hit the textarea fallback without modification. `Ctrl+Enter` / `Cmd+Enter` shortcut wired in BOTH paths.
+- Bundle size: +~3 MB for Monaco — documented as an acceptable V1 trade-off for a desktop Electron app (no web-app constraint)
+- 4 new tests covering the SSR fallback contract
+
+**Editable parameters in FeatureTree (CQGI buildParameters)**
+- `src/renderer/design/FeatureTree.tsx` — extracted `EditableParameters` sub-component (with `useState` draft buffer) and `ReadOnlyParameters`. New props: `parameters`, `paramOverrides`, `onParamsChange`. Editable when `onParamsChange` is supplied; read-only fallback otherwise. Kind-matched inputs: number → `<input type="number">`, boolean → `<input type="checkbox">`, string → `<input type="text">`. Per-row Reset + global Apply.
+- `src/renderer/design/DesignWorkspace.tsx` — added `paramOverrides` state, refactored `handleRun` → `runScriptWithOverrides` helper (avoids stale-state read after `setParamOverrides`), added `handleParamsChange` callback (immediately re-runs script with new overrides via `cad.execute({script, buildParameters: overrides})`)
+- `engines/sidecar/__tests__/test_cad_script_handlers.py` — added pytest round-trip case: `result = cq.Workplane('XY').box(L, 1, 1)` once with `L=10` default (max-X=5), once with `buildParameters={L: 25}` (max-X=12.5), asserts both bbox values match and the two runs return different handles
+- 19 new tests on the React side covering: parameters absent → no section; `onParamsChange` omitted → read-only fallback; kind-matched inputs; per-row Reset + global Apply rendering; `paramOverrides` controlling displayed value; dirty/clean state markers; Apply disabled/enabled logic
+- `src/renderer/styles/manufacture.css` — added `.cad-feature-tree-root` + `.cad-feature-params__*` tokens-only styles (BEM, no hard-coded colors), including a left accent stripe on `data-param-dirty='true'` rows so the operator sees pending edits at a glance
+- Pre-existing wire surfaces (sidecar-protocol.ts, ipc-cad.ts, shop-types.ts, cad_handlers.py) already supported `buildParameters?: Record<string, CadScriptParamValue>` from the CAD MVP spec — no schema work was needed
+
+### File-ownership separation worked
+The two workflows ran concurrently in the same worktree with strict file-ownership separation:
+- **A owned**: `machine-schema.ts`, `makera-carvera-4axis.json`, `cam-axis4/validation.ts`, `cam-axis4/__tests__/*`, `resources/posts/` (rename + new header), `machine-cps-import.ts` + tests, 12 post-process test files + 2 snapshot files
+- **B owned**: `src/renderer/design/*.tsx`, `engines/sidecar/__tests__/test_cad_script_handlers.py`, `package.json` + `package-lock.json`, `electron.vite.config.ts`
+- **Shared** (additive only, no conflict): `src/renderer/styles/manufacture.css` (A added nothing; B added .cad-feature-params)
+
+The agents observed each other's mid-flight state ("sister-agent territory failures" from one report) but those resolved as soon as both phases completed. Validator final read AFTER both A and B landed: 13,888 / 0 / 2 + tsc clean.
+
+### Combined deliverable counts
+| Workflow | Build agents | Tests added | Files touched |
+| --- | --- | --- | --- |
+| A — G-code finishers | 2 | 22 | 19 |
+| B — CAD V1 | 2 | 23 (19 vitest + 4 Monaco) | 6 |
+| **Combined** | **4 + 2 validators** | **+45 vitest + 2 pytest cases (gated on cadquery import; +0 active until cadquery is installed)** | **25** |
+
+### gcode-safety skill verdict on Workflow A
+Invoked from main loop after both workflows landed. **Verdict: SAFE for all four target machines.**
+- (a) Rename byte-identity confirmed — snapshot diff shows ONLY the describe-block label changed; actual G-code lines unchanged
+- (b) Handlebars `{{!-- ... --}}` comments in the new template header are stripped at render time, not emitted
+- (c) Schema additions are backward-compatible optionals — old saved profiles parse with undefined → validators skip the check
+- (d) Y-zero gate scans an explicit `toolpathYValues` array which defaults to undefined → no-op for typical 4-axis production jobs (strategies build Y=0 by construction). Defense-in-depth only.
+- (e) `cnc_4axis_grbl` still appears in `validation.ts` and tests as a DIALECT IDENTIFIER string (not a filename) — that's correct and intentional
+- (f) Updated `.claude/skills/gcode-safety/references/carvera-4axis.md` to point at the new filename + document the new schema gates
+
+### Stray artifact cleaned
+`resources/unused-out.nc` (56 lines, agent-exploration artifact from Workflow A's validator development) deleted before commit. Not from any test file — safe to remove.
+
+### Quality gates
+| Checkpoint | npm test | tsc | test:python |
+| --- | --- | --- | --- |
+| Pre-flight (HEAD 61fb5fa) | 13,844 / 0 / 2 | clean | 30 / 0 / 7-skip |
+| Post-both-workflows | 13,888 / 0 / 2 | clean | 30 / 0 / 8-skip |
+| After gcode-safety doc sync (this commit) | 13,888 / 0 / 2 | clean | 30 / 0 / 8-skip |
+
+The `+44` vitest delta breaks down as: +22 (rank-13 Carvera schema validators) + +22 (Workflow B CAD V1: +4 Monaco SSR + +19 FeatureTree editable params + a couple of accounting drifts in test files updated for rename). Two new pytest cases land but are gated on `import cadquery` and skip in this environment.
+
+### Docs synced this wave
+- `docs/PRE-LAUNCH-READINESS.md` — TL;DR refreshed to note the `cnc_4axis_grbl.hbs` rename has LANDED (was listed as deferred before this wave); Workflow A and B deliverables noted in the appropriate sections
+- `.claude/skills/gcode-safety/references/carvera-4axis.md` — line 111 updated for the renamed filename; new section added documenting the rank-13 schema gates + validator
+- `.claude/improvement-log.md` — this entry
+
+### Remaining deferred (none blocking real-world testing)
+1. **Right-side profile stack with Recommended/Pro modes** (deep-dive move #5) — touches `ManufactureWorkspace.tsx` + `ManufactureAuxPanels.tsx` + `manufacture.css` in ways that need structural rethinking
+2. **CAD V1 progressions**: selection system (pick faces/edges → CadQuery entity IDs), sketch editor with constraints, planegcs constraint solver
+3. **Workflow-stage tabs panel-content swap per stage** (V1.5 follow-up — chrome is in place, content swap is next)
+4. **E-stop wiring** in AppHeader (V2: M112 for FDM, M5 + spindle-off for CNC, Smoothieware abort for Carvera)
+5. **Real 3D-preview thumbnails** in PlateTabs (V2 — colored-rect placeholders shipped)
+6. **Assemblies + 2D drawings** in CAD workspace (V2)
+
+### Pre-launch punch-list status
+| Rank | Item | Status |
+| --- | --- | --- |
+| 1-12 | (closed in pre-launch wave A) | DONE |
+| 13 | Carvera 4-axis Y=0/X-offset schema constraints | **DONE (this wave)** |
+| 14-15 | (closed earlier) | DONE |
+| 16 | `cnc_4axis_grbl.hbs` rename | **DONE (this wave)** |
+| 17-19 | (closed earlier) | DONE |
+
+**All 19 punch-list items from the pre-launch deep-dive synthesis are now closed.** The 5 big-design UX moves from the deep-dive: 4 of 5 landed (only #5 right-side profile stack remains).
+
+### Pace check (cumulative this session)
+4 major workflow waves: CAD MVP (14 agents) + UI deep-dive (9 agents) + big UX wave (7 agents) + parallel A + B (6 agents). Cumulative ~36 agents, ~5.0M tokens, ~80 min wall-clock workflow time. vitest 13,611 (session start) -> **13,888** (now), Δ **+277** tests, zero net regressions across the whole session.

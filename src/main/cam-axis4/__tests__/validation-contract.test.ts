@@ -52,6 +52,11 @@ function ctx(over: Partial<ValidationContext> = {}): ValidationContext {
     machXStartMm: 5,
     machXEndMm: 95,
     zPassMm: -2,
+    // Pre-launch punch-list rank 13: 4-axis machines REQUIRE a rotary
+    // headstock X offset. Default to 5 (the bundled Carvera value) so the
+    // happy-path tests skip the new validator gate; tests that exercise the
+    // gate override this field.
+    rotaryHeadstockXOffsetMm: 5,
     ...over
   }
 }
@@ -744,10 +749,14 @@ describe('K. Result-shape pin', () => {
     )
   })
 
-  it('source-text pin: validateAxis4Job is the only public export', () => {
+  it('source-text pin: validateAxis4Job + rank-13 helpers are the public function exports', () => {
     const exports = VALIDATION_SOURCE.match(/^export (function|type|const)\s+\w+/gm) ?? []
-    // 4 type exports + 1 function export = 5 total.
-    expect(exports.filter((e) => e.startsWith('export function'))).toEqual([
+    // 4 type exports + 3 function exports (validateAxis4Job + the two rank-13
+    // standalone helpers `assertYAxisIsZeroForProfile` and
+    // `assertRotaryHeadstockXOffsetSet`) = 7 total.
+    expect(exports.filter((e) => e.startsWith('export function')).sort()).toEqual([
+      'export function assertRotaryHeadstockXOffsetSet',
+      'export function assertYAxisIsZeroForProfile',
       'export function validateAxis4Job'
     ])
   })
