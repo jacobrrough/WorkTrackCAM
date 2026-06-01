@@ -82,6 +82,11 @@ try:
         import_step_file,
         tessellate_body,
     )
+    from engines.cad.cadquery_script import (
+        execute_script as _execute_script_core,
+        export_by_handle as _export_by_handle_core,
+        list_operations as _list_operations_core,
+    )
 except ImportError:  # pragma: no cover - frozen-app import path
     import sys
 
@@ -92,6 +97,11 @@ except ImportError:  # pragma: no cover - frozen-app import path
         _CadHandlerError,
         import_step_file,
         tessellate_body,
+    )
+    from cad.cadquery_script import (  # type: ignore[no-redef]
+        execute_script as _execute_script_core,
+        export_by_handle as _export_by_handle_core,
+        list_operations as _list_operations_core,
     )
 
 
@@ -161,7 +171,103 @@ def tessellate(params: dict[str, Any]) -> dict[str, Any]:
     return tessellate_body(handle, out_path, tolerance)
 
 
+# ── BUILD 1: parametric script handlers ──────────────────────────────────
+#
+# These power the Design workspace's script-driven workflow:
+#
+#   cad.execute_script   — run a user script, return tessellated meshes
+#   cad.export           — run a user script, write STEP / STL / DXF to disk
+#   cad.list_operations  — static AST parse for the read-only FeatureTree
+#
+# Numerics live in ``engines/cad/cadquery_script.py``. The thin wrappers below
+# only validate the wire envelope and translate to the structured-error
+# vocabulary documented at the top of the module.
+
+
+ALLOWED_EXPORT_FORMATS = ("step", "stl", "dxf")
+
+
+def _optional_build_parameters(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate the optional ``buildParameters`` object on the wire.
+
+    Returns ``None`` when absent. The cadquery_script core re-checks each
+    name/value pair, but pulling it through a typed accessor here means a
+    non-dict on the wire fails with ``bad_params`` before we touch CadQuery.
+    """
+    bp = params.get("buildParameters")
+    if bp is None:
+        return None
+    if not isinstance(bp, dict):
+        raise _CadHandlerError(
+            "bad_params", "buildParameters must be an object when provided"
+        )
+    return bp
+
+
+def execute_script(params: dict[str, Any]) -> dict[str, Any]:
+    """Run a parametric CadQuery script and return tessellated meshes."""
+    script = _require_str(params, "script")
+    bp = _optional_build_parameters(params)
+    return _execute_script_core(script, build_parameters=bp)
+
+
+def export(params: dict[str, Any]) -> dict[str, Any]:
+    """Export the body referenced by ``handle`` to STEP / STL / DXF.
+
+    The handle must come from a prior ``cad.execute_script`` or
+    ``cad.import_step`` call inside the same sidecar process — the
+    in-memory handle table is process-local (see ``cadquery_import._HANDLES``).
+    """
+    handle = _require_str(params, "handle")
+    out_path = _require_str(params, "outPath")
+    fmt = _require_str(params, "format").lower()
+    if fmt not in ALLOWED_EXPORT_FORMATS:
+        raise _CadHandlerError(
+            "bad_params",
+            f"format must be one of {sorted(ALLOWED_EXPORT_FORMATS)}, "
+            f"got {fmt!r}",
+        )
+
+    # Reject null-byte injection before delegating — mirrors the posture in
+    # ``src/main/path-security.ts`` and prevents the cadquery_script core
+    # from ever touching a malicious-looking path.
+    if "\x00" in out_path:
+        raise _CadHandlerError(
+            "bad_params", "outPath must not contain null bytes"
+        )
+
+    tol_raw = params.get("toleranceMm", 0.1)
+    if isinstance(tol_raw, (int, float)) and not isinstance(tol_raw, bool):
+        tolerance = float(tol_raw)
+        if not (tolerance > 0 and tolerance < math.inf):
+            raise _CadHandlerError(
+                "invalid_numeric_params",
+                "toleranceMm must be a positive finite number when provided",
+            )
+    else:
+        raise _CadHandlerError(
+            "invalid_numeric_params",
+            "toleranceMm must be a number when provided",
+        )
+
+    return _export_by_handle_core(
+        handle,
+        out_path,
+        fmt,
+        tolerance_mm=tolerance,
+    )
+
+
+def list_operations(params: dict[str, Any]) -> dict[str, Any]:
+    """Static AST parse of a CadQuery script for the FeatureTree."""
+    script = _require_str(params, "script")
+    return _list_operations_core(script)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "import_step": import_step,
     "tessellate": tessellate,
+    "execute_script": execute_script,
+    "export": export,
+    "list_operations": list_operations,
 }

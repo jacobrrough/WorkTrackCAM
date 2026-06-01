@@ -4,9 +4,13 @@ import {
   appSettingsSchema,
   importHistoryEntrySchema,
   roundTripLevelSchema,
+  designModelSchema,
+  designTessellationSchema,
   type ProjectFile,
   type AppSettings,
-  type ImportHistoryEntry
+  type ImportHistoryEntry,
+  type DesignModel,
+  type DesignTessellation
 } from './project-schema'
 
 describe('roundTripLevelSchema', () => {
@@ -135,6 +139,230 @@ describe('projectSchema', () => {
     const result = projectSchema.parse(partial)
     expect(result.physicalMaterial?.name).toBe('Wood')
     expect(result.physicalMaterial?.densityKgM3).toBeUndefined()
+  })
+})
+
+// ── Design workspace (CadQuery) — additive schema pinning ───────────────────
+// SPEC-pinned: the Design workspace stores CadQuery scripts inside the project
+// file with optional cached tessellation descriptors. The field is additive
+// with `.default([])` so v1 project.json files saved before the workspace
+// landed parse unchanged. Safety Rule 2 (never break existing saved projects)
+// is the load-bearing invariant here — if the v1-without-designModels test
+// ever fails, every existing user project breaks on open.
+
+describe('designTessellationSchema', () => {
+  const validTessellation = {
+    stlRelativePath: 'assets/designs/550e8400-e29b-41d4-a716-446655440000/tessellation_0.05mm.stl',
+    toleranceMm: 0.05,
+    triangleCount: 1248,
+    bbox: {
+      min: [-25.4, -25.4, 0] as [number, number, number],
+      max: [25.4, 25.4, 12.7] as [number, number, number]
+    },
+    generatedAt: '2026-06-01T10:00:00.000Z'
+  }
+
+  it('accepts a valid tessellation descriptor', () => {
+    const result = designTessellationSchema.parse(validTessellation)
+    expect(result.stlRelativePath).toBe(validTessellation.stlRelativePath)
+    expect(result.toleranceMm).toBe(0.05)
+    expect(result.triangleCount).toBe(1248)
+  })
+
+  it('preserves bbox tuples exactly (no rearrangement)', () => {
+    const result = designTessellationSchema.parse(validTessellation)
+    expect(result.bbox.min).toEqual([-25.4, -25.4, 0])
+    expect(result.bbox.max).toEqual([25.4, 25.4, 12.7])
+  })
+
+  it('rejects non-positive toleranceMm (zero or negative chord tolerance is nonsense)', () => {
+    expect(() => designTessellationSchema.parse({ ...validTessellation, toleranceMm: 0 })).toThrow()
+    expect(() => designTessellationSchema.parse({ ...validTessellation, toleranceMm: -0.1 })).toThrow()
+  })
+
+  it('rejects non-integer triangleCount', () => {
+    expect(() => designTessellationSchema.parse({ ...validTessellation, triangleCount: 1.5 })).toThrow()
+  })
+
+  it('rejects negative triangleCount', () => {
+    expect(() => designTessellationSchema.parse({ ...validTessellation, triangleCount: -1 })).toThrow()
+  })
+
+  it('rejects bbox tuples with wrong arity (must be exactly [x, y, z])', () => {
+    expect(() =>
+      designTessellationSchema.parse({
+        ...validTessellation,
+        bbox: { min: [0, 0], max: [1, 1, 1] }
+      })
+    ).toThrow()
+    expect(() =>
+      designTessellationSchema.parse({
+        ...validTessellation,
+        bbox: { min: [0, 0, 0, 0], max: [1, 1, 1] }
+      })
+    ).toThrow()
+  })
+})
+
+describe('designModelSchema', () => {
+  const validDesign: DesignModel = {
+    id: '550e8400-e29b-41d4-a716-446655440000',
+    name: 'Bracket v1',
+    scriptText: 'import cadquery as cq\nresult = cq.Workplane("XY").box(50, 50, 25)\n',
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:15:00.000Z'
+  }
+
+  it('accepts a minimal design model (no tessellation yet)', () => {
+    const result = designModelSchema.parse(validDesign)
+    expect(result.id).toBe(validDesign.id)
+    expect(result.name).toBe('Bracket v1')
+    expect(result.scriptText).toContain('cq.Workplane')
+    expect(result.lastTessellation).toBeUndefined()
+  })
+
+  it('accepts a design model with cached tessellation', () => {
+    const withTessellation = {
+      ...validDesign,
+      lastTessellation: {
+        stlRelativePath: 'assets/designs/550e8400-e29b-41d4-a716-446655440000/tessellation_0.1mm.stl',
+        toleranceMm: 0.1,
+        triangleCount: 512,
+        bbox: { min: [-25, -25, 0] as [number, number, number], max: [25, 25, 25] as [number, number, number] },
+        generatedAt: '2026-06-01T09:20:00.000Z'
+      }
+    }
+    const result = designModelSchema.parse(withTessellation)
+    expect(result.lastTessellation?.triangleCount).toBe(512)
+    expect(result.lastTessellation?.bbox.max).toEqual([25, 25, 25])
+  })
+
+  it('rejects scriptText: undefined (script text is the source of truth — cannot be absent)', () => {
+    const { scriptText: _omitted, ...withoutScript } = validDesign
+    expect(() => designModelSchema.parse(withoutScript)).toThrow()
+    expect(() => designModelSchema.parse({ ...validDesign, scriptText: undefined })).toThrow()
+  })
+
+  it('rejects a design model missing id', () => {
+    const { id: _omitted, ...withoutId } = validDesign
+    expect(() => designModelSchema.parse(withoutId)).toThrow()
+  })
+
+  it('rejects a non-UUID id', () => {
+    expect(() => designModelSchema.parse({ ...validDesign, id: 'not-a-uuid' })).toThrow()
+  })
+
+  it('rejects empty name', () => {
+    expect(() => designModelSchema.parse({ ...validDesign, name: '' })).toThrow()
+    expect(() => designModelSchema.parse({ ...validDesign, name: '   ' })).toThrow()
+  })
+
+  it('trims whitespace from name', () => {
+    const result = designModelSchema.parse({ ...validDesign, name: '  Bracket v1  ' })
+    expect(result.name).toBe('Bracket v1')
+  })
+})
+
+describe('projectSchema designModels field (Safety Rule 2: never break existing saved projects)', () => {
+  const baseProject = {
+    version: 1 as const,
+    name: 'Existing Project',
+    updatedAt: '2026-06-01T12:00:00.000Z',
+    activeMachineId: 'machine-001'
+  }
+
+  it('v1 project JSON WITHOUT designModels parses and defaults to [] (load-bearing back-compat)', () => {
+    // This is the load-bearing test for Safety Rule 2. If it ever fails, every
+    // existing .wtcam project on disk breaks on open. The `.default([])` on the
+    // `designModels` field is the line that makes this work.
+    const result = projectSchema.parse(baseProject)
+    expect(result.designModels).toEqual([])
+    expect(Array.isArray(result.designModels)).toBe(true)
+  })
+
+  it('round-trip with a populated designModel preserves scriptText, bbox tuples, and uuid id', () => {
+    const designId = '550e8400-e29b-41d4-a716-446655440000'
+    const scriptText = 'import cadquery as cq\nresult = cq.Workplane("XY").box(50, 50, 25).faces(">Z").hole(10)\n'
+    const tessellation = {
+      stlRelativePath: `assets/designs/${designId}/tessellation_0.05mm.stl`,
+      toleranceMm: 0.05,
+      triangleCount: 2048,
+      bbox: {
+        min: [-25, -25, 0] as [number, number, number],
+        max: [25, 25, 25] as [number, number, number]
+      },
+      generatedAt: '2026-06-01T10:00:00.000Z'
+    }
+    const projectWithDesign = {
+      ...baseProject,
+      designModels: [
+        {
+          id: designId,
+          name: 'Bracket with hole',
+          scriptText,
+          createdAt: '2026-06-01T09:00:00.000Z',
+          updatedAt: '2026-06-01T09:30:00.000Z',
+          lastTessellation: tessellation
+        }
+      ]
+    }
+
+    // Round-trip: parse → stringify → parse again. Pins that nothing is lossy
+    // (in particular bbox tuples and the uuid id) across JSON serialization.
+    const parsed = projectSchema.parse(projectWithDesign)
+    const roundTripped = projectSchema.parse(JSON.parse(JSON.stringify(parsed)))
+
+    expect(roundTripped.designModels).toHaveLength(1)
+    const design = roundTripped.designModels[0]
+    expect(design.id).toBe(designId)
+    expect(design.scriptText).toBe(scriptText)
+    expect(design.lastTessellation?.bbox.min).toEqual([-25, -25, 0])
+    expect(design.lastTessellation?.bbox.max).toEqual([25, 25, 25])
+    expect(design.lastTessellation?.toleranceMm).toBe(0.05)
+    expect(design.lastTessellation?.stlRelativePath).toBe(
+      `assets/designs/${designId}/tessellation_0.05mm.stl`
+    )
+  })
+
+  it('rejects a project whose designModels entry has scriptText: undefined', () => {
+    const bad = {
+      ...baseProject,
+      designModels: [
+        {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          name: 'Broken design',
+          // scriptText omitted — the schema must reject this.
+          createdAt: '2026-06-01T09:00:00.000Z',
+          updatedAt: '2026-06-01T09:00:00.000Z'
+        }
+      ]
+    }
+    expect(() => projectSchema.parse(bad)).toThrow()
+  })
+
+  it('rejects a project whose designModels entry is missing the id field', () => {
+    const bad = {
+      ...baseProject,
+      designModels: [
+        {
+          // id omitted
+          name: 'Idless',
+          scriptText: 'import cadquery as cq\nresult = cq.Workplane("XY").box(10, 10, 10)\n',
+          createdAt: '2026-06-01T09:00:00.000Z',
+          updatedAt: '2026-06-01T09:00:00.000Z'
+        }
+      ]
+    }
+    expect(() => projectSchema.parse(bad)).toThrow()
+  })
+
+  it('inferred ProjectFile type carries designModels as DesignModel[] (compile-time pin)', () => {
+    // Compile-time-only assertion: if the inferred type ever drops the field
+    // or widens it to `unknown[]`, this assignment fails typecheck. Runtime is
+    // a no-op tautology.
+    const result = projectSchema.parse(baseProject)
+    const _typed: ProjectFile['designModels'] = result.designModels
+    expect(_typed).toEqual([])
   })
 })
 

@@ -67,6 +67,52 @@ export type WizardCopySampleResult =
   | { ok: true; /** Path relative to project dir, POSIX-style. */ assetRelativePath: string }
   | { ok: false; error: string }
 
+/**
+ * Bundled CadQuery sample script per-machine, used by the wizard's
+ * "Start a parametric design" 4th starter option (UNIFY 2). The wizard
+ * reads these from `resources/samples/cad/<filename>` via the
+ * `wizard:readCadSample` IPC and seeds them as the project's first
+ * `designModel`.
+ *
+ * Convention:
+ *   - K2 Plus (FDM) reuses the bracket -- the same parametric L-bracket
+ *     prints well on the K2 and exercises a basic extrude + holes script
+ *     before the user dives into CAD-specific FDM geometry.
+ *   - Laguna Swift 5x10 (full-sheet router) gets the sign-board, the
+ *     canonical v-carve / pocket starter.
+ *   - Carvera 3-axis gets the L-bracket as a small precision-milling
+ *     starter (matches the bracket's hole + fillet feature set).
+ *   - Carvera 4-axis HD gets the cylinder + helical groove, the obvious
+ *     rotary-axis sample.
+ */
+export const WIZARD_MACHINE_TO_CAD_SAMPLE: Readonly<
+  Record<WizardStarterMachineId, { fileName: string; designName: string }>
+> = {
+  'creality-k2-plus': { fileName: 'bracket.cq.py', designName: 'L-Bracket' },
+  'laguna-swift-5x10': { fileName: 'sign.cq.py', designName: 'Sign Board' },
+  'makera-carvera-3axis': { fileName: 'bracket.cq.py', designName: 'L-Bracket' },
+  'makera-carvera-4axis': { fileName: 'cylinder.cq.py', designName: 'Rotary Cylinder' }
+}
+
+/** Payload for `wizard:readCadSample` -- read a bundled CadQuery sample by machine. */
+export interface WizardReadCadSampleRequest {
+  /** Machine ID whose CAD starter script should be loaded. */
+  readonly machineId: WizardStarterMachineId
+}
+
+/** Result of `wizard:readCadSample`. */
+export type WizardReadCadSampleResult =
+  | {
+      ok: true
+      /** Display name suggested for the seeded design model. */
+      designName: string
+      /** Bundled script filename (e.g. `bracket.cq.py`). */
+      fileName: string
+      /** Raw CadQuery script text -- becomes `designModels[0].scriptText`. */
+      scriptText: string
+    }
+  | { ok: false; error: string }
+
 /** Returns true when the given machine id is one of the four wizard cards. */
 export function isWizardStarterMachineId(
   value: unknown

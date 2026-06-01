@@ -10,15 +10,16 @@ This doc is the operator's "is the app ready?" checklist. It lists what's been v
 
 ## TL;DR
 
-**The app is ready for first real-world testing on all three machines.** The UI deep-dive + fix wave B closed 8 broken-path issues, added a shared `EmptyState` pattern, wired NavRail 1–6 keyboard shortcuts, and hardened the design-system tokens.
+**The app is ready for first real-world testing on all three machines, AND now has a CAD Design workspace** for parametric modeling via CadQuery — design a part, click "Send to CAM," machine it. All in one app.
 
 Quality gates at the time of this doc:
-- `npm test` → **13,655 passed / 0 failed / 2 skipped** (348 files + 1 skipped) — Δ +44 from the prior baseline
+- `npm test` → **13,787 passed / 0 failed / 2 skipped** (353 files + 1 skipped) — Δ +132 from the prior pre-launch baseline (the CAD MVP added 158 new tests across sidecar / IPC / schema / components / wizard / handoff)
 - `npm run typecheck` → clean
 - `gcode-safety` skill verdict on the prior G-code change set: **SAFE for all three target machines**
-- 0 broken-path findings remaining from the deep-dive synthesis
+- 0 broken-path findings remaining from the prior deep-dive synthesis
+- CAD MVP fully wired: sidecar methods + IPC + schema + components + first-launch + CAD→CAM handoff
 
-Three follow-up items remain deferred to dedicated cycles (vitest 3→4 CVE upgrade, Carvera 4-axis schema constraints, post template rename) — none block real-world testing. The 5 big design moves identified by the deep dive (workflow-stage tabs, right-side profile stack, setup-rooted operation tree, locked global status strip, multi-plate thumbnail strip) are also deferred as each warrants its own dedicated cycle.
+Three pre-launch follow-ups remain deferred (vitest 3→4 CVE upgrade, Carvera 4-axis schema constraints, post template rename) — none block real-world testing. The 5 big-design UX moves from the deep dive are also deferred — each warrants its own cycle.
 
 ---
 
@@ -224,6 +225,85 @@ The deep-dive workflow surveyed OrcaSlicer / Bambu Studio / Fusion 360 / Masterc
 6. **Setup-rooted operation tree with status icons** — adopt the Fusion / Mastercam tree where each Setup is a parent node containing its operations with stale/error/done status icons. Replaces the current flat operations list.
 7. **Locked global status strip** — Mainsail/Fluidd persistent state pill + machine command line + E-stop in the global top bar. Always visible regardless of which workspace section is active.
 8. **Multi-plate thumbnail strip** — promote the current PlateTabs scaffold into a real thumbnail strip with per-plate status pills + split Slice button (Slice this plate / Slice all).
+
+---
+
+## CAD Design workspace MVP (2026-06-01 update)
+
+### What landed
+The app is no longer CAM-only. A full parametric-CAD design surface is wired in, sharing the same Electron shell, sidecar, viewport, project file, and design tokens.
+
+**Backend** (Python sidecar + TS IPC + schema)
+- `engines/sidecar/cad_handlers.py` — 3 new RPC methods:
+  - **`cad.execute_script`** — runs user CadQuery code via `cqgi.parse(...).build(...)` with a BANNED_TOKENS pre-scan (rejects `import os/sys/subprocess/socket/shutil`, `__import__`, `open(`, `eval(`, `exec(`, etc.). Tessellates result, returns mesh + faceCount + log + error envelope.
+  - **`cad.export`** — exports the last script result to STEP / STL / DXF with path-safety validation. Used by the Send-to-CAM handoff (STL at 0.1 mm tolerance).
+  - **`cad.list_operations`** — pure AST parse (no exec) of the script for the read-only feature tree; safe to run on every keystroke (debounced 300 ms in the renderer).
+- `engines/cad/cadquery_script.py` — script execution core (tessellation, handle registry, exporters)
+- `src/main/ipc-cad.ts` — TS IPC layer (`cad:execute`, `cad:export`, `cad:listOperations`)
+- `src/preload/index.ts` + `src/renderer/src/shop-types.ts` — `window.fab.cad.{execute, export, listOperations}` typed bridge
+- `src/shared/sidecar-protocol.ts` — wire-type pairing for the 3 new methods
+- `src/shared/project-schema.ts` — new optional `designModels: DesignModel[]` field with `.default([])` for backward compatibility. Schema additions: `designTessellationSchema`, `designModelSchema`. STL caches live at `<projectDir>/assets/designs/<designId>/tessellation_<toleranceMm>mm.stl`.
+
+**Frontend** (React components + integration)
+- `src/renderer/design/CadQueryEditor.tsx` — code editor pane (controlled `<textarea>` with mono font, Run button, busy state, debounced `list_operations` calls)
+- `src/renderer/design/FeatureTree.tsx` — read-only parametric history with Parameters + Operations sections. Uses `EmptyState` when empty.
+- `src/renderer/design/DesignWorkspace.tsx` — fullscreen overlay composing editor + viewport + tree + Send-to-CAM button
+- `src/renderer/src/ShopApp.tsx` — Design overlay state (`designOpen`), Ctrl+Shift+D shortcut, Escape-to-close, command palette entry ("Open Design workspace"), Send-to-CAM unification handler
+- `src/shared/app-keyboard-shortcuts.ts` — new Ctrl+Shift+D entry in the Navigation rail group
+
+**Sample CAD scripts** (shipped by the wizard)
+- `resources/samples/cad/bracket.cq.py` — L-bracket (rect + extrude + 2 holes + 2 fillets) for Laguna/Carvera 3-axis
+- `resources/samples/cad/sign.cq.py` — flat plate + extruded text for Laguna v-carve
+- `resources/samples/cad/cylinder.cq.py` — 30mm OD × 80mm length cylinder + helical groove for Carvera 4-axis
+
+**First-launch wizard** — 4th option "Start a parametric design" alongside the 3 machine envs. User picks target machine; wizard creates project, preloads the matching CadQuery sample into `designModels[0]`, opens the Design overlay with that script loaded.
+
+**Send-to-CAM handoff** (the unifying button)
+1. DesignWorkspace's "Send to CAM" calls `cad.export({format: 'stl', outPath: <project assets dir>})`
+2. On success: switches back to the active machine env (or prompts if none set)
+3. Auto-imports the produced STL into the active project's first plate via the existing STL import flow
+4. Shows success toast: "Design exported and loaded into the CAM workspace"
+
+### Test deltas
+| Surface | New tests |
+| --- | --- |
+| Sidecar `cad.execute_script` / `cad.export` / `cad.list_operations` | 30 (pytest) |
+| `ipc-cad` TS handler + preload bridge | 41 |
+| `project-schema` + `project-store` (designModels round-trip) | 18 |
+| `CadQueryEditor` + `FeatureTree` render pins | 29 |
+| `DesignWorkspace` + CAD-to-CAM handoff pin | 23 |
+| FirstLaunchWizard 4-option layout + sample on-disk pin | 17 |
+| **Total** | **+158** (13,655 → 13,787 vitest) |
+
+### User progression (now genuinely simple)
+```
+First launch → wizard offers 4 options:
+   ┌─ Pick a machine
+   │     └─ Project opens in CAM env, ready to import STL
+   │
+   └─ Start a parametric design + pick a target machine
+         └─ Project opens in Design overlay with starter CadQuery script
+            ├─ Edit script → Run → 3D result + feature tree
+            └─ Send to CAM → STL exported + machine env activated +
+               STL auto-loaded into the first plate → generate G-code
+```
+
+The .wtcam project file holds both CAD designs and CAM jobs — single source of truth across the design→manufacture flow.
+
+### Known limitations on the CAD MVP
+- **Script-first only** — no visual sketch editor yet (Monaco code highlighting also deferred). The textarea uses the mono font.
+- **Read-only feature tree** — editing parameters in the tree (instead of in the script) is V1 scope.
+- **No selection system** — can't pick faces/edges from the 3D viewport to apply ops to. Script-only addressing for now.
+- **No constraint solver** — for V1, add `planegcs` (the same solver FreeCAD uses).
+- **No assemblies / drawings** — V2 scope.
+- **Design discoverability**: Ctrl+Shift+D + command palette + first-launch wizard. No NavRail entry (intentional — Design is an overlay, not a workspace section).
+
+### Architectural choice worth knowing
+The Design workspace renders as a **fullscreen overlay** rather than as a registered 4th env in `environments/registry.ts`. Rationale:
+- Preserves CAM env state across CAD work — when you click Send-to-CAM, you return to exactly the CAM workspace state you left.
+- Matches Mainsail/Fluidd's pattern of treating gcode preview / console as overlays, not envs.
+- Simpler — no env-switcher 4th button, no per-env state replication.
+- Trade-off: less discoverable than a brand-bar env button would be. If needed later, adding a brand-bar Design pill is a small refactor.
 
 ---
 

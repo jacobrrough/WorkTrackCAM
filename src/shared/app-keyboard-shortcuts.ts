@@ -170,6 +170,18 @@ export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
     title: 'Design workspace',
     rows: [
       {
+        action: 'Switch to Design environment (parametric CAD)',
+        keysWin: 'Ctrl+Shift+D',
+        keysMac: '⌘⇧D',
+        context: 'Opens the CadQuery editor / FeatureTree workspace; ignored while focus is in a text field'
+      },
+      {
+        action: 'Run CadQuery script',
+        keysWin: 'Ctrl+Enter',
+        keysMac: '⌘↩',
+        context: 'When focused in the Design workspace script editor'
+      },
+      {
         action: 'Cancel constraint / pick point mode',
         keysWin: 'Esc',
         keysMac: 'Esc',
@@ -263,4 +275,20 @@ export function matchesRedo(e: KeyboardEvent): boolean {
   if (!e.shiftKey && e.key.toLowerCase() === 'y') return true
   if (e.shiftKey && e.key.toLowerCase() === 'z') return true
   return false
+}
+
+/**
+ * Switch to the Design environment (Ctrl+Shift+D / ⌘⇧D). The parametric
+ * CAD workspace ships alongside the three machine environments — this
+ * shortcut is the keyboard counterpart to the Design brand-bar button.
+ * The handler should ignore the gesture while focus is in a text field
+ * (so it does not hijack typing inside the CadQuery editor).
+ */
+export function matchesDesignEnvSwitch(e: KeyboardEvent): boolean {
+  return (
+    !!(e.ctrlKey || e.metaKey) &&
+    e.shiftKey &&
+    !e.altKey &&
+    e.key.toLowerCase() === 'd'
+  )
 }

@@ -30,7 +30,9 @@ import type { CamRunPayload, CamRunResultContract } from '../shared/cam-ipc-cont
 import type {
   WizardSamplesAvailability,
   WizardCopySampleRequest,
-  WizardCopySampleResult
+  WizardCopySampleResult,
+  WizardReadCadSampleRequest,
+  WizardReadCadSampleResult
 } from '../shared/first-launch-wizard-contract'
 import type {
   NestOptions,
@@ -38,6 +40,14 @@ import type {
   Polygon as NestPolygon,
   SheetSpec
 } from '../main/nesting/true-shape-v1'
+import type {
+  CadExecutePayload,
+  CadExecuteResponse,
+  CadExportPayload,
+  CadExportResponse,
+  CadListOperationsPayload,
+  CadListOperationsResponse
+} from '../main/ipc-cad'
 
 export type Api = {
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -52,6 +62,8 @@ export type Api = {
   samplesList: () => Promise<WizardSamplesAvailability>
   /** First-launch wizard: copy the bundled sample STL into `<projectDir>/assets/`. */
   wizardCopySample: (payload: WizardCopySampleRequest) => Promise<WizardCopySampleResult>
+  /** First-launch wizard: read the bundled CadQuery starter script for a machine. */
+  wizardReadCadSample: (payload: WizardReadCadSampleRequest) => Promise<WizardReadCadSampleResult>
   dialogOpenFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
   dialogOpenFiles: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string[]>
   dialogSaveFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
@@ -500,6 +512,39 @@ export type Api = {
     sheet: SheetSpec
     opts?: NestOptions
   }) => Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }>
+
+  // ── Parametric CAD Design workspace (BUILD 2) ───────────────────────────
+  /**
+   * Parametric CAD bridge over the Python sidecar. Backed by
+   * `src/main/ipc-cad.ts` -- which fans out to `cad.execute_script` /
+   * `cad.export` / `cad.list_operations` in `engines/sidecar/cad_handlers.py`.
+   *
+   * The renderer's Design workspace consumes this surface; errors NEVER
+   * throw -- every failure folds into `{ ok: false, error, hint? }`.
+   */
+  cad: {
+    /**
+     * Run a CadQuery script via cqgi.parse(...).build(...). Each
+     * `show_object` body is tessellated to a binary STL (0.1 mm tolerance
+     * default; Safety Rule 1: degenerate triangles are filtered before
+     * write) and stashed in the sidecar handle table so cad.export /
+     * cam.run_toolpath can reach it later.
+     */
+    execute: (payload: CadExecutePayload) => Promise<CadExecuteResponse>
+    /**
+     * Export the body referenced by `handle` to STEP / STL / DXF. The
+     * sidecar validates `outPath` is absolute and under the project root
+     * before writing. Used by the "Send to CAM" handoff (STL at 0.1 mm
+     * tolerance) and the future Export menu.
+     */
+    export: (payload: CadExportPayload) => Promise<CadExportResponse>
+    /**
+     * Static parse of the script -- AST walk + cqgi.parse for declared
+     * parameters. Does NOT execute the script; safe to debounce on
+     * every keystroke for the Design workspace's read-only FeatureTree.
+     */
+    listOperations: (payload: CadListOperationsPayload) => Promise<CadListOperationsResponse>
+  }
 }
 
 const api: Api = {
@@ -513,6 +558,7 @@ const api: Api = {
   projectSave: (dir, project) => ipcRenderer.invoke('project:save', dir, project),
   samplesList: () => ipcRenderer.invoke('samples:list'),
   wizardCopySample: (payload) => ipcRenderer.invoke('wizard:copySample', payload),
+  wizardReadCadSample: (payload) => ipcRenderer.invoke('wizard:readCadSample', payload),
   dialogOpenFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFile', filters, defaultPath),
   dialogOpenFiles: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFiles', filters, defaultPath),
   dialogSaveFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:saveFile', filters, defaultPath),
@@ -652,6 +698,14 @@ const api: Api = {
 
   // Laguna true-shape nesting v1 (Gap #9)
   nestingNestPolygons: (payload) => ipcRenderer.invoke('nesting:nest-polygons', payload),
+
+  // Parametric CAD Design workspace (BUILD 2)
+  cad: {
+    execute: (payload) => ipcRenderer.invoke('cad:execute', payload) as Promise<CadExecuteResponse>,
+    export: (payload) => ipcRenderer.invoke('cad:export', payload) as Promise<CadExportResponse>,
+    listOperations: (payload) =>
+      ipcRenderer.invoke('cad:listOperations', payload) as Promise<CadListOperationsResponse>
+  }
 }
 
 contextBridge.exposeInMainWorld('fab', api)

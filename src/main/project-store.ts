@@ -51,6 +51,7 @@ export function newProject(name: string, activeMachineId: string): ProjectFile {
     activeMachineId,
     meshes: [],
     importHistory: [],
-    notes: ''
+    notes: '',
+    designModels: []
   }
 }

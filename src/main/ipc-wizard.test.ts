@@ -20,9 +20,10 @@ const handlers = new Map<string, Function>()
 const fsMocks = vi.hoisted(() => ({
   accessMock: vi.fn(),
   copyFileMock: vi.fn(),
-  mkdirMock: vi.fn()
+  mkdirMock: vi.fn(),
+  readFileMock: vi.fn()
 }))
-const { accessMock, copyFileMock, mkdirMock } = fsMocks
+const { accessMock, copyFileMock, mkdirMock, readFileMock } = fsMocks
 
 vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
@@ -35,7 +36,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(),
+  readFile: fsMocks.readFileMock,
   writeFile: vi.fn(),
   access: fsMocks.accessMock,
   copyFile: fsMocks.copyFileMock,
@@ -74,6 +75,7 @@ describe('first-launch wizard IPC', () => {
     accessMock.mockReset()
     copyFileMock.mockReset()
     mkdirMock.mockReset()
+    readFileMock.mockReset()
     registerCoreIpc(createMockContext())
   })
 
@@ -178,6 +180,75 @@ describe('first-launch wizard IPC', () => {
         projectDir: '/tmp/proj',
         machineId: 'laguna-swift-5x10'
       })
+      expect(result.ok).toBe(false)
+      expect((result as { error: string }).error).toContain('EACCES')
+    })
+  })
+
+  // ── wizard:readCadSample (UNIFY 2 starter design) ──────────────────────
+
+  describe('wizard:readCadSample', () => {
+    it('refuses non-object payload', async () => {
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, null)
+      expect(result.ok).toBe(false)
+    })
+
+    it('refuses an unknown machine id', async () => {
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'nonexistent-machine' })
+      expect(result).toEqual({ ok: false, error: 'Unknown wizard machine id' })
+    })
+
+    it('refuses when the bundled CadQuery script is missing from resources', async () => {
+      accessMock.mockRejectedValue(new Error('ENOENT'))
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'creality-k2-plus' })
+      expect(result.ok).toBe(false)
+      expect((result as { error: string }).error).toMatch(/CadQuery sample not found/)
+    })
+
+    it('reads the bracket starter for K2 Plus', async () => {
+      accessMock.mockResolvedValue(undefined)
+      readFileMock.mockResolvedValue('import cadquery as cq\nresult = cq.Workplane("XY").box(1,1,1)\n')
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'creality-k2-plus' })
+      expect(result).toEqual({
+        ok: true,
+        designName: 'L-Bracket',
+        fileName: 'bracket.cq.py',
+        scriptText: 'import cadquery as cq\nresult = cq.Workplane("XY").box(1,1,1)\n'
+      })
+      // The handler must reach into resources/samples/cad/<filename>
+      expect(readFileMock.mock.calls[0][0]).toContain('cad')
+      expect(readFileMock.mock.calls[0][0]).toContain('bracket.cq.py')
+    })
+
+    it('reads the cylinder starter for Carvera 4-axis', async () => {
+      accessMock.mockResolvedValue(undefined)
+      readFileMock.mockResolvedValue('# cylinder helix\nresult = None\n')
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'makera-carvera-4axis' })
+      expect(result.ok).toBe(true)
+      expect((result as { designName: string }).designName).toBe('Rotary Cylinder')
+      expect((result as { fileName: string }).fileName).toBe('cylinder.cq.py')
+    })
+
+    it('reads the sign starter for Laguna', async () => {
+      accessMock.mockResolvedValue(undefined)
+      readFileMock.mockResolvedValue('# sign\nresult = None\n')
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'laguna-swift-5x10' })
+      expect(result.ok).toBe(true)
+      expect((result as { designName: string }).designName).toBe('Sign Board')
+      expect((result as { fileName: string }).fileName).toBe('sign.cq.py')
+    })
+
+    it('returns ok=false when readFile throws (no silent swallow)', async () => {
+      accessMock.mockResolvedValue(undefined)
+      readFileMock.mockRejectedValue(new Error('EACCES'))
+      const handler = handlers.get('wizard:readCadSample')!
+      const result = await handler({}, { machineId: 'creality-k2-plus' })
       expect(result.ok).toBe(false)
       expect((result as { error: string }).error).toContain('EACCES')
     })

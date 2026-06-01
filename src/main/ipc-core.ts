@@ -10,6 +10,7 @@ import { appSettingsSchema, projectSchema } from '../shared/project-schema'
 import { isSafeExternalUrl } from './path-security'
 import { getResourcesRoot } from './paths'
 import {
+  WIZARD_MACHINE_TO_CAD_SAMPLE,
   WIZARD_MACHINE_TO_SAMPLE_FILE,
   type WizardStarterMachineId
 } from '../shared/first-launch-wizard-contract'
@@ -249,6 +250,51 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
     return {
       ok: true as const,
       assetRelativePath: `assets/${basename(sampleFile)}`
+    }
+  })
+
+  // `wizard:readCadSample` -- read the bundled CadQuery starter script
+  // for a given machine id (UNIFY 2 first-launch wizard 4th option).
+  // The script text is staged into `project.designModels[0].scriptText`
+  // by the renderer after `project:create` succeeds, so the user lands
+  // in the Design workspace with a parametric body already authored.
+  // Read-only: never touches the project directory or any G-code path.
+  ipcMain.handle('wizard:readCadSample', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false as const, error: 'Invalid wizard:readCadSample payload' }
+    }
+    const { machineId } = payload as { machineId?: unknown }
+    if (
+      typeof machineId !== 'string' ||
+      !(machineId in WIZARD_MACHINE_TO_CAD_SAMPLE)
+    ) {
+      return { ok: false as const, error: 'Unknown wizard machine id' }
+    }
+    const entry = WIZARD_MACHINE_TO_CAD_SAMPLE[machineId as WizardStarterMachineId]
+    const sourcePath = join(getResourcesRoot(), 'samples', 'cad', entry.fileName)
+    try {
+      await access(sourcePath, fsConstants.R_OK)
+    } catch {
+      return {
+        ok: false as const,
+        error: `CadQuery sample not found for ${machineId}.`
+      }
+    }
+    try {
+      const scriptText = await readFile(sourcePath, 'utf-8')
+      return {
+        ok: true as const,
+        designName: entry.designName,
+        fileName: entry.fileName,
+        scriptText
+      }
+    } catch (e) {
+      return {
+        ok: false as const,
+        error: `Failed to read CadQuery sample: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      }
     }
   })
 }

@@ -42,7 +42,8 @@ describe('project-store', () => {
         activeMachineId: 'm-1',
         meshes: [],
         importHistory: [],
-        notes: ''
+        notes: '',
+        designModels: []
       })
     })
   })

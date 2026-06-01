@@ -30,7 +30,9 @@ the Laguna router's DXF importer accept them without preprocessing.
 ## Convention
 
 Each target machine has its own subdirectory keyed by **machine ID** as
-declared in `src/shared/first-launch-wizard-contract.ts`:
+declared in `src/shared/first-launch-wizard-contract.ts`. A separate
+`cad/` subdirectory holds the parametric-design starters used by the
+wizard's 4th starter option ("Start a parametric design"):
 
 ```
 resources/samples/
@@ -40,8 +42,12 @@ resources/samples/
 │   └── sign-board-sample.dxf           <- Laguna 2D contour starter
 ├── makera-carvera-3axis/
 │   └── carvera-pocket-sample.stl       <- Carvera 3-axis pocket starter
-└── makera-carvera-4axis/
-    └── carvera-rotary-pen-sample.stl   <- Carvera 4-axis rotary starter
+├── makera-carvera-4axis/
+│   └── carvera-rotary-pen-sample.stl   <- Carvera 4-axis rotary starter
+└── cad/                                <- parametric CadQuery starters
+    ├── bracket.cq.py                   <- L-bracket (K2 / Carvera 3-axis)
+    ├── sign.cq.py                      <- Engraved sign-board (Laguna)
+    └── cylinder.cq.py                  <- Helical-groove cylinder (Carvera 4-axis)
 ```
 
 The wizard reads the directory via the `samples:list` IPC handler
@@ -68,9 +74,35 @@ The starter operation kind is chosen by `wizardStarterOpKind()` in
 | `makera-carvera-3axis`        | `cnc_pocket`           |
 | `makera-carvera-4axis`        | `cnc_4axis_indexed`    |
 
+## CadQuery starters (`cad/`)
+
+The first-launch wizard's 4th starter option ("Start a parametric
+design") loads one of three bundled CadQuery scripts based on the
+machine the user picked. The mapping lives in
+`WIZARD_MACHINE_TO_CAD_SAMPLE` (same contract module as the STL
+samples) and the script text is read at wizard-finish time via the
+`wizard:readCadSample` IPC. The script is then spliced into the new
+project's `designModels[]` array so re-opening the project shows the
+same parametric model in the Design workspace.
+
+| Machine                       | CadQuery file        | Geometry                                              |
+|-------------------------------|----------------------|-------------------------------------------------------|
+| `creality-k2-plus`            | `bracket.cq.py`      | Parametric L-bracket (rect + extrude + holes + fillets) |
+| `laguna-swift-5x10`           | `sign.cq.py`         | 200 x 100 mm engraved sign-board                       |
+| `makera-carvera-3axis`        | `bracket.cq.py`      | Same L-bracket -- precision desktop milling starter    |
+| `makera-carvera-4axis`        | `cylinder.cq.py`     | 30 mm OD x 80 mm cylinder + helical groove (rotary)    |
+
+These scripts use only `cadquery as cq` + the safe-builtins exposed to
+`engines/cad/cadquery_script.py`'s sandboxed exec (`math`, `range`,
+`len`, etc.), so they execute inside the bundled sidecar without any
+out-of-band imports.
+
 ## Why this exists
 
 Bundled samples let a new user click **Sample STL -> Finish** and land in
 a project that already has a model + an operation ready to slice or
 generate G-code -- i.e., the "3-clicks-from-launch" guarantee in
-`docs/COMPETITIVE-GAP-ANALYSIS.md` gap #3.
+`docs/COMPETITIVE-GAP-ANALYSIS.md` gap #3. The CadQuery starters give
+the same guarantee for the new parametric Design workspace: click
+**Start a parametric design -> Finish** and you land in the Design
+workspace with a real editable body.

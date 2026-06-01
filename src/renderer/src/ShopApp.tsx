@@ -51,6 +51,7 @@ import {
   matchesOpenProject,
   matchesNewProject,
   matchesGenerate,
+  matchesDesignEnvSwitch,
 } from '../../shared/app-keyboard-shortcuts'
 import { useFocusTrap } from './useFocusTrap'
 import { useUndo } from './useUndo'
@@ -93,6 +94,12 @@ import { ENVIRONMENTS } from './environments/registry'
 // dashboard surfacing per-machine status, last outcome, and one quick
 // action per machine. Mounts when navSection === 'workshop'.
 import { WorkshopDashboard } from '../dashboard/WorkshopDashboard'
+// BUILD 5 CAD MVP: parametric Design workspace (CadQuery editor +
+// FeatureTree). Mounted as a top-level overlay when the user presses
+// Ctrl+Shift+D or invokes the "Open Design workspace" command. The
+// surface is intentionally additive to the existing env machinery so
+// the three machine environments stay untouched.
+import { DesignWorkspace } from '../design/DesignWorkspace'
 
 // ── Context providers ────────────────────────────────────────────────────────
 import { AppProviders, useToast, useUI, useMachineSession } from '../contexts'
@@ -765,6 +772,13 @@ function ShopAppInner(): React.ReactElement {
   const [navSection, setNavSection] = useState<NavSection>('jobs')
   const [selectedOpId, setSelectedOpId] = useState<string | null>(null)
   const [propCollapsed, setPropCollapsed] = useState(false)
+  // BUILD 5 CAD MVP — Design workspace overlay state. Toggled by the
+  // Ctrl+Shift+D shortcut and the "Open Design workspace" command. We
+  // store the script body here so the surface survives toggle/close
+  // without re-prompting the operator. v2 will persist this to the
+  // project store, but for the MVP this in-memory hold is enough.
+  const [designOpen, setDesignOpen] = useState(false)
+  const [designScript, setDesignScript] = useState('')
   const { pushToast } = useToast()
   const {
     view, setView,
@@ -974,12 +988,17 @@ function ShopAppInner(): React.ReactElement {
       if (matchesOpenProject(e)) { e.preventDefault(); void loadProjectFile() }
       if (matchesKeyboardShortcutsReference(e)) { e.preventDefault(); setShowShortcuts(x => !x) }
       if (matchesGenerate(e) && view === 'jobs' && !running) { e.preventDefault(); void generate() }
+      // BUILD 5 CAD MVP: Ctrl+Shift+D opens (or closes) the Design
+      // workspace overlay. The matcher already excludes Alt to avoid
+      // clashing with browser Ctrl+Alt+D dev shortcuts.
+      if (matchesDesignEnvSwitch(e)) { e.preventDefault(); setDesignOpen(x => !x) }
       if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) { e.preventDefault(); setHelpOpen(x => !x) }
       if (e.key === 'Escape') {
         setCmdOpen(false)
         setGcodeViewerOpen(false)
         setShowShortcuts(false)
         setHelpOpen(false)
+        setDesignOpen(false)
       }
     }
     window.addEventListener('keydown', h)
@@ -1816,7 +1835,19 @@ function ShopAppInner(): React.ReactElement {
     }
     setJobs([job])
     setActiveJobId(job.id)
-    pushToast('ok', `Project "${completion.projectName}" created.`)
+    // UNIFY 2: when the user chose "Start a parametric design", preload
+    // the bundled CadQuery script into the Design workspace and open it
+    // so they land on the parametric editing surface. The project's
+    // `designModels[0]` already carries the same script (persisted in
+    // FirstLaunchWizard.handleFinish), so closing/reopening the
+    // workspace preserves the operator's edits.
+    if (starter.kind === 'design') {
+      setDesignScript(starter.scriptText)
+      setDesignOpen(true)
+      pushToast('ok', `Project "${completion.projectName}" created. Editing "${starter.designName}".`)
+    } else {
+      pushToast('ok', `Project "${completion.projectName}" created.`)
+    }
   }
 
   const handleWizardSkip = (): void => {
@@ -1899,6 +1930,96 @@ function ShopAppInner(): React.ReactElement {
   const handleInstallMyShopMachine = (_machineId: MyShopMachineId): void => {
     setLibraryDrawerOpen(true)
   }
+
+  /**
+   * UNIFY 1 — Design → CAM hand-off.
+   *
+   * Runs after the DesignWorkspace finishes its own `cad.export` round
+   * trip and reports back the freshly written STL path. We then:
+   *
+   *   1. Switch the active env back to the env that owns the current
+   *      `sessionMachine`. When no machine is active (operator opened
+   *      Design straight from the splash), fall back to the splash so
+   *      they can pick a target env explicitly — the spec calls this
+   *      out as "or prompt if none". We surface the prompt by reusing
+   *      the existing `handleQuickSwitchEnv` entrypoint for the env
+   *      switch and routing to the library drawer when no machine is
+   *      installed.
+   *   2. Stage the STL into the active project via `stlStage` (the same
+   *      flow the manual STL import in `importModel` / the dropzone in
+   *      `ShopViewport` uses). When no active job exists yet, create
+   *      one first so the operator always lands in a state with a
+   *      plate ready to receive the design.
+   *   3. Close the Design overlay and surface the success toast.
+   *
+   * Errors at every step fold into an error toast — the import path
+   * already swallows `stlStage` failures and falls back to the raw
+   * path, so the CAM workspace still loads the design even when the
+   * staging copy fails. [UNIFY 1]
+   */
+  const handleDesignSendToCam = useCallback(async (payload: {
+    readonly stlPath: string
+  }): Promise<void> => {
+    const designedStlPath = payload.stlPath
+    // ── (2a) Resolve the env-switch target ─────────────────────────────────
+    // The active env at this moment owns the previously-active machine
+    // (Design is an overlay, so `sessionMachine` is whatever the operator
+    // had selected before opening the workspace). When no machine is set
+    // we cannot pick an env, so we bail out with a toast + open the
+    // library drawer so the operator can install one.
+    const activeEnvId = activeEnv?.id ?? null
+    if (activeEnvId !== null) {
+      // Re-uses the existing brand-bar quick-switch flow so the
+      // variant-memory + missing-machine rules stay centralised. This
+      // is a no-op when the env already owns the active machine — the
+      // common case after Design — but covers the rare path where the
+      // operator opens Design, then loses the env via another action,
+      // and finally clicks Send-to-CAM.
+      handleQuickSwitchEnv(activeEnvId)
+    } else {
+      pushToast('warn', 'Pick a target machine before sending the design to CAM.')
+      setLibraryDrawerOpen(true)
+      // Keep the Design overlay open so the operator can retry once
+      // they have a machine. Closing it would discard their script.
+      return
+    }
+    // ── (2b) Ensure we have an active job ──────────────────────────────────
+    // The Send-to-CAM contract is "auto-import into the active
+    // project's first plate". When there is no active job yet (fresh
+    // session), spin one up so the import always has somewhere to land.
+    let targetJobId = activeJobId
+    if (targetJobId === null) {
+      const machId = sessionMachine?.id ?? undefined
+      const seeded = newJob('Design import', machId)
+      setJobs(prev => [...prev, seeded])
+      setActiveJobId(seeded.id)
+      targetJobId = seeded.id
+    }
+    // ── (2c) Stage + import the STL ────────────────────────────────────────
+    let stagedPath = designedStlPath
+    try {
+      stagedPath = await fab().stlStage('default', designedStlPath)
+    } catch {
+      // `stlStage` failures (missing temp dir, permission, …) fall back
+      // to the raw export path. The CAM workspace still picks the file
+      // up because the export path lives in OS temp, which is readable
+      // by the same process. Mirrors the swallow in `importModel`.
+    }
+    setJobs(js => js.map(j =>
+      j.id === targetJobId
+        ? { ...j, stlPath: stagedPath }
+        : j
+    ))
+    // ── (2d) Close overlay + surface the success toast ─────────────────────
+    setDesignOpen(false)
+    pushToast('ok', 'Design exported and loaded into the CAM workspace')
+  }, [
+    activeEnv?.id,
+    handleQuickSwitchEnv,
+    pushToast,
+    activeJobId,
+    sessionMachine?.id,
+  ])
 
   const handleNavSelect = useCallback((section: NavSection): void => {
     if (section === 'library') { setLibraryDrawerOpen(true); return }
@@ -2023,6 +2144,16 @@ function ShopAppInner(): React.ReactElement {
       label: 'Show app tour (What\u2019s new)',
       icon: '\u{1F4D6}',
       action: () => setShowOnboarding(true)
+    })
+    // BUILD 5 CAD MVP \u2014 surface the Design workspace via the command
+    // palette as an additive entry. Keeps the keyboard-only flow alive
+    // for operators who never reach for Ctrl+Shift+D.
+    c.push({
+      id: 'open_design_workspace',
+      group: 'Navigate',
+      label: 'Open Design workspace (Ctrl+Shift+D)',
+      icon: '\u270e',
+      action: () => setDesignOpen(true)
     })
     return c
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2382,6 +2513,54 @@ function ShopAppInner(): React.ReactElement {
             </div>
             </ErrorBoundary>
           </div>
+        </div>
+      )}
+
+      {/*
+        BUILD 5 CAD MVP + UNIFY 1 — Design workspace overlay. Mounts on
+        top of the Control Center when the operator presses Ctrl+Shift+D
+        or selects the "Open Design workspace" command. The overlay owns
+        its own script text + tessellation state so closing/reopening
+        does not clobber the operator's work. Send-to-CAM runs the
+        sidecar's `cad.export` round-trip inside the workspace and
+        delegates the env-switch + STL auto-import to
+        `handleDesignSendToCam` above, completing the CAD→CAM hand-off.
+      */}
+      {designOpen && (
+        <div
+          className="cc-design-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Design workspace"
+          data-environment="design"
+          data-testid="cc-design-overlay"
+        >
+          <div className="cc-design-overlay__header">
+            <span className="cc-design-overlay__title">
+              {'✎'} Design (parametric CadQuery)
+            </span>
+            <div className="flex-spacer" />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm btn-icon"
+              onClick={() => setDesignOpen(false)}
+              aria-label="Close Design workspace"
+              title="Close (Esc)"
+            >
+              {'✕'}
+            </button>
+          </div>
+          <ErrorBoundary label="Design workspace" severity="panel">
+            <DesignWorkspace
+              initialScript={designScript}
+              onSave={(script) => {
+                setDesignScript(script)
+                pushToast('ok', 'Design script saved to session.')
+              }}
+              onSendToCam={(handoff) => { void handleDesignSendToCam(handoff) }}
+              onToast={pushToast}
+            />
+          </ErrorBoundary>
         </div>
       )}
 

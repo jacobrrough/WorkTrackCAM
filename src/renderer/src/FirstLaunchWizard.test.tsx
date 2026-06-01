@@ -16,12 +16,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   wizardEscapeKeydownHandler,
+  wizardGenerateDesignId,
   wizardSlugifyName,
   wizardComposeProjectDir,
   wizardStarterOpKind
 } from './FirstLaunchWizard'
 import {
   isWizardStarterMachineId,
+  WIZARD_MACHINE_TO_CAD_SAMPLE,
   WIZARD_MACHINE_TO_SAMPLE_FILE
 } from '../../shared/first-launch-wizard-contract'
 
@@ -227,5 +229,111 @@ describe('first-launch-wizard-contract (shared)', () => {
       expect(isWizardStarterMachineId(42)).toBe(false)
       expect(isWizardStarterMachineId({})).toBe(false)
     })
+  })
+
+  // ── UNIFY 2: bundled CadQuery starter scripts ──────────────────────────
+  describe('WIZARD_MACHINE_TO_CAD_SAMPLE', () => {
+    it('covers all four wizard machine ids exactly', () => {
+      expect(Object.keys(WIZARD_MACHINE_TO_CAD_SAMPLE).sort()).toEqual([
+        'creality-k2-plus',
+        'laguna-swift-5x10',
+        'makera-carvera-3axis',
+        'makera-carvera-4axis'
+      ])
+    })
+
+    it('maps each machine to a non-empty CadQuery filename + display name', () => {
+      for (const [, entry] of Object.entries(WIZARD_MACHINE_TO_CAD_SAMPLE)) {
+        expect(entry.fileName).toMatch(/\.cq\.py$/)
+        expect(entry.designName.length).toBeGreaterThan(0)
+      }
+    })
+
+    it('points Laguna at the sign-board, Carvera-4axis at the cylinder', () => {
+      expect(WIZARD_MACHINE_TO_CAD_SAMPLE['laguna-swift-5x10'].fileName).toBe('sign.cq.py')
+      expect(WIZARD_MACHINE_TO_CAD_SAMPLE['makera-carvera-4axis'].fileName).toBe('cylinder.cq.py')
+    })
+
+    it('reuses the bracket starter for K2 Plus and Carvera 3-axis', () => {
+      expect(WIZARD_MACHINE_TO_CAD_SAMPLE['creality-k2-plus'].fileName).toBe('bracket.cq.py')
+      expect(WIZARD_MACHINE_TO_CAD_SAMPLE['makera-carvera-3axis'].fileName).toBe('bracket.cq.py')
+    })
+  })
+})
+
+// ── UNIFY 2: pin the wizard's Step-3 starter layout at FOUR options ───────
+//
+// The wizard's Step 3 has historically offered three radios:
+//   1. Empty project
+//   2. Sample STL for this machine
+//   3. Import existing STL/STEP
+//
+// UNIFY 2 adds a 4th option ("Start a parametric design"). These tests pin
+// the option set so a future refactor cannot silently drop the design path.
+// We don't render the React tree (no testing-library); instead we statically
+// inspect the FirstLaunchWizard source to assert the four radio values are
+// present. That's enough to catch accidental deletions and keeps the suite
+// fast.
+describe('FirstLaunchWizard Step-3 layout (4 options pin)', () => {
+  it('declares exactly four starterChoice values', async () => {
+    // Read the wizard source as text and assert each radio's `value=` is
+    // present. Mirrors the snapshot-free pinning style used by
+    // `keyboard-shortcuts.test.ts` for the shortcut table.
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const filePath = path.resolve(__dirname, 'FirstLaunchWizard.tsx')
+    const src = readFileSync(filePath, 'utf-8')
+    expect(src).toContain('value="empty"')
+    expect(src).toContain('value="sample"')
+    expect(src).toContain('value="import"')
+    expect(src).toContain('value="design"')
+    // And that the union type carries all four discriminants.
+    expect(src).toMatch(/'empty' \| 'sample' \| 'import' \| 'design'/)
+  })
+
+  it('WizardStarterContent union has a design discriminant', async () => {
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const filePath = path.resolve(__dirname, 'FirstLaunchWizard.tsx')
+    const src = readFileSync(filePath, 'utf-8')
+    expect(src).toMatch(/kind: 'design'/)
+    expect(src).toMatch(/scriptText: string/)
+    expect(src).toMatch(/designName: string/)
+  })
+})
+
+describe('wizardGenerateDesignId (UNIFY 2 starter design seeder)', () => {
+  // Pin: the project schema's `designModelSchema.id` is `z.string().uuid()`,
+  // so the generator MUST return a value the Zod uuid check accepts. We
+  // pin the regex here so a regression in the fallback path is caught
+  // even when `crypto.randomUUID` is available in the test runner.
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  it('returns a UUID-shaped string', () => {
+    const id = wizardGenerateDesignId()
+    expect(id).toMatch(uuidRe)
+  })
+
+  it('produces distinct ids across calls', () => {
+    const a = wizardGenerateDesignId()
+    const b = wizardGenerateDesignId()
+    expect(a).not.toBe(b)
+  })
+
+  it('fallback path also returns a v4-shaped UUID when crypto.randomUUID is unavailable', () => {
+    // Swap out `randomUUID` temporarily to exercise the Math.random()
+    // fallback branch. Restore afterwards so other tests are unaffected.
+    const origRandomUUID = (crypto as { randomUUID?: () => string }).randomUUID
+    try {
+      ;(crypto as { randomUUID?: () => string }).randomUUID = undefined
+      const id = wizardGenerateDesignId()
+      expect(id).toMatch(uuidRe)
+      // version-4 nibble lives at position 14
+      expect(id[14]).toBe('4')
+      // variant nibble at position 19 is one of 8, 9, a, or b
+      expect('89ab').toContain(id[19])
+    } finally {
+      ;(crypto as { randomUUID?: () => string }).randomUUID = origRandomUUID
+    }
   })
 })

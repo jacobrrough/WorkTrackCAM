@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, session } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { registerCadIpc } from './ipc-cad'
 import { registerCoreIpc } from './ipc-core'
 import { registerFabricationIpc } from './ipc-fabrication'
 import { registerModelingIpc } from './ipc-modeling'
@@ -101,6 +102,11 @@ app.whenReady().then(async () => {
   registerCoreIpc(ipcCtx)
   registerFabricationIpc(ipcCtx)
   registerModelingIpc(ipcCtx)
+  // BUILD 2: parametric CAD Design workspace — cad.execute_script /
+  // cad.export / cad.list_operations bridge into the existing Python
+  // sidecar. Registered alongside the other modeling channels so the
+  // ordering invariant above keeps holding for cold-start renders.
+  registerCadIpc(ipcCtx)
 
   createWindow()
 

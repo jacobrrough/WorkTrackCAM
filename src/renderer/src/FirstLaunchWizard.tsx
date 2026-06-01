@@ -30,6 +30,7 @@ import type { ManufactureOperationKind } from '../../shared/manufacture-schema'
 import { fab } from './shop-types'
 import {
   isWizardStarterMachineId,
+  WIZARD_MACHINE_TO_CAD_SAMPLE,
   type WizardStarterMachineId
 } from '../../shared/first-launch-wizard-contract'
 
@@ -62,6 +63,15 @@ export type WizardStarterContent =
       /** Absolute path the user picked in the file dialog. */
       sourcePath: string
       starterOpKind: ManufactureOperationKind
+    }
+  | {
+      kind: 'design'
+      /** Display name for the seeded design model (e.g. "L-Bracket"). */
+      designName: string
+      /** Bundled CadQuery filename (e.g. `bracket.cq.py`). */
+      sampleFileName: string
+      /** Raw CadQuery Python source -- becomes `designModels[0].scriptText`. */
+      scriptText: string
     }
 
 export interface FirstLaunchWizardProps {
@@ -186,6 +196,41 @@ export function wizardSlugifyName(input: string): string {
   return cleaned || 'New-Project'
 }
 
+/**
+ * UUID factory for the starter design model the wizard splices into the
+ * project's `designModels[]` (UNIFY 2 "Start a parametric design" path).
+ * Exported so a vitest can substitute a deterministic generator without
+ * monkey-patching `globalThis.crypto`.
+ *
+ * Falls back to a v4-ish pseudo-random id when `crypto.randomUUID` is
+ * unavailable (older test runners) -- the project schema validates the
+ * shape so the value still has to look like a UUID.
+ */
+export function wizardGenerateDesignId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Pseudo-random v4 fallback. Not cryptographically strong; just keeps the
+  // schema happy on environments without `crypto.randomUUID`.
+  const hex = (n: number): string => n.toString(16).padStart(2, '0')
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // variant
+  const parts = Array.from(bytes, hex)
+  return (
+    parts.slice(0, 4).join('') +
+    '-' +
+    parts.slice(4, 6).join('') +
+    '-' +
+    parts.slice(6, 8).join('') +
+    '-' +
+    parts.slice(8, 10).join('') +
+    '-' +
+    parts.slice(10, 16).join('')
+  )
+}
+
 /** Compose the proposed project directory from parent + name. */
 export function wizardComposeProjectDir(
   parentDir: string,
@@ -226,7 +271,7 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
   const [makeraVariantId, setMakeraVariantId] = useState<WizardStarterMachineId>('makera-carvera-3axis')
 
   // Step 3 state
-  const [starterChoice, setStarterChoice] = useState<'empty' | 'sample' | 'import'>('empty')
+  const [starterChoice, setStarterChoice] = useState<'empty' | 'sample' | 'import' | 'design'>('empty')
   const [importedPath, setImportedPath] = useState<string | null>(null)
   const [availableSampleMachineIds, setAvailableSampleMachineIds] = useState<readonly WizardStarterMachineId[]>([])
 
@@ -346,6 +391,59 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
           kind: 'imported',
           sourcePath: importedPath,
           starterOpKind: wizardStarterOpKind(selectedMachineId)
+        }
+      } else if (starterChoice === 'design') {
+        // UNIFY 2: read the bundled CadQuery starter script for this machine
+        // and stage it as the project's first `designModels[]` entry. The
+        // host (`ShopApp.handleWizardFinish`) opens the Design workspace
+        // with the script preloaded so the user lands on the parametric
+        // surface with a body already authored.
+        const readRes = await fab().wizardReadCadSample({
+          machineId: selectedMachineId
+        })
+        if (readRes.ok) {
+          // Persist the starter design back into the project.json so
+          // re-opening the project shows the same parametric model. We
+          // re-read after `project:create` to pick up any defaults the
+          // main process supplied (BUILD 3 schema: designModels: []), then
+          // splice in the new entry and write back.
+          try {
+            const created = await fab().projectRead(projectDir)
+            const nowIso = new Date().toISOString()
+            const designId = wizardGenerateDesignId()
+            const updated = {
+              ...created,
+              updatedAt: nowIso,
+              designModels: [
+                ...created.designModels,
+                {
+                  id: designId,
+                  name: readRes.designName,
+                  scriptText: readRes.scriptText,
+                  createdAt: nowIso,
+                  updatedAt: nowIso
+                }
+              ]
+            }
+            await fab().projectSave(projectDir, updated)
+          } catch (e) {
+            // Non-fatal: project shell already exists; surface a soft
+            // warning. The user can still author a design in-session.
+            setError(
+              `Created project but failed to seed design model: ${
+                e instanceof Error ? e.message : String(e)
+              }`
+            )
+          }
+          starterContent = {
+            kind: 'design',
+            designName: readRes.designName,
+            sampleFileName: readRes.fileName,
+            scriptText: readRes.scriptText
+          }
+        } else {
+          // Non-fatal: continue with empty project, surface a soft error.
+          setError(`Design sample load failed; created empty project. (${readRes.error})`)
         }
       }
 
@@ -605,6 +703,48 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
                   </div>
                 )}
               </label>
+
+              {/*
+                UNIFY 2 "Start a parametric design" option. Loads a bundled
+                CadQuery starter script for the chosen machine (see
+                `WIZARD_MACHINE_TO_CAD_SAMPLE`) and seeds it as the project's
+                first `designModels[]` entry. On Finish the host opens the
+                Design workspace with the script preloaded. All four wizard
+                machine IDs currently ship with a CAD sample, so the option
+                is always enabled -- if a future machine lacks one, we
+                disable + tooltip the same way Sample STL does.
+              */}
+              {(() => {
+                const cadAvailable =
+                  selectedMachineId in WIZARD_MACHINE_TO_CAD_SAMPLE
+                const designName = cadAvailable
+                  ? WIZARD_MACHINE_TO_CAD_SAMPLE[selectedMachineId].designName
+                  : null
+                return (
+                  <label
+                    className={`flw-starter__option${starterChoice === 'design' ? ' flw-starter__option--selected' : ''}${!cadAvailable ? ' flw-starter__option--disabled' : ''}`}
+                    title={cadAvailable ? '' : 'CadQuery starter coming soon for this machine'}
+                    data-testid="flw-starter-design"
+                  >
+                    <input
+                      type="radio"
+                      name="flw-starter"
+                      value="design"
+                      checked={starterChoice === 'design'}
+                      disabled={!cadAvailable}
+                      onChange={() => setStarterChoice('design')}
+                    />
+                    <span className="flw-starter__option-title">
+                      Start a parametric design
+                    </span>
+                    <span className="flw-starter__option-desc">
+                      {cadAvailable && designName
+                        ? `Loads the bundled "${designName}" CadQuery starter script and opens the Design workspace so you can edit dimensions before sending to CAM.`
+                        : 'CadQuery starter coming soon for this machine.'}
+                    </span>
+                  </label>
+                )
+              })()}
             </fieldset>
           </section>
         )}

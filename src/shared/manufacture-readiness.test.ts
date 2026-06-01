@@ -10,7 +10,8 @@ function mkProject(): ProjectFile {
     updatedAt: new Date().toISOString(),
     activeMachineId: 'm1',
     meshes: ['assets/a.stl'],
-    importHistory: []
+    importHistory: [],
+    designModels: []
   }
 }
 

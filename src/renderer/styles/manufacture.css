@@ -1958,3 +1958,378 @@
 .manufacture-plan-no-setup-banner .btn {
   flex: 0 0 auto;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Design Workspace (BUILD 6 — CadQuery parametric design surface)
+   ───────────────────────────────────────────────────────────────────────────
+   The Design tab is the user's parametric CAD entry point. It sits in front
+   of CadQuery (Python sidecar in engines/sidecar/cad_handlers.py) and is
+   organized as a 3-column grid:
+
+     ┌────────────┬───────────────────┬────────────┐
+     │  editor    │     viewport      │   tree     │
+     │  (320px)   │     (1fr)         │   (280px)  │
+     └────────────┴───────────────────┴────────────┘
+
+   - Editor column: CadQuery script textarea + action buttons (Run / Save).
+   - Viewport: shared Three.js viewport (preview of tessellated B-rep).
+   - Tree: feature list — each row prints op, args, and source line number
+     in a single dense mono row.
+
+   All values come from tokens.css; no hard-coded colors or px. The pattern
+   mirrors the .manufacture-plan-layout--makera 3-column grid so the Design
+   workspace feels like a sibling surface, not a foreign one.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.design-workspace {
+  display: grid;
+  grid-template-columns: 320px 1fr 280px;
+  grid-template-rows: 1fr;
+  gap: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg0);
+  color: var(--txt0);
+  font-family: var(--font);
+}
+
+/* Editor column — left rail, fixed 320px. Owns the CadQuery script editor
+   plus its Run / Save action row. */
+.design-workspace__editor-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Viewport column — fluid middle. The Three.js canvas mounts inside; this
+   shell only provides the flex chrome so the canvas fills the available
+   area without leaking overflow. */
+.design-workspace__viewport-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg0);
+  overflow: hidden;
+}
+
+/* Tree column — right rail, fixed 280px. Houses the feature tree (parsed
+   op list with line refs back into the editor). */
+.design-workspace__tree-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* ── CAD editor (script textarea + action row) ─────────────────────────── */
+.cad-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: var(--sp-4);
+  gap: var(--sp-4);
+}
+
+.cad-editor__textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-4);
+  background: var(--bg1);
+  color: var(--txt0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  resize: none;
+  outline: none;
+  tab-size: 2;
+  transition: border-color var(--transition-base);
+}
+.cad-editor__textarea:hover {
+  border-color: var(--border-hi);
+}
+.cad-editor__textarea:focus {
+  border-color: var(--accent);
+}
+.cad-editor__textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* Editor action row (Run, Save, Reset). Buttons inherit .btn primitive
+   chrome — this only owns the row layout. */
+.cad-editor__actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.cad-editor__actions button:focus-visible,
+.cad-editor__actions .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── CAD feature tree (right column) ───────────────────────────────────── */
+.cad-feature-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* One row per parsed op. Single-line, truncated, monospace — operator
+   scans down the column the same way they read the script. */
+.cad-feature-row {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.cad-feature-row:hover {
+  background: var(--bg2);
+}
+.cad-feature-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* Source line number (e.g. "L12") — dim mono prefix. */
+.cad-feature-row__line {
+  flex: 0 0 auto;
+  color: var(--txt2);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* CadQuery op name (e.g. "box", "extrude", "fillet"). Accent-colored,
+   semibold so the verb pops in an otherwise mono row. */
+.cad-feature-row__op {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+/* Op argument string — truncates with ellipsis when the row is narrow. */
+.cad-feature-row__args {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--txt1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Responsive: stack the 3 columns vertically under 1200px ──────────── */
+@media (max-width: 1200px) {
+  .design-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    height: 100%;
+    overflow-y: auto;
+  }
+  .design-workspace__editor-col {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 40vh;
+  }
+  .design-workspace__viewport-col {
+    min-height: 320px;
+  }
+  .design-workspace__tree-col {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 30vh;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BUILD 5 — Design workspace error banner, viewport summary, feature panel,
+   parameter list, and the top-level Ctrl+Shift+D overlay chrome. All rules
+   layer on top of the existing `.design-workspace*` + `.cad-editor*`
+   primitives above so the surface stays visually consistent with the rest
+   of the shell.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Inline error banner above the script editor — surfaces Run-time failures
+   (script_exec_error, sidecar_timeout, etc.) without stealing focus. */
+.design-workspace__error {
+  flex-shrink: 0;
+  margin: var(--sp-3) var(--sp-4) 0;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--err-bg, rgba(231, 76, 60, 0.12));
+  border: 1px solid var(--err, #e74c3c);
+  border-radius: var(--radius-sm);
+  color: var(--err, #e74c3c);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* Viewport-column summary card — interim placeholder for the v2
+   Three.js render of the tessellated STL. Centered vertically so the
+   summary reads like a result card rather than a stray dump. */
+.design-workspace__viewport-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  height: 100%;
+  padding: var(--sp-6);
+  text-align: center;
+}
+.design-workspace__viewport-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+.design-workspace__viewport-meta {
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  font-variant-numeric: tabular-nums;
+}
+.design-workspace__viewport-path {
+  font-size: var(--text-xs);
+  color: var(--txt2);
+  font-family: var(--mono);
+  word-break: break-all;
+  max-width: 80%;
+}
+
+/* Feature-tree column sections — two stacked groups (Parameters /
+   Operations) plus a bottom action row for Send-to-CAM. */
+.design-workspace__feature-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-4) 0;
+}
+.design-workspace__feature-title {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--txt2);
+}
+.design-workspace__feature-empty {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  font-style: italic;
+}
+.design-workspace__feature-error {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--err-bg, rgba(231, 76, 60, 0.12));
+  border: 1px solid var(--err, #e74c3c);
+  border-radius: var(--radius-sm);
+  color: var(--err, #e74c3c);
+  font-size: var(--text-sm);
+  font-family: var(--mono);
+}
+
+/* Parameter list rows — mono, name = value. Reads like the script. */
+.design-workspace__parameter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.design-workspace__parameter-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg2);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+}
+.design-workspace__parameter-name {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.design-workspace__parameter-equals {
+  color: var(--txt2);
+}
+.design-workspace__parameter-value {
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bottom action row in the feature column — Send-to-CAM CTA. */
+.design-workspace__feature-actions {
+  display: flex;
+  justify-content: stretch;
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+.design-workspace__feature-actions > .btn {
+  flex: 1 1 auto;
+}
+
+/* Top-level Ctrl+Shift+D overlay — mounts above the Control Center as a
+   modal-style sheet so the user can dive into Design without losing the
+   underlying machine workspace state. The `data-environment='design'`
+   attribute on the overlay root pulls the soft-purple accent from
+   `tokens.css` so every accent token inside the surface re-themes.
+*/
+.cc-design-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg0);
+  color: var(--txt0);
+}
+.cc-design-overlay__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  height: var(--shell-header-h);
+  flex-shrink: 0;
+}
+.cc-design-overlay__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+}

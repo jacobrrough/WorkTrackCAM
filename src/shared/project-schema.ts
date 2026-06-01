@@ -17,6 +17,59 @@ export const importHistoryEntrySchema = z.object({
 
 export type ImportHistoryEntry = z.infer<typeof importHistoryEntrySchema>
 
+/**
+ * Cached tessellation metadata for a CadQuery design model.
+ *
+ * The actual STL bytes live at `<projectDir>/<stlRelativePath>` (POSIX-relative,
+ * conventionally `assets/designs/<designId>/tessellation_<toleranceMm>mm.stl`,
+ * mirroring the mesh-import-registry layout). Only the descriptor is persisted in
+ * project.json — keeping the schema lean and the on-disk JSON diff-friendly.
+ *
+ * `bbox.min` / `bbox.max` are `[x, y, z]` tuples in project units (mm). They are
+ * captured at tessellation time so the viewport can frame the design without
+ * loading the STL on every project open.
+ */
+export const designTessellationSchema = z.object({
+  /** POSIX-relative path under the project root, e.g. `assets/designs/<id>/tessellation_0.05mm.stl`. */
+  stlRelativePath: z.string(),
+  /** Chord tolerance used to tessellate the B-rep (mm). Encoded in the STL filename for cache hits. */
+  toleranceMm: z.number().positive(),
+  /** Number of triangles in the cached STL. */
+  triangleCount: z.number().int().nonnegative(),
+  /** Axis-aligned bounding box in project units (mm). */
+  bbox: z.object({
+    min: z.tuple([z.number(), z.number(), z.number()]),
+    max: z.tuple([z.number(), z.number(), z.number()])
+  }),
+  /** ISO timestamp of when the tessellation was produced. */
+  generatedAt: z.string()
+})
+
+export type DesignTessellation = z.infer<typeof designTessellationSchema>
+
+/**
+ * Parametric CAD design model authored in CadQuery (Python).
+ *
+ * The `scriptText` is the source of truth — the bundled CadQuery sidecar executes it
+ * to produce a B-rep, which is then tessellated into an STL cached under
+ * `assets/designs/<id>/`. Storing the script text (not just a path) keeps the project
+ * self-contained: copying the project folder copies the design intent.
+ */
+export const designModelSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1),
+  /** Raw CadQuery Python source. The sidecar evaluates this to produce the B-rep. */
+  scriptText: z.string(),
+  /** ISO timestamp of creation. */
+  createdAt: z.string(),
+  /** ISO timestamp of last edit. */
+  updatedAt: z.string(),
+  /** Cached tessellation descriptor (regenerated on script edit; absent until first tessellation). */
+  lastTessellation: designTessellationSchema.optional()
+})
+
+export type DesignModel = z.infer<typeof designModelSchema>
+
 /** On-disk project format (project.json at project root). */
 export const projectSchema = z.object({
   version: z.literal(1).describe('Project file schema version'),
@@ -39,7 +92,21 @@ export const projectSchema = z.object({
     })
     .optional(),
   /** Free-text finish / color / appearance notes for documentation or export. */
-  appearanceNotes: z.string().optional()
+  appearanceNotes: z.string().optional(),
+  /**
+   * CadQuery parametric design models authored inside the Design workspace.
+   *
+   * The field is additive and `.default([])` so existing v1 project.json files
+   * (saved before the Design workspace landed) parse unchanged and gain an empty
+   * array in memory — no migration pipeline entry needed. Safety Rule 2: never
+   * break existing saved projects.
+   *
+   * Each entry carries the CadQuery script text plus an optional cached
+   * tessellation descriptor pointing at an STL under `assets/designs/<id>/`.
+   * Designs feed downstream CAM workspaces (operations consume the cached STL),
+   * but the script text remains the source of truth.
+   */
+  designModels: z.array(designModelSchema).default([])
 })
 
 export type ProjectFile = z.infer<typeof projectSchema>

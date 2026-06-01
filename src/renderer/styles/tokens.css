@@ -164,6 +164,21 @@
   --accent-20: rgba(92, 179, 255, 0.20);
   --accent-28: rgba(92, 179, 255, 0.28);
 }
+/* Design environment — parametric CadQuery workspace. Soft purple sits
+   distinctly apart from the three machine environment hues (orange
+   wood-routing, red-orange FDM, blue precision-CNC) so the DesignWorkspace
+   reads as a fourth peer in the brand-bar and splash card grid. */
+[data-environment='design'] {
+  --accent: #7c5cff;
+  --accent-hi: #9579ff;
+  --accent-dim: rgba(124, 92, 255, 0.14);
+  --accent-8:  rgba(124, 92, 255, 0.08);
+  --accent-10: rgba(124, 92, 255, 0.10);
+  --accent-12: rgba(124, 92, 255, 0.12);
+  --accent-16: rgba(124, 92, 255, 0.16);
+  --accent-20: rgba(124, 92, 255, 0.20);
+  --accent-28: rgba(124, 92, 255, 0.28);
+}
 
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {

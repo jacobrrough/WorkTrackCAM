@@ -15,6 +15,14 @@ import type { ToolLibraryFile } from '../../shared/tool-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import type { MaterialAuditResult } from '../../shared/material-audit'
 import type { EnvironmentId } from './environments/registry'
+import type {
+  CadExecutePayload,
+  CadExecuteResponse,
+  CadExportPayload,
+  CadExportResponse,
+  CadListOperationsPayload,
+  CadListOperationsResponse
+} from '../../main/ipc-cad'
 
 // ── Re-exports for convenience ───────────────────────────────────────────────
 export type { MachineUIMode } from './shop-stock-bounds'
@@ -291,6 +299,18 @@ export declare const window: Window & {
         }
       | { ok: false; error: string; hint?: string }
     >
+    /**
+     * Parametric CAD Design workspace (BUILD 2) -- bridges to the Python
+     * sidecar's `cad.execute_script` / `cad.export` / `cad.list_operations`
+     * handlers. Used exclusively by the new Design workspace; CAM still
+     * reaches CadQuery through the existing `assets:importMesh` /
+     * `cad:importStep` paths.
+     */
+    cad: {
+      execute: (payload: CadExecutePayload) => Promise<CadExecuteResponse>
+      export: (payload: CadExportPayload) => Promise<CadExportResponse>
+      listOperations: (payload: CadListOperationsPayload) => Promise<CadListOperationsResponse>
+    }
   }
 }
 

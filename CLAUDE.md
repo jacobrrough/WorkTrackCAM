@@ -130,11 +130,14 @@ npm run build         # Full production build
 - `src/main/slicer/orca-wrapper.ts` — OrcaSlicer CLI wrapper (`buildOrcaArgs` + `runOrcaSlice`)
 - `src/renderer/src/` — React UI components, CSS, Three.js viewport
 - `src/renderer/src/EmptyState.tsx` — **shared "nothing here yet" component**. Use this for ANY panel that can render with no data (operations list, dashboard, nesting result, etc.). BEM CSS classes (`.empty-state`, `__icon`, `__title`, `__body`, `__cta`) live in `src/renderer/styles/components.css`. Do NOT roll your own empty-state markup — extend `EmptyState` instead.
+- `src/renderer/design/DesignWorkspace.tsx` — **CAD Design workspace** (fullscreen overlay opened via `Ctrl+Shift+D`, command palette, or first-launch wizard). Composes `CadQueryEditor` (left), 3D viewport (center, reuses ShopApp's viewport), `FeatureTree` (right). The "Send to CAM" button exports STL, switches to the active machine env, and auto-imports the STL into the first plate. Toggled via `designOpen` state in `ShopApp.tsx`. Do NOT register Design as a 4th env in `environments/registry.ts` — the overlay model is intentional so CAM env state is preserved across CAD work.
 - `src/preload/` — Electron preload (IPC bridge)
 - `src/shared/` — Zod schemas, type definitions
-- `src/shared/app-keyboard-shortcuts.ts` — single source of truth for keyboard shortcuts (1–6 for NavRail, F1 for Help, Ctrl+K palette, Ctrl+Shift+? for the shortcuts dialog). When wiring a new shortcut, add it here so the shortcuts dialog documents it.
+- `src/shared/app-keyboard-shortcuts.ts` — single source of truth for keyboard shortcuts (1–6 for NavRail, F1 for Help, Ctrl+K palette, Ctrl+Shift+D for the Design workspace overlay, Ctrl+Shift+? for the shortcuts dialog). When wiring a new shortcut, add it here so the shortcuts dialog documents it.
+- `src/shared/project-schema.ts` — Zod project schema. Includes `designModels: DesignModel[]` (optional with `.default([])` for backward compat). A project file can hold both CAD design models AND CAM jobs in one file.
 - `src/shared/sidecar-protocol.ts` — wire types + `isSidecarResponse` guard (kept in sync with engines/sidecar/main.py)
-- `engines/sidecar/` — Python sidecar (JSON-RPC over stdin/stdout): `main.py` request loop, `cad_handlers.py` (CadQuery), `cam_handlers.py` (OpenCAMLib)
+- `engines/sidecar/` — Python sidecar (JSON-RPC over stdin/stdout): `main.py` request loop, `cad_handlers.py` (CadQuery — `import_step`, `tessellate`, `execute_script`, `export`, `list_operations`), `cam_handlers.py` (OpenCAMLib). The `execute_script` handler runs user CadQuery code via `cqgi.parse(script).build(...)` with a BANNED_TOKENS pre-scan (rejects `import os/sys/subprocess/socket/shutil`, `__import__`, `open(`, `eval(`, `exec(`, etc.) — security via static rejection, not sandboxing.
+- `engines/cad/cadquery_script.py` — CadQuery script execution core (tessellation, handle registry, exporters). Imported by `cad_handlers.py`.
 - `engines/cam/ocl_toolpath.py` — standalone OpenCAMLib runner (still used by `src/main/cam-runner.ts`; migrates into the sidecar later)
 - `engines/mesh/`, `engines/occt/` — mesh + STEP I/O helpers (consolidating into CadQuery)
 - `engines/requirements.txt` — CadQuery + OpenCAMLib + numpy + trimesh
@@ -142,6 +145,7 @@ npm run build         # Full production build
 - `resources/posts/` — Handlebars post-processor templates per controller/dialect
 - `resources/materials/` — Material/feed-rate data
 - `resources/orca-slicer/` — bundled OrcaSlicer CLI + .json profiles for K2 Plus FDM (machines/process/filament). Bundled via `pwsh ./scripts/bundle-orca-slicer.ps1`.
+- `resources/samples/cad/` — starter CadQuery scripts shipped by the first-launch wizard: `bracket.cq.py` (Laguna/Carvera 3-axis), `sign.cq.py` (Laguna v-carve), `cylinder.cq.py` (Carvera 4-axis). Each is a valid `cqgi.parse(...)`-compatible script.
 - `.claude/improvement-log.md` — Improvement cycle history (source of truth)
 - `.claude/commands/improve.md` — Full improvement cycle playbook
 - `.claude/skills/gcode-safety/` — G-code safety skill + per-machine reference files. Invoke whenever `engines/cam/`, `src/main/cam-*`, `resources/posts/**`, or `resources/machines/**` changes.
