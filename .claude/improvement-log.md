@@ -16322,3 +16322,81 @@ unblocks real-world K2 Plus printing.
 - **Three-machine impact**: INDIRECT — the dashboard surfaces per-machine status for all three (Laguna Swift 5x10, Creality K2 Plus, Makera Carvera). The CSS makes the existing three-card layout visually legible without changing any behavior, IPC, or G-code. Each card still routes through its existing quick-action (Send latest slice / Open setup sheet / Send to Carvera).
 - **Out of scope (deliberate)**: Did NOT touch the dashboard's Moonraker polling lifecycle, the underlying status helpers (`workshop-dashboard-helpers.ts`), the NavRail entry, or any other recently-added panel (FirstLaunchWizard, PlateTabs, CalibrationPanel, LagunaNestingPanel). Those are next-rotation candidates.
 - **Next cycle**: `cam-engine` (rotation item #2). Suggested sub-focus: validate the OrcaSlicer wrapper at `src/main/slicer/orca-wrapper.ts` against the bundled OrcaSlicer 2.3.2 binary on a small real STL (K2 Plus standard profile). The CLI-flag fix at HEAD (a108f94) is currently exercised only by the E2E integration test; a smaller unit-level fixture would catch flag regressions in <1 s instead of 10+ s. Secondary: scan the renderer for other recently-added components with no matching CSS (`PlateTabs` is styled; `LagunaNestingPanel` and `CalibrationPanel` should be audited next ui-polish cycle).
+
+
+---
+
+## PRE-LAUNCH SUB-AGENT STACK — 2026-06-01 — pre-real-world-testing readiness
+
+> User-directed multi-workflow run. NOT a numbered rotation cycle.
+> Goal: "set up a sub agent stack to handle progress work on this app
+> and run them all until we have everything done we can before real
+> world testing." Three sequential workflows + one inline phase.
+
+### Workflow 0 — Discovery (task wqjutlcq3, ~10.5 min, 36 agents, 2.77M tokens)
+- **Pattern**: 8 parallel scouts → adversarial per-finding verifier → synthesizer
+- **Scope**: Machine profiles, post-processors, OrcaSlicer profiles, IPC test coverage, security (npm audit), docs, first-launch samples
+- **Output**: 27 raw findings → **23 verified real** → ranked 19-item punch list (5 G-code-touching mechanical, 5 CSS-only mechanical, 1 SettingsUI mechanical, 6 docs, 1 INI comment, 1 regression-pin coverage, 3 deferred design-effort)
+- One scout (UI CSS) failed to call StructuredOutput after 2 nudges; the synthesizer compensated by pulling UI CSS gaps from the other scouts. Stored at .
+
+### Workflow A — Apply mechanical fixes (task wze4vj1hg, ~18.4 min, 12 agents, 865K tokens)
+- **Pattern**: 11 parallel fix agents grouped by target file (to avoid concurrent-write collisions) + 1 sequential validator
+- **Apply phase**: all 11 returned . Files changed across machine profiles, posts, CSS, SettingsView, docs, INI, regression pins.
+- **Validate phase**: caught **7 regressions** — but ALL were test pins encoding the *old wrong* spindle ranges. The agents correctly bumped the JSONs to CLAUDE.md spec; the test pins needed manual reconciliation.
+- **Inline reconciliation** (main loop, post-workflow): Updated 4 test files (, , , ) to assert the new CLAUDE.md-correct ranges (Laguna 6000-24000, Carvera 3-axis 13000-15000). Bumped clamp-test inputs so each clamp branch is still exercised (Laguna max-clamp uses 25000 → clamps 24000; min-clamp uses 5000 → clamps 6000). Regenerated 2 vacuum-postlude snapshots via . Net post-flight: 13611/0/2 + tsc clean.
+- **Net Δ vs Cycle-233 post-flight**: -82 vitest (5-axis test surface deletions) + 3 new spindle-pin tests + 4 dashboard-test count shift. Zero regressions.
+
+### gcode-safety skill invocation (inline)
+- **Verdict**: SAFE for all three target machines.
+- **(a) Laguna widening (8k-18k → 6k-24k)**: reduces false-positive clamps; HW supports the wider range;  is a monotone clamp with operator-visible warnings on both edges.
+- **(b) Carvera 3-axis floor bump (6k → 13k)**: UPGRADES safety; rejects sub-spec RPM that would damage the 200W spindle; explicit  warning surfaces the substitution.
+- **(c) Fanuc/Siemens CPS → cnc_generic_mm.hbs fallback**: emits valid 3-axis CNC G-code with explicit G21/G90/G17/M30 and a multi-line UNVERIFIED warning header. Safe on any 3-axis Fanuc/Siemens control. Loss of 5-axis capability is the intended My-Shop-Only scope reduction.
+- **Side fix landed**: The gcode-safety reference files (, ) encoded the *old wrong* spindle ranges. Updated header + envelope table + fixture recipe entries to match the corrected profiles.
+
+### Workflow B — Deferred items + final report (inline rather than fan-out)
+- Switched from fan-out to inline because (a) the readiness report benefits from full session context that a sub-agent would lose, and (b) the 3 remaining items (vitest 3→4, Carvera 4-axis schema, post rename) are genuine design-effort that needs user decisions, not mechanical work agents can apply.
+- **New**:  — comprehensive operator-facing readiness doc covering per-machine first-run procedures, known limitations, deferred items, security note, confidence summary. ~200 lines.
+- **Deferred** (each filed for a dedicated cycle):
+  - Rank 4: Vitest 3.x → 4.x upgrade (CVSS 9.8, breaking change, dev-deps only)
+  - Rank 13: Carvera 4-axis Y=0 +  schema constraints (defense-in-depth; engine + operator sanity table already provide safety today)
+  - Rank 16: Rename  →  (clarity, not safety)
+  - **Optional**: CPS-import fallback toast warning when a 5-axis dialect lands on the 3-axis generic post (UX, not safety)
+
+### Deliverables landed this session
+- **Files changed** (commit ): 34 files (1057 insertions, 1040 deletions), +2 new docs, +1 new pin test, -2 deleted posts
+- **Cumulative session count**:
+  - 11 SMOKE/runbook doc additions or extensions
+  - 25 CSS rules added (covered the calibration / nesting / settings-probe / plate-tabs / util-* tree)
+  - 3 machine-profile / schema fixes (CLAUDE.md alignment)
+  - 2 speculative post deletions (My-Shop-Only enforcement)
+  - 5 test files updated + 2 snapshots regenerated
+  - 1 new regression pin (machine-profile-spindle-pin.test.ts)
+  - 1 SettingsView External-tool-paths section
+  - 2 gcode-safety reference doc updates
+
+### Quality gates across the session
+| Checkpoint | npm test | tsc |
+| --- | --- | --- |
+| Cycle 233 post-flight (HEAD aaf7a27) | 13693 / 0 / 2 | clean |
+| Workflow A validator (before inline reconciliation) | 13604 / 7 / 2 | clean |
+| After inline test-pin reconciliation | 13611 / 0 / 2 | clean |
+| After gcode-safety doc updates (FINAL) | 13611 / 0 / 2 | clean |
+
+### Three-machine readiness verdict
+- **K2 Plus**: HIGH confidence. E2E slice test against bundled OrcaSlicer 2.3.2 green; Moonraker push restored; CFS + PLR + adaptive-probe header validators landed.
+- **Laguna Swift 5x10**: HIGH confidence. Profile now matches CLAUDE.md spec; vcarve_mach3.hbs untouched; contract pins updated to new ranges; new SMOKE-LAGUNA-RICHAUTO runbook covers USB transfer + pendant ops.
+- **Carvera 3-axis**: HIGH confidence. M2-vs-M30 guard pinned; ATC orchestration pinned; spindle floor now safe at 13k; SettingsView exposes carveraCliPath; SMOKE-CARVERA-CLI runbook covers install/verify/configure.
+- **Carvera 4-axis**: MEDIUM-HIGH confidence. Engine + chuck-span validator + operator sanity table all in place; schema-level Y=0/X-offset enforcement deferred to rank-13 cycle.
+
+### Commits + push
+- `4c57685` — "Pre-launch fix wave A — 11 mechanical punch-list items + gcode-safety" — 34 files, pushed to origin/main on top of `aaf7a27` (Cycle 233).
+- Next commit will land this improvement-log entry + `docs/PRE-LAUNCH-READINESS.md` together.
+
+### Open follow-ups (for the next maintainer / cycle)
+1. **vitest 3→4 upgrade cycle** (rank 4) — schedule as `test-coverage` or `docs-and-dx`
+2. **Carvera 4-axis schema constraints** (rank 13) — schedule as `cam-engine`
+3. **`cnc_4axis_grbl.hbs` rename** (rank 16) — schedule as `post-processing`
+4. **Optional CPS-import fallback toast** — schedule as `ui-polish` or `cam-engine`
+5. **15 non-critical npm audit advisories** — schedule a `docs-and-dx` security sweep after the vitest upgrade lands
+
+The standard rotation can resume at `cam-engine` (next after the Cycle 233 `ui-polish` slot). Suggested first task: rank-13 Carvera 4-axis Y=0 + rotaryHeadstockXOffsetMm schema constraints, which is the highest-defense-in-depth value remaining.
