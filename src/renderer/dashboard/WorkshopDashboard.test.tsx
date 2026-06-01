@@ -331,3 +331,59 @@ describe('WorkshopDashboard — last-outcome filename surfacing', () => {
     expect(lagSection).toMatch(/workshop-dashboard__last-file[^>]*>—</)
   })
 })
+
+// ── a11y: list / listitem pairing ───────────────────────────────────────
+
+describe('WorkshopDashboard — list/listitem ARIA pairing (Cycle 233 ui-polish)', () => {
+  it('grid container declares role="list" for screen readers', () => {
+    const html = render()
+    // The grid wraps the three cards; it must announce as a list so
+    // assistive tech traverses card-by-card.
+    expect(html).toMatch(/class="workshop-dashboard__grid"[^>]*role="list"/)
+  })
+
+  it('each of the three cards declares role="listitem" so the list is well-formed', () => {
+    const html = render()
+    // ARIA requires listitem children when an ancestor declares role=list;
+    // without this pairing screen readers stop announcing the list.
+    const items = html.match(/role="listitem"/g) ?? []
+    expect(items).toHaveLength(3)
+  })
+
+  it('every card section carries role="listitem" regardless of job state', () => {
+    // Mixed job state across the three cards — listitem role must be
+    // present on each <section>, not gated on whether a job exists.
+    const html = render({
+      jobs: [
+        job('lag', 'laguna-swift-5x10', 'done', '/tmp/lag.gcode'),
+        job('k2', 'creality-k2-plus', 'running'),
+        job('car', 'makera-carvera-3axis', 'error', '/tmp/car.gcode')
+      ]
+    })
+    for (const cardId of ['laguna-swift-5x10', 'creality-k2-plus', 'makera-carvera']) {
+      const tag = html.match(new RegExp(`<section[^>]*data-card-id="${cardId}"[^>]*>`))?.[0] ?? ''
+      expect(tag).toContain('role="listitem"')
+    }
+  })
+})
+
+// ── ui-polish: token-scoped status-dot inline style ──────────────────────
+
+describe('WorkshopDashboard — StatusDot inline style is token-scoped (Cycle 233 ui-polish)', () => {
+  it('status-dot inline style contains only the dynamic background-color', () => {
+    // The 10x10 geometry, border-radius, and margin all live in
+    // manufacture.css under `.workshop-dashboard__dot`. ONLY the
+    // per-status color (driven by the DASHBOARD_STATUS_COLORS map) is
+    // legitimately inline.
+    const html = render({ jobs: [job('k2', 'creality-k2-plus', 'running')] })
+    // Find the dot inside the K2 card.
+    const k2Section = html.split('data-card-id="creality-k2-plus"')[1] ?? ''
+    const dotTag = k2Section.match(/<span[^>]*class="workshop-dashboard__dot"[^>]*>/)?.[0] ?? ''
+    expect(dotTag).toMatch(/style="[^"]*background-color/)
+    // No geometry/spacing should leak into the inline style.
+    expect(dotTag).not.toMatch(/style="[^"]*\bwidth/)
+    expect(dotTag).not.toMatch(/style="[^"]*\bheight/)
+    expect(dotTag).not.toMatch(/style="[^"]*border-radius/)
+    expect(dotTag).not.toMatch(/style="[^"]*margin/)
+  })
+})

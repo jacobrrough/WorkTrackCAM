@@ -152,20 +152,18 @@ const EMPTY_K2_STATE: K2LiveState = {
 function StatusDot({ status }: { readonly status: DashboardStatusKind }): React.ReactElement {
   const color = DASHBOARD_STATUS_COLORS[status]
   const label = DASHBOARD_STATUS_LABELS[status]
+  // Dimensions, radius, and spacing live in `.workshop-dashboard__dot`
+  // (manufacture.css). Only the dynamic per-status color stays inline —
+  // it is driven by the DASHBOARD_STATUS_COLORS map which encodes one of
+  // eight discrete kinds (idle/running/printing/paused/error/done/
+  // setup-required/uploading) and is therefore not a static CSS value.
   return (
     <span
       className="workshop-dashboard__dot"
       role="img"
       aria-label={label}
       title={label}
-      style={{
-        display: 'inline-block',
-        width: 10,
-        height: 10,
-        borderRadius: '50%',
-        backgroundColor: color,
-        marginRight: 6
-      }}
+      style={{ backgroundColor: color }}
     />
   )
 }
@@ -307,6 +305,10 @@ function WorkshopCard(props: CardProps): React.ReactElement {
       className={`workshop-dashboard__card${isCurrent ? ' workshop-dashboard__card--current' : ''}`}
       data-card-id={cardId}
       aria-label={name}
+      // `role="listitem"` pairs with the grid container's `role="list"`
+      // so the dashboard reads as a well-formed list to screen readers
+      // (ARIA requires listitem children when an ancestor declares list).
+      role="listitem"
     >
       <header className="workshop-dashboard__card-header">
         <div className="workshop-dashboard__card-titleblock">
