@@ -196,7 +196,9 @@ describe('machineProfileSchema -- ATC fields ([ID-0093])', () => {
       expect(m.postTemplate).toBe('carvera_3axis.hbs')
       expect(m.axisCount).toBe(3)
       expect(m.maxSpindleRpm).toBe(15000)
-      expect(m.minSpindleRpm).toBe(6000)
+      // Bumped from 6000 to 13000 per CLAUDE.md 200 W spindle spec
+      // (13,000–15,000 RPM); sub-13k risks spindle damage.
+      expect(m.minSpindleRpm).toBe(13000)
       expect(m.workAreaMm).toEqual({ x: 360, y: 240, z: 140 })
     })
   })

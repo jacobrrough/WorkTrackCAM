@@ -32,52 +32,26 @@
  *     wrong spindle warm-up; 4-axis loss falls back to cnc_4axis_grbl
  *     which has wrong rotary-origin handling.
  *
- * Sister cycles (post-Cycle-127 paired-pin chain):
- *   - 119 [ID-0196] derive-features
- *   - 124 [ID-0201] viewport3d-bounds
- *   - 129 [ID-0206] design-viewport-interaction
- *   - 130 [ID-0207] shop-stock-bounds
- *   - 131 [ID-0208] command-palette-memory
- *   - 132 [ID-0209] post-process-dialects
- *   - 134 [ID-0210] brand-bar-machine-badge
- *   - 135 [ID-0211] moonraker-push-payload
- *   - 136 [ID-0212] fdm-gcode-layer-summary
- *   - 137 [ID-0213] post-domain
- *   - 139 [ID-0214] laguna-vacuum-allocator-ui
- *   - 140 [ID-0215] setup-sheet
- *   - 142 [ID-0216] cam-domain
- *   - 144 [ID-0217] stock-fit-engine
- *   - 145 [ID-0218] laguna-vacuum-allocator
- *   - 146 [ID-0220] my-shop-presets
- *   - 147 [ID-0222] cam-engine-adapter
- *   - 149 [ID-0225] useShellResizableColumns
- *   - 150 [ID-0221] carvera-zeroing
- *   - 151 [ID-0226] useUndo
- *   - 152 [ID-0224] cam-heightfield-cylindrical
- *   - 154 [ID-0227] drawing-project-model-views
- *   - 155 [ID-0228] post-process-atc-capability
- *   - 156 [ID-0229] command-palette-search
- *   - 157 [ID-0230] cura-slice-defaults
- *   - 159 [ID-0232] laguna-vacuum-postlude
- *   - 160 [ID-0223] cam-runtime-telemetry
- *   - 161 [ID-0233] shellLayoutStorage
- *   - 162 [ID-0234] cam-progress
- *   - 163 [ID-0235] machine-post-template-hints (THIS FILE)
+ * June 2026 My-Shop-Only cleanup: the speculative 5-axis Fanuc and
+ * 5-axis Siemens fallbacks were removed -- none of the three target
+ * shops own a 5-axis machine, and the templates violated My-Shop-Only
+ * Mode. The hint list now ships 4 production + 2 fallback entries
+ * (6 total).
  *
  * Pinned surfaces:
  *   (A) Module shape -- exactly one runtime export
  *       `COMMON_POST_TEMPLATE_FILENAMES`, runtime tagged `Module`, null
  *       prototype, no default export, no foreign runtime symbols.
- *   (B) Cardinality + uniqueness -- length is EXACTLY 8 (4 production
- *       + 4 fallback). All entries unique.
- *   (C) Exact-byte equality table -- each of the 8 entries pinned by
+ *   (B) Cardinality + uniqueness -- length is EXACTLY 6 (4 production
+ *       + 2 fallback). All entries unique.
+ *   (C) Exact-byte equality table -- each of the 6 entries pinned by
  *       absolute position to its byte-equal `.hbs` filename. Order
  *       matters -- the source file documents the first 4 as the
- *       production environment posts and the trailing 4 as
+ *       production environment posts and the trailing 2 as
  *       generic / fallback infrastructure.
  *   (D) Production-vs-fallback partition -- the first 4 entries (index
  *       0..3) are the production posts that MUST exist for the three
- *       target machines; the trailing 4 (index 4..7) are
+ *       target machines; the trailing 2 (index 4..5) are
  *       generic / fallback (kept for CPS imports + custom user
  *       machines per the source-file JSDoc).
  *   (E) Three-machine production-post coverage -- the production-only
@@ -99,7 +73,7 @@
  *       environments (VCarve Pro / Creality Print / Makera CAM) and
  *       cites the April 2026 4-axis rewrite. Negative regex confirms
  *       NO foreign-machine vendors leak into source code (Bambu /
- *       Prusa / Fanuc-as-runtime / Haas / Tormach / Mach3-as-runtime /
+ *       Prusa / Fanuc / Siemens / Haas / Tormach / Mach3-as-runtime /
  *       Mach4 / Shapeoko / Onefinity / X-Carve), no toolpath G-codes /
  *       M-codes leak, no electron / fs / path / child_process / dgram
  *       / net / tls / React / DOM / Three.js / Handlebars imports, no
@@ -111,12 +85,7 @@
  *       Also pins that `COMMON_POST_TEMPLATE_FILENAMES` is a frozen
  *       readonly tuple at the type level.
  *
- * ZERO production-code edits. Pure paired-pin (mirrors Cycles
- * 119/124/129/130/131/132/134/135/136/137/139/140/142/144/145/146/147/149/
- * 150/151/152/154/155/156/157/159/160/161/162). Per `docs/EDIT-WORKFLOW.md`
- * R1 the Python-via-bash mandate covers EXISTING files >800 lines and
- * `.claude/` log files only; this is a NEW file < 800 lines so the Write
- * tool is safe (per Cycle 141 v18 ledger mid-cycle re-check protocol).
+ * ZERO production-code edits beyond the June 2026 My-Shop-Only cleanup.
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync, statSync, existsSync } from 'node:fs'
@@ -145,7 +114,7 @@ const CODE_ONLY_SRC = codeOnly(SRC)
 // resources/posts/<file>.hbs from project root.
 const POSTS_DIR = join(HERE, '..', '..', 'resources', 'posts')
 
-// The 8 production-environment + fallback hints, as the canonical
+// The 6 production-environment + fallback hints, as the canonical
 // expected ordered tuple. Drift-detector for the source constant.
 const EXPECTED_HINTS = [
   // Production environment posts (index 0..3)
@@ -153,11 +122,9 @@ const EXPECTED_HINTS = [
   'fdm_passthrough.hbs',
   'carvera_3axis.hbs',
   'carvera_4axis.hbs',
-  // Generic / fallback infrastructure (index 4..7)
+  // Generic / fallback infrastructure (index 4..5)
   'cnc_generic_mm.hbs',
-  'cnc_4axis_grbl.hbs',
-  'cnc_5axis_fanuc.hbs',
-  'cnc_5axis_siemens.hbs'
+  'cnc_4axis_grbl.hbs'
 ] as const
 
 const PRODUCTION_SLICE = EXPECTED_HINTS.slice(0, 4)
@@ -198,11 +165,11 @@ describe('[ID-0235] machine-post-template-hints module shape', () => {
     }
   })
 
-  // The runtime constant has 8 elements, matching the JSDoc partition (4
-  // production + 4 fallback). Drift here means a hint was added or removed
+  // The runtime constant has 6 elements, matching the JSDoc partition (4
+  // production + 2 fallback). Drift here means a hint was added or removed
   // and is the strongest single drift-detector for the module surface.
-  it('COMMON_POST_TEMPLATE_FILENAMES has exactly 8 entries', () => {
-    expect(COMMON_POST_TEMPLATE_FILENAMES.length).toBe(8)
+  it('COMMON_POST_TEMPLATE_FILENAMES has exactly 6 entries', () => {
+    expect(COMMON_POST_TEMPLATE_FILENAMES.length).toBe(6)
   })
 
   it('module exposes exactly 1 runtime key (no leaked private symbols)', () => {
@@ -215,7 +182,7 @@ describe('[ID-0235] machine-post-template-hints module shape', () => {
 // ---------------------------------------------------------------------------
 
 describe('[ID-0235] cardinality + uniqueness', () => {
-  it('length matches EXPECTED_HINTS length (8)', () => {
+  it('length matches EXPECTED_HINTS length (6)', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES.length).toBe(EXPECTED_HINTS.length)
   })
 
@@ -280,14 +247,6 @@ describe('[ID-0235] exact-byte equality table', () => {
   it('index 5 is cnc_4axis_grbl fallback (April 2026 4-axis rewrite repointing target)', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES[5]).toBe('cnc_4axis_grbl.hbs')
   })
-
-  it('index 6 is cnc_5axis_fanuc fallback', () => {
-    expect(COMMON_POST_TEMPLATE_FILENAMES[6]).toBe('cnc_5axis_fanuc.hbs')
-  })
-
-  it('index 7 is cnc_5axis_siemens fallback', () => {
-    expect(COMMON_POST_TEMPLATE_FILENAMES[7]).toBe('cnc_5axis_siemens.hbs')
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -299,11 +258,11 @@ describe('[ID-0235] production-vs-fallback partition', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES.slice(0, 4)).toEqual([...PRODUCTION_SLICE])
   })
 
-  it('fallback slice has exactly 4 entries (index 4..7)', () => {
+  it('fallback slice has exactly 2 entries (index 4..5)', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES.slice(4)).toEqual([...FALLBACK_SLICE])
   })
 
-  it('production + fallback partition is exhaustive (covers all 8)', () => {
+  it('production + fallback partition is exhaustive (covers all 6)', () => {
     expect([...PRODUCTION_SLICE, ...FALLBACK_SLICE]).toEqual([...EXPECTED_HINTS])
   })
 
@@ -394,6 +353,12 @@ describe('[ID-0235] three-machine production-post coverage', () => {
   it('both Carvera posts (3-axis + 4-axis) are present', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('carvera_3axis.hbs')
     expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('carvera_4axis.hbs')
+  })
+
+  // June 2026 My-Shop-Only cleanup: the 5-axis posts must not return.
+  it('hint list contains ZERO 5-axis post entries (My-Shop-Only enforcement)', () => {
+    const fiveAxis = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.includes('5axis'))
+    expect(fiveAxis).toHaveLength(0)
   })
 })
 
@@ -528,7 +493,7 @@ describe('[ID-0235] filesystem existence invariant', () => {
   // hint-internal. Since we don't have a separate exclusion list yet, we
   // pin the current set as the complete known-`.hbs` filename set under
   // resources/posts; an addition trips this and forces a deliberate update.
-  it('resources/posts/ contains EXACTLY the 8 known hint filenames among .hbs files', () => {
+  it('resources/posts/ contains EXACTLY the 6 known hint filenames among .hbs files', () => {
     // We list the on-disk .hbs files via fs and compare to EXPECTED_HINTS.
     // Mirror the source-of-truth check in reverse direction.
     // The directory may also contain README.md etc; we filter to .hbs only.
@@ -549,8 +514,8 @@ describe('[ID-0235] filesystem existence invariant', () => {
 // ---------------------------------------------------------------------------
 
 describe('[ID-0235] source-text whitelist', () => {
-  it('source file is small (< 30 lines, sanity)', () => {
-    expect(SRC.split('\n').length).toBeLessThan(30)
+  it('source file is small (< 35 lines, sanity)', () => {
+    expect(SRC.split('\n').length).toBeLessThan(35)
   })
 
   it('source file is small (< 1.5 KB, sanity)', () => {
@@ -582,6 +547,11 @@ describe('[ID-0235] source-text whitelist', () => {
   it('JSDoc explains that non-GRBL 4-axis templates were removed and CPS imports repoint to cnc_4axis_grbl', () => {
     expect(SRC).toMatch(/cnc_4axis_grbl/)
     expect(SRC).toMatch(/repointed/)
+  })
+
+  it('JSDoc cites the June 2026 5-axis removal (My-Shop-Only enforcement)', () => {
+    expect(SRC).toMatch(/June\s*2026/)
+    expect(SRC).toMatch(/5-axis/)
   })
 
   it('source file has no top-level `let`', () => {
@@ -628,14 +598,18 @@ describe('[ID-0235] source-text whitelist', () => {
     expect(CODE_ONLY_SRC).not.toMatch(/from\s+['"]handlebars['"]/)
   })
 
-  // No Bambu / Prusa / Haas / Tormach / Mach4 / Shapeoko / Onefinity /
-  // X-Carve in source (foreign-machine-vendor leak guard, Cycles 159+).
-  // We DO allow 'Mach3' as a substring because vcarve_mach3.hbs and the
-  // dialect token `mach3` are intentional in this module's hint surface;
-  // similarly 'Fanuc' / 'Siemens' as substrings of cnc_5axis_*.hbs.
-  it('source file does NOT contain foreign-machine-vendor names (Bambu/Prusa/Haas/Tormach/Mach4/Shapeoko/Onefinity/X-Carve)', () => {
+  // No Bambu / Prusa / Fanuc / Siemens / Haas / Tormach / Mach4 / Shapeoko /
+  // Onefinity / X-Carve in source (foreign-machine-vendor leak guard,
+  // Cycles 159+). The 5-axis-fanuc/siemens fallbacks were removed in the
+  // June 2026 My-Shop-Only cleanup so Fanuc/Siemens substrings should
+  // no longer appear here. We DO allow 'Mach3' as a substring because
+  // vcarve_mach3.hbs and the dialect token `mach3` remain in the hint
+  // surface.
+  it('source file does NOT contain foreign-machine-vendor names (Bambu/Prusa/Fanuc/Siemens/Haas/Tormach/Mach4/Shapeoko/Onefinity/X-Carve)', () => {
     expect(SRC).not.toMatch(/Bambu/i)
     expect(SRC).not.toMatch(/Prusa/i)
+    expect(SRC).not.toMatch(/Fanuc/i)
+    expect(SRC).not.toMatch(/Siemens/i)
     expect(SRC).not.toMatch(/Haas/i)
     expect(SRC).not.toMatch(/Tormach/i)
     expect(SRC).not.toMatch(/Mach4\b/i)
@@ -678,7 +652,7 @@ describe('[ID-0235] source-text whitelist', () => {
     }
   })
 
-  // Each of the 8 .hbs filenames must literally appear in source as a
+  // Each of the 6 .hbs filenames must literally appear in source as a
   // SINGLE-QUOTED string literal -- belt-and-braces drift detector for a
   // typo or rename. We count single-quoted occurrences only so JSDoc
   // references (like the April-2026-rewrite explanation that mentions
@@ -758,21 +732,18 @@ describe('[ID-0235] cross-cutting safety + invariants', () => {
     expect(PRODUCTION_SLICE[3]).toBe('carvera_4axis.hbs')
   })
 
-  it('fallback slice is sorted by axis count (3-axis, 4-axis, 5-axis-fanuc, 5-axis-siemens)', () => {
+  it('fallback slice is sorted by axis count (3-axis generic, then 4-axis GRBL)', () => {
     expect(FALLBACK_SLICE[0]).toBe('cnc_generic_mm.hbs')
     expect(FALLBACK_SLICE[1]).toBe('cnc_4axis_grbl.hbs')
-    expect(FALLBACK_SLICE[2]).toBe('cnc_5axis_fanuc.hbs')
-    expect(FALLBACK_SLICE[3]).toBe('cnc_5axis_siemens.hbs')
   })
 
   it('hint list never accidentally surfaces a 5-axis post in the production slice', () => {
     expect(PRODUCTION_SLICE.filter((f) => f.includes('5axis'))).toHaveLength(0)
   })
 
-  it('hint list contains EXACTLY 2 5-axis post entries (Fanuc + Siemens fallbacks)', () => {
+  it('hint list contains ZERO 5-axis post entries (June 2026 My-Shop-Only removal)', () => {
     const fiveAxis = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.includes('5axis'))
-    expect(fiveAxis).toHaveLength(2)
-    expect(fiveAxis).toEqual(['cnc_5axis_fanuc.hbs', 'cnc_5axis_siemens.hbs'])
+    expect(fiveAxis).toHaveLength(0)
   })
 
   it('hint list contains EXACTLY 1 4-axis post entry beyond Carvera (the GRBL fallback)', () => {
@@ -797,17 +768,17 @@ describe('[ID-0235] cross-cutting safety + invariants', () => {
     expect(carvera).toEqual(['carvera_3axis.hbs', 'carvera_4axis.hbs'])
   })
 
-  it('hint list contains EXACTLY 4 cnc-prefixed fallback entries', () => {
+  it('hint list contains EXACTLY 2 cnc-prefixed fallback entries', () => {
     const cnc = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('cnc_'))
-    expect(cnc).toHaveLength(4)
+    expect(cnc).toHaveLength(2)
   })
 
-  it('every prefix bucket (cnc_/carvera_/vcarve_/fdm_) sums to 8 total entries (partition exhaustive)', () => {
+  it('every prefix bucket (cnc_/carvera_/vcarve_/fdm_) sums to 6 total entries (partition exhaustive)', () => {
     const cnc = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('cnc_')).length
     const carvera = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('carvera_')).length
     const vcarve = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('vcarve_')).length
     const fdm = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.startsWith('fdm_')).length
     expect(cnc + carvera + vcarve + fdm).toBe(COMMON_POST_TEMPLATE_FILENAMES.length)
-    expect(cnc + carvera + vcarve + fdm).toBe(8)
+    expect(cnc + carvera + vcarve + fdm).toBe(6)
   })
 })

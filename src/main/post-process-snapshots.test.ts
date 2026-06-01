@@ -80,14 +80,9 @@ const fourAxisToolpath = [
   'G0 Z20 A0',
 ]
 
-// 5-axis toolpath with A and B axes
-const fiveAxisToolpath = [
-  'G0 X0 Y0 Z30 A0 B0',
-  'G1 X10 Y10 Z-1.000 A15 B10 F500',
-  'G1 X20 Y10 Z-1.000 A30 B-5 F500',
-  'G1 X20 Y20 Z-1.500 A15 B0 F500',
-  'G0 Z30 A0 B0',
-]
+// fiveAxisToolpath (5-axis A/B test fixture) was removed alongside the
+// speculative 5-axis Fanuc / Siemens post templates in the June 2026
+// My-Shop-Only cleanup.
 
 // ─── Base machine profiles ──────────────────────────────────────────────────
 
@@ -518,59 +513,10 @@ describe('Snapshot — spindle RPM clamping', () => {
   })
 })
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 5-AXIS TEMPLATE SNAPSHOTS WITH OPTIONS
-// ═════════════════════════════════════════════════════════════════════════════
-
-describe('Snapshot — 5-axis templates with options', () => {
-  const fanuc5ax: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_fanuc.hbs',
-    dialect: 'fanuc',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-head',
-    maxTiltDeg: 60,
-  }
-
-  const siemens5ax: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_siemens.hbs',
-    dialect: 'siemens',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-table',
-    maxTiltDeg: 60,
-  }
-
-  it('Fanuc 5-axis with tool number T3 and WCS G55', async () => {
-    const { gcode } = await renderPost(resourcesRoot, fanuc5ax, fiveAxisToolpath, {
-      toolNumber: 3,
-      workCoordinateIndex: 2,
-      operationLabel: '5ax Fanuc T3 G55',
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('G43.4 H3')
-    expect(gcode).toContain('G55')
-  })
-
-  it('Siemens 5-axis with TRAORI and line numbering', async () => {
-    const { gcode } = await renderPost(resourcesRoot, siemens5ax, fiveAxisToolpath, {
-      operationLabel: '5ax Siemens Numbered',
-      lineNumbering: { enabled: true, start: 10, increment: 10 },
-    })
-    expect(gcode).toMatchSnapshot()
-    expect(gcode).toContain('TRAORI(1)')
-    expect(gcode).toContain('TRAFOOF')
-    // Line numbers present
-    const nLines = gcode.split('\n').filter((l) => /^N\d/.test(l.trim()))
-    expect(nLines.length).toBeGreaterThan(0)
-  })
-})
+// Note: the "5-AXIS TEMPLATE SNAPSHOTS WITH OPTIONS" describe block was
+// removed in the June 2026 My-Shop-Only cleanup — the speculative 5-axis
+// Fanuc / Siemens post templates were deleted because none of the three
+// target shops own a 5-axis machine.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // COMBINED OPTIONS: arc fitting + line numbering + cutter comp
@@ -709,36 +655,9 @@ describe('Snapshot — every dialect with tool change and WCS', () => {
     },
     // Note: the Fanuc/Mach3/LinuxCNC/Siemens/Heidenhain 4-axis baseline
     // snapshot entries were removed in the April 2026 4-axis subsystem rewrite.
-    {
-      name: 'Fanuc 5-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_5axis_fanuc.hbs',
-        dialect: 'fanuc' as const,
-        axisCount: 5,
-        aAxisRangeDeg: 360,
-        bAxisRangeDeg: 120,
-        bAxisOrientation: 'y' as const,
-        fiveAxisType: 'table-head' as const,
-        maxTiltDeg: 60,
-      },
-      lines: fiveAxisToolpath,
-    },
-    {
-      name: 'Siemens 5-axis',
-      machine: {
-        ...baseMachine,
-        postTemplate: 'cnc_5axis_siemens.hbs',
-        dialect: 'siemens' as const,
-        axisCount: 5,
-        aAxisRangeDeg: 360,
-        bAxisRangeDeg: 120,
-        bAxisOrientation: 'y' as const,
-        fiveAxisType: 'table-table' as const,
-        maxTiltDeg: 60,
-      },
-      lines: fiveAxisToolpath,
-    },
+    // Note: the Fanuc 5-axis / Siemens 5-axis baseline snapshot entries were
+    // removed in the June 2026 My-Shop-Only cleanup — the speculative 5-axis
+    // Fanuc / Siemens post templates were deleted.
   ]
 
   for (const { name, machine, lines } of dialects) {

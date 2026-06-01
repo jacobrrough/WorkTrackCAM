@@ -20,6 +20,36 @@ This document is the bench procedure Jacob runs to verify, on his actual K2 Plus
 
 Do NOT run this against a stranger printer or a printer you do not physically control. The push API does not authenticate by default on a stock K2 Plus; the safety net is your LAN, not the protocol.
 
+## Finding the K2 Plus on your LAN (do this before Step 0)
+
+Everything below uses `<printer-host>` as a placeholder. You need to resolve that to a real address before you can curl anything or type a URL into WorkTrackCAM. There are three ways to find the K2 Plus on your LAN, in order of reliability:
+
+1. **Router DHCP table (most reliable).** Log in to your router's admin page (commonly `http://192.168.1.1` or `http://192.168.0.1`), open the DHCP / connected-clients / device-list page, and look for a hostname like `K2Plus`, `CrealityK2`, or a MAC vendor of `Creality`. Note the IPv4 address (e.g. `192.168.1.42`). **Strongly recommended**: while you are in the router UI, set a **DHCP reservation** for that MAC -- this pins the IP across reboots and means every URL in this checklist keeps working forever.
+2. **K2 Plus touchscreen.** On the printer, tap `Settings -> Network -> WiFi` (or `Settings -> Network -> Ethernet` if wired). The current IPv4 address is displayed on the network status screen. Use this if you cannot reach the router UI -- but remember the IP can change at the next DHCP lease renewal unless you set a reservation per (1).
+3. **mDNS (`k2plus.local`).** Stock Creality K2 Plus OS advertises itself on mDNS. From the workstation, `ping k2plus.local` (or `ping K2Plus.local` -- case sometimes matters on Linux). If it resolves, you can use `http://k2plus.local:7125` everywhere `<printer-host>` appears. **Caveat**: mDNS is convenient but flaky -- it stops working on guest VLANs, networks with mDNS reflection disabled, some VPN configurations, and occasionally just at random. Use it as a fallback, not as the primary.
+
+### Hostname vs IP -- which to use in WorkTrackCAM
+
+| Form | Pros | Cons | When to use |
+| --- | --- | --- | --- |
+| IPv4 (`192.168.1.42`) | Reliable, no resolver, fastest | Breaks if DHCP hands out a new lease | Production -- pair with a router DHCP reservation |
+| mDNS (`k2plus.local`) | Stable across IP changes; readable | Flaky on some networks, slow first resolve, sometimes silently breaks | Quick bench tests; fallback if IP changes |
+
+The recommended setup is **DHCP-reserved IPv4**: stable like a static IP, but you configure it in one place (the router) instead of on the printer.
+
+### Moonraker port
+
+Stock K2 Plus OS exposes Moonraker (and the Fluidd web UI) on **TCP port 7125**. The Fluidd UI is the visual confirmation -- open the URL in any browser; you should see the Fluidd dashboard (printer state, temperature gauges, file list). If you see that, Moonraker is up and reachable; if you do not, fix the network or firmware before continuing.
+
+### Example URLs (use one of these as `<printer-host>` everywhere below)
+
+```
+http://192.168.1.42:7125      # IPv4 form (recommended -- pair with DHCP reservation)
+http://k2plus.local:7125      # mDNS form (fallback; flaky on some networks)
+```
+
+Once one of those URLs loads Fluidd in a browser, substitute that exact origin (scheme + host + port) for every `<printer-host>` in this document, and use it for the **Moonraker** field in Step 2.
+
 ## Step 0 -- pre-flight
 
 1. From the workstation, in a terminal:
@@ -51,7 +81,7 @@ If either file is red, FIX THE BUILD before pointing it at hardware. A mock fail
 
 1. Start the desktop app: `npm run dev` (or run the packaged build).
 2. Open the **My Shop** quick-select; pick **Creality K2 Plus**.
-3. Open the manufacture / fabrication panel; in the **Moonraker** field, enter the printer base URL (e.g. `http://192.168.1.50` -- include the port only if Moonraker is not on 80, e.g. `http://192.168.1.50:7125`).
+3. Open the manufacture / fabrication panel; in the **Moonraker** field, enter the printer base URL using the address you resolved in "Finding the K2 Plus on your LAN" above (e.g. `http://192.168.1.42:7125` or `http://k2plus.local:7125`). On stock K2 Plus OS Moonraker is on port `7125` -- always include the port.
 4. Confirm the active machine card shows: `K2 Plus`, `350 x 350 x 350 mm`, `nozzle <= 350 C`, `bed <= 120 C`, `chamber <= 60 C`.
 5. The active machine resolves the FDM capability fields (`maxNozzleTempC`, `maxBedTempC`, `chamberTempC`) via the `moonraker:push` IPC handler -- they ARE checked against the slicer output BEFORE any byte crosses the network (see `src/main/moonraker-push.ts` `[ID-0073]` block).
 

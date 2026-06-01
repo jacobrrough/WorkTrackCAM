@@ -14,7 +14,9 @@ const resourcesRoot = join(process.cwd(), 'resources')
 
 const toolpathLines = ['G0 X10 Y10 Z5', 'G1 X20 Y20 Z-2 F600']
 const fourAxisLines = ['G0 X10 Y0 Z5 A0', 'G1 X10 Z-2 A90 F400']
-const fiveAxisLines = ['G0 X10 Y10 Z10 A0 B0', 'G1 X20 Y10 Z-1 A15 B10 F500']
+// fiveAxisLines (5-axis test toolpath) was removed alongside the speculative
+// 5-axis Fanuc / Siemens post templates in the June 2026 My-Shop-Only
+// cleanup — no surviving describe block exercises 5-axis output.
 
 const baseMachine: MachineProfile = {
   id: 'safety-test',
@@ -337,137 +339,7 @@ describe('Dialect safety — carvera_4axis.hbs', () => {
   })
 })
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 5-axis Fanuc
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('Dialect safety — cnc_5axis_fanuc.hbs', () => {
-  const machine: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_fanuc.hbs',
-    dialect: 'fanuc',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-head',
-    maxTiltDeg: 60
-  }
-
-  it('header: G21, G90, G17 safety codes', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G21')
-    expect(gcode).toContain('G90')
-    expect(gcode).toContain('G17')
-  })
-
-  it('header: G40 G49 G80 safety reset', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G40')
-    expect(gcode).toContain('G49')
-    expect(gcode).toContain('G80')
-  })
-
-  it('header: G43.4 RTCP activation', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G43.4 H1')
-  })
-
-  it('header: 5-AXIS identifier', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('5-AXIS')
-  })
-
-  it('footer: spindle off M5', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('M5')
-  })
-
-  it('footer: G49 cancel RTCP before retract', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    const lines = gcodeLines(gcode)
-    // G49 must appear after M5 in the footer
-    const m5Idx = gcode.lastIndexOf('M5')
-    const g49Idx = gcode.lastIndexOf('G49')
-    expect(g49Idx).toBeGreaterThan(m5Idx)
-  })
-
-  it('footer: safe Z retract', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain(`G0 Z${machine.workAreaMm.z}`)
-  })
-
-  it('footer: A0 B0 return to zero', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G0 A0 B0')
-  })
-
-  it('footer: M30 program end', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('M30')
-  })
-})
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 5-axis Siemens
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('Dialect safety — cnc_5axis_siemens.hbs', () => {
-  const machine: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_siemens.hbs',
-    dialect: 'siemens',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-table',
-    maxTiltDeg: 60
-  }
-
-  it('header: G21, G90, G17 safety codes', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G21')
-    expect(gcode).toContain('G90')
-    expect(gcode).toContain('G17')
-  })
-
-  it('header: TRAORI activation for 5-axis transformation', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('TRAORI(1)')
-  })
-
-  it('header: 5-AXIS identifier', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('5-AXIS')
-  })
-
-  it('footer: spindle off M5', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('M5')
-  })
-
-  it('footer: TRAFOOF deactivates transformation', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('TRAFOOF')
-    // TRAFOOF must come after M5
-    const m5Idx = gcode.lastIndexOf('M5')
-    const trafoofIdx = gcode.lastIndexOf('TRAFOOF')
-    expect(trafoofIdx).toBeGreaterThan(m5Idx)
-  })
-
-  it('footer: safe Z retract', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain(`G0 Z${machine.workAreaMm.z}`)
-  })
-
-  it('footer: A0 B0 return to zero', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('G0 A0 B0')
-  })
-
-  it('footer: M30 program end', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine, fiveAxisLines)
-    expect(gcode).toContain('M30')
-  })
-})
+// Note: the 5-axis Fanuc and 5-axis Siemens dialect-safety describe blocks
+// were removed in the June 2026 My-Shop-Only cleanup — the speculative
+// 5-axis post templates were deleted because none of the three target
+// shops own a 5-axis machine.

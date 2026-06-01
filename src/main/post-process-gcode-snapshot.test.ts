@@ -34,14 +34,9 @@ const fourAxisToolpathLines = [
   'G0 Z20 A0'
 ]
 
-/** 5-axis toolpath lines with A-axis and B-axis words. */
-const fiveAxisToolpathLines = [
-  'G0 X0 Y0 Z30 A0 B0',
-  'G1 X10 Y10 Z-1.000 A15 B10 F500',
-  'G1 X20 Y10 Z-1.000 A30 B-5 F500',
-  'G1 X20 Y20 Z-1.500 A15 B0 F500',
-  'G0 Z30 A0 B0'
-]
+// 5-axis toolpath fixture was removed alongside the speculative 5-axis
+// Fanuc / Siemens post templates in the June 2026 My-Shop-Only cleanup.
+// No surviving describe block exercises 5-axis output.
 
 // ─── Base machine used across tests ──────────────────────────────────────────
 
@@ -175,48 +170,5 @@ describe('G-code snapshot — carvera_4axis.hbs', () => {
   })
 })
 
-// ─── 5-axis Fanuc template snapshot ──────────────────────────────────────────
-
-describe('G-code snapshot — cnc_5axis_fanuc.hbs', () => {
-  const machine5axFanuc: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_fanuc.hbs',
-    dialect: 'fanuc',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-head',
-    maxTiltDeg: 60
-  }
-
-  it('fanuc 5-axis dialect', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine5axFanuc, fiveAxisToolpathLines, {
-      operationLabel: 'Snapshot 5-Axis Fanuc'
-    })
-    expect(gcode).toMatchSnapshot()
-  })
-})
-
-// ─── 5-axis Siemens template snapshot ────────────────────────────────────────
-
-describe('G-code snapshot — cnc_5axis_siemens.hbs', () => {
-  const machine5axSiemens: MachineProfile = {
-    ...baseMachine,
-    postTemplate: 'cnc_5axis_siemens.hbs',
-    dialect: 'siemens',
-    axisCount: 5,
-    aAxisRangeDeg: 360,
-    bAxisRangeDeg: 120,
-    bAxisOrientation: 'y',
-    fiveAxisType: 'table-table',
-    maxTiltDeg: 60
-  }
-
-  it('siemens 5-axis dialect', async () => {
-    const { gcode } = await renderPost(resourcesRoot, machine5axSiemens, fiveAxisToolpathLines, {
-      operationLabel: 'Snapshot 5-Axis Siemens'
-    })
-    expect(gcode).toMatchSnapshot()
-  })
-})
+// Note: the 5-axis Fanuc / Siemens snapshot describe blocks were removed
+// in the June 2026 My-Shop-Only cleanup — see machine-cps-import.ts comment.

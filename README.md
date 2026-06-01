@@ -13,12 +13,20 @@ CNC toolpath generation, 4-axis machining, heightfield strategies, FDM slicing, 
 - Project files (`.wtcam`), auto-updates, cross-platform (Win/Linux/Mac)
 
 ## Quick Start
+0. Install OrcaSlicer 2.3.2+ and bundle: `pwsh ./scripts/bundle-orca-slicer.ps1`
 1. `git clone https://github.com/jacobrrough/WorkTrackCAM.git`
 2. `cd WorkTrackCAM`
 3. Install Node: `npm install`
 4. Install Python engine: `pip install -r engines/requirements.txt` (Python ≥ 3.9)
 5. `npm run dev` (development)
 6. `npm run build` (production installer)
+
+## Next Steps
+- K2 Plus Moonraker push smoke test → [`docs/SMOKE-K2-MOONRAKER.md`](docs/SMOKE-K2-MOONRAKER.md)
+- Laguna Swift RichAuto upload smoke test → [`docs/SMOKE-LAGUNA-RICHAUTO.md`](docs/SMOKE-LAGUNA-RICHAUTO.md)
+- Carvera CLI upload smoke test → [`docs/SMOKE-CARVERA-CLI.md`](docs/SMOKE-CARVERA-CLI.md)
+- Machine profiles & safety reference → [`docs/MACHINES.md`](docs/MACHINES.md)
+- 4th-axis CAM reference → [`docs/CAM_4TH_AXIS_REFERENCE.md`](docs/CAM_4TH_AXIS_REFERENCE.md)
 
 ## Development
 - `npm test` + `npm run typecheck` before every change (mandatory per CLAUDE.md)

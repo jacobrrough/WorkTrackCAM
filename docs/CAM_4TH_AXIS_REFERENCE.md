@@ -89,6 +89,79 @@ It also optionally emits `G93` inverse-time feed around the toolpath for continu
 
 ---
 
+## Part 1.5 — physical setup of the Carvera HD rotary
+
+Everything in Part 1 assumes the rotary is **already on the table, square to X, and correctly zeroed**. This section covers the mechanical work that has to happen before any of that is true. Skip nothing — the post hardcodes `G0 Y0` ([`resources/posts/carvera_4axis.hbs`](../resources/posts/carvera_4axis.hbs) line 73) and a misaligned mount will drive the tool into the chuck body on the very first feed move. The air-cut runbook in Part 2 Step 5 is your last line of defense, not your first.
+
+### Mount the rotary attachment
+
+The Carvera HD rotary module bolts to the machine table through the same T-slots used for the standard vise.
+
+1. Clear the table. Vacuum chips out of the T-slots. Any chip under the rotary base will tilt the rotation axis and you will not notice it until the dial indicator catches it.
+2. Drop the rotary in place with its long axis **parallel to machine X**. The chuck end should be at the **−X end** of the table (closer to `X = 0`, the machine's spindle home), so positive X moves run toward the tailstock. This matches the coordinate convention in Part 1.
+3. Bolt down with **M6 T-nuts in at least four points** (two per side rail). Snug each bolt with your fingers first, then torque diagonally — front-left, rear-right, rear-left, front-right — to roughly **8–10 N·m**. Over-torquing distorts the base; under-torquing lets the rotary walk under cutting load.
+4. Square to X with a dial indicator: clamp the indicator in the spindle, sweep along the side rail of the rotary base, and jog X. The reading should not change by more than **0.05 mm** over the full base length. Loosen the diagonal bolts and tap the rotary square if it drifts.
+
+### Install the chuck
+
+The HD module ships with a **3-jaw self-centering chuck**. That is the right default for round stock and what every example in this doc assumes.
+
+- **3-jaw self-centering** — fast, repeatable on round bar, no per-jaw adjustment. Use this for everything in Part 2 and 90% of rotary work.
+- **4-jaw independent** — needed only when you have to indicate in non-round stock (square bar, casting, off-center features). Each jaw is set with its own key; expect 10–15 minutes per setup.
+- **Jaw reversal** — every chuck ships with two jaw sets: **internal grip** (jaws bite outward into a bore) and **external grip** (jaws bite inward on an OD). External is the default for round bar. Swap by removing the three jaw screws, sliding each jaw out, and reinstalling in numerical order (jaws are numbered 1/2/3; installing out of order destroys concentricity).
+
+After installing or swapping jaws, **always re-check runout** with a dial indicator on a known-good ground bar (drill rod, gauge pin, or a precision dowel). Runout should be **< 0.05 mm TIR** for any work that needs to look right; **< 0.02 mm TIR** for finish passes. Anything worse means a chip in the jaws or a damaged scroll — fix it before going further.
+
+### Engage the tailstock (long stock only)
+
+For stock more than about **4× diameter long** (e.g. a 30 mm bar longer than ~120 mm), tailstock support stops the free end from deflecting under cutting forces.
+
+- **Alignment shim** — the HD module's tailstock has a small lateral shim under its base. Use it to bring the live center exactly on the rotation axis. Spin the stock by hand with the tailstock loose; tighten the shim, retighten the tailstock clamp, and confirm the stock spins true.
+- **Follower-rest for long thin stock** — if the part is more than ~6× diameter long (e.g. an 8 mm dowel longer than 48 mm), a follower-rest or steady-rest mounted between chuck and tailstock prevents harmonic chatter. The Carvera HD doesn't ship with one; print or machine a fixture that bolts to the same T-slots and supports the stock at the cutting zone.
+- **Tailstock engagement** — back the live center off, slide the stock in, advance the live center into the stock's centerdrill until you feel firm contact, then back off **¼ turn**. Too tight and you bow the stock; too loose and it walks.
+
+### Measure the X-offset (chuck face to spindle home)
+
+This is the step nobody documents and everybody gets wrong on their first rotary job.
+
+The post emits `G0 X0 Y0` at the end (footer) and assumes `X = 0` is the **chuck face**. But the machine's home position is `X = 0` at the **spindle's machine home**, which is some distance from the chuck face along the table. You have to measure that distance and use it when you set the WCS (G54) zero.
+
+1. Home the machine (`$H`).
+2. Load any tool (a centerdrill works; the exact tool doesn't matter).
+3. Jog the spindle in X toward the chuck until the tool tip is **at the chuck face plane** — use a square or a feeler gauge against the front face of the chuck jaws.
+4. Read the machine X coordinate from the Carvera console. **That number is your X-offset.** Write it down. On a stock Carvera with the HD rotary mounted at the −X end of the table this is typically in the **5–20 mm range**; it varies with how far back you bolted the rotary.
+5. Set `G54 X` to the negative of that reading. Now `X = 0` in your G-code is the chuck face, exactly as the post expects.
+
+Re-measure any time you remove and reinstall the rotary, or move it on the table. **A 2 mm drift here puts every Part 2 X coordinate 2 mm closer to the chuck than the toolpath thinks** — which is why `rotaryChuckDepthMm` (the engine-side guard) is set conservatively in stock setup. See Part 1 *Stock model* for how `rotaryChuckDepthMm + rotaryClampOffsetMm` builds the no-go zone the engine refuses to violate; the X-offset you just measured is the **operator-side** half of the same safety contract.
+
+### Enforce Y = 0
+
+The post hardcodes `G0 Y0` before every feed move ([`resources/posts/carvera_4axis.hbs`](../resources/posts/carvera_4axis.hbs) line 73) because the rotary attachment is meant to center the workpiece on the Y = 0 plane. **The post will not protect you from a misaligned rotary** — if the chuck centerline is 3 mm off Y = 0, every cut is 3 mm off and the tool may clip the chuck body or the jaws on retract.
+
+1. Clamp a dial indicator in the spindle.
+2. Touch the indicator tip to the side of the chuck body (or, better, a ground bar held in the chuck).
+3. Rotate the A axis through **180°** in two stops. The indicator reading should not change by more than **0.05 mm** between the two positions. If it does, the chuck centerline is not on Y = 0 — loosen the rotary mount, shim or shift it, and re-square.
+4. With the rotary verified centered, set `G54 Y = 0` at the spindle position that matches the chuck centerline (your dial indicator's zero position).
+
+The air-cut runbook in **Part 2 Step 5** below is where you'll confirm this end-to-end with the toolpath in motion. Do not skip it: a Y-axis collision at feed rate during a real cut is the most expensive and most preventable mistake on the 4-axis Carvera.
+
+### Pre-cut sanity check
+
+Before you load any G-code, run through this list. None of these steps are optional.
+
+| Check | Pass criterion | Tool |
+|---|---|---|
+| Chuck face square to X | <0.05 mm sweep across base | Dial indicator |
+| Chuck runout (3-jaw on ground bar) | <0.05 mm TIR (decorative) / <0.02 mm TIR (finish) | Dial indicator |
+| Chuck centerline on Y = 0 | <0.05 mm between A = 0° and A = 180° | Dial indicator |
+| X-offset measured and entered into G54 | Within 0.5 mm of measured value | Carvera console |
+| Tailstock alignment (if used) | Stock spins true; live center backed ¼ turn after firm contact | Hand spin + feel |
+| Stock seated in chuck | At least 15 mm grip depth, equal to `rotaryChuckDepthMm` in Part 2 Step 1 | Calipers |
+
+If any row fails, fix it now. **Every** subsequent step in Part 2 — stock config, simulation, post-compile, air cut — assumes these checks have passed. The validator and post-compile envelope check cannot see the dial indicator, only what you typed into the panel.
+
+---
+
 ## Part 2 — first-job runbook: groove around a round bar
 
 This job cuts a single decorative groove around a 30 mm diameter aluminum round bar. No STL is required — we supply the contour as two points. It's the simplest possible 4-axis job and exercises every link in the pipeline: stock config, contour strategy, validation, post, envelope check, simulation, and the Carvera-specific post rules.

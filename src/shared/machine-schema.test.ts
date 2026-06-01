@@ -136,11 +136,16 @@ describe('machineProfileSchema', () => {
   })
 
   it('parses 5-axis machine profile with all 5-axis fields', () => {
+    // The speculative 5-axis Fanuc/Siemens post templates were removed in the
+    // June 2026 My-Shop-Only cleanup, but the 5-axis schema surface is kept
+    // additive (Safety Rule 2: no migration needed for saved profiles). A
+    // 5-axis machine profile still parses cleanly when pointed at the
+    // generic-mm post fallback.
     const fiveAxis = {
       ...minimalCnc,
       id: 'generic-5axis-th',
       name: 'Generic 5-axis (Table-Head)',
-      postTemplate: 'cnc_5axis_fanuc.hbs',
+      postTemplate: 'cnc_generic_mm.hbs',
       dialect: 'fanuc' as const,
       axisCount: 5,
       aAxisRangeDeg: 360,

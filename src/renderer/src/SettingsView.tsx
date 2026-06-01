@@ -95,6 +95,8 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
   const moonrakerUrl = typeof settings.moonrakerUrl === 'string' ? settings.moonrakerUrl : ''
   const moonrakerApiKey = typeof settings.moonrakerApiKey === 'string' ? settings.moonrakerApiKey : ''
   const pythonPath = typeof settings.pythonPath === 'string' ? settings.pythonPath : ''
+  const carveraCliPath = typeof settings.carveraCliPath === 'string' ? settings.carveraCliPath : ''
+  const carveraCliExtraArgsJson = typeof settings.carveraCliExtraArgsJson === 'string' ? settings.carveraCliExtraArgsJson : ''
   const k2QualityPresetId = useMemo<'standard' | 'high_speed'>(() => {
     return settings.k2QualityPresetId === 'high_speed' ? 'high_speed' : 'standard'
   }, [settings.k2QualityPresetId])
@@ -118,6 +120,8 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
         moonrakerUrl: moonrakerUrl || undefined,
         moonrakerApiKey: moonrakerApiKey || undefined,
         pythonPath: pythonPath || undefined,
+        carveraCliPath: carveraCliPath || undefined,
+        carveraCliExtraArgsJson: carveraCliExtraArgsJson || undefined,
         k2QualityPresetId,
         activeFilamentId: activeFilamentId || undefined
       }
@@ -275,6 +279,9 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
             <span id="settings-moonraker-url-hint" className="settings-hint">
               Base URL of the K2 Plus Moonraker API. Used by the Manufacture &quot;Send to K2 Plus&quot; button.
             </span>
+            <span className="settings-hint">
+              Find your K2 Plus IP from the router DHCP table, the K2 touchscreen Settings, or try the mDNS name k2plus.local. Default Moonraker port is 7125.
+            </span>
           </div>
 
           <div className="form-group">
@@ -425,7 +432,46 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
         </div>
       </fieldset>
 
-      {/* ── 4. Slicing defaults (K2 Plus) ──────────────────────────────── */}
+      {/* ── 4. External tool paths ─────────────────────────────────────── */}
+      <fieldset className="settings-section card">
+        <legend className="settings-section__legend">External tool paths</legend>
+        <div className="card-body section-gap">
+          <div className="form-group">
+            <label htmlFor="settings-carvera-cli-path">carvera-cli executable (Makera Carvera upload)</label>
+            <input
+              id="settings-carvera-cli-path"
+              data-testid="carvera-cli-path-input"
+              type="text"
+              placeholder="C:\\Tools\\carvera-cli.exe  or  /usr/local/bin/carvera-cli"
+              value={carveraCliPath}
+              onChange={e => setField('carveraCliPath', e.target.value)}
+              aria-describedby="settings-carvera-cli-path-hint"
+            />
+            <span id="settings-carvera-cli-path-hint" className="settings-hint">
+              Absolute path to the community carvera-cli executable used to upload G-code to the Carvera. Leave empty to fall back to <code>carvera-cli</code> on PATH.
+            </span>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="settings-carvera-cli-extra-args">carvera-cli extra args (JSON array)</label>
+            <textarea
+              id="settings-carvera-cli-extra-args"
+              data-testid="carvera-cli-extra-args-input"
+              rows={2}
+              spellCheck={false}
+              placeholder='["-m","carvera_cli"]'
+              value={carveraCliExtraArgsJson}
+              onChange={e => setField('carveraCliExtraArgsJson', e.target.value)}
+              aria-describedby="settings-carvera-cli-extra-args-hint"
+            />
+            <span id="settings-carvera-cli-extra-args-hint" className="settings-hint">
+              Optional JSON array of extra argv inserted after the executable, e.g. <code>[&quot;-m&quot;,&quot;carvera_cli&quot;]</code> when running carvera-cli as a Python module.
+            </span>
+          </div>
+        </div>
+      </fieldset>
+
+      {/* ── 5. Slicing defaults (K2 Plus) ──────────────────────────────── */}
       <fieldset className="settings-section card">
         <legend className="settings-section__legend">Slicing defaults (K2 Plus)</legend>
         <div className="card-body section-gap">

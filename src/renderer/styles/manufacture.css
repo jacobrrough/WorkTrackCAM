@@ -1472,3 +1472,363 @@
 .workshop-dashboard__action {
   width: 100%;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Workspace utility panels (shared namespace)
+   ───────────────────────────────────────────────────────────────────────────
+   The Slice / CAM / Tools / Calibrate panels under Manufacture all live in a
+   <section className="panel workspace-util-panel"> shell. This namespace
+   gives them a consistent dense-CAM-panel rhythm (padding, gap, heading
+   weight) so individual panels only need to add their own card layouts on
+   top. The `.util-section-heading` pattern matches the `.subh` cue already
+   used inside the multi-setup wizard for visual continuity.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.workspace-util-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-6) var(--sp-8);
+  background: var(--bg1);
+  color: var(--txt0);
+  font-family: var(--font);
+  font-size: var(--text-base);
+}
+.workspace-util-panel > h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  line-height: var(--leading-tight);
+}
+.workspace-util-panel > h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  line-height: var(--leading-tight);
+}
+
+.util-section-heading {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  letter-spacing: 0.01em;
+  line-height: var(--leading-tight);
+}
+
+.util-panel-intro {
+  margin: 0;
+  color: var(--txt1);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+/* Field-group control rows inside util panels. The label-stack control
+   (label + input) uses column flex so the caption sits above the input. */
+.util-panel-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--txt1);
+}
+.util-panel-control > span {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--txt2);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.util-panel-control > input,
+.util-panel-control > select {
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font-family: var(--font);
+  font-size: var(--text-base);
+  padding: var(--sp-2) var(--sp-3);
+  min-width: 0;
+}
+.util-panel-control > input:focus,
+.util-panel-control > select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.util-panel-control-row {
+  /* Dense grid of util-panel-control fields. Wraps on narrow widths so
+     the 4–6 inputs in each calibration card stay readable. */
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-5);
+  align-items: flex-start;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CalibrationPanel — K2 Plus calibration suite (Gap #4)
+   ───────────────────────────────────────────────────────────────────────────
+   Eight cards stacked vertically; each card is a self-contained section
+   with heading, hint text, control row, action row, and result/error
+   surfaces. Cards share the same chrome regardless of test kind because
+   the operator scans down the list — visual consistency outranks per-card
+   identity.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.calibration-panel {
+  /* Inherits .workspace-util-panel chrome; this only tunes spacing for
+     the stacked-card layout. */
+  gap: var(--sp-6);
+}
+
+.calibration-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-8);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+.calibration-card:hover {
+  border-color: var(--border-hi);
+  box-shadow: var(--elevation-1);
+}
+.calibration-card > h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  line-height: var(--leading-tight);
+}
+.calibration-card > .msg {
+  margin: 0;
+  color: var(--txt1);
+  line-height: var(--leading-normal);
+}
+.calibration-card code {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+  background: var(--accent-8);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ManufactureAuxPanels — K2 send / CAM action / Laguna / Carvera surfaces
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* K2 Plus "Send to printer" sub-section in the FDM slice panel. Visually
+   nested inside the parent util panel; uses the same card chrome as a
+   calibration card so the operator can scan the whole stack uniformly. */
+.k2-send-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.k2-send-section > h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+
+/* CAM stale-mesh banner: warns when the source mesh is newer than
+   output/cam.nc so the operator re-posts before sending to a machine.
+   Uses the existing warn semantic palette. */
+.manufacture-cam-stale-banner {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--warn-dim);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+.manufacture-cam-stale-banner strong {
+  color: var(--warn);
+  font-weight: var(--weight-semibold);
+}
+
+/* CAM action button row (Generate / Preview / Export setup sheet). Slightly
+   tighter than the default .row so the three buttons line up close. */
+.util-cam-actions {
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+/* Laguna 6-zone vacuum picker row: six chips in a single tight row so they
+   visually map to the 2x3 physical zone layout. */
+.util-laguna-vacuum-row {
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* Laguna spec card — read-only definition list. Two-column dt/dd rows so
+   the operator can quickly skim work envelope / collet / dwell values. */
+.util-laguna-spec-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.util-laguna-spec-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: var(--sp-4);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px dashed var(--border);
+}
+.util-laguna-spec-row:last-child {
+  border-bottom: none;
+}
+.util-laguna-spec-row > dt {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--txt2);
+}
+.util-laguna-spec-row > dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+}
+
+/* Carvera upload row — connection + device input + button line. Looser
+   gap than util-cam-actions because the inputs need breathing room. */
+.manufacture-carvera-row {
+  gap: var(--sp-4);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+/* Carvera ATC tool table + 4-axis rotary fixture table. Mono font on
+   numeric cells (Ø, length, H register) so columns visually align. */
+.util-tool-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  color: var(--txt0);
+}
+.util-tool-table thead th {
+  text-align: left;
+  font-weight: var(--weight-semibold);
+  color: var(--txt1);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.util-tool-table th[scope="row"] {
+  text-align: left;
+  font-weight: var(--weight-medium);
+  color: var(--txt2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.util-tool-table td {
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+/* Numeric / identifier columns: every column from the third onward in the
+   ATC slot map (Ø, length, H register) is numeric — mono-style them so
+   decimals stack cleanly down the column. */
+.util-tool-table td:nth-child(n+3) {
+  font-family: var(--mono);
+  color: var(--txt1);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.util-tool-table tbody tr:last-child td,
+.util-tool-table tbody tr:last-child th[scope="row"] {
+  border-bottom: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LagunaNestingPanel — Gap #9 true-shape nesting UI
+   ───────────────────────────────────────────────────────────────────────────
+   Renders only when the active machine is the Laguna Swift 5x10. Card
+   chrome mirrors the dashboard cards so the nesting result reads as a
+   distinct surface (not just inline text).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.laguna-nesting-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.laguna-nesting-panel > h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+.laguna-nesting-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.laguna-nesting-result > .msg {
+  margin: 0;
+  color: var(--txt0);
+}
+.laguna-nesting-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: var(--text-sm);
+  color: var(--txt1);
+}
+.laguna-nesting-list > li {
+  padding: var(--sp-1) 0;
+  border-bottom: 1px dashed var(--border);
+}
+.laguna-nesting-list > li:last-child {
+  border-bottom: none;
+}
+.laguna-nesting-list code {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PlateTabs — active-state wash (Gap #7 v1)
+   ───────────────────────────────────────────────────────────────────────────
+   The active plate's wrapper gets a subtle accent-tinted background so the
+   operator can spot the live plate even when scanning the tab strip with
+   peripheral vision. The wash is intentionally lighter than the
+   .plate-tab.active bottom-border treatment so the two cues compound
+   without competing.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.plate-tab-wrap--active {
+  background: var(--accent-12);
+}
+.plate-tab-wrap--active .plate-tab,
+.plate-tab-wrap--active .plate-tab:hover {
+  background: transparent;
+}

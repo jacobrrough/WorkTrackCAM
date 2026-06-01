@@ -192,21 +192,25 @@ describe('Laguna Swift 5×10 — RichAuto A-series post compliance', () => {
 
   // ─── Spindle RPM clamping against the Laguna's stated min/max ───────────
 
-  it('clamps spindle RPM above maxSpindleRpm (18000) and emits a warning', async () => {
+  it('clamps spindle RPM above maxSpindleRpm (24000) and emits a warning', async () => {
+    // CLAUDE.md spec: Laguna 3 HP / 6 HP wood router runs at 6,000-24,000 RPM.
+    // Use 25000 to exceed the new ceiling — bumped from the legacy 18000 cap.
     const machine = loadLagunaProfile()
     const { gcode, warnings } = await renderPost(resourcesRoot, machine, sampleToolpath, {
-      spindleRpm: 24000,
+      spindleRpm: 25000,
     })
-    expect(gcode).toContain('M3 S18000')
+    expect(gcode).toContain('M3 S24000')
     expect(warnings.some((w) => /exceeds machine maximum/.test(w))).toBe(true)
   })
 
-  it('clamps spindle RPM below minSpindleRpm (8000) and emits a warning', async () => {
+  it('clamps spindle RPM below minSpindleRpm (6000) and emits a warning', async () => {
+    // CLAUDE.md spec: Laguna 3 HP / 6 HP wood router runs at 6,000-24,000 RPM.
+    // Use 5000 to go below the new floor — dropped from the legacy 8000 floor.
     const machine = loadLagunaProfile()
     const { gcode, warnings } = await renderPost(resourcesRoot, machine, sampleToolpath, {
-      spindleRpm: 6000,
+      spindleRpm: 5000,
     })
-    expect(gcode).toContain('M3 S8000')
+    expect(gcode).toContain('M3 S6000')
     expect(warnings.some((w) => /below machine minimum/.test(w))).toBe(true)
   })
 

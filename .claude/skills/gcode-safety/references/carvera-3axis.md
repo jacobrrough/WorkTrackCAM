@@ -1,6 +1,6 @@
 # Makera Carvera (3-axis) -- G-code safety reference
 
-**Machine identity**: Makera Carvera in 3-axis mode is a 360 x 240 x 140 mm desktop CNC with a 200 W spindle (6000-15000 RPM), 6-slot automatic tool changer, and Smoothieware-family firmware accessed over the Makera Controller.
+**Machine identity**: Makera Carvera in 3-axis mode is a 360 x 240 x 140 mm desktop CNC with a 200 W spindle (13,000–15,000 RPM rated operating window — sub-13k risks spindle damage), 6-slot automatic tool changer, and Smoothieware-family firmware accessed over the Makera Controller.
 
 > Read this before touching `resources/posts/carvera_3axis.hbs`, `resources/machines/makera-carvera-3axis.json`, or any code path that emits G-code for the 3-axis Carvera. Bad G-code crashes the spindle into the ATC and (worse) **M30 may delete the file from the SD card** -- this is the single most burned-by gotcha on this machine.
 
@@ -31,7 +31,7 @@ The Post template `carvera_3axis.hbs` and the profile `makera-carvera-3axis.json
 | --- | --- | --- |
 | Work envelope | 360 x 240 x 140 mm | `workAreaMm` |
 | Max feed | **Max feed is 2400 mm/min** | `maxFeedMmMin` |
-| Min spindle | 6000 RPM | `minSpindleRpm` |
+| Min spindle | 13000 RPM | `minSpindleRpm` |
 | Max spindle | 15000 RPM | `maxSpindleRpm` |
 | ATC capacity | 6 cutting slots | `atcSlotCount` |
 | ATC probe slot | T0 (`wireless probe`) | `atcProbeSlot` |

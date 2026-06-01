@@ -10,7 +10,7 @@
   "atcSlotCount": 6,
   "atcProbeSlot": 0,
   "maxSpindleRpm": 15000,
-  "minSpindleRpm": 6000,
+  "minSpindleRpm": 13000,
   "meta": {
     "manufacturer": "Makera",
     "model": "Carvera",

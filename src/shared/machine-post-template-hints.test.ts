@@ -28,9 +28,11 @@ describe('machine-post-template-hints', () => {
     expect(COMMON_POST_TEMPLATE_FILENAMES).toContain('cnc_4axis_grbl.hbs')
   })
 
-  it('includes 5-axis templates', () => {
+  it('contains no 5-axis templates (June 2026 My-Shop-Only enforcement)', () => {
+    // None of the three target shops own a 5-axis machine, so the speculative
+    // 5-axis Fanuc / Siemens fallbacks were removed.
     const fiveAxis = COMMON_POST_TEMPLATE_FILENAMES.filter((f) => f.includes('5axis'))
-    expect(fiveAxis.length).toBeGreaterThan(0)
+    expect(fiveAxis.length).toBe(0)
   })
 
   it('has no duplicate entries', () => {

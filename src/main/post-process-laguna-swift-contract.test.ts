@@ -30,7 +30,7 @@
  *   contract: the Mach3-vs-RichAuto dialect superset note (doc lines 8-12),
  *   the dustCollection flag round-trip (M7 with paired M9), the
  *   spindle warm-up dwell `G4 P2.0`, the cool-down dwell `G4 P3.0`, the
- *   1524x3048x203 work envelope, and the [8000, 18000] RPM band. The two
+ *   1524x3048x203 work envelope, and the [6000, 24000] RPM band. The two
  *   layers complement.
  */
 
@@ -60,7 +60,7 @@ function loadLagunaSwiftProfile(): MachineProfile {
 
 /**
  * Representative Laguna Swift wood-routing facing pass. Stays inside the
- * Laguna's [8000, 18000] RPM band (controlled by spindleRpm opt) and the
+ * Laguna's [6000, 24000] RPM band (controlled by spindleRpm opt) and the
  * 12000 mm/min feed ceiling. No A-word (3-axis router).
  */
 const SAMPLE_LAGUNA_TOOLPATH = [
@@ -350,10 +350,10 @@ describe('laguna-swift contract: machine scope (My-Shop-Only Mode)', () => {
     expect(m.name).toMatch(/Laguna Swift/)
   })
 
-  it('runtime: profile spindle range matches Laguna 3 HP / 6 HP wood-router spec (8000-18000 RPM)', () => {
+  it('runtime: profile spindle range matches Laguna 3 HP / 6 HP wood-router spec (6000-24000 RPM)', () => {
     const m = loadLagunaSwiftProfile()
-    expect(m.minSpindleRpm).toBe(8000)
-    expect(m.maxSpindleRpm).toBe(18000)
+    expect(m.minSpindleRpm).toBe(6000)
+    expect(m.maxSpindleRpm).toBe(24000)
   })
 
   it('runtime: profile work envelope matches Laguna Swift 5x10 spec (1524 x 3048 x 203 mm)', () => {

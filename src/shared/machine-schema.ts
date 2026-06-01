@@ -52,11 +52,25 @@ export const machineProfileSchema = z.object({
     .max(5)
     .optional()
     .describe('Number of controlled axes: 3=XYZ, 4=+A rotary, 5=+A+B'),
+  /**
+   * A-axis rotation range in degrees. Finite values (e.g. 360 for a full
+   * single revolution, 180 for a +/-90 indexer) represent the usable soft-
+   * limit window enforced by the post-processor.
+   *
+   * The sentinel value **99999** is the project convention for "continuous
+   * rotation, no soft limit" -- used by Makera Carvera 4-axis profiles
+   * whose HD harmonic-drive module spins freely without firmware-enforced
+   * angular bounds. The Carvera 4-axis post contract pins this convention
+   * (see post-process-carvera-4axis-contract.test.ts); validators and the
+   * UI must treat 99999 as "unbounded" rather than a literal 99999-degree
+   * window. Do not redefine or remap this sentinel without updating the
+   * contract test and every Carvera 4-axis machine profile in one change.
+   */
   aAxisRangeDeg: z
     .number()
     .positive()
     .optional()
-    .describe('A-axis rotation range in degrees (e.g. 360 for continuous)'),
+    .describe('A-axis rotation range in degrees (e.g. 360 for a single full revolution; 99999 = continuous rotation, no soft limit -- Carvera 4-axis sentinel)'),
   aAxisOrientation: z
     .enum(['x', 'y'])
     .optional()

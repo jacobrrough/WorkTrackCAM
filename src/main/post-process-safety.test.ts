@@ -47,12 +47,9 @@ const fourAxisLines = [
   'G0 Z20 A0',
 ]
 
-const fiveAxisLines = [
-  'G0 X0 Y0 Z30 A0 B0',
-  'G1 X10 Y10 Z-1.000 A15 B10 F500',
-  'G1 X20 Y10 Z-1.000 A30 B-5 F500',
-  'G0 Z30 A0 B0',
-]
+// fiveAxisLines (5-axis test toolpath) was removed alongside the speculative
+// 5-axis Fanuc / Siemens post templates in the June 2026 My-Shop-Only
+// cleanup — no surviving dialect entry exercises 5-axis output.
 
 // ─── Machine profiles for every dialect ─────────────────────────────────────
 
@@ -180,44 +177,9 @@ const dialects: DialectConfig[] = [
     hasM6: false,
     hasM9: true,
   },
-  {
-    name: 'Fanuc 5-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_5axis_fanuc.hbs',
-      dialect: 'fanuc',
-      axisCount: 5,
-      aAxisRangeDeg: 360,
-      bAxisRangeDeg: 120,
-      bAxisOrientation: 'y',
-      fiveAxisType: 'table-head',
-      maxTiltDeg: 60,
-    },
-    lines: fiveAxisLines,
-    programEnd: 'M30',
-    hasG43: false,  // Uses G43.4 (RTCP) instead, tested separately
-    hasM6: false,
-    hasM9: false,
-  },
-  {
-    name: 'Siemens 5-axis',
-    machine: {
-      ...baseMachine,
-      postTemplate: 'cnc_5axis_siemens.hbs',
-      dialect: 'siemens',
-      axisCount: 5,
-      aAxisRangeDeg: 360,
-      bAxisRangeDeg: 120,
-      bAxisOrientation: 'y',
-      fiveAxisType: 'table-table',
-      maxTiltDeg: 60,
-    },
-    lines: fiveAxisLines,
-    programEnd: 'M30',
-    hasG43: false,  // Uses TRAORI instead, tested separately
-    hasM6: false,
-    hasM9: false,
-  },
+  // Note: the Fanuc 5-axis / Siemens 5-axis dialect entries were removed in
+  // the June 2026 My-Shop-Only cleanup. The speculative 5-axis post templates
+  // were deleted because none of the three target shops own a 5-axis machine.
 ]
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -427,20 +389,9 @@ describe('Safety: G43 tool length compensation', () => {
     })
   }
 
-  // 5-axis Fanuc uses G43.4 (RTCP) instead of G43
-  it('Fanuc 5-axis: G43.4 RTCP with tool number', async () => {
-    const fanuc5 = dialects.find((d) => d.name === 'Fanuc 5-axis')!
-    const { gcode } = await renderPost(resourcesRoot, fanuc5.machine, fanuc5.lines, {
-      toolNumber: 2,
-    })
-    expect(gcode).toContain('G43.4 H2')
-  })
-
-  it('Fanuc 5-axis: G43.4 defaults to H1', async () => {
-    const fanuc5 = dialects.find((d) => d.name === 'Fanuc 5-axis')!
-    const { gcode } = await renderPost(resourcesRoot, fanuc5.machine, fanuc5.lines)
-    expect(gcode).toContain('G43.4 H1')
-  })
+  // Note: the Fanuc 5-axis G43.4 RTCP tests were removed in the June 2026
+  // My-Shop-Only cleanup — the speculative 5-axis Fanuc post template was
+  // deleted because none of the three target shops own a 5-axis machine.
 })
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 # Laguna Swift 5x10 -- RichAuto A-series G-code safety reference
 
-**Machine identity**: Laguna Swift 5x10 is a large-format 3-axis CNC router with a 1524 x 3048 x 203 mm work envelope, helical rack-and-pinion X/Y + ball-screw Z, a 3 HP (bundled) or 6 HP liquid-cooled spindle (8000-18000 RPM, ER-20 collet), and a RichAuto A-series handheld controller. The bundled profile is the 3 HP variant.
+**Machine identity**: Laguna Swift 5x10 is a large-format 3-axis CNC router with a 1524 x 3048 x 203 mm work envelope, helical rack-and-pinion X/Y + ball-screw Z, a 3 HP (bundled) or 6 HP liquid-cooled spindle (6,000–24,000 RPM, ER-20 collet), and a RichAuto A-series handheld controller. The bundled profile is the 3 HP variant.
 
 > Read this before touching `resources/posts/vcarve_mach3.hbs`, `resources/machines/laguna-swift-5x10.json`, or any code path that emits G-code for the Laguna Swift. The Mach3-vs-RichAuto dialect superset note is the most-burned-by source of confusion; the M30/M2 terminator mistake is the second.
 
@@ -31,8 +31,8 @@ If a future post genuinely needs RichAuto-only syntax that Mach3 rejects, **add 
 | --- | --- | --- |
 | Work envelope | 1524 x 3048 x 203 mm | `workAreaMm` (the 203 mm Z is the safe-Z source for the post) |
 | Max feed | maxFeedMmMin (12000 mm/min ceiling) | `maxFeedMmMin` |
-| Min spindle | 8000 RPM | `minSpindleRpm` |
-| Max spindle | 18000 RPM | `maxSpindleRpm` |
+| Min spindle | 6000 RPM | `minSpindleRpm` |
+| Max spindle | 24000 RPM | `maxSpindleRpm` |
 | Spindle variant | 3 HP (bundled) | `spindleVariantHp` |
 | Vacuum zones | 6 (controlled from the RichAuto pendant, not from G-code) | `vacuumZoneCount` |
 | Safe retract Z (operational) | 25 mm | `safeRetractZMm` (advisory; the post uses `workAreaMm.z` for the post-loaded safe-Z lift) |
@@ -98,7 +98,7 @@ If a shop-specific post enables dust-on (the `dustCollection` flag), it MUST emi
 
 ## Known-good fixture recommendation
 
-For snapshot tests and bench verification: a **600 x 400 mm plywood** facing pass with a **6 mm end mill** at 8000-12000 mm/min feed, 8000-12000 RPM spindle, dustCollection on, workCoordinateIndex=1. Reuse this recipe when extending Laguna coverage rather than reinventing one.
+For snapshot tests and bench verification: a **600 x 400 mm plywood** facing pass with a **6 mm end mill** at 8000-12000 mm/min feed, 12000-18000 RPM spindle (well inside the 6000-24000 RPM hardware envelope), dustCollection on, workCoordinateIndex=1. Reuse this recipe when extending Laguna coverage rather than reinventing one.
 
 ---
 

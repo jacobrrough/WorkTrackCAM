@@ -151,17 +151,9 @@ describe('renderPost — operationLabel injection', () => {
     expect(g).toContain('; Operation: Rotary Contour')
   })
 
-  it('injects operation label comment in 5-axis Fanuc template', async () => {
-    const m5f: MachineProfile = { ...machine, postTemplate: 'cnc_5axis_fanuc.hbs', dialect: 'fanuc', axisCount: 5 }
-    const { gcode: g } = await renderPost(resourcesRoot, m5f, [], { operationLabel: '5-Axis Finish' })
-    expect(g).toContain('; Operation: 5-Axis Finish')
-  })
-
-  it('injects operation label comment in 5-axis Siemens template', async () => {
-    const m5s: MachineProfile = { ...machine, postTemplate: 'cnc_5axis_siemens.hbs', dialect: 'siemens', axisCount: 5 }
-    const { gcode: g } = await renderPost(resourcesRoot, m5s, [], { operationLabel: 'TRAORI Contour' })
-    expect(g).toContain('; Operation: TRAORI Contour')
-  })
+  // Note: the 5-axis Fanuc and 5-axis Siemens operationLabel injection tests
+  // were removed in the June 2026 My-Shop-Only cleanup — the speculative
+  // 5-axis Fanuc / Siemens post templates were deleted.
 
   it('operation label appears before toolpath lines', async () => {
     const lines = ['G0 X10 Y10 Z5', 'G1 X20 F800']
@@ -232,132 +224,10 @@ describe('renderPost — cnc_4axis_grbl.hbs safety structure', () => {
 // only `cnc_4axis_grbl.hbs` is exercised. CPS imports for those dialects now
 // repoint at GRBL.
 
-// ─── 5-axis Fanuc template (cnc_5axis_fanuc.hbs) ──────────────────────────────
-describe('renderPost — cnc_5axis_fanuc.hbs safety structure', () => {
-  const machine5axFanuc: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_5axis_fanuc.hbs',
-    dialect: 'fanuc',
-    axisCount: 5,
-    fiveAxisType: 'table-head'
-  }
-
-  it('emits G43.4 RTCP activation in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('G43.4')
-  })
-
-  it('emits G49 to cancel RTCP/tool length compensation before retract', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('G49')
-  })
-
-  it('emits G0 A0 B0 to return rotary axes to zero before park', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('G0 A0 B0')
-  })
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('M30')
-  })
-
-  it('emits G40 G49 G80 safety reset in header', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    // Cancel cutter comp, tool length comp, canned cycles
-    expect(g).toContain('G40')
-    expect(g).toContain('G80')
-  })
-
-  it('emits 5-AXIS and Fanuc identifiers in header comment', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('5-AXIS')
-    expect(g).toContain('Fanuc')
-  })
-
-  it('G49 appears after toolpath and before M30 (cancel RTCP before program end)', async () => {
-    const lines = ['G1 X10 Y5 Z-1 A30 B15 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, lines)
-    const lineIdx = g.indexOf('G1 X10 Y5 Z-1 A30 B15 F800')
-    const g49Idx = g.lastIndexOf('G49')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(lineIdx).toBeGreaterThan(-1)
-    expect(g49Idx).toBeGreaterThan(lineIdx)
-    expect(m30Idx).toBeGreaterThan(g49Idx)
-  })
-
-  it('emits kinematic type comment when fiveAxisType is set', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('table-head')
-  })
-
-  it('emits spindle on (fanuc M3 S10000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axFanuc, [])
-    expect(g).toContain('M3 S10000')
-    expect(g).toContain('M5')
-  })
-})
-
-// ─── 5-axis Siemens template (cnc_5axis_siemens.hbs) ─────────────────────────
-describe('renderPost — cnc_5axis_siemens.hbs safety structure', () => {
-  const machine5axSiemens: MachineProfile = {
-    ...machine,
-    postTemplate: 'cnc_5axis_siemens.hbs',
-    dialect: 'siemens',
-    axisCount: 5
-  }
-
-  it('emits TRAORI to activate 5-axis orientation transformation', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('TRAORI')
-  })
-
-  it('emits TRAFOOF to deactivate transformation before retract', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('TRAFOOF')
-  })
-
-  it('TRAFOOF appears after toolpath and before M30', async () => {
-    const lines = ['G1 X10 Y5 Z-1 A30 B15 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, lines)
-    const lineIdx = g.indexOf('G1 X10 Y5 Z-1 A30 B15 F800')
-    const trafoodIdx = g.indexOf('TRAFOOF')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(lineIdx).toBeGreaterThan(-1)
-    expect(trafoodIdx).toBeGreaterThan(lineIdx)
-    expect(m30Idx).toBeGreaterThan(trafoodIdx)
-  })
-
-  it('TRAORI appears before toolpath lines', async () => {
-    const lines = ['G1 X10 Y5 Z-1 A30 B15 F800']
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, lines)
-    const traoriIdx = g.indexOf('TRAORI')
-    const lineIdx = g.indexOf('G1 X10 Y5 Z-1 A30 B15 F800')
-    expect(traoriIdx).toBeGreaterThan(-1)
-    expect(traoriIdx).toBeLessThan(lineIdx)
-  })
-
-  it('emits G0 A0 B0 to return rotary axes to zero', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('G0 A0 B0')
-  })
-
-  it('emits M30 program end', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('M30')
-  })
-
-  it('emits Siemens identifier in header comment', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('Siemens')
-  })
-
-  it('emits spindle on (siemens M3 S10000) and spindle off (M5)', async () => {
-    const { gcode: g } = await renderPost(resourcesRoot, machine5axSiemens, [])
-    expect(g).toContain('M3 S10000')
-    expect(g).toContain('M5')
-  })
-})
+// Note: the 5-axis Fanuc and 5-axis Siemens safety-structure describe
+// blocks were removed in the June 2026 My-Shop-Only cleanup — the
+// speculative 5-axis post templates were deleted because none of the
+// three target shops own a 5-axis machine.
 
 // ─── toolNumber passthrough (ATC support) ───────────────────────────────────
 describe('renderPost — toolNumber (ATC tool slot)', () => {
@@ -395,12 +265,9 @@ describe('renderPost — toolNumber (ATC tool slot)', () => {
   // removed in the April 2026 4-axis subsystem rewrite — only the GRBL/Carvera
   // templates remain for 4-axis output.
 
-  it('5-axis Fanuc: emits correct H number in G43.4 when toolNumber provided', async () => {
-    const fanuc5Machine: MachineProfile = { ...machine, postTemplate: 'cnc_5axis_fanuc.hbs', dialect: 'fanuc', axisCount: 5, fiveAxisType: 'table-head' }
-    const { gcode: g } = await renderPost(resourcesRoot, fanuc5Machine, [], { toolNumber: 2 })
-    expect(g).toContain('G43.4 H2')
-    expect(g).not.toContain('G43.4 H1')
-  })
+  // Note: the 5-axis Fanuc toolNumber test was removed in the June 2026
+  // My-Shop-Only cleanup — the speculative 5-axis Fanuc post template was
+  // deleted.
 
   it('generic template: no executable tool change lines affected by toolNumber', async () => {
     const { gcode: g } = await renderPost(resourcesRoot, machine, [], { toolNumber: 3 })

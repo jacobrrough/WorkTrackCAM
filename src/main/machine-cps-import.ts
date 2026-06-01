@@ -232,6 +232,12 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
   // the dialect enum is preserved so existing user machine profiles in
   // %APPDATA%/WorkTrackCAM/machines/ continue to load. Imported CPS files for
   // those dialects now point at `cnc_4axis_grbl.hbs` instead.
+  //
+  // My-Shop-Only enforcement (June 2026): the speculative 5-axis Fanuc and
+  // Siemens post templates were removed — none of the three target shops
+  // own a 5-axis machine. The `fanuc` / `siemens` dialect enum entries
+  // remain so existing saved profiles still load (Safety Rule 2), but
+  // imported CPS files now fall back to the generic-mm post.
   const postTemplateMap: Record<MachineProfile['dialect'], string> = {
     grbl:            'cnc_generic_mm.hbs',
     grbl_4axis:      'cnc_4axis_grbl.hbs',
@@ -242,8 +248,8 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
     heidenhain_4axis: 'cnc_4axis_grbl.hbs',
     mach3:           'cnc_generic_mm.hbs',
     generic_mm:      'cnc_generic_mm.hbs',
-    fanuc:           'cnc_5axis_fanuc.hbs',
-    siemens:         'cnc_5axis_siemens.hbs',
+    fanuc:           'cnc_generic_mm.hbs',
+    siemens:         'cnc_generic_mm.hbs',
     heidenhain:      'cnc_generic_mm.hbs',
     // [ID-0160] Cycle 68 — Smoothieware (Makera Carvera 3-axis) imports
     // route to the bundled Carvera 3-axis post for shop-specific defaults.

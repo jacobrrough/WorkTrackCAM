@@ -371,9 +371,11 @@ describe('carvera-3axis contract: machine scope (My-Shop-Only Mode)', () => {
     expect(m.name).toMatch(/3-Axis/i)
   })
 
-  it('runtime: profile spindle range matches Carvera 200 W spec (6000–15000 RPM)', () => {
+  it('runtime: profile spindle range matches Carvera 200 W spec (13000–15000 RPM)', () => {
+    // CLAUDE.md spec: the 200 W spindle is rated 13,000–15,000 RPM.
+    // Sub-13k operation risks spindle damage; the profile floor enforces this.
     const m = loadCarvera3AxisProfile()
-    expect(m.minSpindleRpm).toBe(6000)
+    expect(m.minSpindleRpm).toBe(13000)
     expect(m.maxSpindleRpm).toBe(15000)
   })
 
