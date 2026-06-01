@@ -125,20 +125,25 @@ npm run build         # Full production build
 
 ## Architecture Quick Reference
 - `src/main/` — Electron main process, IPC handlers, file I/O
+- `src/main/index.ts` — **IPC ordering invariant**: all `register*Ipc` calls MUST run inside `app.whenReady()` BEFORE `createWindow()`. Otherwise the preload can dispatch initial `fab()` calls before handlers are installed, producing opaque "No handler registered" errors on cold start. Adding a new IPC namespace? Put it next to the existing `registerCoreIpc / registerFabricationIpc / registerModelingIpc` calls.
 - `src/main/sidecar/python-bridge.ts` — typed JSON-RPC client that spawns and talks to the Python sidecar
 - `src/main/slicer/orca-wrapper.ts` — OrcaSlicer CLI wrapper (`buildOrcaArgs` + `runOrcaSlice`)
 - `src/renderer/src/` — React UI components, CSS, Three.js viewport
+- `src/renderer/src/EmptyState.tsx` — **shared "nothing here yet" component**. Use this for ANY panel that can render with no data (operations list, dashboard, nesting result, etc.). BEM CSS classes (`.empty-state`, `__icon`, `__title`, `__body`, `__cta`) live in `src/renderer/styles/components.css`. Do NOT roll your own empty-state markup — extend `EmptyState` instead.
 - `src/preload/` — Electron preload (IPC bridge)
 - `src/shared/` — Zod schemas, type definitions
+- `src/shared/app-keyboard-shortcuts.ts` — single source of truth for keyboard shortcuts (1–6 for NavRail, F1 for Help, Ctrl+K palette, Ctrl+Shift+? for the shortcuts dialog). When wiring a new shortcut, add it here so the shortcuts dialog documents it.
 - `src/shared/sidecar-protocol.ts` — wire types + `isSidecarResponse` guard (kept in sync with engines/sidecar/main.py)
 - `engines/sidecar/` — Python sidecar (JSON-RPC over stdin/stdout): `main.py` request loop, `cad_handlers.py` (CadQuery), `cam_handlers.py` (OpenCAMLib)
 - `engines/cam/ocl_toolpath.py` — standalone OpenCAMLib runner (still used by `src/main/cam-runner.ts`; migrates into the sidecar later)
 - `engines/mesh/`, `engines/occt/` — mesh + STEP I/O helpers (consolidating into CadQuery)
 - `engines/requirements.txt` — CadQuery + OpenCAMLib + numpy + trimesh
-- `resources/machines/` — Machine profiles (YAML/JSON) — Creality K2 Plus, Laguna Swift 5x10, Makera Carvera (3-axis + 4-axis)
+- `resources/machines/` — Machine profiles (JSON) — Creality K2 Plus, Laguna Swift 5x10, Makera Carvera (3-axis + 4-axis). CLAUDE.md spec values are encoded here AND pinned by `src/main/machine-profile-spindle-pin.test.ts`.
 - `resources/posts/` — Handlebars post-processor templates per controller/dialect
 - `resources/materials/` — Material/feed-rate data
-- `resources/orca-slicer/` — (planned) bundled OrcaSlicer CLI for K2 Plus FDM
+- `resources/orca-slicer/` — bundled OrcaSlicer CLI + .json profiles for K2 Plus FDM (machines/process/filament). Bundled via `pwsh ./scripts/bundle-orca-slicer.ps1`.
 - `.claude/improvement-log.md` — Improvement cycle history (source of truth)
 - `.claude/commands/improve.md` — Full improvement cycle playbook
+- `.claude/skills/gcode-safety/` — G-code safety skill + per-machine reference files. Invoke whenever `engines/cam/`, `src/main/cam-*`, `resources/posts/**`, or `resources/machines/**` changes.
 - `docs/EDIT-WORKFLOW.md` — Python-via-bash edit workflow + splice-recovery marker-uniqueness checklist ([ID-0089], [ID-0095])
+- `docs/PRE-LAUNCH-READINESS.md` — operator's readiness checklist for real-world testing

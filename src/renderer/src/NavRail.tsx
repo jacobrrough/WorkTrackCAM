@@ -7,6 +7,7 @@ interface NavRailProps {
   onSelect: (s: NavSection) => void
   jobCount: number
   opCount: number
+  onHelp: () => void
 }
 
 const ITEMS: { id: NavSection; icon: string; label: string; shortcut?: string }[] = [
@@ -21,7 +22,7 @@ const ITEMS: { id: NavSection; icon: string; label: string; shortcut?: string }[
   { id: 'settings', icon: '⚙',    label: 'Settings',  shortcut: '6' },
 ]
 
-export function NavRail({ active, onSelect, jobCount, opCount }: NavRailProps): React.ReactElement {
+export function NavRail({ active, onSelect, jobCount, opCount, onHelp }: NavRailProps): React.ReactElement {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   return (
@@ -55,6 +56,7 @@ export function NavRail({ active, onSelect, jobCount, opCount }: NavRailProps): 
         className="nav-rail__btn nav-rail__btn--bottom"
         aria-label="Help (F1)"
         title="Help (F1)"
+        onClick={onHelp}
       >
         <span className="nav-rail__icon" aria-hidden="true">?</span>
       </button>

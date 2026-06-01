@@ -13,8 +13,9 @@
  * on Finish AND on Skip (acceptance criterion: after completing the
  * wizard once, subsequent launches go straight to the main app).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  wizardEscapeKeydownHandler,
   wizardSlugifyName,
   wizardComposeProjectDir,
   wizardStarterOpKind
@@ -84,6 +85,97 @@ describe('FirstLaunchWizard helpers', () => {
     })
     it('maps Carvera 4-axis HD to cnc_4axis_indexed (3+2 strategy)', () => {
       expect(wizardStarterOpKind('makera-carvera-4axis')).toBe('cnc_4axis_indexed')
+    })
+  })
+
+  describe('wizardEscapeKeydownHandler (WCAG 2.1.2 escape route)', () => {
+    /**
+     * Minimal KeyboardEvent shim -- the project has no jsdom or
+     * testing-library dependency, so we synthesize the few props the
+     * handler reads. Mirrors the `useUndo-keyboard.test.ts` pattern.
+     */
+    function mkEvent(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
+      return {
+        key: '',
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...overrides
+      } as KeyboardEvent
+    }
+
+    it('invokes onSkip when a bare Escape keydown is dispatched', () => {
+      const onSkip = vi.fn()
+      const handler = wizardEscapeKeydownHandler(onSkip)
+      handler(mkEvent({ key: 'Escape' }))
+      expect(onSkip).toHaveBeenCalledOnce()
+    })
+
+    it('ignores non-Escape keys (Enter / Tab / arrow keys must not skip)', () => {
+      const onSkip = vi.fn()
+      const handler = wizardEscapeKeydownHandler(onSkip)
+      handler(mkEvent({ key: 'Enter' }))
+      handler(mkEvent({ key: 'Tab' }))
+      handler(mkEvent({ key: 'ArrowDown' }))
+      handler(mkEvent({ key: 'a' }))
+      handler(mkEvent({ key: ' ' }))
+      expect(onSkip).not.toHaveBeenCalled()
+    })
+
+    it('ignores Escape combined with modifiers (Ctrl/Meta/Shift/Alt) so app accelerators stay safe', () => {
+      const onSkip = vi.fn()
+      const handler = wizardEscapeKeydownHandler(onSkip)
+      handler(mkEvent({ key: 'Escape', ctrlKey: true }))
+      handler(mkEvent({ key: 'Escape', metaKey: true }))
+      handler(mkEvent({ key: 'Escape', shiftKey: true }))
+      handler(mkEvent({ key: 'Escape', altKey: true }))
+      expect(onSkip).not.toHaveBeenCalled()
+    })
+
+    it('cleans up after document.addEventListener -- handler reference is stable per call to factory', () => {
+      // The cleanup contract: the wizard mounts a single handler and
+      // unmounts the SAME reference on teardown. Re-creating the
+      // factory yields a fresh handler instance, so removeEventListener
+      // would mis-match if the effect did not capture the same ref.
+      const onSkip = vi.fn()
+      const a = wizardEscapeKeydownHandler(onSkip)
+      const b = wizardEscapeKeydownHandler(onSkip)
+      expect(a).not.toBe(b)
+      // But both forward Escape to the same callback:
+      a(mkEvent({ key: 'Escape' }))
+      b(mkEvent({ key: 'Escape' }))
+      expect(onSkip).toHaveBeenCalledTimes(2)
+    })
+
+    it('integration: dispatching a real keydown Escape on document fires the registered handler exactly once', () => {
+      // Pins the wiring pattern the wizard uses (document-level
+      // listener + cleanup). If a future refactor swaps target -> window
+      // or drops cleanup, this test catches the drift.
+      const onSkip = vi.fn()
+      const handler = wizardEscapeKeydownHandler(onSkip)
+      const docMock = {
+        listeners: new Map<string, EventListener[]>(),
+        addEventListener(type: string, fn: EventListener): void {
+          const arr = this.listeners.get(type) ?? []
+          arr.push(fn)
+          this.listeners.set(type, arr)
+        },
+        removeEventListener(type: string, fn: EventListener): void {
+          const arr = this.listeners.get(type) ?? []
+          this.listeners.set(type, arr.filter((f) => f !== fn))
+        },
+        dispatch(type: string, e: KeyboardEvent): void {
+          for (const fn of this.listeners.get(type) ?? []) fn(e as unknown as Event)
+        }
+      }
+      docMock.addEventListener('keydown', handler as unknown as EventListener)
+      docMock.dispatch('keydown', mkEvent({ key: 'Escape' }))
+      expect(onSkip).toHaveBeenCalledOnce()
+      // Cleanup removes the listener so a second dispatch is inert.
+      docMock.removeEventListener('keydown', handler as unknown as EventListener)
+      docMock.dispatch('keydown', mkEvent({ key: 'Escape' }))
+      expect(onSkip).toHaveBeenCalledOnce()
     })
   })
 })

@@ -367,6 +367,47 @@ describe('WorkshopDashboard — list/listitem ARIA pairing (Cycle 233 ui-polish)
   })
 })
 
+// ── UX Overhaul #8 — shared EmptyState surfaces when jobs.length === 0 ──
+
+describe('WorkshopDashboard — empty-state surface (UX Overhaul #8)', () => {
+  it('renders the shared EmptyState block when there are zero jobs', () => {
+    const html = render({ jobs: [] })
+    expect(html).toContain('data-testid="workshop-dashboard-empty-state"')
+    expect(html).toContain('class="empty-state"')
+    expect(html).toContain('No jobs yet')
+    expect(html).toContain('Create your first project to see machine status here.')
+  })
+
+  it('renders the "Create project" CTA only when onCreateProject is wired', () => {
+    const withCta = render({ jobs: [], onCreateProject: vi.fn() })
+    expect(withCta).toContain('data-testid="workshop-dashboard-empty-state"')
+    expect(withCta).toContain('Create project')
+
+    const withoutCta = render({ jobs: [], onCreateProject: undefined })
+    expect(withoutCta).toContain('data-testid="workshop-dashboard-empty-state"')
+    expect(withoutCta).not.toContain('Create project')
+  })
+
+  it('hides the EmptyState block once at least one job exists', () => {
+    const html = render({
+      jobs: [job('k2-1', 'creality-k2-plus', 'running')]
+    })
+    expect(html).not.toContain('data-testid="workshop-dashboard-empty-state"')
+    expect(html).not.toContain('Create your first project to see machine status here.')
+  })
+
+  it('still renders the three machine cards alongside the EmptyState', () => {
+    // The empty-state is additive — the operator must still see the three
+    // machine cards so the dashboard's "what is each machine doing right
+    // now" contract holds even when there are no jobs.
+    const html = render({ jobs: [] })
+    expect(html).toContain('data-testid="workshop-dashboard-empty-state"')
+    expect(html).toContain('data-card-id="laguna-swift-5x10"')
+    expect(html).toContain('data-card-id="creality-k2-plus"')
+    expect(html).toContain('data-card-id="makera-carvera"')
+  })
+})
+
 // ── ui-polish: token-scoped status-dot inline style ──────────────────────
 
 describe('WorkshopDashboard — StatusDot inline style is token-scoped (Cycle 233 ui-polish)', () => {

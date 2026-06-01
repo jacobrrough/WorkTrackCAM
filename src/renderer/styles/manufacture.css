@@ -92,6 +92,17 @@
   border-color: var(--accent);
   color: var(--txt0);
 }
+/* UX Overhaul #7: keyboard focus indicator for WCS tabs. */
+.mkr-fn-wcs-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
+}
+.mkr-fn-wcs-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: var(--focus-ring);
+}
 .mkr-fn-wcs-tab__label {
   font-weight: 600;
   font-size: 0.75rem;
@@ -349,8 +360,8 @@
   color: var(--txt2);
 }
 .mkr-fn-op-action--danger:hover {
-  background: rgba(239, 68, 68, 0.18);
-  color: #f87171;
+  background: var(--err-dim);
+  color: var(--err);
 }
 .mkr-fn-op-action:disabled {
   opacity: 0.25;
@@ -375,9 +386,9 @@
   width: 100%;
 }
 .mkr-fn-setup-remove:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.12);
-  border-color: #f87171;
-  color: #f87171;
+  background: var(--err-dim);
+  border-color: var(--err);
+  color: var(--err);
 }
 .mkr-fn-setup-remove:disabled {
   opacity: 0.3;
@@ -435,6 +446,15 @@
   border-color: var(--accent);
   color: #c4b5fd;
   box-shadow: 0 0 0 2px var(--accent-28);
+}
+/* UX Overhaul #7: keyboard focus indicator for the WCS origin picker
+   cells (the 3x3 grid + bottom row). The active state uses an accent
+   border + soft glow; we layer a high-contrast outline on focus so the
+   keyboard user can see where their cursor is even mid-drag. */
+.wcs-origin-picker__cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 .wcs-origin-picker__cell--bottom {
   width: 32px;
@@ -507,6 +527,19 @@
   background: var(--accent-20);
   border-color: var(--accent);
   color: #c4b5fd;
+}
+/* UX Overhaul #7: keyboard focus indicator for stock-material toggles. */
+.stock-material-panel__axis-btn:focus-visible,
+.stock-material-panel__mat-chip:focus-visible,
+.stock-material-panel__fit-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+.stock-material-panel__input:focus-visible,
+.stock-material-panel__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Material grid */
@@ -689,6 +722,30 @@
 }
 .manufacture-op-li[data-kind^='cnc_pcb'] {
   border-left: 3px solid #34d399;
+}
+
+/* ── Operation-list empty state (filtered + no-ops yet) ── */
+.manufacture-op-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-10) var(--sp-6);
+  color: var(--txt2);
+  text-align: center;
+}
+.manufacture-op-empty__title {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--txt1);
+}
+.manufacture-op-empty__title--italic {
+  font-style: italic;
+}
+.manufacture-op-empty__hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--txt2);
 }
 
 /* ── Filter buttons (ManufactureWorkspace readiness filter bar) ── */
@@ -1184,6 +1241,12 @@
   opacity: 0.35;
   cursor: not-allowed;
 }
+/* UX Overhaul #7: keyboard focus indicator for filament chips. */
+.filament-picker__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
 .filament-picker__chip-name {
   font-weight: 500;
 }
@@ -1237,6 +1300,20 @@
   color: var(--accent);
   border-bottom-color: var(--accent);
   background: var(--bg1);
+}
+/* UX Overhaul #7: keyboard focus indicator. The plate tabs receive
+   programmatic .focus() after arrow-key navigation (see PlateTabs.tsx),
+   so a focus-visible ring is required to confirm the live tab. */
+.plate-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
+}
+.plate-tab-close:focus-visible,
+.plate-tab-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: var(--focus-ring);
 }
 .plate-tab-label {
   display: inline-block;
@@ -1831,4 +1908,53 @@
 .plate-tab-wrap--active .plate-tab,
 .plate-tab-wrap--active .plate-tab:hover {
   background: transparent;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Manufacture Plan — "Add a Setup first" prominent banner
+   ───────────────────────────────────────────────────────────────────────────
+   BROKEN PATH #5 fix: the previous "Add a setup so work offset and stock
+   context are defined" message was buried at the bottom of the Plan
+   sidebar. Users could create operations on the Plan tab without ever
+   seeing it and only discover the missing setup when CAM generation
+   failed. This banner sits at the top of the Plan body so the next-step
+   call to action is unmissable, and disappears once a Setup exists.
+   Uses the existing warn semantic palette to flag the gating action
+   without screaming "error" -- the workflow is incomplete, not broken.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.manufacture-plan-no-setup-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  margin: 0 0 var(--sp-6);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--warn-dim);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--txt0);
+}
+.manufacture-plan-no-setup-banner__icon {
+  flex: 0 0 auto;
+  font-size: var(--text-xl);
+  color: var(--warn);
+  line-height: 1;
+}
+.manufacture-plan-no-setup-banner__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.manufacture-plan-no-setup-banner__heading {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--warn);
+}
+.manufacture-plan-no-setup-banner__subtitle {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  line-height: var(--leading-normal);
+}
+.manufacture-plan-no-setup-banner .btn {
+  flex: 0 0 auto;
 }

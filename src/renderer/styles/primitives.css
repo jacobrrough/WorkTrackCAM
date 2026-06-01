@@ -31,6 +31,13 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
+/* UX Overhaul #7: emphasise the focus ring when the user is on the
+   keyboard, so the accent border + token focus-ring stay legible against
+   busy adjacent surfaces (cards, list rows, etc.). */
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 select option { background: var(--bg3); }
 textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12px; }
 
@@ -229,6 +236,11 @@ button.secondary:disabled {
 }
 .tab-btn:hover { color: var(--txt0); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
+}
 
 /* ── Spinner ────────────────────────────────────────────────────── */
 @keyframes spin {

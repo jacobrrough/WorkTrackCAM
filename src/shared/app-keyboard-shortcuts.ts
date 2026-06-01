@@ -65,6 +65,54 @@ export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
     ]
   },
   {
+    id: 'navrail',
+    title: 'Navigation rail',
+    rows: [
+      {
+        action: 'Jobs',
+        keysWin: '1',
+        keysMac: '1',
+        context: 'Ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'Tools',
+        keysWin: '2',
+        keysMac: '2',
+        context: 'Ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'Workshop dashboard',
+        keysWin: '3',
+        keysMac: '3',
+        context: 'Ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'My Shop',
+        keysWin: '4',
+        keysMac: '4',
+        context: 'Opens My Shop drawer; ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'Library',
+        keysWin: '5',
+        keysMac: '5',
+        context: 'Opens Library drawer; ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'Settings',
+        keysWin: '6',
+        keysMac: '6',
+        context: 'Opens Settings drawer; ignored while focus is in a text field or a dialog is open'
+      },
+      {
+        action: 'Help panel',
+        keysWin: 'F1',
+        keysMac: 'F1',
+        context: 'Toggle open/closed'
+      }
+    ]
+  },
+  {
     id: 'palette',
     title: 'While command palette is open',
     rows: [

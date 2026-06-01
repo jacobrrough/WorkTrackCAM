@@ -295,3 +295,90 @@ describe('SliceManufacturePanel -- CFS slot picker', () => {
     )
   })
 })
+
+// ── UX Overhaul #8 — shared EmptyState surfaces when K2 is connected, no slice ──
+//
+// When the K2 Plus is reachable (Moonraker URL configured) but the
+// operator has not yet produced an on-disk slice, the panel surfaces
+// the shared `EmptyState` block. The existing slice button outside this
+// panel is the CTA, so the empty-state intentionally omits its own
+// button (matches the task spec verbatim).
+
+describe('SliceManufacturePanel -- empty-state surface (UX Overhaul #8)', () => {
+  it('renders the shared EmptyState when K2 is reachable but no slice has run', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        lastSliceGcodePath: null,
+        settings: {
+          moonrakerUrl: 'http://k2plus.local'
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).toContain('data-testid="slice-empty-state"')
+    expect(html).toContain('class="empty-state"')
+    expect(html).toContain('Ready to slice')
+    expect(html).toContain('Select an STL and click Slice to begin.')
+  })
+
+  it('empty state intentionally omits a CTA button (existing slice button IS the CTA)', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        lastSliceGcodePath: null,
+        settings: {
+          moonrakerUrl: 'http://k2plus.local'
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    // The empty-state DIV exists ...
+    expect(html).toContain('data-testid="slice-empty-state"')
+    // ... but it must not embed its own button (no `.empty-state__cta`).
+    const emptyStateBlock =
+      html.split('data-testid="slice-empty-state"')[1]?.split('</div>')[0] ?? ''
+    expect(emptyStateBlock).not.toContain('empty-state__cta')
+    expect(emptyStateBlock).not.toMatch(/<button/)
+  })
+
+  it('does NOT render the EmptyState once a slice has been produced', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        lastSliceGcodePath: '/tmp/proj/output/slice.gcode',
+        settings: {
+          moonrakerUrl: 'http://k2plus.local'
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).not.toContain('data-testid="slice-empty-state"')
+    expect(html).not.toContain('Ready to slice')
+  })
+
+  it('does NOT render the EmptyState when Moonraker URL is missing (legacy hint covers it)', () => {
+    const html = render(
+      baseProps({
+        activeMachine: k2Plus,
+        lastSliceGcodePath: null,
+        settings: null
+      })
+    )
+    expect(html).not.toContain('data-testid="slice-empty-state"')
+    expect(html).not.toContain('Ready to slice')
+    // The legacy moonraker-url hint stays intact for this branch.
+    expect(html).toContain('Add a Moonraker URL in File → Settings to enable Send.')
+  })
+
+  it('does NOT render the EmptyState on non-K2 (Laguna) renders', () => {
+    const html = render(
+      baseProps({
+        activeMachine: lagunaSwift,
+        lastSliceGcodePath: null,
+        settings: {
+          moonrakerUrl: 'http://k2plus.local'
+        } as ManufactureAuxPanelsProps['settings']
+      })
+    )
+    expect(html).not.toContain('data-testid="slice-empty-state"')
+    expect(html).not.toContain('Ready to slice')
+  })
+})

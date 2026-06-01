@@ -45,6 +45,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Job } from '../src/shop-types'
+import { EmptyState } from '../src/EmptyState'
 import {
   DASHBOARD_CARD_IDS,
   DASHBOARD_STATUS_COLORS,
@@ -102,6 +103,15 @@ export interface WorkshopDashboardProps {
   readonly onOpenSetupSheet?: (job: Job) => void
   /** Wired by parent: route to the Carvera CLI upload flow. */
   readonly onSendToCarvera?: (job: Job) => void
+  /**
+   * Wired by parent: route to the existing "new project" flow (mirrors the
+   * Ctrl+N shortcut and the brand-bar File menu's New Project action).
+   * When supplied AND `jobs.length === 0`, the dashboard surfaces an
+   * `EmptyState` with a primary "Create project" CTA. When omitted, the
+   * `EmptyState` still renders but the CTA is hidden — keeping the
+   * surface honest when the parent has no create flow to delegate to.
+   */
+  readonly onCreateProject?: () => void
   /**
    * Bridge to the existing Electron preload `fab` API. Defaults to the
    * runtime `window.fab` accessor; tests inject a stub.
@@ -369,7 +379,7 @@ export function WorkshopDashboard(props: WorkshopDashboardProps): React.ReactEle
   const {
     jobs, moonrakerUrl, currentMachineId,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-    onSendLatestSlice, onOpenSetupSheet, onSendToCarvera,
+    onSendLatestSlice, onOpenSetupSheet, onSendToCarvera, onCreateProject,
     fab
   } = props
 
@@ -514,6 +524,30 @@ export function WorkshopDashboard(props: WorkshopDashboardProps): React.ReactEle
           />
         ))}
       </div>
+      {/*
+       * UX Overhaul #8 — shared `EmptyState` block surfaces only when the
+       * dashboard has zero jobs across all three machines. The three
+       * cards above still render (each shows "No jobs yet" in its Last:
+       * row) so the operator sees the machine roster, but this block
+       * gives a one-click path back to the project-creation flow.
+       *
+       * The CTA is gated on `onCreateProject` being wired — when the
+       * parent has no create flow (e.g., the dashboard render-pin
+       * fixture) the block still renders the message but omits the
+       * button, so the surface stays honest.
+       */}
+      {jobs.length === 0 ? (
+        <EmptyState
+          testId="workshop-dashboard-empty-state"
+          title="No jobs yet"
+          body="Create your first project to see machine status here."
+          cta={
+            onCreateProject
+              ? { label: 'Create project', onClick: onCreateProject, variant: 'primary' }
+              : undefined
+          }
+        />
+      ) : null}
     </div>
   )
 }

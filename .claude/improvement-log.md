@@ -16400,3 +16400,101 @@ unblocks real-world K2 Plus printing.
 5. **15 non-critical npm audit advisories** — schedule a `docs-and-dx` security sweep after the vitest upgrade lands
 
 The standard rotation can resume at `cam-engine` (next after the Cycle 233 `ui-polish` slot). Suggested first task: rank-13 Carvera 4-axis Y=0 + rotaryHeadstockXOffsetMm schema constraints, which is the highest-defense-in-depth value remaining.
+
+
+---
+
+## UI DEEP-DIVE + BROKEN-PATH FIX WAVE — 2026-06-01 — agent stack run
+
+> User-directed UX overhaul. "the ui is much better but still not good
+> do a deep dive into similar app and adjust the ui/x to match make sure
+> we dont have any broken paths. use an agent stack to get this done
+> fast." Two sequential workflows + inline docs sync. NOT a numbered
+> rotation cycle.
+
+### Workflow 1 — Deep-dive: research + audit + synthesize (task w2dowgnma)
+- **9 agents, 9.8 min, 843K tokens**
+- **Pattern**: 4 parallel web-research agents (FDM slicers / Pro CAM / Lightweight CAM / Machine control) + 4 parallel codebase audit agents (nav graph / IPC paths / loading states / visual hierarchy) → 1 synthesizer
+- **Output**: 32 research patterns + 48 audit findings → ranked 8-item broken-path list + 8-item ux_overhaul list (grouped by target file to avoid concurrent-write collisions in the next workflow)
+- **Apps covered**: OrcaSlicer, Bambu Studio, PrusaSlicer, Cura (FDM); Fusion 360, Mastercam, SolidCAM, BobCAD (pro CAM); VCarve Pro / Aspire, Carbide Create, Easel, Estlcam (lightweight CAM); Mainsail, Fluidd, OctoPrint, DWC (machine control)
+
+### Workflow 2 — Fix wave (task w7sm6dnys)
+- **9 agents, 17.0 min, 889K tokens**
+- **Phase 1 (6 parallel agents)**: closed all 8 broken paths
+- **Phase 2 (2 parallel agents)**: design-system hardening (CSS tokens + focus-visible + EmptyState component)
+- **Phase 3 (1 sequential validator)**: gates + per-broken-path grep verification
+- **Validator caveat**: flagged broken-path #3 (1-6 shortcuts) as MISSING; trust-but-verify in the main loop showed it actually landed at ShopApp.tsx:1918-1947 — validator only checked the first keydown handler in the file.
+
+### Broken paths closed (8 / 8)
+1. **IPC handler registration race** (`src/main/index.ts`) — `register*Ipc` now runs BEFORE `createWindow()` inside `app.whenReady()`, with documented ordering invariant comment
+2. **NavRail Help button** (`NavRail.tsx`, `ShopApp.tsx`) — `onHelp: () => void` prop wired to F1's handler
+3. **NavRail 1–6 keyboard shortcuts** (`ShopApp.tsx:1918-1947`, `app-keyboard-shortcuts.ts`) — bare digit keys jump to Jobs/Tools/Workshop/MyShop/Library/Settings; gated on `isTypableKeyboardTarget` + no-modal + no-modifier
+4. **ManufactureOperationList empty-filter state** (`ManufactureOperationList.tsx`) — "No operations match this filter" / "Clear filter" CTA when filter excludes everything; separate "No operations yet" / "Add operation" CTA when ops list is empty
+5. **Plan-tab no-setup banner** (NEW `ManufactureNoSetupBanner.tsx`, `ManufactureWorkspace.tsx`) — prominent warn-palette banner with `Add Setup` primary CTA when `setupCount === 0`; replaces the buried sidebar message users were missing
+6. **FirstLaunchWizard Escape handler** (`FirstLaunchWizard.tsx`) — closes WCAG 2.1.2 focus-trap-without-escape violation; pure-factory tested per [ID-0226]; gated on `!busy`
+7. **NavRail drawer-state desync** (`ShopApp.tsx`) — `effectiveActive` derivation keeps rail visual state in sync with drawer open state
+8. **Dialog file paths null-byte-checked** (`ipc-core.ts`) — `dialog:openFile / openFiles / saveFile` now apply the same `\0`-include guard sibling handlers use; returns the existing `null` / `[]` sentinel on rejection (preserves the `Promise<string | null>` / `Promise<string[]>` contract that 8+ renderer callsites depend on)
+
+### Design system hardening (applied this wave)
+- **EmptyState component** (NEW `src/renderer/src/EmptyState.tsx`) — shared "nothing here yet" surface with readonly props (icon/title/body/cta + variant primary/secondary/ghost), `data-testid` for pin tests, zero inline styles. CTA reuses existing `.btn` primitives.
+- **Empty-state BEM CSS** (`components.css`) — `.empty-state` (centered flex column, sp-6 gap, sp-12 padding), `__icon` (36px glyph), `__title` (text-md weight-medium), `__body` (text-base, txt2, max-width 320px), `__cta` (sp-4 margin-top). Backward-compatible with existing `.empty-state` consumers.
+- **EmptyState applied to 3 high-traffic panels**:
+  - WorkshopDashboard (jobs.length === 0 → "No jobs yet" + "Create project" CTA via new optional `onCreateProject` prop)
+  - LagunaNestingPanel (no nesting result → "Run nesting" CTA)
+  - SliceManufacturePanel (K2 connected, no slice → "Ready to slice", no CTA — slice button is the action)
+- **Focus-visible rings** added across `primitives.css`, `layout.css`, `manufacture.css` for: form inputs/selects/textareas, .tab-btn, .utility-strip buttons, .app-menubar items, .workspace-bar buttons, .workbench-selector, .app-shell-banner__dismiss, .plate-tab + .plate-tab-close + .plate-tab-add, .mkr-fn-wcs-tab + .mkr-fn-wcs-add, .wcs-origin-picker__cell, stock-material chips, .filament-picker__chip
+- **Token consolidation** in `components.css`: replaced ~25 high-confidence hard-coded px/color values with design tokens; replaced bare-hex `#f87171` and rgba red-tints with `var(--err)` + `var(--err-dim)` in mkr-fn-op-action--danger:hover and mkr-fn-setup-remove:hover
+
+### Tests added
+| Surface | New tests |
+| --- | --- |
+| EmptyState component pin | 10 |
+| WorkshopDashboard (EmptyState wiring) | 4 |
+| LagunaNestingPanel (EmptyState) | 4 |
+| SliceManufacturePanel (EmptyState) | 5 |
+| ManufactureOperationList (empty branches) | 5 |
+| FirstLaunchWizard (Escape handler) | 5 |
+| ManufactureNoSetupBanner | 5 |
+| ipc-core null-byte guards | 6 |
+| **Total** | **+44 (13,611 → 13,655)** |
+
+### Quality gates throughout
+| Checkpoint | npm test | tsc |
+| --- | --- | --- |
+| Pre-flight (HEAD 61b1bef) | 13611 / 0 / 2 | clean |
+| After broken-path phase | ~13627 / 0 / 2 | (transient ShopApp.tsx error during parallel landing — resolved by NavRail subagent) |
+| After design-system phase | 13655 / 0 / 2 | clean |
+| FINAL (after main-loop verification + docs sync) | 13655 / 0 / 2 | clean |
+
+### Docs synced this wave
+- `README.md` — Features section updated to reflect the CadQuery + OpenCAMLib + OrcaSlicer stack (was still listing "OCCT + OpenCAMLib" and "Cura defaults"); new Keyboard Shortcuts section; Development section now documents the IPC ordering invariant + the EmptyState convention + the EDIT-WORKFLOW pointer
+- `CLAUDE.md` — Architecture Quick Reference expanded: IPC ordering invariant on `src/main/index.ts`, EmptyState location + convention, `app-keyboard-shortcuts.ts` source-of-truth role, pinned spindle ranges, gcode-safety skill location, PRE-LAUNCH-READINESS pointer
+- `docs/PRE-LAUNCH-READINESS.md` — refreshed TL;DR with new gate numbers, new "UI deep-dive + broken-path fix wave" section listing all 8 fixes + tests, new "Big-design UX moves" subsection cataloging the 5 deferred items
+- `src/shared/app-keyboard-shortcuts.ts` — new "Navigation rail" group documenting 1-6 + F1
+
+### Files touched (this wave)
+- **NEW**: `src/renderer/src/EmptyState.tsx`, `src/renderer/src/EmptyState.test.tsx`, `src/renderer/manufacture/ManufactureNoSetupBanner.tsx`, `src/renderer/manufacture/ManufactureNoSetupBanner.test.tsx`, `src/renderer/manufacture/ManufactureOperationList.empty-state.test.tsx`, `src/renderer/manufacture/LagunaNestingPanel.empty-state.test.tsx`
+- **MODIFIED**: `src/main/index.ts`, `src/main/ipc-core.ts`, `src/main/ipc-core.test.ts`, `src/renderer/dashboard/WorkshopDashboard.tsx` + `.test.tsx`, `src/renderer/manufacture/LagunaNestingPanel.tsx`, `src/renderer/manufacture/ManufactureAuxPanels.tsx` + `manufacture-aux-k2-send-render.test.tsx`, `src/renderer/manufacture/ManufactureOperationList.tsx`, `src/renderer/manufacture/ManufactureWorkspace.tsx`, `src/renderer/src/FirstLaunchWizard.tsx` + `.test.tsx`, `src/renderer/src/NavRail.tsx`, `src/renderer/src/ShopApp.tsx`, `src/renderer/styles/components.css`, `src/renderer/styles/layout.css`, `src/renderer/styles/manufacture.css`, `src/renderer/styles/primitives.css`, `src/shared/app-keyboard-shortcuts.ts`
+- **DOCS**: README.md, CLAUDE.md, docs/PRE-LAUNCH-READINESS.md, this entry
+
+### G-code safety status
+**N/A — no G-code surfaces touched this wave.** No edits under `engines/cam/`, `src/main/cam-*`, `resources/posts/**`, `resources/machines/**`, or the post-process pipeline. Safety Rule 1 preserved by construction; `gcode-safety` skill invocation not required.
+
+### Deferred (each warrants a dedicated cycle)
+**From the original pre-launch punch list** (3 items, unchanged):
+1. Vitest 3.x → 4.x upgrade (rank 4, CVSS 9.8 critical, dev-deps only)
+2. Carvera 4-axis Y=0 + rotaryHeadstockXOffsetMm schema constraints (rank 13)
+3. `cnc_4axis_grbl.hbs` rename (rank 16, clarity)
+
+**From the UI deep-dive synthesis** (5 big-design moves):
+4. Workflow-stage tabs above the viewport (Bambu / Orca / Fusion pattern) — `ManufactureWorkspace.tsx` + `ShopApp.tsx`
+5. Right-side profile stack with Recommended/Pro modes + Send-to-machine primary action — `ManufactureWorkspace.tsx` + `ManufactureAuxPanels.tsx` + `manufacture.css`
+6. Setup-rooted operation tree with status icons — `ManufactureOperationList.tsx` + `ManufactureSetupTab.tsx` + `ManufactureWorkspace.tsx`
+7. Locked global status strip (Mainsail/Fluidd pattern) — new `AppHeader.tsx` + `ShopApp.tsx` + `layout.css`
+8. Multi-plate thumbnail strip with status pills + split Slice button — `PlateTabs.tsx` + `ManufactureWorkspace.tsx` + `manufacture.css`
+
+**Optional / small** (1 item):
+9. CPS-import fallback toast when a 5-axis dialect lands on the 3-axis generic post (UX, not safety)
+
+### Hand-off
+The standard rotation can resume at `cam-engine` (next after Cycle 233 `ui-polish`). Suggested first task: rank-13 Carvera 4-axis Y=0 + rotaryHeadstockXOffsetMm schema constraints, the highest-defense-in-depth value remaining. The 5 big-design UX moves can be tackled one per `ui-polish` slot — they are individually substantial enough to deserve their own dedicated cycle each.

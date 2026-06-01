@@ -47,6 +47,8 @@ type Props = {
   onDeriveOpGeometry: (i: number) => void
   onLoadContourCandidates: () => void
   onRunFdmSlice: (i: number) => void
+  /** Optional: when supplied, the "no operations yet" empty state renders an "Add operation" CTA. */
+  onAddOp?: () => void
 }
 
 export function ManufactureOperationList({
@@ -73,7 +75,8 @@ export function ManufactureOperationList({
   onSetGeometryJson,
   onDeriveOpGeometry,
   onLoadContourCandidates,
-  onRunFdmSlice
+  onRunFdmSlice,
+  onAddOp
 }: Props): React.ReactElement {
   return (
     <>
@@ -160,6 +163,56 @@ export function ManufactureOperationList({
         Shortcuts (panel focused): <code>A</code> all, <code>M</code> missing, <code>S</code> stale, <code>U</code>{' '}
         suppressed, <code>N</code> not CAM, <code>F</code> actionable toggle, <code>C</code> clear.
       </p>
+      {filteredOps.length === 0 && operations.length === 0 ? (
+        <div
+          className="empty-state manufacture-op-empty"
+          data-testid="manufacture-op-empty-none"
+          role="status"
+        >
+          <p className="manufacture-op-empty__title">No operations yet</p>
+          <p className="manufacture-op-empty__hint">
+            Add your first operation to start planning toolpaths or slicing.
+          </p>
+          {onAddOp ? (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={onAddOp}
+              aria-label="Add new manufacture operation"
+              data-testid="manufacture-op-empty-add"
+            >
+              Add operation
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {filteredOps.length === 0 && operations.length > 0 ? (
+        <div
+          className="empty-state manufacture-op-empty"
+          data-testid="manufacture-op-empty-filtered"
+          role="status"
+        >
+          <p className="manufacture-op-empty__title manufacture-op-empty__title--italic">
+            No operations match this filter
+          </p>
+          <p className="manufacture-op-empty__hint">
+            Filter: <code>{activeFilterLabel}</code>. Clear it to see all {operations.length}{' '}
+            operation{operations.length === 1 ? '' : 's'}.
+          </p>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              onSetActionableOnly(false)
+              onSetOpFilter('all')
+            }}
+            aria-label="Clear active operation filter"
+            data-testid="manufacture-op-empty-clear"
+          >
+            Clear filter
+          </button>
+        </div>
+      ) : null}
       <ul className="tools entity-list entity-list--stack">
         {filteredOps.map((op) => {
           const i = operations.findIndex((x) => x.id === op.id)

@@ -141,6 +141,31 @@ export function wizardStarterOpKind(
   }
 }
 
+// ── Keyboard helpers ───────────────────────────────────────────────────────
+
+/**
+ * Pure factory for the wizard's Escape-to-skip keydown handler. WCAG
+ * 2.1.2 forbids focus traps without an escape route; this matches the
+ * `ConfirmDialog`/`ContextMenu` pattern so a single Escape press exits
+ * the modal exactly like clicking "Skip wizard".
+ *
+ * Exported so the keyboard wiring can be exercised by a vitest unit
+ * without booting React (project has no testing-library dep; see
+ * `useUndo-keyboard.test.ts` for the precedent).
+ *
+ * Only a bare Escape (no Ctrl/Meta/Shift/Alt) triggers `onEscape` so we
+ * don't fight other accelerators that happen to ride on Escape.
+ */
+export function wizardEscapeKeydownHandler(
+  onEscape: () => void
+): (e: KeyboardEvent) => void {
+  return (e) => {
+    if (e.key !== 'Escape') return
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+    onEscape()
+  }
+}
+
 // ── Project-name + folder helpers ──────────────────────────────────────────
 
 /**
@@ -353,6 +378,23 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
     void fab().settingsSet({ hasCompletedOnboarding: true }).catch(() => { /* */ })
     onSkip()
   }
+
+  // Escape-to-skip (WCAG 2.1.2: focus trap MUST have an escape route).
+  // Mirrors ConfirmDialog.tsx's document-level keydown pattern. The
+  // listener is gated on `busy` so a mid-create Escape can't drop the
+  // user out of an in-flight `project:create` IPC.
+  useEffect(() => {
+    if (busy) return
+    const handler = wizardEscapeKeydownHandler(() => {
+      // Same exit path as the visible "Skip wizard" button -- persists
+      // `hasCompletedOnboarding=true` so the wizard doesn't re-open on
+      // the next launch.
+      void fab().settingsSet({ hasCompletedOnboarding: true }).catch(() => { /* */ })
+      onSkip()
+    })
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [busy, onSkip])
 
   // ── Render ──
 

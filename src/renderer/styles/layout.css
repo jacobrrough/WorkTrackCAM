@@ -101,6 +101,11 @@
   transition: color var(--transition-fast);
 }
 .app-shell-banner__dismiss:hover { color: var(--txt0); }
+.app-shell-banner__dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
 
 /* ── Utility Strip ────────────────────────────────────────────── */
 .utility-strip-outer {
@@ -136,6 +141,12 @@
 .utility-strip button[aria-selected="true"] {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+/* UX Overhaul #7: keyboard focus indicator for sub-tab strip buttons. */
+.utility-strip button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
 }
 .utility-strip-hint {
   padding: 4px 12px;
@@ -274,6 +285,11 @@
 }
 .workbench-selector__select:hover,
 .workbench-selector__select:focus { border-color: var(--accent); }
+.workbench-selector__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
 
 .workspace-bar { display: flex; align-items: center; gap: 2px; }
 .workspace-bar--fusion { gap: 0; }
@@ -295,6 +311,14 @@
 .workspace-bar--fusion button[aria-current="page"] {
   color: var(--accent);
   background: var(--accent-dim);
+}
+/* UX Overhaul #7: keyboard focus indicator for Fusion-style workspace
+   buttons. The active state is colour-only, so we layer the focus-ring
+   on top so the focused pill is recognisable from across the screen. */
+.workspace-bar--fusion button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 /* ── App Menubar ──────────────────────────────────────────────── */
@@ -326,6 +350,14 @@
 .app-menubar__item:hover {
   background: var(--bg3);
   color: var(--txt0);
+}
+/* UX Overhaul #7: app menubar items are keyboard-reachable through the
+   menubar navigation pattern; surface a focus ring so the active item
+   stays visible when the user tabs/arrows through. */
+.app-menubar__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--focus-ring);
 }
 .app-menubar__sep {
   width: 1px;

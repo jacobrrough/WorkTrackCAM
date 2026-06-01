@@ -18,6 +18,7 @@ import type { ManufactureFile } from '../../shared/manufacture-schema'
 import { CarveraSetupPanel } from './CarveraSetupPanel'
 import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
+import { EmptyState } from '../src/EmptyState'
 
 const CAM_PREVIEW = 8000
 const countVisibleLines = (text: string): number => text.split(/\r?\n/).length
@@ -207,6 +208,22 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
           aria-labelledby="k2-send-heading"
         >
           <h3 id="k2-send-heading">Send to K2 Plus</h3>
+          {/*
+           * UX Overhaul #8 — shared `EmptyState` slot. Surfaces when the
+           * K2 Plus is reachable (Moonraker URL configured) but no slice
+           * has produced an on-disk G-code yet. The existing slice
+           * button in the panel header IS the CTA; the empty state
+           * intentionally omits a button to avoid duplicating the
+           * action surface. The legacy inline hint(s) below stay
+           * intact so existing render-pin tests keep passing.
+           */}
+          {moonrakerUrl.length > 0 && sendCandidatePath.length === 0 ? (
+            <EmptyState
+              testId="slice-empty-state"
+              title="Ready to slice"
+              body="Select an STL and click Slice to begin."
+            />
+          ) : null}
           {sendCandidatePath.length === 0 ? (
             <p className="msg">Slice an FDM operation to enable Send.</p>
           ) : null}

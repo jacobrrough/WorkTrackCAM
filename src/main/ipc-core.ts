@@ -68,7 +68,13 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
           : {})
       })
       if (r.canceled || !r.filePaths[0]) return null
-      return r.filePaths[0]
+      // Null-byte rejection -- mirrors the pattern in `file:readText`,
+      // `file:writeText`, and `slice:orca` (ipc-fabrication.ts:340). Even
+      // though the path comes from the native OS dialog (not the renderer),
+      // we never trust untrusted bytes flowing back across the IPC boundary.
+      const picked = r.filePaths[0]
+      if (picked.includes('\0')) return null
+      return picked
     }
   )
 
@@ -85,6 +91,12 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
           : {})
       })
       if (r.canceled || r.filePaths.length === 0) return []
+      // Null-byte rejection (see `dialog:openFile` for rationale). If *any*
+      // path in the selection is poisoned, reject the whole batch -- callers
+      // expect a homogeneous array of safe paths or an empty list.
+      for (const p of r.filePaths) {
+        if (p.includes('\0')) return []
+      }
       return r.filePaths
     }
   )
@@ -132,6 +144,10 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
           : {})
       })
       if (r.canceled || !r.filePath) return null
+      // Null-byte rejection (see `dialog:openFile`). The save target is fed
+      // straight into `writeFile`/post-processor pipelines downstream, so a
+      // poisoned path here would defeat the per-handler guards.
+      if (r.filePath.includes('\0')) return null
       return r.filePath
     }
   )

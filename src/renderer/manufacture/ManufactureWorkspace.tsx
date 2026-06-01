@@ -52,6 +52,7 @@ import { ManufactureSetupList } from './ManufactureSetupList'
 import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
 import { LagunaNestingPanel } from './LagunaNestingPanel'
+import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
 
 
 type Props = {
@@ -947,6 +948,7 @@ export function ManufactureWorkspace({
     ) : (
       <div className="panel manufacture-plan-root" tabIndex={0} onKeyDown={handlePanelKeydown}>
       <h2>Manufacture</h2>
+      <ManufactureNoSetupBanner setupCount={effectiveMfg.setups.length} onAddSetup={addSetup} />
       <div
         className={`manufacture-plan-layout${fabPlanSidebarCollapsed ? ' manufacture-plan-layout--sidebar-collapsed' : ''} manufacture-plan-layout--makera`}
       >
@@ -1091,6 +1093,7 @@ export function ManufactureWorkspace({
         onDeriveOpGeometry={(i) => void deriveOpGeometryFromSketch(i)}
         onLoadContourCandidates={() => void loadContourCandidates()}
         onRunFdmSlice={(i) => void runFdmSliceFromOp(i)}
+        onAddOp={addOp}
       />
         </aside>
       </div>

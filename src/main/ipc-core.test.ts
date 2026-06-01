@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { dialog } from 'electron'
 
 // Track registered handlers
 const handlers = new Map<string, Function>()
@@ -146,5 +147,104 @@ describe('ipc-core', () => {
     registerCoreIpc(ctx)
     expect(handlers.has('file:readText')).toBe(true)
     expect(handlers.has('file:writeText')).toBe(true)
+  })
+
+  // ── Dialog null-byte injection guards ───────────────────────────────────
+  // Even though native OS file dialogs are extremely unlikely to ever return
+  // a path containing a NUL byte, the dialog handlers sit on the IPC trust
+  // boundary and their results flow straight into `writeFile`, post-processors,
+  // and subprocess args downstream. The other path-accepting handlers in this
+  // file (file:readText, file:writeText, shell:openPath) already reject NUL
+  // bytes; these tests pin the same guard onto the dialog handlers.
+
+  // Cast `dialog.showOpenDialog`/`showSaveDialog` to the mock interface we
+  // declared in `vi.mock('electron', ...)` so we can stage return values.
+  const mockedShowOpenDialog = dialog.showOpenDialog as unknown as ReturnType<typeof vi.fn>
+  const mockedShowSaveDialog = dialog.showSaveDialog as unknown as ReturnType<typeof vi.fn>
+
+  // The dialog handlers short-circuit when `getMainWindow()` returns null,
+  // so we need a non-null window stub to exercise the validation path.
+  function createCtxWithWindow(): MainIpcWindowContext {
+    return {
+      getMainWindow: () => ({} as unknown as Electron.BrowserWindow)
+    }
+  }
+
+  it('dialog:openFile rejects null-byte paths returned by the OS dialog', async () => {
+    mockedShowOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/evil\0extra.stl']
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:openFile')!
+    const result = await handler({}, [])
+    // The handler must NOT return the poisoned path. Returning `null` matches
+    // the existing "user cancelled" semantics so the renderer's `if (!p)`
+    // guards naturally treat the rejection as a no-op rather than passing a
+    // half-truncated path further down the pipeline.
+    expect(result).toBeNull()
+  })
+
+  it('dialog:openFile passes through a clean path', async () => {
+    mockedShowOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/safe.stl']
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:openFile')!
+    const result = await handler({}, [])
+    expect(result).toBe('/tmp/safe.stl')
+  })
+
+  it('dialog:openFiles rejects the whole batch if any path has a null byte', async () => {
+    mockedShowOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/ok-a.stl', '/tmp/poisoned\0name.stl', '/tmp/ok-b.stl']
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:openFiles')!
+    const result = await handler({}, [])
+    // Empty array is the existing "no selection" return shape -- safe for
+    // callers iterating with `for (const p of paths)`.
+    expect(result).toEqual([])
+  })
+
+  it('dialog:openFiles passes through a clean batch', async () => {
+    mockedShowOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/a.stl', '/tmp/b.stl']
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:openFiles')!
+    const result = await handler({}, [])
+    expect(result).toEqual(['/tmp/a.stl', '/tmp/b.stl'])
+  })
+
+  it('dialog:saveFile rejects null-byte paths returned by the OS dialog', async () => {
+    mockedShowSaveDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePath: '/tmp/out\0evil.gcode'
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:saveFile')!
+    const result = await handler({}, [])
+    expect(result).toBeNull()
+  })
+
+  it('dialog:saveFile passes through a clean path', async () => {
+    mockedShowSaveDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePath: '/tmp/out.gcode'
+    })
+    const ctx = createCtxWithWindow()
+    registerCoreIpc(ctx)
+    const handler = handlers.get('dialog:saveFile')!
+    const result = await handler({}, [])
+    expect(result).toBe('/tmp/out.gcode')
   })
 })

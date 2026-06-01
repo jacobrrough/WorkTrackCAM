@@ -1907,6 +1907,64 @@ function ShopAppInner(): React.ReactElement {
     setNavSection(s => s === section ? null : section)
   }, [])
 
+  // ── NavRail 1-6 keyboard shortcuts (broken-path #3) ──────────────────────
+  // The NavRail items advertise number-key shortcuts in their `title`
+  // (Jobs:1 ... Settings:6). Wire those bare-number keys to
+  // `handleNavSelect`. The existing F1/Ctrl+Shift+? handler skips while
+  // focus is in a text field via `isTypableKeyboardTarget`; we apply the
+  // same guard here, and additionally skip while any modal/overlay is open
+  // so the digit keys don't hijack focus away from the dialog the user is
+  // reading.
+  useEffect(() => {
+    const NUM_TO_SECTION: Record<string, NavSection> = {
+      '1': 'jobs',
+      '2': 'tools',
+      '3': 'workshop',
+      '4': 'myshop',
+      '5': 'library',
+      '6': 'settings'
+    }
+    const h = (e: KeyboardEvent): void => {
+      if (isTypableKeyboardTarget(e.target)) return
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+      const modalOpen =
+        cmdOpen || showShortcuts || helpOpen || showOnboarding ||
+        showFirstLaunchWizard || gcodeViewerOpen ||
+        showRemoveModelConfirm || showNewProjectConfirm
+      if (modalOpen) return
+      const section = NUM_TO_SECTION[e.key]
+      if (!section) return
+      e.preventDefault()
+      handleNavSelect(section)
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [
+    cmdOpen, showShortcuts, helpOpen, showOnboarding,
+    showFirstLaunchWizard, gcodeViewerOpen,
+    showRemoveModelConfirm, showNewProjectConfirm,
+    handleNavSelect
+  ])
+
+  // ── Derived NavRail active state (broken-path #7) ────────────────────────
+  // `handleNavSelect` short-circuits for 'library'/'settings'/'myshop' by
+  // opening drawers instead of mutating `navSection`. Without this
+  // derivation the NavRail's visual active state drifts away from drawer
+  // open state. `effectiveActive` keeps drawer/section semantics separate
+  // but the UI affordances consistent: when no main-panel section is set,
+  // the open drawer (if any) gets the active indicator. `NavSection`'s only
+  // falsy value is `null`, so `||` and `??` are equivalent here; `||` is
+  // used to mirror the task spec literally.
+  const effectiveActive: NavSection =
+    navSection
+    || (libraryDrawerOpen
+      ? 'library'
+      : settingsDrawerOpen
+        ? 'settings'
+        : myShopDrawerOpen
+          ? 'myshop'
+          : null)
+
   const commands = useMemo((): Command[] => {
     const c: Command[] = []
     c.push({ id: 'new_project', group: 'File', label: 'New Project (Ctrl+N)', icon: '\u{1F4C4}', action: () => void newProject() })
@@ -2049,10 +2107,11 @@ function ShopAppInner(): React.ReactElement {
       {/* Main workspace: rail + panel + viewport + properties */}
       <div className="cc-workspace">
         <NavRail
-          active={navSection}
+          active={effectiveActive}
           onSelect={handleNavSelect}
           jobCount={jobs.length}
           opCount={activeJob?.operations.length ?? 0}
+          onHelp={() => setHelpOpen(x => !x)}
         />
 
         {/*

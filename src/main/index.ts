@@ -82,12 +82,27 @@ app.whenReady().then(async () => {
     })
   })
 
-  createWindow()
-
+  // ── IPC ordering invariant ───────────────────────────────────────────
+  // IPC handlers MUST be registered BEFORE createWindow() is called.
+  // Rationale: createWindow() kicks off fire-and-forget loadURL/loadFile
+  // (the `void mainWindow.loadURL(...)` calls). Once that load starts, the
+  // preload script may dispatch `ipcRenderer.invoke(...)` calls before any
+  // synchronous code that runs after createWindow() returns. If handlers
+  // are not installed by then, the renderer sees opaque
+  // "No handler registered for ..." errors on cold-start / dev-rebuild.
+  //
+  // Safety of registering first: `ctx.getMainWindow` is a closure over the
+  // module-level `mainWindow`; it resolves at call-time, so handlers that
+  // need the window still get the real instance once createWindow() runs.
+  // Handlers that fire before the window exists must (and do) tolerate
+  // `getMainWindow()` returning null (see auto-updater-pin.test.ts).
+  // ─────────────────────────────────────────────────────────────────────
   const ipcCtx = { getMainWindow: () => mainWindow }
   registerCoreIpc(ipcCtx)
   registerFabricationIpc(ipcCtx)
   registerModelingIpc(ipcCtx)
+
+  createWindow()
 
   // ── IPC: Python dependency check (renderer pull) ─────────────────────
   ipcMain.handle('pythonDeps:check', async () => {

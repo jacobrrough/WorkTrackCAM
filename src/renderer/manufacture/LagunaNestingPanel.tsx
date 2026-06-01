@@ -18,6 +18,7 @@
 import { useMemo, useState } from 'react'
 import type { ManufactureOperation } from '../../shared/manufacture-schema'
 import { fab } from '../src/shop-types'
+import { EmptyState } from '../src/EmptyState'
 
 interface Props {
   /** Active machine id (gates the panel). Only renders for laguna-swift-5x10. */
@@ -199,7 +200,26 @@ export function LagunaNestingPanel({
             </p>
           ) : null}
         </div>
-      ) : null}
+      ) : (
+        /*
+         * UX Overhaul #8 — shared `EmptyState` slot. Surfaces when the
+         * operator opens the Laguna nesting panel before kicking off a
+         * nesting pass. The CTA delegates straight to the same `runNest`
+         * routine that the "Nest parts on stock" button above uses, so
+         * Empty-state semantics never invent a new code path. Disabled
+         * when there are no nestable parts (matches the primary button).
+         */
+        <EmptyState
+          testId="laguna-nesting-empty-state"
+          title="No nesting result yet"
+          body="Run a nesting pass to see results here."
+          cta={{
+            label: 'Run nesting',
+            onClick: () => void runNest(),
+            variant: 'primary'
+          }}
+        />
+      )}
     </section>
   )
 }
