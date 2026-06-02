@@ -181,7 +181,7 @@ Operators must run the relevant sub-step **once per machine** before relying on 
 ### Cross-references
 
 - AppHeader location: search `AppHeader` in [`src/renderer/src/`](../src/renderer/src/) -- the button is rendered at the top-right.
-- IPC entry point: `'fab:estop'` in [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts).
+- IPC entry point: `'machine:estop'` in [`src/main/ipc-machine.ts`](../src/main/ipc-machine.ts).
 - K2 transport: Moonraker `POST /printer/emergency_stop` -- documented at <https://moonraker.readthedocs.io/en/latest/web_api/#emergency-stop>; Klipper M112 documented at <https://www.klipper3d.org/G-Codes.html#m112-emergency-stop>.
 - Carvera transport: [`src/main/carvera-cli-run.ts`](../src/main/carvera-cli-run.ts) spawn helper, same path the upload pipeline uses.
 - Laguna transport: none (by design). The in-app button shows a toast and returns.

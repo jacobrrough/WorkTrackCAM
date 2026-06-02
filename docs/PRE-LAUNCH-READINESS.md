@@ -200,6 +200,18 @@ These are explicit and documented; not bugs.
 
 ---
 
+## Upstream watch items
+
+Items blocked on an external dependency. Re-check on each upstream release — **nothing here blocks real-world testing today**.
+
+| Item | Upstream | What to check | Unblock action |
+|---|---|---|---|
+| **Carvera E-stop real wiring** | `carvera-cli` — the community CLI used for uploads (the `hagmonk/carvera-cli` repo was private / unindexed as of 2026-06-02) | A release exposing an `abort` / `stop` / `cancel` / `halt` verb (verify with `carvera-cli --help`) | Add `buildCarveraAbortArgs()` + `carveraAbort()` to [`src/main/carvera-cli-run.ts`](../src/main/carvera-cli-run.ts) and replace the `carveraAbortFallback()` branch in [`src/main/ipc-machine.ts`](../src/main/ipc-machine.ts) per [`docs/plans/carvera-cli-abort-verb.md`](plans/carvera-cli-abort-verb.md). Keep the advisory fallback for installs without an abort-capable CLI. |
+
+Until that verb ships, `machine:estop` for the Carvera returns a structured `no_cli_abort` advisory and the operator uses the **physical e-stop on the machine bezel** — confirmed correct and safe (see the E-stop summary in [`docs/MACHINES.md`](MACHINES.md)). Recommended cadence: a **manual quarterly check**; a scheduled GitHub-releases poll isn't worth wiring while the upstream repo is unindexed.
+
+---
+
 ## Deferred items (do NOT block real-world testing)
 
 Eight items remain as design-effort cycles. They are all defense-in-depth, not blocking:
