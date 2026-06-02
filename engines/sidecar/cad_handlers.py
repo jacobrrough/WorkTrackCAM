@@ -82,6 +82,9 @@ try:
         import_step_file,
         tessellate_body,
     )
+    from engines.cad.cadquery_hlr import (
+        hlr_section as _hlr_section_core,
+    )
     from engines.cad.cadquery_script import (
         execute_script as _execute_script_core,
         export_by_handle as _export_by_handle_core,
@@ -126,6 +129,9 @@ except ImportError:  # pragma: no cover - frozen-app import path
         _CadHandlerError,
         import_step_file,
         tessellate_body,
+    )
+    from cad.cadquery_hlr import (  # type: ignore[no-redef]
+        hlr_section as _hlr_section_core,
     )
     from cad.cadquery_script import (  # type: ignore[no-redef]
         execute_script as _execute_script_core,
@@ -848,6 +854,99 @@ def attach_title_block(params: dict[str, Any]) -> dict[str, Any]:
     return _v15_attach_title_block_core(svg_text, metadata)
 
 
+# -- BUILD 8 (3D viewport true-HLR section cut -- CAD V1.5) ----------------
+#
+# ``cad.hlr_section`` powers the Design workspace's engineering section view in
+# the 3D viewport (NOT the 2D drawing pipeline -- that is ``cad.section_drawing``
+# above). It cuts the body at an axis-aligned-or-arbitrary plane, fills the cut
+# with a cap face, and runs real B-rep hidden-line removal from a view
+# direction so the renderer can draw visible (solid) vs hidden (dashed) edges
+# correctly. Numerics live in ``engines/cad/cadquery_hlr.py``.
+#
+# Wire result (kept in lock-step with ``src/shared/sidecar-protocol.ts``)::
+#
+#     {
+#       "visibleEdges":     [[[x,y,z], ...], ...],
+#       "hiddenEdges":      [[[x,y,z], ...], ...],
+#       "capFaceTriangles": [x,y,z, x,y,z, x,y,z, ...],   # 9 floats / triangle
+#       "capFaceOutline":   [[[x,y,z], ...], ...],        # 1 ring / section loop
+#       "bbox":             {"min": [..3], "max": [..3]},
+#       "truncated":        bool
+#     }
+#
+# Error vocabulary adds two codes to the shared set:
+#   * 'ocp_hlr_not_available' -- OCP HLR / section binding missing; the
+#                                 renderer falls back to the GPU half-space
+#                                 clip + a toast.
+#   * 'hlr_section_error'     -- OCCT raised mid-pipeline.
+# plus the usual 'bad_params' / 'invalid_handle'.
+#
+# Safety Rule 1: this path does NOT emit G-code / STL. The section overlay is
+# renderer-only; no downstream CAM logic reads it.
+
+
+def _require_vec3_param(params: dict[str, Any], key: str) -> list[float]:
+    """Validate a 3-element numeric vector param. Raises ``bad_params``.
+
+    The deep finite-number / zero-length checks live in the hlr core; this
+    wrapper only enforces the envelope shape so a malformed call fails fast
+    with a structured error before the (slow) OCP import.
+    """
+    raw = params.get(key)
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+        raise _CadHandlerError(
+            "bad_params", f"{key!r} must be a 3-element [x, y, z] vector"
+        )
+    out: list[float] = []
+    for i, c in enumerate(raw):
+        if isinstance(c, bool) or not isinstance(c, (int, float)):
+            raise _CadHandlerError(
+                "bad_params", f"{key}[{i}] must be a number"
+            )
+        out.append(float(c))
+    return out
+
+
+def hlr_section(params: dict[str, Any]) -> dict[str, Any]:
+    """Compute a true-HLR section view for a body handle (3D viewport overlay).
+
+    See the section comment above for the wire contract. Mirrors the thin-
+    wrapper posture of ``section_drawing`` / ``project_drawing``: validate the
+    envelope here, defer all geometry to the ``cadquery_hlr`` core.
+    """
+    handle = _require_str(params, "handle")
+    plane_normal = _require_vec3_param(params, "planeNormal")
+    plane_offset = params.get("planeOffset", 0.0)
+    if isinstance(plane_offset, bool) or not isinstance(plane_offset, (int, float)):
+        raise _CadHandlerError(
+            "bad_params", "planeOffset must be a number"
+        )
+    view_dir = _require_vec3_param(params, "viewDir")
+
+    # Optional toleranceMm; default 0.1 mm to match the other tessellation
+    # paths so edge sampling density is consistent across the app.
+    tol_raw = params.get("toleranceMm", 0.1)
+    if not isinstance(tol_raw, (int, float)) or isinstance(tol_raw, bool):
+        raise _CadHandlerError(
+            "invalid_numeric_params",
+            "toleranceMm must be a number when provided",
+        )
+    tolerance = float(tol_raw)
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise _CadHandlerError(
+            "invalid_numeric_params",
+            "toleranceMm must be a positive finite number",
+        )
+
+    return _hlr_section_core(
+        handle,
+        plane_normal,
+        float(plane_offset),
+        view_dir,
+        tolerance_mm=tolerance,
+    )
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "import_step": import_step,
     "tessellate": tessellate,
@@ -870,4 +969,6 @@ HANDLERS: dict[str, HandlerFn] = {
     "dimension_drawing": dimension_drawing,
     "section_drawing": section_drawing,
     "attach_title_block": attach_title_block,
+    # BUILD 8 -- 3D viewport true-HLR section cut (CAD V1.5)
+    "hlr_section": hlr_section,
 }

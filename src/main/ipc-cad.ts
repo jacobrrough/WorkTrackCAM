@@ -1517,6 +1517,9 @@ import type {
   CadSectionKeepSide as V15CadSectionKeepSide,
   CadSectionPlane as V15CadSectionPlane,
   CadTitleBlockMetadata as V15CadTitleBlockMetadata,
+  CadHlrSectionParams as V15CadHlrSectionParams,
+  CadHlrSectionResult as V15CadHlrSectionResult,
+  CadHlrEdgePolyline as V15CadHlrEdgePolyline,
 } from '../shared/sidecar-protocol'
 
 /** Allowed dimension kinds (V1.5). Mirrors the sidecar's vocabulary. */
@@ -1932,6 +1935,141 @@ export function v15CoerceAttachTitleBlockResult(
     svg: raw.svg,
     bytes,
     metadata: out,
+  }
+}
+
+// ----------------------------------------------------------------------------
+// CAD V1.5 -- 3D viewport true-HLR section cut IPC layer (BUILD 8).
+// Distinct from the V15 section-DRAWING surface above: this drives the 3D
+// viewport's engineering section overlay, not the 2D SVG drawing. Types /
+// validator / coercer are prefixed with ``V15Hlr`` (channel ``cad:hlrSection``)
+// so they stay easy to spot in a diff. Reuses the module-level ``looks3Vector``
+// guard for the plane-normal / view-dir checks.
+// ----------------------------------------------------------------------------
+
+export type V15HlrSectionPayload = V15CadHlrSectionParams
+
+export type V15HlrSectionResponse =
+  | { ok: true; result: V15CadHlrSectionResult }
+  | { ok: false; error: string; hint?: string }
+
+/**
+ * Validate the ``cad:hlrSection`` IPC payload. Pure -- no FS / spawn / electron
+ * globals. The sidecar owns the deep geometry checks (zero-length vectors,
+ * degenerate planes); this gate catches structural drift before a Python
+ * spawn: ``handle`` non-empty, ``planeNormal`` / ``viewDir`` finite 3-vectors,
+ * ``planeOffset`` finite, optional ``toleranceMm`` positive finite.
+ */
+export function v15ValidateHlrSectionPayload(
+  raw: unknown,
+): { ok: true; payload: V15HlrSectionPayload } | V15HlrSectionResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:hlrSection requires { handle, planeNormal, planeOffset, viewDir, toleranceMm? }',
+    }
+  }
+  const p = raw as {
+    handle?: unknown
+    planeNormal?: unknown
+    planeOffset?: unknown
+    viewDir?: unknown
+    toleranceMm?: unknown
+  }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (!looks3Vector(p.planeNormal)) {
+    return {
+      ok: false,
+      error: 'invalid_plane_normal',
+      hint: 'planeNormal must be a finite [x, y, z] vector',
+    }
+  }
+  if (typeof p.planeOffset !== 'number' || !Number.isFinite(p.planeOffset)) {
+    return {
+      ok: false,
+      error: 'invalid_plane_offset',
+      hint: 'planeOffset must be a finite number',
+    }
+  }
+  if (!looks3Vector(p.viewDir)) {
+    return {
+      ok: false,
+      error: 'invalid_view_dir',
+      hint: 'viewDir must be a finite [x, y, z] vector',
+    }
+  }
+  let toleranceMm: number | undefined
+  if (p.toleranceMm !== undefined) {
+    if (typeof p.toleranceMm !== 'number' || !Number.isFinite(p.toleranceMm) || p.toleranceMm <= 0) {
+      return {
+        ok: false,
+        error: 'invalid_tolerance',
+        hint: 'toleranceMm must be a positive finite number',
+      }
+    }
+    toleranceMm = p.toleranceMm
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      planeNormal: p.planeNormal,
+      planeOffset: p.planeOffset,
+      viewDir: p.viewDir,
+      ...(toleranceMm !== undefined ? { toleranceMm } : {}),
+    },
+  }
+}
+
+/**
+ * Shape guard for one HLR edge polyline (>= 2 points, each a finite 3-tuple).
+ * Malformed polylines drop silently in the coercer (defense-in-depth) so a
+ * single bad edge never poisons the whole overlay.
+ */
+function looksHlrPolyline(value: unknown): value is V15CadHlrEdgePolyline {
+  if (!Array.isArray(value) || value.length < 2) return false
+  for (const pt of value) {
+    if (!Array.isArray(pt) || pt.length !== 3) return false
+    if (typeof pt[0] !== 'number' || !Number.isFinite(pt[0])) return false
+    if (typeof pt[1] !== 'number' || !Number.isFinite(pt[1])) return false
+    if (typeof pt[2] !== 'number' || !Number.isFinite(pt[2])) return false
+  }
+  return true
+}
+
+/**
+ * Coerce the raw ``cad.hlr_section`` sidecar payload into the strongly-typed
+ * ``CadHlrSectionResult``. Returns ``null`` when the response is structurally
+ * unusable (missing edge arrays / bbox) so the handler can fold to a
+ * deterministic ``sidecar_protocol_error`` envelope. Malformed individual
+ * polylines / non-finite cap floats drop silently.
+ */
+export function v15CoerceHlrSectionResult(
+  raw: Record<string, unknown>,
+): V15CadHlrSectionResult | null {
+  if (!Array.isArray(raw.visibleEdges)) return null
+  if (!Array.isArray(raw.hiddenEdges)) return null
+  if (!Array.isArray(raw.capFaceOutline)) return null
+  if (!Array.isArray(raw.capFaceTriangles)) return null
+  if (!looksLikeBbox(raw.bbox)) return null
+
+  const visibleEdges: V15CadHlrEdgePolyline[] = raw.visibleEdges.filter(looksHlrPolyline)
+  const hiddenEdges: V15CadHlrEdgePolyline[] = raw.hiddenEdges.filter(looksHlrPolyline)
+  const capFaceOutline: V15CadHlrEdgePolyline[] = raw.capFaceOutline.filter(looksHlrPolyline)
+  const capFaceTriangles: number[] = raw.capFaceTriangles.map((v) =>
+    typeof v === 'number' && Number.isFinite(v) ? v : 0,
+  )
+
+  return {
+    visibleEdges,
+    hiddenEdges,
+    capFaceTriangles,
+    capFaceOutline,
+    bbox: raw.bbox,
+    truncated: raw.truncated === true,
   }
 }
 
@@ -2364,6 +2502,44 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
           ok: false,
           error: 'sidecar_protocol_error',
           hint: 'cad.section_drawing returned a malformed svg/plane envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:hlrSection -- CAD V1.5: compute the 3D viewport's true-HLR section
+  // overlay (visible/hidden edges + cap face) for a body handle. Delegates to
+  // the sidecar's ``cad.hlr_section`` (BUILD 8). 90 s ceiling mirrors the
+  // section-drawing budget -- HLR is O(edges * faces) and can scale with body
+  // complexity, so the renderer can surface a hang to the operator rather than
+  // waiting forever. The validator gates structural drift before the spawn.
+  ipcMain.handle(
+    'cad:hlrSection',
+    async (_e, raw: unknown): Promise<V15HlrSectionResponse> => {
+      const v = v15ValidateHlrSectionPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.hlr_section',
+        {
+          handle: v.payload.handle,
+          planeNormal: v.payload.planeNormal,
+          planeOffset: v.payload.planeOffset,
+          viewDir: v.payload.viewDir,
+          ...(v.payload.toleranceMm !== undefined ? { toleranceMm: v.payload.toleranceMm } : {}),
+        },
+        pyCtx,
+        90_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceHlrSectionResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.hlr_section returned a malformed edges/bbox envelope',
         }
       }
       return { ok: true, result: coerced }

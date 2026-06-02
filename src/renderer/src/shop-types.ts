@@ -425,6 +425,19 @@ export declare const window: Window & {
         | { ok: false; error: string; hint?: string }
       >
       /**
+       * CAD V1.5 3D viewport section (Wave 3): compute a true hidden-line-
+       * removal section overlay (visible/hidden edges + cap face) for a body
+       * handle. Distinct from `sectionDrawing` (2D SVG). Permissive envelope --
+       * the renderer builds the typed { handle, planeNormal, planeOffset,
+       * viewDir, toleranceMm? } payload. Delegates to `cad.hlr_section`.
+       */
+      hlrSection: (
+        payload: Record<string, unknown>,
+      ) => Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
+      /**
        * CAD V1.5 Title block (Wave 3): attach (or replace) a title-block
        * metadata blob on a drawing sheet so the next `exportDrawing` call
        * stamps it onto the rendered shell.

@@ -53,6 +53,8 @@ export type SidecarMethod =
   | 'cad.dimension_drawing'
   | 'cad.section_drawing'
   | 'cad.attach_title_block'
+  // CAD V1.5 -- 3D viewport true hidden-line-removal section cut.
+  | 'cad.hlr_section'
   | 'cam.run_toolpath'
 
 export type PingResult = { pong: true; version: string }
@@ -948,6 +950,76 @@ export type CadAttachTitleBlockResult = {
     date: string
     sheet: string
   }
+}
+
+// -- cad.hlr_section (CAD V1.5 -- 3D viewport true HLR section cut) --------
+//
+// Distinct from cad.section_drawing (the 2D SVG drawing pipeline): this method
+// powers the 3D viewport's engineering section view. The sidecar cuts the body
+// at a plane, fills the cut with a cap face, and runs real B-rep hidden-line
+// removal (OCCT HLRBRep_Algo) from a view direction so the renderer can draw
+// visible edges solid and hidden edges dashed -- correct from topology, not a
+// screen-space silhouette heuristic.
+//
+// Coordinate space: HLR edges + the cap come back already PROJECTED onto the
+// view plane (a top-down view flattens Z to 0). That is standard HLR behaviour
+// and exactly what the viewport overlay draws.
+//
+// Errors add two codes to the shared CAD vocabulary:
+//   * 'ocp_hlr_not_available' -- OCP HLR / section binding missing; the
+//                                 renderer falls back to the GPU half-space
+//                                 clip + a toast.
+//   * 'hlr_section_error'     -- OCCT raised mid-pipeline.
+// plus the usual 'bad_params' / 'invalid_handle'.
+//
+// Safety Rule 1: renderer-only overlay; never touches G-code / STL.
+
+export type CadHlrSectionParams = {
+  /** Opaque handle from cad.import_step or cad.execute_script. */
+  handle: string
+  /** Section-plane normal (need not be unit length). */
+  planeNormal: [number, number, number]
+  /**
+   * Signed offset of the plane along its normal, in mm. A point p lies on the
+   * plane when dot(p, unit(planeNormal)) === planeOffset.
+   */
+  planeOffset: number
+  /** View direction for the HLR projection (operator looks ALONG this vector). */
+  viewDir: [number, number, number]
+  /** Edge discretization deflection in mm. Defaults to 0.1 mm in the sidecar. */
+  toleranceMm?: number
+}
+
+/**
+ * A single discretized edge polyline in projected view-plane space. Ordered
+ * list of [x, y, z] points (>= 2). The renderer concatenates pairs into
+ * Three.js LineSegments positions.
+ */
+export type CadHlrEdgePolyline = Array<[number, number, number]>
+
+export type CadHlrSectionResult = {
+  /** Visible (solid) linework: sharp edges + visible silhouettes. */
+  visibleEdges: CadHlrEdgePolyline[]
+  /** Hidden (dashed) linework: occluded edges + occluded silhouettes. */
+  hiddenEdges: CadHlrEdgePolyline[]
+  /**
+   * Flat cap-face triangle buffer (the filled section profile). 9 floats per
+   * triangle: [x0,y0,z0, x1,y1,z1, x2,y2,z2, ...]; length divisible by 9.
+   * Empty when the plane misses the body or the cut wire is degenerate.
+   */
+  capFaceTriangles: number[]
+  /**
+   * Cap-face outline rings -- one closed polyline per section loop (a hollow
+   * part yields two: outer + inner). Empty when the plane misses the body.
+   */
+  capFaceOutline: CadHlrEdgePolyline[]
+  /** Axis-aligned bbox over the projected edges + cap, in mm. */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * True when the edge-count cap was hit and the linework was truncated; the
+   * renderer surfaces a "section simplified" notice.
+   */
+  truncated: boolean
 }
 
 /** Type guard: is this a valid sidecar response envelope? */
