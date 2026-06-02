@@ -100,6 +100,56 @@ export const machineProfileSchema = z.object({
       'Outer radius (mm) of the fixed rotary chuck/module body. Used as the default chuck radius by the 4-axis collision sweep.'
     ),
   /**
+   * For 4-axis machines: outer radius (mm) of the rotary chuck body, used by
+   * the renderer's interactive simulation-panel collision overlay (the red
+   * "would hit the chuck" segment pass in ManufactureCamSimulationPanel). This
+   * value, together with `chuckDepthMm`, maps one-to-one onto the
+   * `RotaryFixtureConfig` consumed by `checkRotaryFixtureCollision`
+   * (src/shared/rotary-collision.ts), so the panel can flag colliding segments
+   * without re-deriving fixture geometry from the main-process pipeline.
+   *
+   * Distinct from `rotaryChuckOuterRadiusMm` (which feeds the on-by-default
+   * cam-axis4 sweep in the MAIN process): both carry the same physical chuck
+   * radius for the bundled Carvera profile (46 mm), but they are kept separate
+   * so the renderer-side preview overlay stays self-contained and the two
+   * code paths can evolve independently. Per CLAUDE.md USER CONTEXT the Carvera
+   * 4th-Axis HD module is ~92 mm diameter → 46 mm radius.
+   *
+   * Safety Rule 2: additive/optional. Absent means the panel's collision
+   * overlay stays off for that machine; existing saved projects parse unchanged.
+   */
+  chuckOuterRadiusMm: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Outer radius (mm) of the rotary chuck body for the simulation-panel collision overlay (maps to RotaryFixtureConfig.chuckOuterRadiusMm). Carvera 4-axis: 46.'
+    ),
+  /**
+   * For 4-axis machines: axial depth (mm) of the rotary chuck body measured
+   * from the chuck face along the rotation axis (the chuck occupies X in
+   * [0, chuckDepthMm]). Used together with `chuckOuterRadiusMm` by the
+   * renderer simulation-panel collision overlay; maps directly onto
+   * `RotaryFixtureConfig.chuckDepthMm` in src/shared/rotary-collision.ts.
+   *
+   * Per CLAUDE.md USER CONTEXT the Carvera 4th-Axis HD module is a
+   * harmonic-drive headstock; the bundled profile uses 25 mm as a
+   * conservative body depth so the overlay flags tool moves that dive toward
+   * the headstock face. (This is the chuck-BODY depth, not the per-job stock
+   * clamp depth — that remains the operator-entered `chuckDepthMm` on the job
+   * params; see cam-4axis-params.ts.)
+   *
+   * Safety Rule 2: additive/optional. Absent means the panel's collision
+   * overlay stays off for that machine.
+   */
+  chuckDepthMm: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Axial depth (mm) of the rotary chuck body for the simulation-panel collision overlay (maps to RotaryFixtureConfig.chuckDepthMm). Carvera 4-axis: 25.'
+    ),
+  /**
    * CNC 4-axis -- defense-in-depth flag that, when true, forces every job
    * planned for this machine to keep the Y-axis at zero throughout the entire
    * toolpath. The Makera Carvera 4-axis HD setup REQUIRES Y=0 because the

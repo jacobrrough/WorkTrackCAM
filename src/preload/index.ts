@@ -214,6 +214,50 @@ export type Api = {
   // ── Design/Assembly read-only (CAM reads design data from project files) ─
   designLoad: (projectDir: string) => Promise<DesignFileV2 | null>
   assemblyReadStlBase64: (projectDir: string, meshPath: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
+  /**
+   * Phase 2 (IPC) + Phase 3 (UI): run the iterative assembly mate solver on the given assembly
+   * input. Returns solved transforms, diagnostics, and (when mateConstraints are present) a
+   * SolverConvergenceReport. Delegates to the `assembly:solve` IPC channel.
+   */
+  assemblySolve: (assemblyInput: unknown) => Promise<{
+    ok: true
+    transforms: Array<{ id: string; transform: { x: number; y: number; z: number; rxDeg: number; ryDeg: number; rzDeg: number } }>
+    diagnostics: {
+      violations: unknown[]
+      clampedDofs: string[]
+      residuals: number[]
+      convergenceReport?: {
+        converged: boolean
+        iterations: number
+        finalResidual: number
+        perConstraintResiduals: Array<{ constraintId: string; residual: number }>
+        status: 'converged' | 'max_iterations_reached' | 'diverged' | 'over_constrained' | 'under_constrained'
+        conflictingConstraintIds?: string[]
+        freeVariableCount?: number
+      }
+    }
+    convergenceReport?: {
+      converged: boolean
+      iterations: number
+      finalResidual: number
+      perConstraintResiduals: Array<{ constraintId: string; residual: number }>
+      status: 'converged' | 'max_iterations_reached' | 'diverged' | 'over_constrained' | 'under_constrained'
+      conflictingConstraintIds?: string[]
+      freeVariableCount?: number
+    }
+  }>
+  /**
+   * Phase 2 (IPC): run a real motion study for the given assembly by stepping jointed components
+   * across their limit range. `sampleCount` defaults to 12 (clamped 1-200). Returns one pose per
+   * sample with per-sample transforms (each sample has a distinct joint-state fraction).
+   */
+  assemblySimulate: (assemblyInput: unknown, sampleCount?: number) => Promise<{
+    ok: true
+    sampleCount: number
+    poses: Array<{ sample: number; transforms: Array<{ id: string; transform: unknown }> }>
+    diagnostics: unknown
+    convergenceReport?: unknown
+  }>
   meshPreviewStlBase64: (sourcePath: string, pythonPath: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string; detail?: string }>
   featuresLoad: (projectDir: string) => Promise<PartFeaturesFile>
   featuresSave: (projectDir: string, json: string) => Promise<void>
@@ -800,6 +844,8 @@ const api: Api = {
   // Design/Assembly read-only
   designLoad: (projectDir) => ipcRenderer.invoke('design:load', projectDir),
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),
+  assemblySolve: (assemblyInput) => ipcRenderer.invoke('assembly:solve', assemblyInput),
+  assemblySimulate: (assemblyInput, sampleCount) => ipcRenderer.invoke('assembly:simulate', assemblyInput, sampleCount),
   meshPreviewStlBase64: (sourcePath, pythonPath) => ipcRenderer.invoke('mesh:previewStlBase64', sourcePath, pythonPath),
   featuresLoad: (projectDir) => ipcRenderer.invoke('features:load', projectDir),
   featuresSave: (projectDir, json) => ipcRenderer.invoke('features:save', projectDir, json),

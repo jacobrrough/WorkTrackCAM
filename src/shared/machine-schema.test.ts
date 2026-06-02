@@ -221,6 +221,32 @@ describe('machineProfileSchema', () => {
     ).toThrow()
   })
 
+  it('parses chuckOuterRadiusMm and chuckDepthMm for the rotary collision overlay', () => {
+    // [v2 toolpath playback — rotary collision overlay] additive chuck-geometry
+    // fields consumed by the renderer simulation-panel collision overlay.
+    const m = machineProfileSchema.parse({
+      ...minimalCnc,
+      axisCount: 4,
+      chuckOuterRadiusMm: 46,
+      chuckDepthMm: 25
+    })
+    expect(m.chuckOuterRadiusMm).toBe(46)
+    expect(m.chuckDepthMm).toBe(25)
+  })
+
+  it('chuckOuterRadiusMm and chuckDepthMm are optional (absent from minimal profile)', () => {
+    const m = machineProfileSchema.parse(minimalCnc)
+    expect(m.chuckOuterRadiusMm).toBeUndefined()
+    expect(m.chuckDepthMm).toBeUndefined()
+  })
+
+  it('rejects non-positive chuckOuterRadiusMm / chuckDepthMm', () => {
+    expect(() => machineProfileSchema.parse({ ...minimalCnc, chuckOuterRadiusMm: 0 })).toThrow()
+    expect(() => machineProfileSchema.parse({ ...minimalCnc, chuckOuterRadiusMm: -1 })).toThrow()
+    expect(() => machineProfileSchema.parse({ ...minimalCnc, chuckDepthMm: 0 })).toThrow()
+    expect(() => machineProfileSchema.parse({ ...minimalCnc, chuckDepthMm: -5 })).toThrow()
+  })
+
   it('5-axis fields are all optional (absent from minimal profile)', () => {
     const m = machineProfileSchema.parse(minimalCnc)
     expect(m.bAxisOrientation).toBeUndefined()

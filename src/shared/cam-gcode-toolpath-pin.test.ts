@@ -170,12 +170,23 @@ describe('A. Module shape -- src/shared/cam-gcode-toolpath.ts', () => {
 // B. ToolpathMotionKind / ToolpathSegment3 type-level + runtime parity
 // ---------------------------------------------------------------------------
 describe('B. ToolpathMotionKind + ToolpathSegment3 shape', () => {
-  it('extractToolpathSegmentsFromGcode result: every segment has exactly 7 string keys', () => {
+  it('extractToolpathSegmentsFromGcode result: base shape is the 7 core keys, plus the additive optional feedMmMin', () => {
+    // [v2 toolpath playback — feed-rate color coding] ToolpathSegment3 gained an
+    // OPTIONAL `feedMmMin?` populated from the modal F-word. It is attached only
+    // to feed moves with a known feed; rapids and feed-less moves keep the
+    // original 7-key shape exactly (Safety Rule 2 — additive, no required field).
+    const BASE7 = ['kind', 'x0', 'x1', 'y0', 'y1', 'z0', 'z1']
     const segs = extractToolpathSegmentsFromGcode('G0 X1 Y2 Z3\nG1 X4 Y5 Z6 F100')
     expect(segs.length).toBe(2)
-    for (const s of segs) {
-      expect(Object.keys(s).sort()).toEqual(['kind', 'x0', 'x1', 'y0', 'y1', 'z0', 'z1'])
-    }
+    // The G0 rapid carries no feed → exactly the 7 core keys, unchanged.
+    expect(Object.keys(segs[0]!).sort()).toEqual(BASE7)
+    expect('feedMmMin' in segs[0]!).toBe(false)
+    // The G1 feed move with F100 carries the 7 core keys plus feedMmMin only.
+    expect(Object.keys(segs[1]!).sort()).toEqual([...BASE7, 'feedMmMin'].sort())
+    expect(segs[1]!.feedMmMin).toBe(100)
+    // A feed move with no F-word in scope stays at the original 7-key shape.
+    const noFeed = extractToolpathSegmentsFromGcode('G1 X4 Y5 Z6')
+    expect(Object.keys(noFeed[0]!).sort()).toEqual(BASE7)
   })
 
   it('every segment kind is one of the two ToolpathMotionKind literals', () => {

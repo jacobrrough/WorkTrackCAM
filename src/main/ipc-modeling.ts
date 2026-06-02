@@ -435,25 +435,71 @@ export function registerModelingIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle('assembly:solve', async (_e, assemblyInput: unknown) => {
     const asm = parseAssemblyFile(assemblyInput)
     const active = asm.components.filter((c) => !c.suppressed)
-    const solved = solveAssemblyKinematics(active)
+    const mateConstraints = asm.mateConstraints ?? []
+    const solved = solveAssemblyKinematics(
+      active,
+      mateConstraints.length > 0 ? mateConstraints : undefined
+    )
     return {
       ok: true as const,
       transforms: [...solved.transforms.entries()].map(([id, t]) => ({ id, transform: t })),
-      diagnostics: solved.diagnostics
+      diagnostics: solved.diagnostics,
+      ...(solved.diagnostics.convergenceReport !== undefined
+        ? { convergenceReport: solved.diagnostics.convergenceReport }
+        : {})
     }
   })
 
   ipcMain.handle('assembly:simulate', async (_e, assemblyInput: unknown, sampleCountRaw?: number) => {
     const asm = parseAssemblyFile(assemblyInput)
     const active = asm.components.filter((c) => !c.suppressed)
-    const solved = solveAssemblyKinematics(active)
+    const mateConstraints = asm.mateConstraints ?? []
     const sampleCount = Math.max(1, Math.min(200, Math.floor(sampleCountRaw ?? 12)))
-    const pose = [...solved.transforms.entries()].map(([id, t]) => ({ id, transform: t }))
+
+    // Determine which components have jointed DOF to drive a motion study.
+    // For each sample i, step each jointed component's scalar state proportionally
+    // across its limit range (revolute: scalarDeg; slider: scalarMm). Components
+    // with no joint or with rigid joints are left at their stored placement.
+    const poses = Array.from({ length: sampleCount }, (_, i) => {
+      const fraction = sampleCount === 1 ? 0 : i / (sampleCount - 1)
+      const stepped = active.map((c) => {
+        if (c.joint === 'revolute') {
+          const minDeg = c.jointLimits?.scalarMinDeg ?? c.revolutePreviewMinDeg ?? -180
+          const maxDeg = c.jointLimits?.scalarMaxDeg ?? c.revolutePreviewMaxDeg ?? 180
+          const scalarDeg = minDeg + fraction * (maxDeg - minDeg)
+          return { ...c, jointState: { ...c.jointState, scalarDeg } }
+        }
+        if (c.joint === 'slider') {
+          const minMm = c.jointLimits?.scalarMinMm ?? c.sliderPreviewMinMm ?? 0
+          const maxMm = c.jointLimits?.scalarMaxMm ?? c.sliderPreviewMaxMm ?? 100
+          const scalarMm = minMm + fraction * (maxMm - minMm)
+          return { ...c, jointState: { ...c.jointState, scalarMm } }
+        }
+        return c
+      })
+      const solved = solveAssemblyKinematics(
+        stepped,
+        mateConstraints.length > 0 ? mateConstraints : undefined
+      )
+      return {
+        sample: i,
+        transforms: [...solved.transforms.entries()].map(([id, t]) => ({ id, transform: t }))
+      }
+    })
+
+    // Final diagnostics from the last sample (representative for the motion study).
+    const finalSolved = solveAssemblyKinematics(
+      active,
+      mateConstraints.length > 0 ? mateConstraints : undefined
+    )
     return {
       ok: true as const,
       sampleCount,
-      poses: Array.from({ length: sampleCount }, (_, i) => ({ sample: i, transforms: pose })),
-      diagnostics: solved.diagnostics
+      poses,
+      diagnostics: finalSolved.diagnostics,
+      ...(finalSolved.diagnostics.convergenceReport !== undefined
+        ? { convergenceReport: finalSolved.diagnostics.convergenceReport }
+        : {})
     }
   })
 

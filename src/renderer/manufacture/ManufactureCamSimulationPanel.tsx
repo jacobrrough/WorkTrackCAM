@@ -28,6 +28,11 @@ import {
   type VoxelSimQualityPreset
 } from '../../shared/cam-voxel-removal-proxy'
 import type { MachineProfile } from '../../shared/machine-schema'
+import {
+  checkRotaryFixtureCollision,
+  type RotaryFixtureConfig,
+  type RotaryCollisionOpts
+} from '../../shared/rotary-collision'
 import type { ManufactureFile, ManufactureOperation } from '../../shared/manufacture-schema'
 import { resolveCamToolDiameterMm, resolveCamToolStickoutMm, resolveCamToolType } from '../../shared/cam-tool-resolve'
 import type { HeightFieldToolShape } from '../../shared/cam-heightfield-2d5'
@@ -566,6 +571,170 @@ function base64ToUint8Array(b64: string): Uint8Array {
   return u8
 }
 
+/** Amber for rapid (G0) moves — matches the flat-mode rapid color. */
+const RAPID_COLOR_HEX = '#fbbf24'
+/** Cyan for feed (G1) moves with no known feed rate — matches the flat-mode feed color. */
+const FEED_COLOR_HEX = '#22d3ee'
+/** Red for segments flagged by the rotary-chuck collision sweep. */
+const COLLISION_COLOR_HEX = '#ef4444'
+
+/**
+ * Min/max commanded feed rate (mm/min) across a segment list, considering only
+ * segments that actually carry a `feedMmMin`. Returns `null` when no segment has
+ * a known feed (e.g. a path of pure rapids, or G-code with no F-words) so the
+ * caller can fall back to flat coloring instead of dividing by a zero range.
+ */
+export function computeFeedRateRangeMmMin(
+  segments: readonly { feedMmMin?: number; [key: string]: unknown }[]
+): { min: number; max: number } | null {
+  let min = Infinity
+  let max = -Infinity
+  for (const s of segments) {
+    const f = s.feedMmMin
+    if (f == null || !Number.isFinite(f)) continue
+    if (f < min) min = f
+    if (f > max) max = f
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null
+  return { min, max }
+}
+
+/**
+ * Map a feed rate to a cold→hot RGB triple (each channel 0..1) for the heat-map
+ * path coloring. Slow feeds are blue (hue ≈ 0.66), fast feeds are red (hue 0).
+ * When `min === max` (a single feed value) the midpoint color is used so the
+ * whole path renders one consistent hue rather than collapsing to a single end.
+ * `feed` is clamped into [min, max]; a non-finite feed returns the cold end.
+ */
+export function feedRateHeatColor(
+  feed: number,
+  min: number,
+  max: number
+): [number, number, number] {
+  let t: number
+  if (!Number.isFinite(feed)) {
+    t = 0
+  } else if (!(max > min)) {
+    t = 0.5
+  } else {
+    const clamped = Math.max(min, Math.min(max, feed))
+    t = (clamped - min) / (max - min)
+  }
+  // Cold (slow) = blue hue 0.66 → hot (fast) = red hue 0.0
+  const hue = 0.66 * (1 - t)
+  const c = new THREE.Color().setHSL(hue, 0.85, 0.5)
+  return [c.r, c.g, c.b]
+}
+
+/**
+ * Indices (into the supplied raw 4-axis segment array) of segments flagged by
+ * the rotary-chuck collision sweep. Thin, deterministic wrapper over the shared
+ * {@link checkRotaryFixtureCollision} — it does NOT reimplement the geometry; it
+ * just projects the collision events down to a sorted, de-duplicated index list
+ * so the panel can recolor exactly those segments red. Returns `[]` when the
+ * sweep is clean or the input is empty.
+ */
+export function collidingRawSegmentIndices(
+  segments: readonly ToolpathSegment4[],
+  fixture: RotaryFixtureConfig,
+  opts: RotaryCollisionOpts
+): number[] {
+  if (segments.length === 0) return []
+  const result = checkRotaryFixtureCollision(segments, fixture, opts)
+  if (result.safe) return []
+  const set = new Set<number>()
+  for (const c of result.collisions) set.add(c.segmentIndex)
+  return Array.from(set).sort((a, b) => a - b)
+}
+
+/**
+ * Feed-rate heat-map toolpath lines. Rapids render amber; feed segments are
+ * colored by a cold→hot gradient keyed to their `feedMmMin` relative to the
+ * path's [min, max] feed range. Feed segments with no known feed fall back to
+ * the flat cyan so the heat map degrades gracefully on partial F-word coverage.
+ * Progressive: only the first `visibleCount` segments are emitted.
+ */
+function FeedHeatmapToolpathLines({
+  segments,
+  visibleCount,
+  feedRange
+}: {
+  segments: ReturnType<typeof extractToolpathSegmentsFromGcode>
+  visibleCount: number
+  feedRange: { min: number; max: number }
+}): ReactNode {
+  const geometry = useMemo(() => {
+    const n = Math.min(visibleCount, segments.length)
+    if (n === 0) return null
+    const positions: number[] = []
+    const colors: number[] = []
+    const rapid = new THREE.Color(RAPID_COLOR_HEX)
+    const feedFallback = new THREE.Color(FEED_COLOR_HEX)
+    for (let i = 0; i < n; i++) {
+      const s = segments[i]!
+      const a = gcodeToThree(s.x0, s.y0, s.z0)
+      const b = gcodeToThree(s.x1, s.y1, s.z1)
+      positions.push(a[0], a[1], a[2], b[0], b[1], b[2])
+      let r: number, g: number, bl: number
+      if (s.kind === 'rapid') {
+        r = rapid.r; g = rapid.g; bl = rapid.b
+      } else if (s.feedMmMin != null) {
+        ;[r, g, bl] = feedRateHeatColor(s.feedMmMin, feedRange.min, feedRange.max)
+      } else {
+        r = feedFallback.r; g = feedFallback.g; bl = feedFallback.b
+      }
+      // Same color at both endpoints of the segment.
+      colors.push(r, g, bl, r, g, bl)
+    }
+    if (positions.length === 0) return null
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(positions), 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(colors), 3))
+    return geo
+  }, [segments, visibleCount, feedRange])
+
+  if (!geometry) return null
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial vertexColors linewidth={2} />
+    </lineSegments>
+  )
+}
+
+/**
+ * Red collision overlay lines. Renders exactly the toolpath segments flagged by
+ * the rotary-chuck collision sweep, drawn thicker and emissive-red on top of the
+ * normal path so the operator can see precisely where the cutter would strike
+ * the chuck body. `lines` is an array of pre-transformed Three.js endpoint pairs.
+ */
+function CollisionToolpathLines({
+  lines
+}: {
+  lines: readonly { a: THREE.Vector3Tuple; b: THREE.Vector3Tuple }[]
+}): ReactNode {
+  const geometry = useMemo(() => {
+    if (lines.length === 0) return null
+    const positions = new Float32Array(lines.length * 6)
+    for (let i = 0; i < lines.length; i++) {
+      const { a, b } = lines[i]!
+      const o = i * 6
+      positions[o] = a[0]; positions[o + 1] = a[1]; positions[o + 2] = a[2]
+      positions[o + 3] = b[0]; positions[o + 4] = b[1]; positions[o + 5] = b[2]
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    return geo
+  }, [lines])
+
+  if (!geometry) return null
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial color={COLLISION_COLOR_HEX} linewidth={3} />
+    </lineSegments>
+  )
+}
+
+
 type Props = {
   projectDir: string
   mfg: ManufactureFile
@@ -584,6 +753,13 @@ type Props = {
   layout?: 'compact' | 'workspace'
   /** Meshes on disk newer than `output/cam.nc` (from main mtime check). */
   camStaleMeshRelativePaths?: string[]
+  /**
+   * Path coloring mode. `'flat'` (default) keeps the legacy rapid-amber /
+   * feed-cyan coloring — zero visual change unless opted in. `'heatmap'`
+   * colors feed segments by a cold→hot gradient keyed to their commanded
+   * feed rate (`feedMmMin`) across the path's min→max feed range.
+   */
+  feedRateColorMode?: 'flat' | 'heatmap'
 }
 
 const VOXEL_QUALITY_STORAGE_KEY = 'ufs.manufacture.camSim.voxelQuality'
@@ -633,7 +809,8 @@ export function ManufactureCamSimulationPanel({
   previewOperation = null,
   camOut = '',
   layout = 'compact',
-  camStaleMeshRelativePaths = []
+  camStaleMeshRelativePaths = [],
+  feedRateColorMode = 'flat'
 }: Props): ReactNode {
   const [gcode, setGcode] = useState<string>(() => camOut ?? '')
   const [loadNote, setLoadNote] = useState<string | null>(null)
@@ -903,6 +1080,52 @@ export function ManufactureCamSimulationPanel({
 
   const rapidRadiusMm = Math.max(0.22, toolDia * 0.065)
   const feedRadiusMm = Math.max(0.38, toolDia * 0.11)
+
+  // ── Feed-rate heat-map range (Feature: feed-rate color coding) ─────────────
+  // Null when no segment carries a feed (pure rapids / no F-words) → caller
+  // falls back to the flat rapid-amber / feed-cyan coloring.
+  const feedRateRange = useMemo(
+    () => computeFeedRateRangeMmMin(viewSegments),
+    [viewSegments]
+  )
+  const useFeedHeatmap = feedRateColorMode === 'heatmap' && feedRateRange != null
+
+  // ── Rotary-chuck collision overlay (Feature: rotary collision overlay) ─────
+  // Only for 4-axis operations on a machine that declares chuck geometry.
+  // Uses the EXISTING checkRotaryFixtureCollision sweep over the RAW 4-axis
+  // segments (segs4Ref), then projects each flagged raw segment through the
+  // same cylindrical transform the rendered path uses, so the red overlay
+  // lines sit exactly on top of the colliding toolpath moves. Self-contained:
+  // derived from props already in scope, not pushed up into ManufactureWorkspace.
+  const collisionLines = useMemo<{ a: THREE.Vector3Tuple; b: THREE.Vector3Tuple }[]>(() => {
+    if (!is4Axis) return []
+    const cnc = machine?.kind === 'cnc' ? machine : undefined
+    const chuckR = cnc?.chuckOuterRadiusMm
+    const chuckD = cnc?.chuckDepthMm
+    if (chuckR == null || chuckD == null || !(chuckR > 0) || !(chuckD > 0)) return []
+    // segs4Ref is refreshed inside the `segments` memo; depend on `segments`
+    // (and gcode) so this recomputes whenever those raw segments change.
+    const segs4 = segs4Ref.current
+    if (segs4.length === 0) return []
+    const fixture: RotaryFixtureConfig = { chuckDepthMm: chuckD, chuckOuterRadiusMm: chuckR }
+    const opts: RotaryCollisionOpts = { toolDiameterMm: toolDia }
+    const idxs = collidingRawSegmentIndices(segs4, fixture, opts)
+    if (idxs.length === 0) return []
+    const out: { a: THREE.Vector3Tuple; b: THREE.Vector3Tuple }[] = []
+    for (const idx of idxs) {
+      const raw = segs4[idx]
+      if (!raw) continue
+      // One raw 4-axis move may arc-subdivide into several Cartesian lines.
+      const cart = apply4AxisCylindricalTransform([raw])
+      for (const c of cart) {
+        out.push({
+          a: gcodeToThree(c.x0, c.y0, c.z0),
+          b: gcodeToThree(c.x1, c.y1, c.z1)
+        })
+      }
+    }
+    return out
+  }, [is4Axis, segments, machine, toolDia])
 
   const envelopeMachine = machine?.kind === 'cnc' ? machine : undefined
   const workArea = envelopeMachine?.workAreaMm
@@ -1174,7 +1397,15 @@ export function ManufactureCamSimulationPanel({
                 <VoxelCarveSamples positions={voxelPreview.samplePositions} />
               ) : null}
               {hasPath ? (
-                progressiveMode ? (
+                useFeedHeatmap ? (
+                  // Heat-map coloring: feed segments colored by feed rate.
+                  // Always lines (per-vertex color) regardless of tube setting.
+                  <FeedHeatmapToolpathLines
+                    segments={viewSegments}
+                    visibleCount={progressiveMode ? visibleSegmentCount : viewSegments.length}
+                    feedRange={feedRateRange!}
+                  />
+                ) : progressiveMode ? (
                   useTubePreview ? (
                     <ProgressiveToolpathTubes
                       segments={viewSegments}
@@ -1194,6 +1425,9 @@ export function ManufactureCamSimulationPanel({
                 ) : (
                   <ToolpathLines segments={viewSegments} />
                 )
+              ) : null}
+              {collisionLines.length > 0 ? (
+                <CollisionToolpathLines lines={collisionLines} />
               ) : null}
               {hasPath && playbackHeadThree ? (
                 <PlaybackToolHead
@@ -1274,6 +1508,15 @@ export function ManufactureCamSimulationPanel({
             ? ` (${envelopeMachine.aAxisRangeDeg}° nominal)`
             : ' (defaults to 360° when unset)'}
           . See <code>docs/CAM_4TH_AXIS_REFERENCE.md</code> and <code>docs/MACHINES.md</code>.
+        </p>
+      ) : null}
+      {collisionLines.length > 0 ? (
+        <p className="msg msg--warn msg--xs" role="status" aria-live="polite">
+          <strong>Rotary chuck collision:</strong> {collisionLines.length.toLocaleString()} toolpath
+          {' '}segment{collisionLines.length === 1 ? '' : 's'} (shown in <strong>red</strong>) would strike the
+          {' '}chuck body (Ø{((machine?.kind === 'cnc' ? machine.chuckOuterRadiusMm : undefined) ?? 0) * 2} mm,
+          {' '}depth {(machine?.kind === 'cnc' ? machine.chuckDepthMm : undefined) ?? 0} mm) with the
+          {' '}{toolDia.toFixed(2)} mm tool. Review the toolpath and fixturing before running.
         </p>
       ) : null}
       {envelopeMachine?.kind === 'cnc' && (envelopeMachine.axisCount ?? 3) >= 5 ? (

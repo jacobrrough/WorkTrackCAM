@@ -85,12 +85,15 @@ vi.mock('../shared/assembly-schema', () => ({
   buildAssemblySummaryReport: vi.fn().mockReturnValue({}),
   buildBomHierarchyJsonText: vi.fn().mockReturnValue('{}'),
   buildHierarchicalBomText: vi.fn().mockReturnValue(''),
-  emptyAssembly: vi.fn().mockReturnValue({ version: 1, name: '', components: [] }),
-  parseAssemblyFile: vi.fn().mockReturnValue({ version: 1, name: '', components: [] })
+  emptyAssembly: vi.fn().mockReturnValue({ version: 1, name: '', components: [], mateConstraints: [] }),
+  parseAssemblyFile: vi.fn().mockReturnValue({ version: 1, name: '', components: [], mateConstraints: [] })
 }))
 
 vi.mock('../shared/assembly-kinematics-core', () => ({
-  solveAssemblyKinematics: vi.fn().mockReturnValue({ transforms: new Map(), diagnostics: [] })
+  solveAssemblyKinematics: vi.fn().mockReturnValue({
+    transforms: new Map(),
+    diagnostics: { violations: [], clampedDofs: [], residuals: [] }
+  })
 }))
 
 vi.mock('../shared/design-schema', () => ({
@@ -225,6 +228,67 @@ describe('ipc-modeling', () => {
     const handler = handlers.get('assembly:simulate')!
     const result = await handler({}, { version: 1, name: '', components: [] }, 500)
     expect(result.sampleCount).toBeLessThanOrEqual(200)
+  })
+
+  it('assembly:simulate returns distinct sample indices', async () => {
+    registerModelingIpc(createMockContext())
+    const handler = handlers.get('assembly:simulate')!
+    const result = await handler({}, { version: 1, name: '', components: [] }, 4)
+    expect(result.poses).toHaveLength(4)
+    const samples = result.poses.map((p: { sample: number }) => p.sample)
+    expect(samples).toEqual([0, 1, 2, 3])
+  })
+
+  it('assembly:solve includes convergenceReport when mateConstraints supplied', async () => {
+    const { parseAssemblyFile } = await import('../shared/assembly-schema')
+    const { solveAssemblyKinematics } = await import('../shared/assembly-kinematics-core')
+    const mockReport = {
+      converged: true,
+      iterations: 5,
+      finalResidual: 0.0000001,
+      perConstraintResiduals: [],
+      status: 'converged' as const
+    }
+    vi.mocked(parseAssemblyFile).mockReturnValueOnce({
+      version: 2,
+      name: '',
+      components: [],
+      mateConstraints: [
+        {
+          id: 'm1',
+          kind: 'coincident' as const,
+          part1Id: 'p1',
+          feature1: { x: 0, y: 0, z: 0 },
+          part2Id: 'p2',
+          feature2: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    } as ReturnType<typeof parseAssemblyFile>)
+    vi.mocked(solveAssemblyKinematics).mockReturnValueOnce({
+      transforms: new Map(),
+      diagnostics: {
+        violations: [],
+        clampedDofs: [],
+        residuals: [0.0000001],
+        convergenceReport: mockReport
+      }
+    })
+
+    registerModelingIpc(createMockContext())
+    const handler = handlers.get('assembly:solve')!
+    const result = await handler({}, { version: 1, name: '', components: [], mateConstraints: [] })
+    expect(result).toHaveProperty('ok', true)
+    expect(result).toHaveProperty('convergenceReport')
+    expect(result.convergenceReport).toMatchObject({ converged: true, status: 'converged' })
+  })
+
+  it('assembly:solve omits convergenceReport when no mateConstraints', async () => {
+    registerModelingIpc(createMockContext())
+    const handler = handlers.get('assembly:solve')!
+    const result = await handler({}, { version: 1, name: '', components: [], mateConstraints: [] })
+    expect(result).toHaveProperty('ok', true)
+    // No mateConstraints means no convergenceReport key in the response.
+    expect(result.convergenceReport).toBeUndefined()
   })
 
   it('drawing:export returns error when no window', async () => {

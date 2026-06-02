@@ -164,6 +164,38 @@ export interface AssemblyViewProps {
    * Defaults to false.
    */
   readonly initialMateModalOpen?: boolean
+  // ── Phase 3 (UI): solver-status badge + Solve button ─────────────────
+  /**
+   * Render-pin escape hatch: seeds the solver-status badge with a known
+   * convergence report so static render-pin tests can assert the badge
+   * text without calling `window.fab.assemblySolve`. When omitted the badge
+   * shows "Not solved" (gray) until the operator clicks "Solve".
+   */
+  readonly initialConvergenceReport?: ConvergenceReport | null
+}
+
+/**
+ * Solver convergence status returned by `assembly:solve` via Phase 2 IPC.
+ * Mirrored here to keep AssemblyView self-contained (the canonical definition
+ * lives in `src/shared/assembly-solver-core.ts` but is not imported directly by
+ * the renderer to avoid pulling main-process deps into the renderer bundle).
+ */
+type SolverStatus =
+  | 'converged'
+  | 'max_iterations_reached'
+  | 'diverged'
+  | 'over_constrained'
+  | 'under_constrained'
+  | 'not_solved'
+
+type ConvergenceReport = {
+  readonly converged: boolean
+  readonly iterations: number
+  readonly finalResidual: number
+  readonly perConstraintResiduals: ReadonlyArray<{ constraintId: string; residual: number }>
+  readonly status: SolverStatus
+  readonly conflictingConstraintIds?: readonly string[]
+  readonly freeVariableCount?: number
 }
 
 /**
@@ -325,11 +357,15 @@ export function AssemblyView({
   onAddMate,
   onRemoveMate,
   initialMateModalOpen = false,
+  initialConvergenceReport = null,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
   const [tessellation, setTessellation] = useState<AssemblyTessellation | null>(null)
   const [busy, setBusy] = useState(false)
+  // Phase 3 — solver-status badge state.
+  const [convergenceReport, setConvergenceReport] = useState<ConvergenceReport | null>(initialConvergenceReport)
+  const [solving, setSolving] = useState(false)
 
   // V1.5 mate modal state. Kept local — the host owns the canonical mates
   // list via the `mates` / `onAddMate` props. The modal is closed unless
@@ -533,6 +569,56 @@ export function AssemblyView({
     [onRemoveMate],
   )
 
+  // ── Phase 3: Solve callback ─────────────────────────────────────────────
+  // Calls window.fab.assemblySolve with the current assembly state and updates
+  // the convergenceReport badge. Errors fold into the existing error banner
+  // (never thrown). Disabled when the assembly is empty or a solve is in flight.
+  const handleSolve = useCallback((): void => {
+    if (parts.length === 0 || solving) return
+    const assemblyBridgeAny = (fab() as unknown) as {
+      assemblySolve?: (input: unknown) => Promise<{
+        ok: boolean
+        convergenceReport?: ConvergenceReport
+        diagnostics?: { convergenceReport?: ConvergenceReport }
+      }>
+    }
+    const bridge = assemblyBridgeAny.assemblySolve
+    if (!bridge) {
+      setError('assemblySolve bridge not available — IPC handler pending.')
+      return
+    }
+    setSolving(true)
+    setError(null)
+    const assemblyInput = {
+      version: 2,
+      name: '',
+      components: parts.map((part) => ({
+        id: part.id,
+        name: part.name,
+        grounded: false,
+        transform: {
+          x: part.transform?.position?.[0] ?? 0,
+          y: part.transform?.position?.[1] ?? 0,
+          z: part.transform?.position?.[2] ?? 0,
+          rxDeg: part.transform?.rotation?.[0] ?? 0,
+          ryDeg: part.transform?.rotation?.[1] ?? 0,
+          rzDeg: part.transform?.rotation?.[2] ?? 0,
+        }
+      })),
+      mateConstraints: []
+    }
+    void bridge(assemblyInput).then((res) => {
+      setSolving(false)
+      if (!res.ok) return
+      const report = res.convergenceReport ?? res.diagnostics?.convergenceReport ?? null
+      setConvergenceReport(report)
+    }).catch((e: unknown) => {
+      setSolving(false)
+      const message = e instanceof Error ? e.message : String(e)
+      setError(`Solve threw: ${message}`)
+    })
+  }, [parts, solving])
+
   // ── Empty-state branch ────────────────────────────────────────────────────
   if (parts.length === 0) {
     return (
@@ -608,6 +694,54 @@ export function AssemblyView({
           >
             Remove
           </button>
+        )}
+        {/* Phase 3: Solve button triggers assembly:solve IPC round-trip */}
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-testid="design-assembly-solve"
+          onClick={handleSolve}
+          disabled={parts.length === 0 || solving}
+          aria-disabled={parts.length === 0 || solving}
+        >
+          {solving ? 'Solving…' : 'Solve'}
+        </button>
+        {/* Phase 3: Solver-status badge */}
+        {convergenceReport === null ? (
+          <span
+            className="design-assembly__solver-badge design-assembly__solver-badge--not-solved"
+            data-testid="design-assembly-solver-badge"
+          >
+            Not solved
+          </span>
+        ) : convergenceReport.status === 'converged' ? (
+          <span
+            className="design-assembly__solver-badge design-assembly__solver-badge--converged"
+            data-testid="design-assembly-solver-badge"
+          >
+            {`Converged in ${convergenceReport.iterations} (residual ${convergenceReport.finalResidual.toExponential(2)})`}
+          </span>
+        ) : convergenceReport.status === 'under_constrained' ? (
+          <span
+            className="design-assembly__solver-badge design-assembly__solver-badge--under-constrained"
+            data-testid="design-assembly-solver-badge"
+          >
+            {`Under-constrained: ${convergenceReport.freeVariableCount ?? 0} DOF free`}
+          </span>
+        ) : convergenceReport.status === 'over_constrained' ? (
+          <span
+            className="design-assembly__solver-badge design-assembly__solver-badge--over-constrained"
+            data-testid="design-assembly-solver-badge"
+          >
+            {`Over-constrained${(convergenceReport.conflictingConstraintIds ?? []).length > 0 ? ' — ' + convergenceReport.conflictingConstraintIds!.join(', ') : ''}`}
+          </span>
+        ) : (
+          <span
+            className="design-assembly__solver-badge design-assembly__solver-badge--error"
+            data-testid="design-assembly-solver-badge"
+          >
+            {convergenceReport.status.replace(/_/g, ' ')}
+          </span>
         )}
       </div>
 

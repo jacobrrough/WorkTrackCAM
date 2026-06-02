@@ -447,3 +447,120 @@ describe('AssemblyView — V1.5 mate modal render contract', () => {
     expect(html).toContain('data-testid="design-assembly-mate-modal-feature2"')
   })
 })
+
+// ── (F) Phase 3: Solver-status badge + Solve button render contract ────────
+//
+// These tests use the `initialConvergenceReport` render-pin escape hatch so
+// the static `renderToStaticMarkup` path can assert badge text without
+// calling `window.fab.assemblySolve` (which requires jsdom + IPC).
+
+describe('AssemblyView — Phase 3 solver-status badge render contract', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+
+  it('renders the Solve button in the populated toolbar', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-solve"')
+    expect(html).toContain('Solve')
+  })
+
+  it('renders the Not-solved badge (gray) when no initialConvergenceReport is seeded', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-solver-badge"')
+    expect(html).toContain('Not solved')
+    expect(html).toContain('design-assembly__solver-badge--not-solved')
+  })
+
+  it('renders a green Converged badge when initialConvergenceReport has status converged', () => {
+    const report = {
+      converged: true,
+      iterations: 7,
+      finalResidual: 0.0000003,
+      perConstraintResiduals: [],
+      status: 'converged' as const,
+    }
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+        initialConvergenceReport: report,
+      }),
+    )
+    expect(html).toContain('design-assembly__solver-badge--converged')
+    expect(html).toContain('Converged in 7')
+    expect(html).toContain('3.00e-7')
+  })
+
+  it('renders a yellow Under-constrained badge with DOF count', () => {
+    const report = {
+      converged: false,
+      iterations: 0,
+      finalResidual: 0,
+      perConstraintResiduals: [],
+      status: 'under_constrained' as const,
+      freeVariableCount: 3,
+    }
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+        initialConvergenceReport: report,
+      }),
+    )
+    expect(html).toContain('design-assembly__solver-badge--under-constrained')
+    expect(html).toContain('Under-constrained: 3 DOF free')
+  })
+
+  it('renders a red Over-constrained badge with conflicting ids', () => {
+    const report = {
+      converged: false,
+      iterations: 0,
+      finalResidual: 0,
+      perConstraintResiduals: [],
+      status: 'over_constrained' as const,
+      conflictingConstraintIds: ['m1', 'm2'],
+    }
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+        initialConvergenceReport: report,
+      }),
+    )
+    expect(html).toContain('design-assembly__solver-badge--over-constrained')
+    expect(html).toContain('Over-constrained')
+    expect(html).toContain('m1')
+    expect(html).toContain('m2')
+  })
+
+  it('renders an error badge for max_iterations_reached', () => {
+    const report = {
+      converged: false,
+      iterations: 100,
+      finalResidual: 0.01,
+      perConstraintResiduals: [],
+      status: 'max_iterations_reached' as const,
+    }
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        onAddPart: vi.fn(),
+        initialConvergenceReport: report,
+      }),
+    )
+    expect(html).toContain('design-assembly__solver-badge--error')
+    expect(html).toContain('max iterations reached')
+  })
+})

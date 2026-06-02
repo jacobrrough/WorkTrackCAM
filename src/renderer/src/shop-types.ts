@@ -437,6 +437,49 @@ export declare const window: Window & {
       >
     }
     /**
+     * Phase 2 (IPC) + Phase 3 (UI): dispatch the assembly mate solver for the given assembly
+     * input. Returns solved transforms, diagnostics, and (when mateConstraints are present) the
+     * SolverConvergenceReport. Delegates to the `assembly:solve` IPC channel.
+     */
+    assemblySolve: (assemblyInput: unknown) => Promise<{
+      ok: true
+      transforms: Array<{ id: string; transform: { x: number; y: number; z: number; rxDeg: number; ryDeg: number; rzDeg: number } }>
+      diagnostics: {
+        violations: unknown[]
+        clampedDofs: string[]
+        residuals: number[]
+        convergenceReport?: {
+          converged: boolean
+          iterations: number
+          finalResidual: number
+          perConstraintResiduals: Array<{ constraintId: string; residual: number }>
+          status: 'converged' | 'max_iterations_reached' | 'diverged' | 'over_constrained' | 'under_constrained'
+          conflictingConstraintIds?: string[]
+          freeVariableCount?: number
+        }
+      }
+      convergenceReport?: {
+        converged: boolean
+        iterations: number
+        finalResidual: number
+        perConstraintResiduals: Array<{ constraintId: string; residual: number }>
+        status: 'converged' | 'max_iterations_reached' | 'diverged' | 'over_constrained' | 'under_constrained'
+        conflictingConstraintIds?: string[]
+        freeVariableCount?: number
+      }
+    }>
+    /**
+     * Phase 2 (IPC): run a real motion study by stepping jointed components across their limit
+     * range. `sampleCount` defaults to 12 (clamped 1-200). Delegates to `assembly:simulate`.
+     */
+    assemblySimulate: (assemblyInput: unknown, sampleCount?: number) => Promise<{
+      ok: true
+      sampleCount: number
+      poses: Array<{ sample: number; transforms: Array<{ id: string; transform: unknown }> }>
+      diagnostics: unknown
+      convergenceReport?: unknown
+    }>
+    /**
      * Workflow F: machine:estop — AppHeader STOP button safety dispatch.
      * Renderer calls `window.fab.machine.estop({ machineId })`; the main
      * process dispatches per-machine abort:

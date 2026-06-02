@@ -13,6 +13,16 @@ export type ToolpathSegment3 = {
   x1: number
   y1: number
   z1: number
+  /**
+   * Commanded feed rate (mm/min) in effect for this segment, sourced from the
+   * modal F-word. Present only when an F-word has been seen at or before this
+   * line; rapids (G0) and any feed move before the first F-word leave it
+   * `undefined`. Optional + additively attached so the existing 7-key segment
+   * shape is preserved for segments with no known feed (Safety Rule 2 — no
+   * downstream consumer is forced to handle a new required field). Consumed by
+   * the simulation panel's optional feed-rate heat-map coloring.
+   */
+  feedMmMin?: number
 }
 
 function readAxis(line: string, axis: 'X' | 'Y' | 'Z' | 'A' | 'B' | 'I' | 'J'): number | null {
@@ -24,6 +34,20 @@ function readAxis(line: string, axis: 'X' | 'Y' | 'Z' | 'A' | 'B' | 'I' | 'J'): 
   if (!m) return null
   const n = Number.parseFloat(m[1] ?? '')
   return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Read the feed-rate F-word (mm/min) from a line, ignoring inline comments.
+ * Returns a positive finite number, or `null` when no usable F-word is present
+ * (so the caller can carry the modal feed forward). Non-positive / non-finite
+ * F values are rejected — a stray `F0` never overwrites a live modal feed.
+ */
+function readFeed(line: string): number | null {
+  const clean = line.replace(/\([^)]*\)/g, '')
+  const m = clean.match(/F([+-]?\d+(?:\.\d+)?)/)
+  if (!m) return null
+  const n = Number.parseFloat(m[1] ?? '')
+  return Number.isFinite(n) && n > 0 ? n : null
 }
 
 /** Number of line segments used to approximate a G2/G3 arc. */
@@ -47,7 +71,8 @@ function interpolateArc(
   cw: boolean,
   x0: number, y0: number, z0: number,
   x1: number, y1: number, z1: number,
-  i: number, j: number
+  i: number, j: number,
+  feedMmMin?: number
 ): ToolpathSegment3[] {
   const cx = x0 + i
   const cy = y0 + j
@@ -86,7 +111,8 @@ function interpolateArc(
     segs.push({
       kind: 'feed',
       x0: sx0, y0: sy0, z0: sz0,
-      x1: sx1, y1: sy1, z1: sz1
+      x1: sx1, y1: sy1, z1: sz1,
+      ...(feedMmMin != null ? { feedMmMin } : {})
     })
   }
 
@@ -100,6 +126,10 @@ export function extractToolpathSegmentsFromGcode(gcode: string): ToolpathSegment
     .filter((line) => line.length > 0 && !line.startsWith(';'))
 
   const state = { x: 0, y: 0, z: 0 }
+  // Modal feed rate (mm/min): an F-word stays in effect for subsequent moves
+  // until overridden. Starts undefined — a feed move before the first F-word
+  // has no known feed and leaves `feedMmMin` off the segment entirely.
+  let modalFeed: number | undefined
   const segs: ToolpathSegment3[] = []
 
   for (const line of lines) {
@@ -109,6 +139,11 @@ export function extractToolpathSegmentsFromGcode(gcode: string): ToolpathSegment
     const isArc = /^(G0?2|G0?3)(?=\s|[A-Z]|$)/i.test(line)
     if (!isArc && !/^(G00|G0|G01|G1)(?=\s|[A-Z]|$)/i.test(line)) continue
 
+    // An F-word on any motion line (including a rapid) updates the modal feed
+    // for later cutting moves, even though the rapid itself uses traverse speed.
+    const lineFeed = readFeed(line)
+    if (lineFeed != null) modalFeed = lineFeed
+
     if (isArc) {
       const isCW = /^(G0?2)(?=\s|[A-Z]|$)/i.test(line)
       const nx = readAxis(line, 'X') ?? state.x
@@ -116,7 +151,7 @@ export function extractToolpathSegmentsFromGcode(gcode: string): ToolpathSegment
       const nz = readAxis(line, 'Z') ?? state.z
       const ci = readAxis(line, 'I') ?? 0
       const cj = readAxis(line, 'J') ?? 0
-      const arcSegs = interpolateArc(isCW, state.x, state.y, state.z, nx, ny, nz, ci, cj)
+      const arcSegs = interpolateArc(isCW, state.x, state.y, state.z, nx, ny, nz, ci, cj, modalFeed)
       segs.push(...arcSegs)
       state.x = nx
       state.y = ny
@@ -133,7 +168,9 @@ export function extractToolpathSegmentsFromGcode(gcode: string): ToolpathSegment
         z0: state.z,
         x1: nx,
         y1: ny,
-        z1: nz
+        z1: nz,
+        // Rapids carry no feed; feed moves carry the modal feed when one is known.
+        ...(!isRapid && modalFeed != null ? { feedMmMin: modalFeed } : {})
       })
       state.x = nx
       state.y = ny

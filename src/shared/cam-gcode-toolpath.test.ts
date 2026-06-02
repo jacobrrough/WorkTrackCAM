@@ -124,6 +124,88 @@ describe('extractToolpathSegmentsFromGcode', () => {
   })
 })
 
+describe('extractToolpathSegmentsFromGcode — modal feed-rate tracking', () => {
+  it('attaches feedMmMin to a feed move from its own F-word', () => {
+    const s = extractToolpathSegmentsFromGcode('G1 X10 Y0 Z0 F300')
+    expect(s.length).toBe(1)
+    expect(s[0]!.kind).toBe('feed')
+    expect(s[0]!.feedMmMin).toBe(300)
+  })
+
+  it('carries the modal feed forward to later feed moves without an F-word', () => {
+    const g = ['G1 X10 F300', 'G1 X20', 'G1 X30 F1200', 'G1 X40'].join('\n')
+    const s = extractToolpathSegmentsFromGcode(g)
+    expect(s.length).toBe(4)
+    expect(s[0]!.feedMmMin).toBe(300)
+    expect(s[1]!.feedMmMin).toBe(300) // modal carry-over
+    expect(s[2]!.feedMmMin).toBe(1200) // new F-word overrides
+    expect(s[3]!.feedMmMin).toBe(1200) // carried again
+  })
+
+  it('leaves feedMmMin undefined on rapids (G0) and omits the key entirely', () => {
+    const g = ['G0 Z5 F300', 'G1 Z-1 F300', 'G0 X20'].join('\n')
+    const s = extractToolpathSegmentsFromGcode(g)
+    expect(s.length).toBe(3)
+    // Rapid before/with an F-word still carries no feedMmMin and no extra key.
+    expect(s[0]!.kind).toBe('rapid')
+    expect(s[0]!.feedMmMin).toBeUndefined()
+    expect('feedMmMin' in s[0]!).toBe(false)
+    // The feed move in the middle does carry it.
+    expect(s[1]!.feedMmMin).toBe(300)
+    // A later rapid still has no feed key even though a modal feed is active.
+    expect(s[2]!.kind).toBe('rapid')
+    expect('feedMmMin' in s[2]!).toBe(false)
+  })
+
+  it('a rapid F-word still seeds the modal feed for a subsequent feed move', () => {
+    // F on a G0 line sets the modal feed; the rapid itself uses traverse speed.
+    const g = ['G0 X5 F800', 'G1 X10'].join('\n')
+    const s = extractToolpathSegmentsFromGcode(g)
+    expect(s[0]!.kind).toBe('rapid')
+    expect('feedMmMin' in s[0]!).toBe(false)
+    expect(s[1]!.kind).toBe('feed')
+    expect(s[1]!.feedMmMin).toBe(800)
+  })
+
+  it('omits feedMmMin from a feed move that precedes any F-word', () => {
+    const s = extractToolpathSegmentsFromGcode('G1 X10 Y0 Z0')
+    expect(s.length).toBe(1)
+    expect(s[0]!.kind).toBe('feed')
+    expect(s[0]!.feedMmMin).toBeUndefined()
+    expect('feedMmMin' in s[0]!).toBe(false)
+  })
+
+  it('propagates the modal feed onto every G2/G3 arc sub-segment', () => {
+    const g = 'G0 X10 Y0 Z0 F450\nG2 X0 Y10 I-10 J0'
+    const s = extractToolpathSegmentsFromGcode(g)
+    // G0 (no feed key) + 16 arc sub-segments (each tagged with the modal feed)
+    expect(s.length).toBe(17)
+    expect('feedMmMin' in s[0]!).toBe(false)
+    for (const seg of s.slice(1)) {
+      expect(seg.feedMmMin).toBe(450)
+    }
+  })
+
+  it('ignores a non-positive F0 so it never clobbers a live modal feed', () => {
+    const g = ['G1 X10 F300', 'G1 X20 F0', 'G1 X30'].join('\n')
+    const s = extractToolpathSegmentsFromGcode(g)
+    expect(s[0]!.feedMmMin).toBe(300)
+    expect(s[1]!.feedMmMin).toBe(300) // F0 rejected, modal feed preserved
+    expect(s[2]!.feedMmMin).toBe(300)
+  })
+
+  it('parses a fractional feed F1234.5 and a compact G1X5F600', () => {
+    expect(extractToolpathSegmentsFromGcode('G1 X10 F1234.5')[0]!.feedMmMin).toBeCloseTo(1234.5, 5)
+    expect(extractToolpathSegmentsFromGcode('G1X5F600')[0]!.feedMmMin).toBe(600)
+  })
+
+  it('does not read an F-word from inside a parenthetical comment', () => {
+    // The comment F999 must not become the feed; the real F300 must win.
+    const s = extractToolpathSegmentsFromGcode('G1 X10 (rough at F999) F300')
+    expect(s[0]!.feedMmMin).toBe(300)
+  })
+})
+
 describe('buildContiguousPathChains', () => {
   it('merges continuous feed moves into one chain', () => {
     const g = ['G0 Z5', 'G1 Z0 F200', 'G1 X1 Y0'].join('\n')
