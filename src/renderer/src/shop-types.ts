@@ -380,6 +380,49 @@ export declare const window: Window & {
       exportDrawing: (
         payload: CadExportDrawingPayload,
       ) => Promise<CadExportDrawingResponse>
+      /**
+       * CAD V1.5 Assembly mate (Wave 3): attach a structural mate to an
+       * assembly handle. Permissive envelope mirrors the precedent set by
+       * `solveSketch` / `createAssembly` / `projectDrawing`. The deep
+       * mate-record schema lives renderer-side; sidecar owns validation.
+       */
+      addAssemblyMate: (
+        payload: Record<string, unknown>,
+      ) => Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
+      /**
+       * CAD V1.5 Drawing dimension (Wave 3): stamp a dimension annotation
+       * (linear / radial / angular / diametric) onto a projected view.
+       */
+      dimensionDrawing: (
+        payload: Record<string, unknown>,
+      ) => Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
+      /**
+       * CAD V1.5 Drawing section (Wave 3): cut a section plane through a
+       * body and return the projected sectioned linework + hatch regions.
+       */
+      sectionDrawing: (
+        payload: Record<string, unknown>,
+      ) => Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
+      /**
+       * CAD V1.5 Title block (Wave 3): attach (or replace) a title-block
+       * metadata blob on a drawing sheet so the next `exportDrawing` call
+       * stamps it onto the rendered shell.
+       */
+      attachTitleBlock: (
+        payload: Record<string, unknown>,
+      ) => Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
     }
     /**
      * Workflow F: machine:estop — AppHeader STOP button safety dispatch.

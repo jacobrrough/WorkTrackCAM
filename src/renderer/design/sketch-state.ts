@@ -77,11 +77,32 @@ export type SketchArcEntity = {
   endId: string
 }
 
+/**
+ * Three-point spline entity (CAD V1.5). Stored as a sequence of point ids;
+ * the renderer draws a quadratic Bézier through the first three control
+ * points (start, via, end) for the MVP. The point ids participate in the
+ * normal constraint solver (coincident / horizontal / etc.) but the curve
+ * itself contributes no constraint residual yet -- the displayed curve is
+ * a pure derivation of the moved points.
+ */
+export type SketchSplineEntity = {
+  id: string
+  kind: 'spline'
+  /**
+   * Ordered list of control point ids. MVP requires exactly 3 (start /
+   * via / end) so the canvas can render a quadratic Bézier; later phases
+   * can extend this to N-knot splines once the renderer learns the
+   * Catmull-Rom / cubic-bezier paths.
+   */
+  pointIds: string[]
+}
+
 export type SketchEntity =
   | SketchPointEntity
   | SketchLineEntity
   | SketchCircleEntity
   | SketchArcEntity
+  | SketchSplineEntity
 
 // ── Constraint data model ────────────────────────────────────────────────────
 
@@ -126,12 +147,34 @@ export type RadiusConstraint = {
   value: number
 }
 
+/** Parallel: line (a1→b1) parallel to line (a2→b2); 2D cross product → 0. */
+export type ParallelConstraint = {
+  id: string
+  kind: 'parallel'
+  a1Id: string
+  b1Id: string
+  a2Id: string
+  b2Id: string
+}
+
+/** Perpendicular: line (a1→b1) ⟂ line (a2→b2); dot product → 0. */
+export type PerpendicularConstraint = {
+  id: string
+  kind: 'perpendicular'
+  a1Id: string
+  b1Id: string
+  a2Id: string
+  b2Id: string
+}
+
 export type Constraint =
   | HorizontalConstraint
   | VerticalConstraint
   | CoincidentConstraint
   | DistanceConstraint
   | RadiusConstraint
+  | ParallelConstraint
+  | PerpendicularConstraint
 
 // ── State + reducer ──────────────────────────────────────────────────────────
 
@@ -167,6 +210,17 @@ export type SketchAction =
   /** Add an arc (start / via / end); auto-creates points if ids omitted. */
   | {
       type: 'addArc'
+      id?: string
+      start: { id?: string; x: number; y: number }
+      via: { id?: string; x: number; y: number }
+      end: { id?: string; x: number; y: number }
+    }
+  /**
+   * Add a three-point spline (control: start / via / end). MVP renders a
+   * quadratic Bézier through the moved points.
+   */
+  | {
+      type: 'addSpline'
       id?: string
       start: { id?: string; x: number; y: number }
       via: { id?: string; x: number; y: number }
@@ -256,6 +310,14 @@ function constraintTouchesPoint(c: Constraint, pointIds: ReadonlySet<string>): b
   if (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'coincident' || c.kind === 'distance') {
     return pointIds.has(c.aId) || pointIds.has(c.bId)
   }
+  if (c.kind === 'parallel' || c.kind === 'perpendicular') {
+    return (
+      pointIds.has(c.a1Id) ||
+      pointIds.has(c.b1Id) ||
+      pointIds.has(c.a2Id) ||
+      pointIds.has(c.b2Id)
+    )
+  }
   return false
 }
 
@@ -263,6 +325,7 @@ function collectEntityPointIds(e: SketchEntity): string[] {
   if (e.kind === 'point') return [e.pointId]
   if (e.kind === 'line') return [e.startId, e.endId]
   if (e.kind === 'circle') return [e.centerId]
+  if (e.kind === 'spline') return [...e.pointIds]
   return [e.startId, e.viaId, e.endId]
 }
 
@@ -278,6 +341,12 @@ function isPointOrphan(
     if (
       (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'coincident' || c.kind === 'distance') &&
       (c.aId === pointId || c.bId === pointId)
+    ) {
+      return false
+    }
+    if (
+      (c.kind === 'parallel' || c.kind === 'perpendicular') &&
+      (c.a1Id === pointId || c.b1Id === pointId || c.a2Id === pointId || c.b2Id === pointId)
     ) {
       return false
     }
@@ -335,6 +404,22 @@ export function sketchReducer(state: SketchState, action: SketchAction): SketchS
       const e = ensurePoint(v.points, action.end)
       const id = action.id ?? generateId('e')
       const entity: SketchArcEntity = { id, kind: 'arc', startId: s.id, viaId: v.id, endId: e.id }
+      return {
+        ...next,
+        sketch: { ...next.sketch, points: e.points, entities: [...next.sketch.entities, entity] }
+      }
+    }
+    case 'addSpline': {
+      const next = pushPast(state)
+      const s = ensurePoint(next.sketch.points, action.start)
+      const v = ensurePoint(s.points, action.via)
+      const e = ensurePoint(v.points, action.end)
+      const id = action.id ?? generateId('e')
+      const entity: SketchSplineEntity = {
+        id,
+        kind: 'spline',
+        pointIds: [s.id, v.id, e.id]
+      }
       return {
         ...next,
         sketch: { ...next.sketch, points: e.points, entities: [...next.sketch.entities, entity] }
@@ -512,6 +597,8 @@ export function sketchToDesign(sketch: Sketch): DesignFileV2 {
       })
     } else if (e.kind === 'arc') {
       entities.push({ id: e.id, kind: 'arc', startId: e.startId, viaId: e.viaId, endId: e.endId })
+    } else if (e.kind === 'spline' && e.pointIds.length >= 3) {
+      entities.push({ id: e.id, kind: 'spline_fit', pointIds: [...e.pointIds], closed: false })
     }
     // point entities have no kernel/solver representation -- drop.
   }
@@ -538,6 +625,24 @@ export function sketchToDesign(sketch: Sketch): DesignFileV2 {
       const key = `r_${c.id}`
       parameters[key] = c.value
       constraints.push({ id: c.id, type: 'radius', entityId: c.entityId, parameterKey: key })
+    } else if (c.kind === 'parallel') {
+      constraints.push({
+        id: c.id,
+        type: 'parallel',
+        a1: { pointId: c.a1Id },
+        b1: { pointId: c.b1Id },
+        a2: { pointId: c.a2Id },
+        b2: { pointId: c.b2Id }
+      })
+    } else if (c.kind === 'perpendicular') {
+      constraints.push({
+        id: c.id,
+        type: 'perpendicular',
+        a1: { pointId: c.a1Id },
+        b1: { pointId: c.b1Id },
+        a2: { pointId: c.a2Id },
+        b2: { pointId: c.b2Id }
+      })
     }
   }
   return {

@@ -49,6 +49,10 @@ export type SidecarMethod =
   | 'cad.create_assembly'
   | 'cad.tessellate_assembly'
   | 'cad.export_assembly'
+  // CAD V1.5 — additive drawing helpers (dimensions / sections / title block).
+  | 'cad.dimension_drawing'
+  | 'cad.section_drawing'
+  | 'cad.attach_title_block'
   | 'cam.run_toolpath'
 
 export type PingResult = { pong: true; version: string }
@@ -650,6 +654,300 @@ export type CadExportAssemblyParams = {
 export type CadExportAssemblyResult = {
   outPath: string
   bytesWritten: number
+}
+
+// ── cad.add_assembly_mate (CAD V1.5 — Wave 3) ───────────────────────────
+//
+// Incremental mate constraints on an existing cq.Assembly handle. The
+// renderer's V1.5 AssemblyView modal lets the operator pick two features
+// in the viewport (a point, an axis, or a plane) on two different parts,
+// then calls cad.add_assembly_mate once per confirmed mate. The sidecar
+// runs cq.Assembly.constrain(...) + .solve() and updates the cached
+// workplane behind the same handle.
+//
+// Three mate kinds:
+//   * point  — weld two 3-D points (in each child's local frame) together.
+//              Drops 3 translational DOFs.
+//   * axis   — align two 3-D axes (parallel + co-linear). Drops 2 rotational DOFs.
+//   * plane  — mate two planes face-to-face. Drops 1 translation + 2 rotation DOFs.
+//
+// Error vocabulary mirrors the bulk assembly path with one addition:
+//   * 'mate_solve_failed' — cq.Assembly.solve() raised. Most common when
+//                            the operator stacks conflicting mates
+//                            (over-constrained system); the renderer
+//                            should surface a "loosen a constraint" hint.
+
+/** Discriminated mate kind. Each kind requires a different feature payload. */
+export type CadAssemblyMateKind = 'point' | 'axis' | 'plane'
+
+/**
+ * Point mate: weld two 3-D points (in each child's local frame) together.
+ * Reduces the relative DOF count of part2 by 3 translation DOFs.
+ */
+export type CadAssemblyPointMate = {
+  kind: 'point'
+  /** Child name in the assembly (matches CadAssemblyChild.name). */
+  part1Id: string
+  /** Point in part1's local frame (mm). */
+  point1: [number, number, number]
+  part2Id: string
+  /** Point in part2's local frame (mm). */
+  point2: [number, number, number]
+}
+
+/**
+ * Axis mate: align two 3-D axes (direction vectors in each child's local frame).
+ * Reduces the relative rotational DOF count of part2 by 2.
+ */
+export type CadAssemblyAxisMate = {
+  kind: 'axis'
+  part1Id: string
+  /** Axis direction in part1's local frame (mm). Need not be unit-length. */
+  axis1: [number, number, number]
+  part2Id: string
+  /** Axis direction in part2's local frame (mm). */
+  axis2: [number, number, number]
+}
+
+/**
+ * Plane mate: mate two planes face-to-face. Each plane is origin + normal in
+ * the child's local frame. Reduces DOFs by 1 translation + 2 rotation.
+ */
+export type CadAssemblyPlaneMate = {
+  kind: 'plane'
+  part1Id: string
+  /** Plane origin in part1's local frame (mm). */
+  point1: [number, number, number]
+  /** Plane normal in part1's local frame (mm). Need not be unit-length. */
+  normal1: [number, number, number]
+  part2Id: string
+  point2: [number, number, number]
+  normal2: [number, number, number]
+}
+
+/** Union of all mate kinds — what the wire accepts as the `mate` field. */
+export type CadAssemblyMate =
+  | CadAssemblyPointMate
+  | CadAssemblyAxisMate
+  | CadAssemblyPlaneMate
+
+/**
+ * Params for cad.add_assembly_mate. Single-mate-at-a-time matches the
+ * renderer's incremental flow: the operator picks features in the viewport
+ * and confirms one mate per modal close. Bulk callers (file load / round-trip)
+ * use cad.build_assembly_with_mates instead.
+ */
+export type CadAddAssemblyMateParams = {
+  /** Assembly handle from a prior cad.create_assembly call. */
+  handle: string
+  /** Mate definition (discriminated by `kind`). */
+  mate: CadAssemblyMate
+}
+
+export type CadAddAssemblyMateResult = {
+  /** Echo of input handle (assembly identity preserved across mate ops). */
+  handle: string
+  /** Echoed mate.kind so the renderer can chain on a single round-trip. */
+  kind: CadAssemblyMateKind
+  /** Echoed part1Id. */
+  part1Id: string
+  /** Echoed part2Id. */
+  part2Id: string
+  /**
+   * Post-solve axis-aligned bbox in mm. The solver moves children, so the
+   * bbox after a successful mate solve typically differs from the pre-solve
+   * cache. Renderer should re-frame the viewport on this value.
+   */
+  bbox: { min: [number, number, number]; max: [number, number, number] }
+}
+
+// ── cad.dimension_drawing / cad.section_drawing / cad.attach_title_block ─
+//
+// CAD V1.5 — additive drawing extensions on top of cad.project_drawing.
+// Three methods so the renderer's V1.5 DrawingView can build a real
+// mechanical drawing (orthographic + dimensions + section view + title
+// block) without stuffing every concern into a single fat call:
+//
+//   * cad.dimension_drawing  — overlay a dimension annotation layer
+//                                (distance / radius / diameter / angle).
+//   * cad.section_drawing    — slice the body with a half-space, then
+//                                project the cut.
+//   * cad.attach_title_block — stamp a title-block <g> into an SVG.
+//
+// All three operate on top of an existing body handle (from
+// cad.execute_script or cad.import_step). attach_title_block is unique in
+// that it operates on the SVG string directly — it does NOT need the
+// handle table — so the renderer can stamp the same block onto a base
+// projection OR a dimensioned/sectioned variant without an extra round-
+// trip.
+//
+// Error vocabulary mirrors the BUILD-3 drawing path with two additions:
+//   * 'bad_params'      — malformed dimension spec, unknown axis, etc.
+//   * 'section_error'   — CadQuery raised during the cut/half-space.
+//   * 'invalid_handle'  — handle missing from the table (dimension /
+//                          section only; attach_title_block doesn't read
+//                          the table).
+//   * 'drawing_error' / 'cadquery_not_installed' — propagated.
+//
+// Safety Rule 1: these paths DO NOT emit G-code or STL. The annotated SVG
+// is renderer-only; no downstream CAM logic ever reads it.
+
+/** Dimension kinds supported in V1.5. */
+export type CadDimensionKind = 'distance' | 'radius' | 'diameter' | 'angle'
+
+/** Re-usable 2D point spec for dimension overlays (sheet-space mm). */
+export type CadDimensionPoint2D = { x: number; y: number }
+
+/**
+ * Discriminated union of every supported dimension spec. Each variant
+ * carries the geometric anchors the SVG layer needs to draw witness
+ * lines, dimension lines, arrowheads, and the text label.
+ *
+ *   * 'distance' — measures the linear distance between two 2D points.
+ *     `offset` shifts the dimension line perpendicular to the measured
+ *     vector so the label sits outside the part outline; sign picks the
+ *     side. Defaults to 8 mm if omitted.
+ *   * 'radius' / 'diameter' — measures a circular feature. `center` is
+ *     the arc/circle centre; `edge` is a point on the arc (the leader
+ *     terminates here). The text label is auto-prefixed with "R" or "Ø"
+ *     unless `label` is supplied.
+ *   * 'angle' — measures the angle between two arms sharing a `vertex`.
+ *     Auto-formatted in degrees unless `label` is supplied.
+ *
+ * `label` is optional on every kind; when present the renderer-supplied
+ * text replaces the auto-computed measurement (useful for tolerance
+ * call-outs like "30 ±0.05").
+ */
+export type CadDimensionSpec =
+  | {
+      kind: 'distance'
+      p1: CadDimensionPoint2D
+      p2: CadDimensionPoint2D
+      /** Perpendicular offset for the dimension line in mm (default 8). */
+      offset?: number
+      label?: string
+    }
+  | {
+      kind: 'radius'
+      center: CadDimensionPoint2D
+      edge: CadDimensionPoint2D
+      label?: string
+    }
+  | {
+      kind: 'diameter'
+      center: CadDimensionPoint2D
+      edge: CadDimensionPoint2D
+      label?: string
+    }
+  | {
+      kind: 'angle'
+      vertex: CadDimensionPoint2D
+      arm1: CadDimensionPoint2D
+      arm2: CadDimensionPoint2D
+      label?: string
+    }
+
+export type CadDimensionDrawingParams = {
+  /** Opaque handle from cad.execute_script or cad.import_step. */
+  handle: string
+  /** View direction; see CadDrawingView for the standard names. */
+  view: CadDrawingView
+  /**
+   * Dimension specs to overlay. Empty array round-trips back to the
+   * bare projection — convenient for toggling the layer off without
+   * two separate IPC paths.
+   */
+  dimensions: CadDimensionSpec[]
+}
+
+export type CadDimensionDrawingResult = {
+  /** Base SVG + dimension <g> layer. */
+  svg: string
+  /** Echoed view name. */
+  view: CadDrawingView
+  /** Byte length of the SVG after UTF-8 encode. */
+  bytes: number
+  /** Number of dimension annotations applied (== dimensions.length). */
+  dimensionCount: number
+}
+
+/** Section-plane axis vocabulary. */
+export type CadSectionAxis = 'x' | 'y' | 'z'
+
+/** Which half-space to KEEP after slicing along the plane. */
+export type CadSectionKeepSide = 'positive' | 'negative'
+
+/**
+ * Section-plane spec: an axis-aligned cutting plane at `offset` along
+ * `axis`. `keepSide` picks which side of the plane the renderer wants
+ * to see; defaults to 'positive' (coord > offset). The unwanted half is
+ * cut away by subtracting an infinite half-space box from the body.
+ */
+export type CadSectionPlane = {
+  axis: CadSectionAxis
+  /** Signed plane offset along the axis (mm). */
+  offset: number
+  /** Defaults to 'positive' when omitted. */
+  keepSide?: CadSectionKeepSide
+}
+
+export type CadSectionDrawingParams = {
+  handle: string
+  view: CadDrawingView
+  plane: CadSectionPlane
+}
+
+export type CadSectionDrawingResult = {
+  /** SVG of the sectioned body (post-cut + projected). */
+  svg: string
+  view: CadDrawingView
+  bytes: number
+  /** Echoed normalized plane spec (keepSide defaulted if absent). */
+  plane: {
+    axis: CadSectionAxis
+    offset: number
+    keepSide: CadSectionKeepSide
+  }
+}
+
+/**
+ * Title-block metadata. Every field is optional on the wire; the sidecar
+ * fills missing slots with empty strings so the operator can stamp a
+ * partial block and finish it later. Field values are trimmed to 80
+ * characters by the sidecar to fit the standard drafting block.
+ */
+export type CadTitleBlockMetadata = {
+  /** Drawing name (left-most cell). */
+  name?: string
+  /** Scale string, e.g. "1:1" or "2:1". */
+  scale?: string
+  /** Author / drafter name. */
+  author?: string
+  /** Date stamp string (renderer chooses the format). */
+  date?: string
+  /** Sheet identifier, e.g. "1 of 1". */
+  sheet?: string
+}
+
+export type CadAttachTitleBlockParams = {
+  /** SVG markup to stamp into. Typically the output of cad.project_drawing
+   * / cad.dimension_drawing / cad.section_drawing. */
+  svg: string
+  metadata: CadTitleBlockMetadata
+}
+
+export type CadAttachTitleBlockResult = {
+  /** Input SVG + title-block <g> layer (idempotent when already stamped). */
+  svg: string
+  bytes: number
+  /** Echoed normalized metadata (missing fields filled with empty string). */
+  metadata: {
+    name: string
+    scale: string
+    author: string
+    date: string
+    sheet: string
+  }
 }
 
 /** Type guard: is this a valid sidecar response envelope? */

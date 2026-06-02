@@ -1633,6 +1633,13 @@ export function MvpSketchCanvas({
   const [hint, setHint] = useState<string | null>(null)
   const [solverError, setSolverError] = useState<SketchSolveError | null>(null)
   const [lastResidual, setLastResidual] = useState<number | null>(null)
+  /**
+   * True while a sidecar ``window.fab.cad.solveSketch`` IPC round-trip is
+   * in flight. The Solve button reflects this with a disabled state + a
+   * ``data-solving`` attribute so the render-pin tests can pin the
+   * loading affordance.
+   */
+  const [solving, setSolving] = useState(false)
   // View transform (mm per pixel + origin); fixed in the MVP -- no pan/zoom yet.
   const scale = 4
   const ox = 0
@@ -1647,36 +1654,85 @@ export function MvpSketchCanvas({
     setNumericInput('')
   }, [activeToolId])
 
+  /**
+   * Solve the current sketch, preferring the sidecar ``window.fab.cad.solveSketch``
+   * IPC bridge when available (richer planegcs-backed solver, Wave 2 commit
+   * 96e6019). Falls back to the local renderer-side ``solver2d`` when the
+   * bridge is missing (test / SSR / non-Electron environments). Either
+   * path produces a ``{ points, residual }`` payload that flows through
+   * ``categoriseSolveResult`` so the UI banners speak one language.
+   */
   const runSolve = useCallback(
-    (sketch: Sketch) => {
+    async (sketch: Sketch) => {
       if (sketch.constraints.length === 0) {
         setSolverError(null)
         setLastResidual(null)
         return
       }
-      // Local solver path. The sidecar bridge ``window.fab.cad.solveSketch``
-      // will be wired by the sister agent; for the MVP we use the
-      // existing in-renderer solver so the round-trip works today.
-      let solved: DesignFileV2
+      const designIn = sketchToDesign(sketch)
+      // Read off the IPC bridge defensively: tests + SSR + dev hot-reload
+      // can all surface a window without the ``fab.cad.solveSketch`` shape.
+      const bridge =
+        typeof window !== 'undefined'
+          ? (window as unknown as {
+              fab?: {
+                cad?: {
+                  solveSketch?: (payload: {
+                    sketch: Record<string, unknown>
+                    constraints: unknown[]
+                  }) => Promise<
+                    | { ok: true; result: { points: Record<string, { x: number; y: number; fixed?: boolean }>; residual?: number } }
+                    | { ok: false; error: string; hint?: string }
+                  >
+                }
+              }
+            }).fab?.cad?.solveSketch
+          : undefined
+      let solvedPoints: Record<string, { x: number; y: number; fixed?: boolean }>
       let residual: number | undefined
-      try {
-        const designIn = sketchToDesign(sketch)
-        const cloned = cloneDesign(designIn)
-        solved = runLocalSketchSolve(cloned, 80, 0.35)
-        residual = energy(solved)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        setSolverError({ kind: 'numerical', message: `Solver crashed: ${message}` })
-        setLastResidual(null)
-        return
-      }
-      const outcome = categoriseSolveResult(
-        sketch,
-        Object.fromEntries(
+      if (typeof bridge === 'function') {
+        setSolving(true)
+        try {
+          const res = await bridge({
+            sketch: designIn as unknown as Record<string, unknown>,
+            constraints: designIn.constraints as unknown as unknown[]
+          })
+          if (!res.ok) {
+            setSolverError({
+              kind: 'numerical',
+              message: res.hint ? `${res.error}: ${res.hint}` : res.error
+            })
+            setLastResidual(null)
+            return
+          }
+          solvedPoints = res.result.points
+          residual = res.result.residual
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          setSolverError({ kind: 'numerical', message: `Sidecar solver crashed: ${message}` })
+          setLastResidual(null)
+          return
+        } finally {
+          setSolving(false)
+        }
+      } else {
+        // Local fallback path (jsdom / vitest / pre-bridge boot).
+        let solved: DesignFileV2
+        try {
+          const cloned = cloneDesign(designIn)
+          solved = runLocalSketchSolve(cloned, 80, 0.35)
+          residual = energy(solved)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          setSolverError({ kind: 'numerical', message: `Solver crashed: ${message}` })
+          setLastResidual(null)
+          return
+        }
+        solvedPoints = Object.fromEntries(
           Object.entries(solved.points).map(([k, v]) => [k, { x: v.x, y: v.y, fixed: v.fixed }])
-        ),
-        residual
-      )
+        )
+      }
+      const outcome = categoriseSolveResult(sketch, solvedPoints, residual)
       if (!outcome.ok) {
         setSolverError(outcome.error)
         setLastResidual(outcome.error.residual ?? null)
@@ -1689,13 +1745,16 @@ export function MvpSketchCanvas({
     [dispatch]
   )
 
-  // Auto-solve debounce: any sketch mutation schedules a solve.
+  // Auto-solve debounce: any sketch mutation schedules a solve. ``runSolve``
+  // is now async (sidecar IPC) but the debounce still fire-and-forgets --
+  // unhandled rejections fall back to the solverError banner via the
+  // inner try/catch in ``runSolve`` itself.
   useEffect(() => {
     if (autoSolveDebounceMs <= 0) return
     if (state.sketch.constraints.length === 0) return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      runSolve(state.sketch)
+      void runSolve(state.sketch)
     }, autoSolveDebounceMs)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -1771,6 +1830,24 @@ export function MvpSketchCanvas({
         const en = state.sketch.points[e.endId]
         if (!s || !v || !en) continue
         ctx.strokeStyle = 'rgba(255,200,120,0.95)'
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        const [sx, sy] = wp(s.x, s.y)
+        const [vx, vy] = wp(v.x, v.y)
+        const [ex, ey] = wp(en.x, en.y)
+        ctx.moveTo(sx, sy)
+        ctx.quadraticCurveTo(vx, vy, ex, ey)
+        ctx.stroke()
+      } else if (e.kind === 'spline') {
+        // CAD V1.5 spline: render a quadratic Bézier through the first three
+        // control points. Distinct tint from the arc so the operator can
+        // tell them apart at a glance even though both use ``quadraticCurveTo``.
+        if (e.pointIds.length < 3) continue
+        const s = state.sketch.points[e.pointIds[0]!]
+        const v = state.sketch.points[e.pointIds[1]!]
+        const en = state.sketch.points[e.pointIds[2]!]
+        if (!s || !v || !en) continue
+        ctx.strokeStyle = 'rgba(140,220,180,0.95)'
         ctx.lineWidth = 1.5
         ctx.beginPath()
         const [sx, sy] = wp(s.x, s.y)
@@ -2041,12 +2118,16 @@ export function MvpSketchCanvas({
           )}
           <button
             type="button"
-            onClick={() => runSolve(state.sketch)}
-            disabled={state.sketch.constraints.length === 0}
+            onClick={() => {
+              void runSolve(state.sketch)
+            }}
+            disabled={state.sketch.constraints.length === 0 || solving}
             style={btnStyle}
             data-testid="sketch-mvp-solve"
+            data-solving={solving ? 'true' : 'false'}
+            aria-busy={solving}
           >
-            Solve
+            {solving ? 'Solving…' : 'Solve'}
           </button>
           <button
             type="button"

@@ -52,6 +52,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type JSX,
 } from 'react'
@@ -134,6 +135,35 @@ export interface AssemblyViewProps {
    * `initialSelection` pattern from DesignWorkspace.
    */
   readonly initialSelectedPartId?: string | null
+  // ── CAD V1.5 mate constraints (additive surface) ─────────────────────
+  /**
+   * Source-of-truth mate list. Owned by the host (typically
+   * `DesignWorkspace`) so persistence + undo apply uniformly across mates
+   * and the parts list. When undefined, the Mates panel still renders but
+   * with an empty list and no "Define mate" affordance — keeps the
+   * V1.5 features opt-in for callers that haven't wired persistence yet.
+   */
+  readonly mates?: readonly AssemblyMate[]
+  /**
+   * Fired when the operator confirms a new mate in the modal. The host
+   * persists the mate (typically by calling `window.fab.cad.addAssemblyMate`
+   * and stashing the result into its mates state). Optional — when
+   * omitted, the "Define mate" button is hidden so the Mates panel
+   * becomes read-only.
+   */
+  readonly onAddMate?: (mate: AssemblyMate) => void
+  /**
+   * Fired when the operator removes a mate. Receives the mate id so the
+   * host can drop the matching entry. Optional — when omitted, the
+   * per-row remove button is hidden.
+   */
+  readonly onRemoveMate?: (id: string) => void
+  /**
+   * Render-pin escape hatch: forces the modal open in a static render so
+   * the test suite can assert the modal markup without simulating a click.
+   * Defaults to false.
+   */
+  readonly initialMateModalOpen?: boolean
 }
 
 /**
@@ -176,6 +206,64 @@ function rowTestId(id: string): string {
   return `design-assembly-part-${id}`
 }
 
+// ── CAD V1.5: Assembly mate constraints (Wave 3) ─────────────────────────
+//
+// Three mate kinds — point / axis / plane — back the new Mates panel +
+// modal on the AssemblyView. Each mate references two parts (by stable row
+// id, NOT by CadQuery child name — the renderer translates to the sidecar's
+// child names via the AssemblyPart.name at the IPC boundary) plus a feature
+// identifier per part:
+//
+//   * Point mate: ``feature1`` / ``feature2`` are integer face ids returned
+//                 by ``cad.tessellate_with_ids`` (the same ids the existing
+//                 selection state in ``selection-state.ts`` exposes).
+//   * Axis mate:  ``feature1`` / ``feature2`` are face ids — the sidecar
+//                 derives an axis (the face's normal at its centroid) from
+//                 each face.
+//   * Plane mate: ``feature1`` / ``feature2`` are face ids — the sidecar
+//                 derives a plane (origin + normal) from each face.
+//
+// Why face ids (not raw 3-D vectors) at the renderer layer? The operator
+// picks faces in the viewport; deriving the (point, axis, normal) from a
+// face is a sidecar concern. The renderer stays pure UI — same posture as
+// the existing `selection-state.ts` module.
+
+/** A mate definition the renderer surfaces in the Mates panel + modal. */
+export type AssemblyMate = {
+  /** Stable mate id (renderer-owned). */
+  readonly id: string
+  /** Discriminated mate kind. */
+  readonly kind: 'point' | 'axis' | 'plane'
+  /** AssemblyPart.id (the row id, NOT the CadQuery child name). */
+  readonly part1Id: string
+  /** Face id from the existing tessellate-with-ids selection state. */
+  readonly feature1: number
+  /** AssemblyPart.id (must differ from part1Id). */
+  readonly part2Id: string
+  /** Face id from the existing tessellate-with-ids selection state. */
+  readonly feature2: number
+}
+
+/** Stable testid suffix per mate row. Mirrors `rowTestId` for parts. */
+function mateRowTestId(id: string): string {
+  return `design-assembly-mate-${id}`
+}
+
+/**
+ * Human-readable label for a mate kind in the row + modal. Pulled out so a
+ * future i18n pass can swap in localized strings without touching the
+ * render path.
+ */
+const MATE_KIND_LABELS: Record<AssemblyMate['kind'], string> = {
+  point: 'Point',
+  axis: 'Axis',
+  plane: 'Plane',
+}
+
+/** Iteration helper for the kind picker — keeps the modal's select options
+ * in declaration order without relying on Object.entries' enumeration. */
+const MATE_KINDS: ReadonlyArray<AssemblyMate['kind']> = ['point', 'axis', 'plane']
+
 /**
  * Build a stable assembly-handle key from the parts list. We hash by
  * `id|handle` pairs (not by reference) so the effect re-runs on add /
@@ -202,6 +290,16 @@ type AssemblyBridges = {
   readonly tessellateAssembly?: (payload: {
     readonly handle: string
   }) => Promise<{ ok: true; result: AssemblyTessellation } | { ok: false; error: string; hint?: string }>
+  /**
+   * Optional V1.5 mate bridge — when the host wires it, the modal's
+   * confirm button will push the new mate to the sidecar before the host
+   * persists it in `onAddMate`. When absent, `onAddMate` still fires and
+   * the host owns the round-trip (e.g. for offline / test scenarios).
+   */
+  readonly addAssemblyMate?: (payload: Record<string, unknown>) => Promise<
+    | { ok: true; result: Record<string, unknown> }
+    | { ok: false; error: string; hint?: string }
+  >
 }
 
 function readAssemblyBridges(): AssemblyBridges {
@@ -213,6 +311,7 @@ function readAssemblyBridges(): AssemblyBridges {
   return {
     createAssembly: cadAny.createAssembly,
     tessellateAssembly: cadAny.tessellateAssembly,
+    addAssemblyMate: cadAny.addAssemblyMate,
   }
 }
 
@@ -222,11 +321,40 @@ export function AssemblyView({
   onRemovePart,
   onToast,
   initialSelectedPartId = null,
+  mates,
+  onAddMate,
+  onRemoveMate,
+  initialMateModalOpen = false,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
   const [tessellation, setTessellation] = useState<AssemblyTessellation | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // V1.5 mate modal state. Kept local — the host owns the canonical mates
+  // list via the `mates` / `onAddMate` props. The modal is closed unless
+  // `initialMateModalOpen` seeds it open for render-pin tests.
+  const [mateModalOpen, setMateModalOpen] = useState<boolean>(initialMateModalOpen)
+  const [mateDraftKind, setMateDraftKind] = useState<AssemblyMate['kind']>('point')
+  const [mateDraftPart1, setMateDraftPart1] = useState<string>(parts[0]?.id ?? '')
+  const [mateDraftFeature1, setMateDraftFeature1] = useState<string>('0')
+  const [mateDraftPart2, setMateDraftPart2] = useState<string>(parts[1]?.id ?? parts[0]?.id ?? '')
+  const [mateDraftFeature2, setMateDraftFeature2] = useState<string>('0')
+  const [mateError, setMateError] = useState<string | null>(null)
+
+  // Stable mate list reference for the render path. Defaulting to `[]` here
+  // (rather than `undefined`) keeps the JSX branches simple — same posture
+  // as the existing `parts` array.
+  const mateList: readonly AssemblyMate[] = mates ?? []
+
+  // Mapping of part id → display name so the mate rows can show
+  // `Bracket → Plate` instead of opaque ids. Pre-compute via useMemo so
+  // a re-render with the same parts/mates does not re-walk the list.
+  const partNameById = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {}
+    for (const p of parts) out[p.id] = p.name
+    return out
+  }, [parts])
 
   const toast = useCallback(
     (kind: 'ok' | 'err' | 'warn', message: string): void => {
@@ -320,6 +448,89 @@ export function AssemblyView({
       setSelectedPartId((prev) => (prev === id ? null : prev))
     },
     [onRemovePart],
+  )
+
+  // ── V1.5 mate modal handlers ───────────────────────────────────────────
+  // Pure UI plumbing: open / close / commit + per-mate row remove. The
+  // host's `onAddMate` / `onRemoveMate` props own persistence; this
+  // component only handles the modal's local draft state and surfaces a
+  // structured error when the draft is malformed (e.g. same part on both
+  // sides).
+  const openMateModal = useCallback((): void => {
+    setMateError(null)
+    setMateDraftKind('point')
+    // Seed the draft with the first two distinct parts so the operator
+    // does not have to pick from scratch on every open. When the assembly
+    // only has one part, the modal still renders but the confirm button
+    // stays disabled with a hint.
+    const first = parts[0]?.id ?? ''
+    const second = parts.find((p) => p.id !== first)?.id ?? ''
+    setMateDraftPart1(first)
+    setMateDraftPart2(second)
+    setMateDraftFeature1('0')
+    setMateDraftFeature2('0')
+    setMateModalOpen(true)
+  }, [parts])
+
+  const closeMateModal = useCallback((): void => {
+    setMateModalOpen(false)
+    setMateError(null)
+  }, [])
+
+  const handleMateConfirm = useCallback((): void => {
+    if (!onAddMate) {
+      // No host listener wired -- closing without persisting is the only
+      // safe outcome. Same posture as the parts toolbar when onAddPart is
+      // absent.
+      setMateModalOpen(false)
+      return
+    }
+    if (!mateDraftPart1 || !mateDraftPart2) {
+      setMateError('Select a part on both sides of the mate.')
+      return
+    }
+    if (mateDraftPart1 === mateDraftPart2) {
+      setMateError('A mate must connect two different parts.')
+      return
+    }
+    const feature1 = Number.parseInt(mateDraftFeature1, 10)
+    const feature2 = Number.parseInt(mateDraftFeature2, 10)
+    if (!Number.isFinite(feature1) || feature1 < 0) {
+      setMateError('Feature 1 must be a non-negative face id.')
+      return
+    }
+    if (!Number.isFinite(feature2) || feature2 < 0) {
+      setMateError('Feature 2 must be a non-negative face id.')
+      return
+    }
+    // Renderer-owned id. UUID-ish — uses random + timestamp so two rapid
+    // confirms cannot collide on the same key.
+    const id = `mate-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`
+    const mate: AssemblyMate = {
+      id,
+      kind: mateDraftKind,
+      part1Id: mateDraftPart1,
+      feature1,
+      part2Id: mateDraftPart2,
+      feature2,
+    }
+    onAddMate(mate)
+    setMateModalOpen(false)
+    setMateError(null)
+  }, [
+    onAddMate,
+    mateDraftKind,
+    mateDraftPart1,
+    mateDraftPart2,
+    mateDraftFeature1,
+    mateDraftFeature2,
+  ])
+
+  const handleMateRemove = useCallback(
+    (id: string): void => {
+      onRemoveMate?.(id)
+    },
+    [onRemoveMate],
   )
 
   // ── Empty-state branch ────────────────────────────────────────────────────
@@ -450,6 +661,91 @@ export function AssemblyView({
               )
             })}
           </ul>
+
+          {/*
+            V1.5 Mates panel — only renders when the host wires `mates`.
+            Sits directly under the parts list so the operator can scan
+            "what parts are in this assembly" and "what mates pin them
+            together" in one column. Keeping it inside the same `<aside>`
+            (rather than a sibling column) mirrors the Fusion 360
+            information-density baseline.
+          */}
+          {mates !== undefined && (
+            <div
+              className="design-assembly__mates"
+              data-testid="design-assembly-mates"
+              aria-label="Assembly mates"
+            >
+              <div className="design-assembly__mates-header">
+                <span className="design-assembly__mates-title">Mates</span>
+                {onAddMate && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost design-assembly__mates-add"
+                    data-testid="design-assembly-mate-add"
+                    onClick={openMateModal}
+                    disabled={parts.length < 2}
+                    aria-disabled={parts.length < 2}
+                    title={parts.length < 2 ? 'Add a second part before defining a mate.' : 'Define a new mate'}
+                  >
+                    Define mate
+                  </button>
+                )}
+              </div>
+              {mateList.length === 0 ? (
+                <div
+                  className="design-assembly__mates-empty"
+                  data-testid="design-assembly-mates-empty"
+                >
+                  No mates defined yet.
+                </div>
+              ) : (
+                <ul
+                  className="design-assembly__mates-list"
+                  data-testid="design-assembly-mates-list"
+                  role="list"
+                >
+                  {mateList.map((mate) => {
+                    const part1Label = partNameById[mate.part1Id] ?? mate.part1Id
+                    const part2Label = partNameById[mate.part2Id] ?? mate.part2Id
+                    const rowId = mateRowTestId(mate.id)
+                    return (
+                      <li
+                        key={mate.id}
+                        className="design-assembly__mate-row"
+                        data-testid={rowId}
+                        role="listitem"
+                      >
+                        <span
+                          className="design-assembly__mate-kind"
+                          data-testid={`${rowId}-kind`}
+                        >
+                          {MATE_KIND_LABELS[mate.kind]}
+                        </span>
+                        <span
+                          className="design-assembly__mate-summary"
+                          data-testid={`${rowId}-summary`}
+                        >
+                          {part1Label} (#{mate.feature1}) ↔ {part2Label} (#{mate.feature2})
+                        </span>
+                        {onRemoveMate && (
+                          <button
+                            type="button"
+                            className="design-assembly__mate-remove"
+                            data-testid={`${rowId}-remove`}
+                            aria-label={`Remove mate ${mate.id}`}
+                            onClick={() => handleMateRemove(mate.id)}
+                          >
+                            &times;
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
         </aside>
 
         <section
@@ -489,6 +785,155 @@ export function AssemblyView({
           </div>
         </section>
       </div>
+
+      {/*
+        V1.5 mate modal — lives outside the body grid so the modal can
+        overlay both columns. We render it inline (instead of teleporting
+        via a portal) because the project's render-pin tests use
+        `renderToStaticMarkup`, which does NOT execute portals. Inline
+        rendering keeps the testid coverage uniform across the static and
+        future jsdom-based suites.
+      */}
+      {mateModalOpen && onAddMate && (
+        <div
+          className="design-assembly__mate-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="design-assembly-mate-modal-title"
+          data-testid="design-assembly-mate-modal"
+        >
+          <div className="design-assembly__mate-modal-inner">
+            <h2
+              className="design-assembly__mate-modal-title"
+              id="design-assembly-mate-modal-title"
+            >
+              Define mate
+            </h2>
+            {mateError !== null && (
+              <div
+                className="design-assembly__mate-modal-error"
+                role="alert"
+                data-testid="design-assembly-mate-modal-error"
+              >
+                {mateError}
+              </div>
+            )}
+            <div className="design-assembly__mate-modal-field">
+              <label
+                className="design-assembly__mate-modal-label"
+                htmlFor="design-assembly-mate-kind"
+              >
+                Mate kind
+              </label>
+              <select
+                id="design-assembly-mate-kind"
+                className="design-assembly__mate-modal-select"
+                data-testid="design-assembly-mate-modal-kind"
+                value={mateDraftKind}
+                onChange={(e) => setMateDraftKind(e.target.value as AssemblyMate['kind'])}
+              >
+                {MATE_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {MATE_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="design-assembly__mate-modal-field">
+              <label
+                className="design-assembly__mate-modal-label"
+                htmlFor="design-assembly-mate-part1"
+              >
+                Part 1
+              </label>
+              <select
+                id="design-assembly-mate-part1"
+                className="design-assembly__mate-modal-select"
+                data-testid="design-assembly-mate-modal-part1"
+                value={mateDraftPart1}
+                onChange={(e) => setMateDraftPart1(e.target.value)}
+              >
+                {parts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <label
+                className="design-assembly__mate-modal-label design-assembly__mate-modal-label--inline"
+                htmlFor="design-assembly-mate-feature1"
+              >
+                Feature 1 (face id)
+              </label>
+              <input
+                id="design-assembly-mate-feature1"
+                className="design-assembly__mate-modal-input"
+                data-testid="design-assembly-mate-modal-feature1"
+                type="number"
+                min={0}
+                value={mateDraftFeature1}
+                onChange={(e) => setMateDraftFeature1(e.target.value)}
+              />
+            </div>
+            <div className="design-assembly__mate-modal-field">
+              <label
+                className="design-assembly__mate-modal-label"
+                htmlFor="design-assembly-mate-part2"
+              >
+                Part 2
+              </label>
+              <select
+                id="design-assembly-mate-part2"
+                className="design-assembly__mate-modal-select"
+                data-testid="design-assembly-mate-modal-part2"
+                value={mateDraftPart2}
+                onChange={(e) => setMateDraftPart2(e.target.value)}
+              >
+                {parts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <label
+                className="design-assembly__mate-modal-label design-assembly__mate-modal-label--inline"
+                htmlFor="design-assembly-mate-feature2"
+              >
+                Feature 2 (face id)
+              </label>
+              <input
+                id="design-assembly-mate-feature2"
+                className="design-assembly__mate-modal-input"
+                data-testid="design-assembly-mate-modal-feature2"
+                type="number"
+                min={0}
+                value={mateDraftFeature2}
+                onChange={(e) => setMateDraftFeature2(e.target.value)}
+              />
+            </div>
+            <div className="design-assembly__mate-modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                data-testid="design-assembly-mate-modal-cancel"
+                onClick={closeMateModal}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="design-assembly-mate-modal-confirm"
+                onClick={handleMateConfirm}
+                disabled={parts.length < 2}
+                aria-disabled={parts.length < 2}
+              >
+                Confirm mate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -588,3 +588,185 @@ describe('plate-thumbnail.ts -- module shape + pure helpers', () => {
     expect(plateThumbnailCacheSize()).toBe(0)
   })
 })
+
+// -- Wave-2 W3: async thumbnail flow + loading-overlay render-pin --
+//
+// The worker contract is documented in `PlateTabs.tsx`:
+//   - worker dispatched         -> loading[id] = true,  thumbnails[id] = undefined
+//   - worker resolved (ok)      -> loading[id] = false, thumbnails[id] = '<url>'
+//   - worker resolved (no geom) -> loading[id] = false, thumbnails[id] = null
+//   - never dispatched          -> both absent (legacy placeholder path)
+//
+// These tests pin the four states. The CSS for `.plate-thumb__preview-loading`
+// (Wave 1) overlays a spinner without reflowing the tile; we assert the
+// element + role="status" + label survive into the static markup.
+describe('PlateTabs Wave-2 W3 -- async thumbnail loading state', () => {
+  it('renders the .plate-thumb__preview-loading overlay when loading[id] = true and thumbnail is still computing', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'Computing')],
+        activePlateId: 'p1',
+        plateThumbnailsLoading: { p1: true }
+      })
+    )
+    expect(html).toContain('plate-thumb__preview-loading')
+    // The overlay is announced to screen readers
+    expect(html).toMatch(/role="status"[^>]*aria-label="Rendering preview for Computing"/)
+    // Placeholder is still rendered underneath (no reflow on swap-in)
+    expect(html).toMatch(/plate-thumb__preview--hue-\d/)
+  })
+
+  it('omits the loading overlay when loading[id] is missing or false (default)', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'Done')],
+        activePlateId: 'p1'
+      })
+    )
+    expect(html).not.toContain('plate-thumb__preview-loading')
+  })
+
+  it('overlays loading on top of a resolved <img> thumbnail (stale-while-revalidate)', () => {
+    const fakeUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII='
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'Stale')],
+        activePlateId: 'p1',
+        plateThumbnails: { p1: fakeUrl },
+        plateThumbnailsLoading: { p1: true }
+      })
+    )
+    // The cached img is still there
+    expect(html).toContain('plate-thumb__preview--image')
+    expect(html).toContain(`src="${fakeUrl}"`)
+    // AND the loading overlay sits on top of it
+    expect(html).toContain('plate-thumb__preview-loading')
+  })
+
+  it('renders different loading state per plate independently', () => {
+    const fakeUrl = 'data:image/png;base64,AAAA'
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B'), plate('p3', 'C')],
+        activePlateId: 'p1',
+        plateThumbnails: { p1: fakeUrl }, // p1 has data
+        plateThumbnailsLoading: { p2: true } // p2 still computing; p3 untouched
+      })
+    )
+    // Exactly one loading overlay (for p2)
+    const loadingMatches = html.match(/plate-thumb__preview-loading/g) ?? []
+    expect(loadingMatches.length).toBe(1)
+    expect(html).toMatch(/aria-label="Rendering preview for B"/)
+    // p1 + p3 do NOT have loading overlays
+    expect(html).not.toMatch(/aria-label="Rendering preview for A"/)
+    expect(html).not.toMatch(/aria-label="Rendering preview for C"/)
+  })
+
+  it('treats loading[id] = false as "not loading" (explicit false reads the same as missing)', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'Quiet')],
+        activePlateId: 'p1',
+        plateThumbnailsLoading: { p1: false }
+      })
+    )
+    expect(html).not.toContain('plate-thumb__preview-loading')
+  })
+
+  it('emits a stable data-testid per loading plate so worker timing tests can target it', () => {
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A'), plate('p2', 'B')],
+        activePlateId: 'p1',
+        plateThumbnailsLoading: { p1: true, p2: true }
+      })
+    )
+    expect(html).toContain('data-testid="plate-thumb-loading-p1"')
+    expect(html).toContain('data-testid="plate-thumb-loading-p2"')
+  })
+
+  it('renders the loading overlay identically across all three target machines (cross-machine pin)', () => {
+    // The loading state is geometry-only — it MUST NOT vary by machine.
+    for (const machine of THREE_MACHINES) {
+      const html = render(
+        baseProps({
+          plates: [plate('p1', 'A')],
+          activePlateId: 'p1',
+          plateThumbnailsLoading: { p1: true }
+        })
+      )
+      // No machine-specific text leaks into the loading overlay
+      expect(html).not.toContain(machine.name)
+      expect(html).not.toContain(machine.id)
+      expect(html).toContain('plate-thumb__preview-loading')
+    }
+  })
+
+  it('keeps the loading overlay decoupled from plate status pills (the pill still reflects upstream state)', () => {
+    // The slice status pill ("Slicing…") is independent from thumbnail
+    // computation. A plate can be done slicing while its thumbnail is
+    // still rendering, or vice versa.
+    const html = render(
+      baseProps({
+        plates: [plate('p1', 'A')],
+        activePlateId: 'p1',
+        plateStatuses: { p1: 'done' }, // slice already done
+        plateThumbnailsLoading: { p1: true } // thumb still rendering
+      })
+    )
+    // Pill shows the slice "Done" state
+    expect(html).toContain('plate-thumb--status-done')
+    expect(html).toContain('Done')
+    // Overlay independently reports thumbnail-pending
+    expect(html).toContain('plate-thumb__preview-loading')
+  })
+})
+
+// -- Wave-2 W3: layer-slider + toolpath-stats CSS presence --
+//
+// Agent W1 owns the LayerPreviewBody + ToolpathSimulationBody surfaces that
+// will eventually emit these classes. Agent W3 ships the CSS chrome only,
+// so we smoke-test that the new rule blocks landed in manufacture.css.
+// Token-driven (uses var(--bg2) / var(--accent) / etc) so visual fidelity
+// tracks the rest of the design system.
+describe('PlateTabs Wave-2 W3 -- layer-slider + toolpath-stats CSS presence', () => {
+  // Derive a stable absolute path to manufacture.css without relying on
+  // __dirname behaviour that varies between Node CJS + ESM contexts.
+  async function readManufactureCss(): Promise<string> {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const url = await import('node:url')
+    const here = path.dirname(url.fileURLToPath(import.meta.url))
+    const cssPath = path.resolve(here, '../styles/manufacture.css')
+    return fs.readFileSync(cssPath, 'utf8')
+  }
+
+  it('manufacture.css contains the .layer-slider block + sub-elements', async () => {
+    const css = await readManufactureCss()
+    expect(css).toContain('.layer-slider {')
+    expect(css).toContain('.layer-slider__track')
+    expect(css).toContain('.layer-slider__thumb')
+    expect(css).toContain('.layer-slider__label')
+  })
+
+  it('manufacture.css contains the .toolpath-stats block + sub-elements', async () => {
+    const css = await readManufactureCss()
+    expect(css).toContain('.toolpath-stats {')
+    expect(css).toContain('.toolpath-stats__table')
+    expect(css).toContain('.toolpath-stats__row')
+    expect(css).toContain('.toolpath-stats__key')
+    expect(css).toContain('.toolpath-stats__value')
+  })
+
+  it('layer-slider + toolpath-stats CSS rules are token-driven (no hard-coded hexes)', async () => {
+    const css = await readManufactureCss()
+    // Find the W3 block we just added (the heading is unique to this file)
+    const startIdx = css.indexOf('LAYER SCRUBBER + TOOLPATH STATS')
+    expect(startIdx).toBeGreaterThan(0)
+    const tail = css.slice(startIdx)
+    // Token usage (at least one var() per surface)
+    expect(tail).toMatch(/\.layer-slider\s*\{[\s\S]*?var\(--/)
+    expect(tail).toMatch(/\.toolpath-stats__table\s*\{[\s\S]*?var\(--/)
+  })
+})

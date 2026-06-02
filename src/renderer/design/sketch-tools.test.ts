@@ -24,7 +24,7 @@ function pick(x: number, y: number, opts: Partial<SketchPick> = {}): SketchPick 
 }
 
 describe('sketch-tools — palette catalogue', () => {
-  it('exposes the documented MVP tool set (5 draw + 5 constraint + select)', () => {
+  it('exposes the V1.5 tool set (5 draw + spline + 7 constraints + select)', () => {
     const ids = SKETCH_TOOLS.map((t) => t.id).sort()
     expect(ids).toEqual(
       [
@@ -34,9 +34,12 @@ describe('sketch-tools — palette catalogue', () => {
         'distanceConstraint',
         'horizontalConstraint',
         'line',
+        'parallelConstraint',
+        'perpendicularConstraint',
         'radiusConstraint',
         'rectangle',
         'select',
+        'spline',
         'verticalConstraint'
       ].sort()
     )
@@ -228,5 +231,251 @@ describe('sketch-tools — deterministic id factory', () => {
   it('seed controls the starting counter', () => {
     const f = makeDeterministicIdFactory(100)
     expect(f('p')).toBe('p101')
+  })
+})
+
+// ── CAD V1.5 sketcher upgrades ──────────────────────────────────────────────
+//
+// New tool router branches: spline (3-pick quadratic Bézier), parallelConstraint
+// + perpendicularConstraint (4-pick endpoint snapping). The existing arc tool
+// (start / via / end) is reverified end-to-end since the cycle's task scoped
+// the four new IDs around the same router.
+
+describe('sketch-tools — V1.5 spline draw tool', () => {
+  it('spline descriptor is a 3-pick draw tool', () => {
+    const t = getSketchTool('spline')
+    expect(t.kind).toBe('draw')
+    expect(t.requiredPicks).toBe(3)
+    expect(t.label).toBe('Spline')
+  })
+
+  it('spline accumulates two picks then commits the third as addSpline', () => {
+    const factory = makeDeterministicIdFactory()
+    // Pick 1: start
+    const r1 = handleSketchToolClick('spline', emptyDraft, pick(0, 0), {
+      ...noCtx,
+      nextId: factory
+    })
+    expect(r1.kind).toBe('updateDraft')
+    if (r1.kind === 'updateDraft') expect(r1.draft.picks).toHaveLength(1)
+    // Pick 2: via
+    const r2 = handleSketchToolClick('spline', { picks: [pick(0, 0)] }, pick(5, 3), {
+      ...noCtx,
+      nextId: factory
+    })
+    expect(r2.kind).toBe('updateDraft')
+    if (r2.kind === 'updateDraft') expect(r2.draft.picks).toHaveLength(2)
+    // Pick 3: end -- commits the curve.
+    const r3 = handleSketchToolClick(
+      'spline',
+      { picks: [pick(0, 0), pick(5, 3)] },
+      pick(10, 0),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r3.kind).toBe('commit')
+    if (r3.kind === 'commit') {
+      expect(r3.action.type).toBe('addSpline')
+      expect(r3.resetDraft).toBe(true)
+      if (r3.action.type === 'addSpline') {
+        expect(r3.action.start.x).toBe(0)
+        expect(r3.action.via.x).toBe(5)
+        expect(r3.action.end.x).toBe(10)
+      }
+    }
+  })
+
+  it('spline rejects coincident start / end picks', () => {
+    const r = handleSketchToolClick(
+      'spline',
+      { picks: [pick(0, 0), pick(5, 3)] },
+      pick(0, 0),
+      noCtx
+    )
+    expect(r.kind).toBe('error')
+    if (r.kind === 'error') expect(r.message).toMatch(/coincide/)
+  })
+})
+
+describe('sketch-tools — V1.5 parallel constraint tool', () => {
+  it('parallelConstraint descriptor is a 4-pick constraint tool', () => {
+    const t = getSketchTool('parallelConstraint')
+    expect(t.kind).toBe('constraint')
+    expect(t.requiredPicks).toBe(4)
+    expect(t.label).toBe('Parallel')
+  })
+
+  it('parallel constraint requires every pick to snap to an existing point', () => {
+    const r = handleSketchToolClick(
+      'parallelConstraint',
+      emptyDraft,
+      pick(0, 0), // no pointId
+      noCtx
+    )
+    expect(r.kind).toBe('error')
+    if (r.kind === 'error') expect(r.message).toMatch(/Parallel/)
+  })
+
+  it('parallel constraint accumulates 3 picks before committing on the 4th', () => {
+    const factory = makeDeterministicIdFactory()
+    const draftAfter1: SketchToolDraft = { picks: [pick(0, 0, { pointId: 'a1' })] }
+    const r2 = handleSketchToolClick(
+      'parallelConstraint',
+      draftAfter1,
+      pick(5, 0, { pointId: 'b1' }),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r2.kind).toBe('updateDraft')
+    if (r2.kind === 'updateDraft') expect(r2.draft.picks).toHaveLength(2)
+
+    const draftAfter2: SketchToolDraft = {
+      picks: [pick(0, 0, { pointId: 'a1' }), pick(5, 0, { pointId: 'b1' })]
+    }
+    const r3 = handleSketchToolClick(
+      'parallelConstraint',
+      draftAfter2,
+      pick(0, 5, { pointId: 'a2' }),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r3.kind).toBe('updateDraft')
+    if (r3.kind === 'updateDraft') expect(r3.draft.picks).toHaveLength(3)
+
+    const draftAfter3: SketchToolDraft = {
+      picks: [
+        pick(0, 0, { pointId: 'a1' }),
+        pick(5, 0, { pointId: 'b1' }),
+        pick(0, 5, { pointId: 'a2' })
+      ]
+    }
+    const r4 = handleSketchToolClick(
+      'parallelConstraint',
+      draftAfter3,
+      pick(5, 5, { pointId: 'b2' }),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r4.kind).toBe('commit')
+    if (r4.kind === 'commit' && r4.action.type === 'addConstraint') {
+      expect(r4.action.constraint.kind).toBe('parallel')
+      if (r4.action.constraint.kind === 'parallel') {
+        expect(r4.action.constraint.a1Id).toBe('a1')
+        expect(r4.action.constraint.b1Id).toBe('b1')
+        expect(r4.action.constraint.a2Id).toBe('a2')
+        expect(r4.action.constraint.b2Id).toBe('b2')
+      }
+    }
+  })
+
+  it('parallel rejects when either line collapses (a1 == b1 or a2 == b2)', () => {
+    const draft: SketchToolDraft = {
+      picks: [
+        pick(0, 0, { pointId: 'a1' }),
+        pick(5, 0, { pointId: 'a1' }), // duplicate of a1
+        pick(0, 5, { pointId: 'a2' })
+      ]
+    }
+    const r = handleSketchToolClick(
+      'parallelConstraint',
+      draft,
+      pick(5, 5, { pointId: 'b2' }),
+      noCtx
+    )
+    expect(r.kind).toBe('error')
+    if (r.kind === 'error') expect(r.message).toMatch(/distinct endpoints/)
+  })
+})
+
+describe('sketch-tools — V1.5 perpendicular constraint tool', () => {
+  it('perpendicularConstraint descriptor is a 4-pick constraint tool', () => {
+    const t = getSketchTool('perpendicularConstraint')
+    expect(t.kind).toBe('constraint')
+    expect(t.requiredPicks).toBe(4)
+    expect(t.label).toBe('Perpendicular')
+  })
+
+  it('perpendicular constraint commits on four valid point picks', () => {
+    const factory = makeDeterministicIdFactory()
+    const draft: SketchToolDraft = {
+      picks: [
+        pick(0, 0, { pointId: 'a1' }),
+        pick(5, 0, { pointId: 'b1' }),
+        pick(0, 0, { pointId: 'a2' })
+      ]
+    }
+    const r = handleSketchToolClick(
+      'perpendicularConstraint',
+      draft,
+      pick(0, 5, { pointId: 'b2' }),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint') {
+      expect(r.action.constraint.kind).toBe('perpendicular')
+      if (r.action.constraint.kind === 'perpendicular') {
+        expect(r.action.constraint.a1Id).toBe('a1')
+        expect(r.action.constraint.b2Id).toBe('b2')
+      }
+    }
+  })
+
+  it('perpendicular constraint rejects a non-snapped first pick', () => {
+    const r = handleSketchToolClick(
+      'perpendicularConstraint',
+      emptyDraft,
+      pick(0, 0), // no pointId
+      noCtx
+    )
+    expect(r.kind).toBe('error')
+    if (r.kind === 'error') expect(r.message).toMatch(/Perpendicular/)
+  })
+
+  it('perpendicular rejects when not all picks snap to existing points', () => {
+    // The router enforces ``pick.pointId`` on every incoming pick (not just
+    // the first). Feeding a pick with no pointId on the 4th tries fails fast.
+    const draft: SketchToolDraft = {
+      picks: [
+        pick(0, 0, { pointId: 'a1' }),
+        pick(5, 0, { pointId: 'b1' }),
+        pick(0, 0, { pointId: 'a2' })
+      ]
+    }
+    const r = handleSketchToolClick(
+      'perpendicularConstraint',
+      draft,
+      pick(0, 5), // missing pointId
+      noCtx
+    )
+    expect(r.kind).toBe('error')
+  })
+})
+
+describe('sketch-tools — arc router (V1.5 reverification)', () => {
+  it('arc descriptor is a 3-pick draw tool', () => {
+    const t = getSketchTool('arc')
+    expect(t.kind).toBe('draw')
+    expect(t.requiredPicks).toBe(3)
+  })
+
+  it('arc commits an addArc action with deterministic ids', () => {
+    const factory = makeDeterministicIdFactory(100)
+    const r = handleSketchToolClick(
+      'arc',
+      { picks: [pick(0, 0), pick(5, 3)] },
+      pick(10, 0),
+      { ...noCtx, nextId: factory }
+    )
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addArc') {
+      // First call to the factory bumps from 100 → 101 with prefix 'e'.
+      expect(r.action.id).toBe('e101')
+    }
+  })
+
+  it('arc clears the draft on commit (resetDraft: true)', () => {
+    const r = handleSketchToolClick(
+      'arc',
+      { picks: [pick(0, 0), pick(5, 3)] },
+      pick(10, 0),
+      noCtx
+    )
+    if (r.kind === 'commit') expect(r.resetDraft).toBe(true)
   })
 })

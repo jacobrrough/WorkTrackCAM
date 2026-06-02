@@ -48,6 +48,9 @@
     "vite-plugin-monaco-editor": "^1.1.0",
     "vitest": "^4.1.8"
   },
+  "overrides": {
+    "dompurify": "^3.4.7"
+  },
   "build": {
     "productName": "WorkTrackCAM",
     "appId": "com.worktrack.cam",

@@ -30,6 +30,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AssemblyView,
   formatTransformSummary,
+  type AssemblyMate,
   type AssemblyPart,
 } from '../AssemblyView'
 
@@ -232,5 +233,217 @@ describe('AssemblyView — populated-state render contract', () => {
       errSpy.mockRestore()
       warnSpy.mockRestore()
     }
+  })
+})
+
+// ── (D) V1.5 Mates panel render contract ────────────────────────────────
+//
+// New surface added by the CAD V1.5 wave. The Mates panel sits inside the
+// `<aside>` parts column so the operator can scan parts + mates in one
+// pass. The panel only renders when the host wires a `mates` prop;
+// callers that haven't opted in get the legacy V1 surface untouched.
+
+describe('AssemblyView — V1.5 Mates panel render contract', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+
+  it('omits the Mates panel entirely when `mates` is undefined', () => {
+    // Backwards compat pin: callers that haven't opted in to V1.5 must
+    // not see any of the new mate testids leak into their render output.
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, onAddPart: vi.fn() }),
+    )
+    expect(html).not.toContain('data-testid="design-assembly-mates"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-add"')
+  })
+
+  it('renders the Mates panel with its canonical testid when mates=[] is provided', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates: [],
+        onAddMate: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mates"')
+    expect(html).toContain('data-testid="design-assembly-mates-empty"')
+    expect(html).toContain('No mates defined yet.')
+  })
+
+  it('hides the "Define mate" CTA entirely when onAddMate is not wired', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates: [],
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mates"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-add"')
+  })
+
+  it('disables the "Define mate" CTA when fewer than two parts exist', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: [samplePart({ id: 'solo', name: 'Solo' })],
+        mates: [],
+        onAddMate: vi.fn(),
+      }),
+    )
+    expect(html).toMatch(/data-testid="design-assembly-mate-add"[^>]*disabled/)
+  })
+
+  it('renders one row per mate with stable testids', () => {
+    const mates: AssemblyMate[] = [
+      {
+        id: 'm-alpha',
+        kind: 'point',
+        part1Id: 'p1',
+        feature1: 0,
+        part2Id: 'p2',
+        feature2: 3,
+      },
+      {
+        id: 'm-beta',
+        kind: 'axis',
+        part1Id: 'p1',
+        feature1: 1,
+        part2Id: 'p2',
+        feature2: 4,
+      },
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates,
+        onAddMate: vi.fn(),
+        onRemoveMate: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-m-alpha"')
+    expect(html).toContain('data-testid="design-assembly-mate-m-beta"')
+    // Per-row remove handles only when onRemoveMate is wired.
+    expect(html).toContain('data-testid="design-assembly-mate-m-alpha-remove"')
+    expect(html).toContain('data-testid="design-assembly-mate-m-beta-remove"')
+  })
+
+  it('renders the kind label + part name summary inline for each mate', () => {
+    const mates: AssemblyMate[] = [
+      {
+        id: 'm1',
+        kind: 'plane',
+        part1Id: 'p1',
+        feature1: 2,
+        part2Id: 'p2',
+        feature2: 5,
+      },
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates,
+        onAddMate: vi.fn(),
+      }),
+    )
+    // Kind label uses the user-facing capitalization, not the wire enum.
+    expect(html).toContain('Plane')
+    // Summary contains both part display names + the feature ids.
+    expect(html).toContain('Bracket')
+    expect(html).toContain('Plate')
+    expect(html).toContain('#2')
+    expect(html).toContain('#5')
+  })
+
+  it('falls back to the part id when a mate references an unknown part', () => {
+    // Defensive contract: a stale mate (part removed) renders the raw id
+    // rather than crashing. This is the "host's onRemoveMate didn't fire
+    // for this mate" failure mode.
+    const mates: AssemblyMate[] = [
+      {
+        id: 'stale',
+        kind: 'point',
+        part1Id: 'ghost-part',
+        feature1: 0,
+        part2Id: 'p2',
+        feature2: 0,
+      },
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, mates, onAddMate: vi.fn() }),
+    )
+    expect(html).toContain('ghost-part')
+  })
+
+  it('omits the empty-state placeholder when at least one mate is present', () => {
+    const mates: AssemblyMate[] = [
+      {
+        id: 'm1',
+        kind: 'point',
+        part1Id: 'p1',
+        feature1: 0,
+        part2Id: 'p2',
+        feature2: 0,
+      },
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, mates, onAddMate: vi.fn() }),
+    )
+    expect(html).not.toContain('design-assembly-mates-empty')
+    expect(html).toContain('data-testid="design-assembly-mates-list"')
+  })
+})
+
+// ── (E) V1.5 mate modal render contract ─────────────────────────────────
+//
+// The modal is closed by default. Tests use the `initialMateModalOpen`
+// render-pin escape hatch to assert the markup without simulating clicks
+// (renderToStaticMarkup does not run effects).
+
+describe('AssemblyView — V1.5 mate modal render contract', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+
+  it('hides the mate modal by default', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates: [],
+        onAddMate: vi.fn(),
+      }),
+    )
+    expect(html).not.toContain('data-testid="design-assembly-mate-modal"')
+  })
+
+  it('renders the modal when initialMateModalOpen seeds it open', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates: [],
+        onAddMate: vi.fn(),
+        initialMateModalOpen: true,
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-modal"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-confirm"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-cancel"')
+  })
+
+  it('renders the kind / part / feature picker controls inside the modal', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mates: [],
+        onAddMate: vi.fn(),
+        initialMateModalOpen: true,
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-modal-kind"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-part1"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-feature1"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-part2"')
+    expect(html).toContain('data-testid="design-assembly-mate-modal-feature2"')
   })
 })

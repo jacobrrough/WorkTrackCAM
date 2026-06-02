@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
@@ -8,6 +8,13 @@ import {
   type DerivedContourCandidate
 } from '../../shared/cam-2d-derive'
 import { EmptyState } from '../src/EmptyState'
+import {
+  formatDurationShort,
+  formatFilamentMm,
+  parseLayers,
+  type LayerInfo
+} from './gcode-layer-parser'
+import { formatDistanceMm, parseToolpathStats } from './gcode-toolpath-stats'
 import { resolveManufactureSetupForCam } from '../../shared/cam-cut-params'
 import { MESH_IMPORT_FILE_EXTENSIONS } from '../../shared/mesh-import-formats'
 import type { ManufactureFile, ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
@@ -178,25 +185,66 @@ export function WorkflowStageTabs({ env, stage, onChange }: WorkflowStageTabsPro
  * UX MOVE 5 — Layer preview body for the FDM `preview` workflow stage.
  *
  * When the operator switches the workflow stage to "Preview" the right-panel
- * content swaps to this focused view. It surfaces a brief layer summary from
- * the slicer's stdout (last log line) when a slice has run, and an EmptyState
- * inviting the user to run a slice when nothing has been produced yet.
+ * content swaps to this focused view. The body parses OrcaSlicer K2 Plus
+ * G-code (via `gcode-layer-parser.ts`) for `;BEFORE_LAYER_CHANGE` /
+ * `;AFTER_LAYER_CHANGE` markers and renders a vertical layer scrubber on
+ * the right side. Selecting a layer surfaces a metadata readout (layer
+ * index, Z height, estimated per-layer time, estimated per-layer
+ * filament). MVP: metadata only — no 3D layer rendering.
  *
  * Pure presentation; no IPC or G-code mutation. Exported so the
  * `ManufactureWorkspace.stage-content.test.tsx` render-pin tests can mount
  * it directly via `renderToStaticMarkup` without dragging in Three.js or
  * the plate-state stack.
+ *
+ * Fallback path: when no G-code text is available (operator hasn't sliced
+ * yet, or the file failed to read) the body renders the shared
+ * `EmptyState` per CLAUDE.md convention.
  */
 export interface LayerPreviewBodyProps {
-  /** Slicer stdout text from the most recent `slice:orca` run. Empty when no slice yet. */
-  readonly sliceOut: string
+  /** G-code text of the most recent successful slice (empty when no slice yet). */
+  readonly gcodeText: string
   /** Absolute path to the most recent successfully-sliced G-code (null if none). */
   readonly lastSliceGcodePath: string | null
+  /**
+   * Currently-selected layer index (1-based) for the scrubber. Defaults to
+   * the top (highest-Z) layer when unset. Callers can wire a piece of
+   * state to make the scrubber interactive — for SSR / render-pin tests
+   * the prop alone is enough to deterministically pick a layer.
+   */
+  readonly selectedLayerIndex?: number
+  /** Optional change handler — when present, the slider becomes interactive. */
+  readonly onSelectLayerIndex?: (index: number) => void
 }
 
-export function LayerPreviewBody({ sliceOut, lastSliceGcodePath }: LayerPreviewBodyProps): ReactNode {
-  const hasSlice = (lastSliceGcodePath?.trim() ?? '').length > 0
-  if (!hasSlice) {
+/**
+ * Pick the visible layer from the parsed array given the (optional)
+ * selected index. Clamps to the first/last layer bounds and falls back
+ * to the top layer when nothing is selected.
+ */
+function pickActiveLayer(
+  layers: readonly LayerInfo[],
+  selectedIndex: number | undefined
+): LayerInfo | null {
+  if (layers.length === 0) return null
+  if (selectedIndex == null || !Number.isFinite(selectedIndex)) {
+    return layers[layers.length - 1] ?? null
+  }
+  const clamped = Math.max(1, Math.min(layers.length, Math.trunc(selectedIndex)))
+  return layers[clamped - 1] ?? layers[layers.length - 1] ?? null
+}
+
+export function LayerPreviewBody({
+  gcodeText,
+  lastSliceGcodePath,
+  selectedLayerIndex,
+  onSelectLayerIndex
+}: LayerPreviewBodyProps): ReactNode {
+  const hasPath = (lastSliceGcodePath?.trim() ?? '').length > 0
+  const layers = parseLayers(gcodeText)
+  // Empty-state when either no slice file has been produced OR the
+  // produced file contained no recognisable OrcaSlicer layer markers.
+  if (!hasPath || layers.length === 0) {
     return (
       <section
         className="panel workspace-stage-body workspace-stage-body--preview"
@@ -212,9 +260,20 @@ export function LayerPreviewBody({ sliceOut, lastSliceGcodePath }: LayerPreviewB
       </section>
     )
   }
-  const trimmed = sliceOut.trim()
-  const lastLine = trimmed.length > 0 ? trimmed.split(/\r?\n/).slice(-1)[0] ?? '' : ''
-  const lineCount = trimmed.length > 0 ? trimmed.split(/\r?\n/).length : 0
+
+  const active = pickActiveLayer(layers, selectedLayerIndex)
+  // `active` is non-null because `layers.length > 0` is guarded above —
+  // assert via a fallback so the JSX below can be unconditional.
+  const layer: LayerInfo = active ?? layers[layers.length - 1]!
+  const maxLayer = layers.length
+  const minLayer = 1
+
+  const handleChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    if (!onSelectLayerIndex) return
+    const n = Number.parseInt(e.target.value, 10)
+    if (Number.isFinite(n)) onSelectLayerIndex(n)
+  }
+
   return (
     <section
       className="panel workspace-stage-body workspace-stage-body--preview"
@@ -225,18 +284,82 @@ export function LayerPreviewBody({ sliceOut, lastSliceGcodePath }: LayerPreviewB
       <p className="msg msg--muted">
         Latest slice: <code data-testid="workflow-stage-preview-path">{lastSliceGcodePath}</code>
       </p>
-      <dl className="workflow-stage-preview-stats" data-testid="workflow-stage-preview-stats">
-        <div>
-          <dt>Slicer log lines</dt>
-          <dd data-testid="workflow-stage-preview-line-count">{lineCount}</dd>
-        </div>
-        {lastLine.length > 0 ? (
-          <div>
-            <dt>Last log line</dt>
-            <dd><code>{lastLine}</code></dd>
+      <dl
+        className="toolpath-stats workflow-stage-preview-stats"
+        data-testid="workflow-stage-preview-stats"
+      >
+        <div className="toolpath-stats__table">
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Layer</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-preview-layer-index"
+            >
+              {layer.index} / {maxLayer}
+            </dd>
           </div>
-        ) : null}
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Z height</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-preview-layer-z"
+            >
+              {layer.zMm.toFixed(2)} mm
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Est. time</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-preview-layer-time"
+            >
+              {formatDurationShort(layer.estTimeSec)}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Est. filament</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-preview-layer-filament"
+            >
+              {formatFilamentMm(layer.estFilamentMm)}
+            </dd>
+          </div>
+        </div>
       </dl>
+      <div
+        className="layer-slider"
+        data-testid="workflow-stage-preview-slider"
+      >
+        <label
+          htmlFor="workflow-stage-preview-slider-input"
+          className="layer-slider__label"
+        >
+          Scrub layer
+        </label>
+        <input
+          id="workflow-stage-preview-slider-input"
+          data-testid="workflow-stage-preview-slider-input"
+          type="range"
+          className="layer-slider__track"
+          min={minLayer}
+          max={maxLayer}
+          step={1}
+          value={layer.index}
+          aria-label={`Scrub between layer ${minLayer} and layer ${maxLayer}`}
+          aria-valuemin={minLayer}
+          aria-valuemax={maxLayer}
+          aria-valuenow={layer.index}
+          aria-valuetext={`Layer ${layer.index} of ${maxLayer}, Z = ${layer.zMm.toFixed(2)} mm`}
+          onChange={handleChange}
+        />
+        <span
+          className="layer-slider__label"
+          data-testid="workflow-stage-preview-slider-readout"
+        >
+          Layer {layer.index} of {maxLayer}
+        </span>
+      </div>
     </section>
   )
 }
@@ -244,11 +367,24 @@ export function LayerPreviewBody({ sliceOut, lastSliceGcodePath }: LayerPreviewB
 /**
  * UX MOVE 5 — Toolpath simulation body for the CNC `simulate` workflow stage.
  *
- * Shows an EmptyState when no G-code has been generated yet, and a basic
- * toolpath-line statistics readout once `output/cam.nc` exists. The full 3D
- * simulation lives behind the `panelTab='simulate'` sub-tab and still renders
- * there — this stage body is the focused preview surface for the workflow
- * strip itself.
+ * Shows an EmptyState when no G-code has been generated yet, and a full
+ * toolpath statistics readout once `output/cam.nc` exists. The readout
+ * is computed by `gcode-toolpath-stats.ts`:
+ *
+ *   - Total lines
+ *   - Rapid count (G0)
+ *   - Cut count (G1)
+ *   - Arc count (G2 + G3)
+ *   - Rapid distance (mm / m)
+ *   - Cut distance (mm / m, includes arc chord length)
+ *   - Tool changes (M6)
+ *   - Spindle starts (M3 / M4)
+ *
+ * The full 3D simulation still lives behind the `panelTab='simulate'`
+ * sub-tab; this body is the focused at-a-glance summary that anchors the
+ * Simulate workflow stage.
+ *
+ * Safety Rule 1: pure read of G-code text — no mutation, no re-emit.
  */
 export interface ToolpathSimulationBodyProps {
   /** G-code text from the most recent `cam:run` (empty when no toolpath yet). */
@@ -273,8 +409,7 @@ export function ToolpathSimulationBody({ camOut }: ToolpathSimulationBodyProps):
       </section>
     )
   }
-  const lines = trimmed.split(/\r?\n/)
-  const motionLines = lines.filter((line) => /^G0?[01]\b/i.test(line.trim().replace(/;.*$/, ''))).length
+  const stats = parseToolpathStats(camOut)
   return (
     <section
       className="panel workspace-stage-body workspace-stage-body--simulate"
@@ -284,16 +419,94 @@ export function ToolpathSimulationBody({ camOut }: ToolpathSimulationBodyProps):
       <h2 id="mfg-stage-simulate-heading">Toolpath simulation</h2>
       <p className="msg msg--muted">
         Switch to the <strong>Simulate</strong> sub-tab below for the full 3D visualization.
-        This summary surfaces only the high-level G-code line counts.
+        This summary surfaces high-level G-code motion + spindle counts.
       </p>
-      <dl className="workflow-stage-simulate-stats" data-testid="workflow-stage-simulate-stats">
-        <div>
-          <dt>Total lines</dt>
-          <dd data-testid="workflow-stage-simulate-total-lines">{lines.length}</dd>
-        </div>
-        <div>
-          <dt>Motion lines (G0 / G1)</dt>
-          <dd data-testid="workflow-stage-simulate-motion-lines">{motionLines}</dd>
+      <dl
+        className="toolpath-stats workflow-stage-simulate-stats"
+        data-testid="workflow-stage-simulate-stats"
+      >
+        <div className="toolpath-stats__table">
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Total lines</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-total-lines"
+            >
+              {stats.totalLines}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Motion lines (G0 / G1)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-motion-lines"
+            >
+              {stats.rapidCount + stats.cutCount}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Rapid moves (G0)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-rapid-count"
+            >
+              {stats.rapidCount}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Cut moves (G1)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-cut-count"
+            >
+              {stats.cutCount}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Arc moves (G2 / G3)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-arc-count"
+            >
+              {stats.arcCount}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Rapid distance</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-rapid-distance"
+            >
+              {formatDistanceMm(stats.rapidDistanceMm)}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Cut distance</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-cut-distance"
+            >
+              {formatDistanceMm(stats.cutDistanceMm)}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Tool changes (M6)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-tool-changes"
+            >
+              {stats.toolChangeCount}
+            </dd>
+          </div>
+          <div className="toolpath-stats__row">
+            <dt className="toolpath-stats__key">Spindle starts (M3 / M4)</dt>
+            <dd
+              className="toolpath-stats__value"
+              data-testid="workflow-stage-simulate-spindle-starts"
+            >
+              {stats.spindleStartCount}
+            </dd>
+          </div>
         </div>
       </dl>
     </section>
@@ -391,6 +604,17 @@ export function ManufactureWorkspace({
   // the K2 Plus "Send to Printer" button has a concrete file to push
   // to Moonraker. `null` means no slice has succeeded this session.
   const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
+
+  // UX Wave 2 — actual G-code text loaded from `lastSliceGcodePath` so
+  // the LayerPreviewBody can parse layer markers. `null` while loading
+  // / when no slice has run. The loader effect is owned by the workspace
+  // (not the body) because the body is exported as a pure component for
+  // render-pin tests.
+  const [sliceGcodeText, setSliceGcodeText] = useState<string>('')
+
+  // Selected layer index for the Preview stage scrubber (1-based). When
+  // null, the body falls back to the top layer (highest Z).
+  const [selectedPreviewLayer, setSelectedPreviewLayer] = useState<number | null>(null)
 
   /**
    * UX MOVE 4 — Workflow-stage tab state. The env is derived from the active
@@ -493,6 +717,37 @@ export function ManufactureWorkspace({
   useEffect(() => {
     writePersistedManufactureActionableOnly(actionableOnly)
   }, [actionableOnly])
+
+  // UX Wave 2 — load sliced G-code text from disk for the Layer
+  // preview scrubber. Runs whenever the slice path changes. The body
+  // is purely presentational; loading happens here and the parsed
+  // result flows through props (CLAUDE.md: read before write; existing
+  // `fab.readTextFile` already used by the Setup Sheet generator).
+  useEffect(() => {
+    if (!lastSliceGcodePath?.trim()) {
+      setSliceGcodeText('')
+      setSelectedPreviewLayer(null)
+      return
+    }
+    let cancelled = false
+    void fab
+      .readTextFile(lastSliceGcodePath)
+      .then((text) => {
+        if (cancelled) return
+        setSliceGcodeText(text)
+        setSelectedPreviewLayer(null)
+      })
+      .catch(() => {
+        if (cancelled) return
+        // Silently drop — body falls back to EmptyState when no
+        // recognisable layer markers are present.
+        setSliceGcodeText('')
+        setSelectedPreviewLayer(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fab, lastSliceGcodePath])
 
   useEffect(() => {
     if (!projectDir?.trim() || meshRelPathsForStaleCheck.length === 0) {
@@ -1538,9 +1793,16 @@ export function ManufactureWorkspace({
     )
   )
 
-  // FDM 'preview' stage body — focused layer-preview summary.
+  // FDM 'preview' stage body — focused layer-preview summary. The
+  // workspace owns the gcode text + selected-layer state; the body is a
+  // pure presentation component so render-pin tests don't need IPC.
   const previewStageBody: ReactNode = (
-    <LayerPreviewBody sliceOut={sliceOut} lastSliceGcodePath={lastSliceGcodePath} />
+    <LayerPreviewBody
+      gcodeText={sliceGcodeText}
+      lastSliceGcodePath={lastSliceGcodePath}
+      selectedLayerIndex={selectedPreviewLayer ?? undefined}
+      onSelectLayerIndex={setSelectedPreviewLayer}
+    />
   )
 
   // FDM 'device' stage body — Send-to-K2 view + ProfileStack.

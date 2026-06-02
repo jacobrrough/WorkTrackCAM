@@ -648,6 +648,61 @@ export type Api = {
     exportDrawing: (
       payload: CadExportDrawingPayload
     ) => Promise<CadExportDrawingResponse>
+    /**
+     * CAD V1.5 Assembly mate (Wave 3): attach a structural mate to the
+     * assembly handle table (coincident / concentric / distance / angle).
+     * Permissive payload/result envelopes -- mirrors the precedent set by
+     * `solveSketch` / `createAssembly` / `projectDrawing` so the renderer
+     * and sidecar can co-evolve the mate-schema without dragging the IPC
+     * boundary along. Errors fold into `{ ok: false, error, hint? }`.
+     * Delegates to the sidecar's `cad.add_assembly_mate` handler.
+     */
+    addAssemblyMate: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
+    /**
+     * CAD V1.5 Drawing dimension (Wave 3): stamp a dimension annotation
+     * (linear / radial / angular / diametric) onto a projected drawing
+     * view. Permissive envelope -- the renderer's Zod parser owns the
+     * deep dimension shape (anchor points, alignment, tolerance string).
+     * Delegates to `cad.dimension_drawing`.
+     */
+    dimensionDrawing: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
+    /**
+     * CAD V1.5 Drawing section view (Wave 3): cut a section plane through
+     * a body and return the projected sectioned linework + hatch regions.
+     * Permissive envelope -- ``handle`` references a body or assembly in
+     * the sidecar handle table and ``sheet`` carries the section-line
+     * placement + hatch options. Delegates to `cad.section_drawing`.
+     */
+    sectionDrawing: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
+    /**
+     * CAD V1.5 Title block (Wave 3): attach (or replace) a title-block
+     * metadata blob on a drawing sheet so the next `exportDrawing` call
+     * stamps it onto the rendered shell. Permissive envelope -- the
+     * renderer's `drawingSheetSchema` Zod parser owns the title-block
+     * field shape (company / part-number / revision / date / etc.).
+     * Delegates to `cad.attach_title_block`.
+     */
+    attachTitleBlock: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
   }
 }
 
@@ -830,7 +885,30 @@ const api: Api = {
     projectDrawing: (payload) =>
       ipcRenderer.invoke('cad:projectDrawing', payload) as Promise<CadProjectDrawingResponse>,
     exportDrawing: (payload) =>
-      ipcRenderer.invoke('cad:exportDrawing', payload) as Promise<CadExportDrawingResponse>
+      ipcRenderer.invoke('cad:exportDrawing', payload) as Promise<CadExportDrawingResponse>,
+    // CAD V1.5 (Wave 3) -- mates / dimensions / sections / title blocks.
+    // Permissive payload/result envelopes; pin-tested by the IPC handler
+    // tests Agents 2 + 3 add.
+    addAssemblyMate: (payload) =>
+      ipcRenderer.invoke('cad:addAssemblyMate', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    dimensionDrawing: (payload) =>
+      ipcRenderer.invoke('cad:dimensionDrawing', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    sectionDrawing: (payload) =>
+      ipcRenderer.invoke('cad:sectionDrawing', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    attachTitleBlock: (payload) =>
+      ipcRenderer.invoke('cad:attachTitleBlock', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >
   }
 }
 

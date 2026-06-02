@@ -524,3 +524,194 @@ def _make_fake_doc() -> Any:
         bbox_max=(1.0, 1.0, 1.0),
         source_path="<fake>",
     )
+
+
+# ── Tier 1: dispatch + add_assembly_mate param validation (CAD V1.5) ─────
+
+
+def test_dispatch_table_registers_add_assembly_mate() -> None:
+    """The sidecar must expose ``cad.add_assembly_mate`` so the V1.5
+    AssemblyView modal can persist mates via the same JSON-RPC bridge as
+    the rest of the assembly surface. Drift here breaks the wire."""
+    from engines.sidecar.main import _build_dispatch_table
+
+    table = _build_dispatch_table()
+    assert "cad.add_assembly_mate" in table
+
+
+def test_add_assembly_mate_requires_mate_object() -> None:
+    """Missing ``mate`` object must short-circuit with ``bad_params`` BEFORE
+    we touch CadQuery — mirrors the posture of ``create_assembly``'s
+    missing-parts check."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.add_assembly_mate({"handle": "assembly:abc"})
+    assert exc_info.value.code == "bad_params"
+
+
+def test_add_assembly_mate_rejects_unknown_mate_kind() -> None:
+    """Mate kinds outside {point, axis, plane} must produce ``bad_params``
+    so the renderer's discriminated-union shape stays the single source of
+    truth."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.add_assembly_mate({
+            "handle": "assembly:abc",
+            "mate": {
+                "kind": "tangent",  # unsupported in V1.5
+                "part1Id": "a",
+                "part2Id": "b",
+                "point1": [0, 0, 0],
+                "point2": [1, 1, 1],
+            },
+        })
+    assert exc_info.value.code == "bad_params"
+
+
+# ── Tier 2: full CadQuery round trip for mates ───────────────────────────
+
+
+@requires_cadquery
+@requires_assembly
+def test_add_assembly_mate_point_happy_path() -> None:
+    """A point mate on a 2-cube assembly must succeed and return the same
+    handle with the post-solve bbox populated. Load-bearing pin for the
+    point-mate constrain → solve flow."""
+    h_a = _make_box_handle(size=10.0)
+    h_b = _make_box_handle(size=10.0)
+    created = cad_handlers.create_assembly({
+        "parts": [
+            {"handle": h_a, "name": "a", "transform": "identity"},
+            {"handle": h_b, "name": "b", "transform": _translation_matrix(50, 0, 0)},
+        ],
+    })
+    r = cad_handlers.add_assembly_mate({
+        "handle": created["handle"],
+        "mate": {
+            "kind": "point",
+            "part1Id": "a",
+            "part2Id": "b",
+            "point1": [5, 0, 0],
+            "point2": [-5, 0, 0],
+        },
+    })
+    assert r["handle"] == created["handle"]
+    assert r["kind"] == "point"
+    assert r["part1Id"] == "a"
+    assert r["part2Id"] == "b"
+    # Post-solve bbox must be populated (3-tuple of finite numbers).
+    assert "bbox" in r
+    assert len(r["bbox"]["min"]) == 3
+    assert len(r["bbox"]["max"]) == 3
+    for v in r["bbox"]["min"] + r["bbox"]["max"]:
+        assert isinstance(v, (int, float))
+
+
+@requires_cadquery
+@requires_assembly
+def test_add_assembly_mate_axis_happy_path() -> None:
+    """An axis mate on a 2-cube assembly must succeed. Confirms the axis
+    path through ``_apply_mate_constraint`` is exercised."""
+    h_a = _make_box_handle(size=10.0)
+    h_b = _make_box_handle(size=10.0)
+    created = cad_handlers.create_assembly({
+        "parts": [
+            {"handle": h_a, "name": "lhs", "transform": "identity"},
+            {"handle": h_b, "name": "rhs", "transform": _translation_matrix(30, 0, 0)},
+        ],
+    })
+    r = cad_handlers.add_assembly_mate({
+        "handle": created["handle"],
+        "mate": {
+            "kind": "axis",
+            "part1Id": "lhs",
+            "part2Id": "rhs",
+            "axis1": [0, 0, 1],
+            "axis2": [0, 0, 1],
+        },
+    })
+    assert r["kind"] == "axis"
+    assert r["part1Id"] == "lhs"
+
+
+@requires_cadquery
+@requires_assembly
+def test_add_assembly_mate_plane_happy_path() -> None:
+    """A plane mate on a 2-cube assembly must succeed. Plane mates carry
+    both an origin and a normal per child — this exercises the wider
+    feature payload path."""
+    h_a = _make_box_handle(size=10.0)
+    h_b = _make_box_handle(size=10.0)
+    created = cad_handlers.create_assembly({
+        "parts": [
+            {"handle": h_a, "name": "p1", "transform": "identity"},
+            {"handle": h_b, "name": "p2", "transform": _translation_matrix(30, 0, 0)},
+        ],
+    })
+    r = cad_handlers.add_assembly_mate({
+        "handle": created["handle"],
+        "mate": {
+            "kind": "plane",
+            "part1Id": "p1",
+            "part2Id": "p2",
+            "point1": [5, 0, 0],
+            "normal1": [1, 0, 0],
+            "point2": [-5, 0, 0],
+            "normal2": [-1, 0, 0],
+        },
+    })
+    assert r["kind"] == "plane"
+    assert r["part1Id"] == "p1"
+    assert r["part2Id"] == "p2"
+
+
+@requires_cadquery
+@requires_assembly
+def test_add_assembly_mate_rejects_same_part_on_both_sides() -> None:
+    """A mate connecting a part to itself is meaningless — the constraint
+    solver would either deadlock or report zero DOF reduction. We surface
+    this as ``bad_params`` at the validator BEFORE touching CadQuery."""
+    h_a = _make_box_handle(size=10.0)
+    created = cad_handlers.create_assembly({
+        "parts": [
+            {"handle": h_a, "name": "solo", "transform": "identity"},
+        ],
+    })
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.add_assembly_mate({
+            "handle": created["handle"],
+            "mate": {
+                "kind": "point",
+                "part1Id": "solo",
+                "part2Id": "solo",
+                "point1": [0, 0, 0],
+                "point2": [0, 0, 0],
+            },
+        })
+    assert exc_info.value.code == "bad_params"
+
+
+@requires_cadquery
+@requires_assembly
+def test_add_assembly_mate_rejects_unknown_child_name() -> None:
+    """A mate referencing a child name not in the assembly's children list
+    must produce ``bad_params`` so the renderer can point the operator at
+    the bad row (typically: stale part list after a remove)."""
+    h_a = _make_box_handle(size=10.0)
+    h_b = _make_box_handle(size=10.0)
+    created = cad_handlers.create_assembly({
+        "parts": [
+            {"handle": h_a, "name": "alpha", "transform": "identity"},
+            {"handle": h_b, "name": "beta", "transform": _translation_matrix(20, 0, 0)},
+        ],
+    })
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.add_assembly_mate({
+            "handle": created["handle"],
+            "mate": {
+                "kind": "point",
+                "part1Id": "alpha",
+                "part2Id": "gamma",  # not in the assembly
+                "point1": [0, 0, 0],
+                "point2": [0, 0, 0],
+            },
+        })
+    assert exc_info.value.code == "bad_params"

@@ -3323,3 +3323,107 @@
   opacity: 0.7;
   animation: pulse 1.2s ease-in-out infinite;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYER SCRUBBER + TOOLPATH STATS  (Wave-2 W3 / Agent W3)
+   ───────────────────────────────────────────────────────────────────────────
+   Token-driven chrome for two sibling surfaces wired by Agent W1:
+     - .layer-slider       — vertical/horizontal scrubber inside
+                              `LayerPreviewBody` (FDM Preview stage).
+                              Lets the operator scrub through G-code layers.
+     - .toolpath-stats     — definition-list-style table inside
+                              `ToolpathSimulationBody` (CNC Simulate stage).
+                              Surfaces motion-line counts, feedrate envelope,
+                              and total travel without scrolling.
+   Both block names follow the project BEM convention; the inner element
+   classes (__track, __thumb, __label, __table, __row, __key, __value) are
+   the exact strings Agent W1's bodies emit.
+
+   STRICT 3-machine scope (CLAUDE.md): these surfaces are pure visualisation
+   chrome. They emit ZERO G-code, never touch Moonraker/RichAuto/Carvera
+   posts, and render identically across all three target machines.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.layer-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+}
+.layer-slider__track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 6px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.layer-slider__thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  background: var(--accent);
+  border: 1px solid var(--accent-hi);
+  border-radius: 50%;
+  box-shadow: var(--elevation-1);
+  transform: translateY(-50%);
+  transition: transform var(--transition-fast),
+              background var(--transition-base);
+}
+.layer-slider__thumb:hover,
+.layer-slider__thumb:focus-visible {
+  background: var(--accent-hi);
+  transform: translateY(-50%) scale(1.15);
+  outline: none;
+  box-shadow: var(--focus-ring), var(--elevation-1);
+}
+.layer-slider__label {
+  flex: 0 0 auto;
+  min-width: 5ch;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolpath-stats {
+  display: block;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+  color: var(--txt0);
+  font-family: var(--font);
+}
+.toolpath-stats__table {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-2) var(--sp-8);
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toolpath-stats__row {
+  display: contents;
+}
+.toolpath-stats__key {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--txt1);
+  white-space: nowrap;
+}
+.toolpath-stats__value {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

@@ -28,12 +28,18 @@ export type SketchToolId =
   | 'line'
   | 'circle'
   | 'arc'
+  /** CAD V1.5: three-pick quadratic Bézier spline (start, via, end). */
+  | 'spline'
   | 'rectangle'
   | 'horizontalConstraint'
   | 'verticalConstraint'
   | 'coincidentConstraint'
   | 'distanceConstraint'
   | 'radiusConstraint'
+  /** CAD V1.5: parallel constraint between two lines (four point picks). */
+  | 'parallelConstraint'
+  /** CAD V1.5: perpendicular constraint between two lines (four point picks). */
+  | 'perpendicularConstraint'
 
 export type SketchToolKind = 'select' | 'draw' | 'constraint'
 
@@ -77,6 +83,13 @@ export const SKETCH_TOOLS: readonly SketchToolDescriptor[] = [
     requiredPicks: 3
   },
   {
+    id: 'spline',
+    label: 'Spline',
+    kind: 'draw',
+    description: 'Three picks: start, via, end -- renders a quadratic Bézier.',
+    requiredPicks: 3
+  },
+  {
     id: 'rectangle',
     label: 'Rectangle',
     kind: 'draw',
@@ -117,6 +130,20 @@ export const SKETCH_TOOLS: readonly SketchToolDescriptor[] = [
     kind: 'constraint',
     description: 'Pin a circle / arc radius (mm).',
     requiredPicks: 1
+  },
+  {
+    id: 'parallelConstraint',
+    label: 'Parallel',
+    kind: 'constraint',
+    description: 'Force two lines parallel — pick endpoints (a1, b1, a2, b2).',
+    requiredPicks: 4
+  },
+  {
+    id: 'perpendicularConstraint',
+    label: 'Perpendicular',
+    kind: 'constraint',
+    description: 'Force two lines perpendicular — pick endpoints (a1, b1, a2, b2).',
+    requiredPicks: 4
   }
 ] as const
 
@@ -259,6 +286,32 @@ export function handleSketchToolClick(
         end: { id: e.pointId, x: e.x, y: e.y }
       },
       hint: 'Arc placed.'
+    }
+  }
+
+  if (tool === 'spline') {
+    if (nextPicks.length < 3) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [s, v, e] = nextPicks
+    if (!s || !v || !e) return { kind: 'noop', reason: 'missing pick' }
+    // Reject coincident endpoints -- a spline that collapses to a single
+    // point has no curve to render and adds zero value.
+    if (Math.hypot(e.x - s.x, e.y - s.y) < 0.001) {
+      return {
+        kind: 'error',
+        message: 'Spline endpoints coincide -- pick distinct start and end picks.'
+      }
+    }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: {
+        type: 'addSpline',
+        id: nextId('e'),
+        start: { id: s.pointId, x: s.x, y: s.y },
+        via: { id: v.pointId, x: v.x, y: v.y },
+        end: { id: e.pointId, x: e.x, y: e.y }
+      },
+      hint: 'Spline placed.'
     }
   }
 
@@ -417,6 +470,54 @@ export function handleSketchToolClick(
       resetDraft: true,
       action: { type: 'addConstraint', constraint },
       hint: `Radius constraint added (${(value as number).toFixed(2)} mm).`
+    }
+  }
+
+  if (tool === 'parallelConstraint' || tool === 'perpendicularConstraint') {
+    if (!pick.pointId) {
+      return {
+        kind: 'error',
+        message: `${tool === 'parallelConstraint' ? 'Parallel' : 'Perpendicular'} constraint requires picking existing points — click closer to a vertex.`
+      }
+    }
+    if (nextPicks.length < 4) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [a1, b1, a2, b2] = nextPicks
+    if (!a1?.pointId || !b1?.pointId || !a2?.pointId || !b2?.pointId) {
+      return {
+        kind: 'error',
+        message: 'All four picks must snap to existing points.'
+      }
+    }
+    if (a1.pointId === b1.pointId || a2.pointId === b2.pointId) {
+      return {
+        kind: 'error',
+        message: 'Each line needs two distinct endpoints.'
+      }
+    }
+    const id = nextId('c')
+    const constraint: Constraint =
+      tool === 'parallelConstraint'
+        ? {
+            id,
+            kind: 'parallel',
+            a1Id: a1.pointId,
+            b1Id: b1.pointId,
+            a2Id: a2.pointId,
+            b2Id: b2.pointId
+          }
+        : {
+            id,
+            kind: 'perpendicular',
+            a1Id: a1.pointId,
+            b1Id: b1.pointId,
+            a2Id: a2.pointId,
+            b2Id: b2.pointId
+          }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: `${tool === 'parallelConstraint' ? 'Parallel' : 'Perpendicular'} constraint added.`
     }
   }
 

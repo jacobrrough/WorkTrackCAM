@@ -33,7 +33,10 @@ import pytest
 
 from engines.cad.cadquery_import import reset_handle_table
 from engines.cad.cadquery_drawing import (
+    ALLOWED_DIMENSION_KINDS,
+    ALLOWED_SECTION_AXES,
     ALLOWED_VIEWS,
+    TITLE_BLOCK_FIELDS,
     VIEW_DIRECTIONS,
 )
 from engines.cad.cadquery_import import _CadHandlerError
@@ -346,3 +349,193 @@ def test_export_drawing_invalid_handle_raises() -> None:
         assert exc_info.value.code == "invalid_handle"
         # No file created on the failure path.
         assert not Path(out_path).exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# CAD V1.5 — Drawing dimensions / sections / title block coverage
+# ─────────────────────────────────────────────────────────────────────────
+#
+# 8 new test cases — 4 Tier 1 (no CadQuery) + 4 Tier 2 (full round-trip).
+# Tier 1 pins the dispatch + param-validation surface so a renderer typo
+# fails fast with `bad_params`; Tier 2 verifies the SVG layer composition
+# actually adds the expected `<g>` markers on top of a real projection.
+
+
+# ── Tier 1: dispatch + param validation ─────────────────────────────────
+
+
+def test_v15_dispatch_table_registers_new_methods() -> None:
+    """The three new V1.5 methods MUST appear in the sidecar dispatch
+    table — drift here breaks the wire contract for the renderer's V1.5
+    DrawingView toolbar.
+    """
+    from engines.sidecar.main import _build_dispatch_table
+
+    table = _build_dispatch_table()
+    assert "cad.dimension_drawing" in table
+    assert "cad.section_drawing" in table
+    assert "cad.attach_title_block" in table
+
+
+def test_v15_dimension_drawing_validates_kind() -> None:
+    """A dimension spec with an unknown `kind` MUST fail fast with
+    `bad_params` so a renderer typo (`'distancee'`) doesn't silently
+    drop the annotation on the floor."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.dimension_drawing({
+            "handle": "script:abc",
+            "view": "front",
+            "dimensions": [{"kind": "distancee", "p1": {"x": 0, "y": 0}, "p2": {"x": 5, "y": 0}}],
+        })
+    assert exc_info.value.code == "bad_params"
+
+
+def test_v15_section_drawing_validates_axis() -> None:
+    """A section plane with an unknown axis MUST fail with `bad_params`.
+    Mirrors the `view` validator posture."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.section_drawing({
+            "handle": "script:abc",
+            "view": "front",
+            "plane": {"axis": "w", "offset": 0},
+        })
+    assert exc_info.value.code == "bad_params"
+    # Allowed axes vocabulary is exposed for the renderer.
+    assert set(ALLOWED_SECTION_AXES) == {"x", "y", "z"}
+
+
+def test_v15_attach_title_block_requires_svg_and_metadata() -> None:
+    """Both `svg` and `metadata` MUST be present; missing either fails
+    with `bad_params`."""
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.attach_title_block({"metadata": {"name": "X"}})
+    assert exc_info.value.code == "bad_params"
+    with pytest.raises(_CadHandlerError) as exc_info:
+        cad_handlers.attach_title_block({"svg": "<svg></svg>"})
+    assert exc_info.value.code == "bad_params"
+    # All five title-block fields are exposed for renderer parity.
+    assert set(TITLE_BLOCK_FIELDS) == {"name", "scale", "author", "date", "sheet"}
+
+
+# ── Tier 2: full CadQuery round trip ─────────────────────────────────────
+
+
+@requires_cadquery
+def test_v15_dimension_drawing_overlays_distance_layer() -> None:
+    """A distance dimension overlay must add a `<g class="dim ..."` group
+    to the SVG output of a real projection. Pins the SVG composition
+    contract: the BUILD-3 projection is preserved AND the dimension
+    layer is appended."""
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(30, 30, 30)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    r = cad_handlers.dimension_drawing({
+        "handle": handle,
+        "view": "front",
+        "dimensions": [
+            {"kind": "distance",
+             "p1": {"x": 0, "y": 0},
+             "p2": {"x": 30, "y": 0},
+             "label": "30 mm"},
+        ],
+    })
+    assert r["view"] == "front"
+    assert r["dimensionCount"] == 1
+    assert isinstance(r["svg"], str)
+    # The dimension layer is stamped on top of the base projection.
+    assert "dim--distance" in r["svg"]
+    # The user-supplied label appears verbatim in the dimension text.
+    assert "30 mm" in r["svg"]
+    # The base SVG/XML markup is still present.
+    assert r["svg"].lstrip().startswith("<")
+    # The bytes count matches the encoded length.
+    assert r["bytes"] == len(r["svg"].encode("utf-8"))
+
+
+@requires_cadquery
+def test_v15_dimension_drawing_empty_list_round_trips() -> None:
+    """An empty dimension list MUST round-trip back to the bare
+    projection (zero `<g class="dim` markers) so the renderer can toggle
+    the layer off without two separate IPC paths."""
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(20, 20, 20)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    r = cad_handlers.dimension_drawing({
+        "handle": handle,
+        "view": "front",
+        "dimensions": [],
+    })
+    assert r["dimensionCount"] == 0
+    assert "class=\"dim" not in r["svg"]
+
+
+@requires_cadquery
+def test_v15_section_drawing_produces_different_svg() -> None:
+    """A section view of the cube MUST produce a different SVG than the
+    bare front view (cutting away half the cube changes the projected
+    silhouette). Pins the section-cut wiring: a no-op section would be
+    indistinguishable from a bare projection."""
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(30, 30, 30)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    bare = cad_handlers.project_drawing({"handle": handle, "view": "front"})
+    sectioned = cad_handlers.section_drawing({
+        "handle": handle,
+        "view": "front",
+        "plane": {"axis": "z", "offset": 0, "keepSide": "positive"},
+    })
+
+    assert sectioned["view"] == "front"
+    assert sectioned["plane"]["axis"] == "z"
+    assert sectioned["plane"]["offset"] == 0
+    assert sectioned["plane"]["keepSide"] == "positive"
+    # The two SVGs are produced by different geometry, so they must
+    # not be byte-identical. A regression where the cut silently
+    # no-ops would surface as equality here.
+    assert sectioned["svg"] != bare["svg"]
+    assert sectioned["bytes"] == len(sectioned["svg"].encode("utf-8"))
+
+
+def test_v15_attach_title_block_is_idempotent() -> None:
+    """Stamping the title block twice MUST NOT double the markup — the
+    second call detects the existing `class="title-block"` marker and
+    returns the SVG unchanged. Lets the operator re-export a drawing
+    without doubling the block in the bottom-right corner."""
+    base_svg = (
+        '<?xml version="1.0"?>'
+        '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">'
+        '<rect width="100" height="100"/></svg>'
+    )
+    metadata = {
+        "name": "Bracket-V1",
+        "scale": "1:1",
+        "author": "Jacob",
+        "date": "2026-06-01",
+        "sheet": "1 of 1",
+    }
+    once = cad_handlers.attach_title_block({"svg": base_svg, "metadata": metadata})
+    assert "title-block" in once["svg"]
+    assert "Bracket-V1" in once["svg"]
+    # All five normalized metadata fields are echoed.
+    assert once["metadata"]["name"] == "Bracket-V1"
+    assert once["metadata"]["scale"] == "1:1"
+    # Stamping again — input is the previously-stamped SVG — MUST NOT
+    # add a second `<g class="title-block">` group. Count the marker
+    # before and after to verify idempotency.
+    twice = cad_handlers.attach_title_block({"svg": once["svg"], "metadata": metadata})
+    assert twice["svg"].count("class=\"title-block\"") == 1
+    # The dimension kinds vocabulary is in sync with what the renderer
+    # expects — pins the allowed list against drift.
+    assert set(ALLOWED_DIMENSION_KINDS) == {"distance", "radius", "diameter", "angle"}

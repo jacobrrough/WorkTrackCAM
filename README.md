@@ -86,6 +86,9 @@ The .wtcam project file holds both the CAD designs and the CAM jobs, so you can 
 ## Tech
 Electron • React 19 • TypeScript • Three.js • Python sidecar (CadQuery for CAD + OpenCAMLib for CAM) • OrcaSlicer • Zod • Vite • **Vitest 4** • pytest
 
+## Security
+WorkTrackCAM ships zero runtime advisories (`npm audit --omit=dev` returns 0). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full posture — closed CVEs (including the critical vitest GHSA-5xrq-8626-4rwp closed in commit 61fb5fa via vitest 3 → 4.1.8), deferred dev-only advisories (electron-builder + Monaco transitive chain), the per-release `npm audit --omit=dev` gate cadence, and a pointer to the live [GitHub Dependabot dashboard](https://github.com/jacobrrough/WorkTrackCAM/security/dependabot). Report a vulnerability via the repo's [private advisory form](https://github.com/jacobrrough/WorkTrackCAM/security/advisories/new) — do NOT file a public issue.
+
 **License**: MIT (see LICENSE)
 
 Made with ❤️ by Jacob Rough

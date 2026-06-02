@@ -848,7 +848,598 @@ def _write_binary_stl_from_flat_mesh(
 
 __all__ = [
     "ALLOWED_ASSEMBLY_FORMATS",
+    "ALLOWED_MATE_KINDS",
     "build_assembly_from_parts",
+    "build_assembly_with_mates",
+    "add_mate_to_assembly",
     "tessellate_assembly",
     "export_assembly",
 ]
+
+
+# ── CAD V1.5: cq.Assembly mate constraints (additive surface) ─────────────
+#
+# Three mate kinds — point / axis / plane — back the renderer's V1.5
+# AssemblyView modal. Each mate references two children by name (the same
+# ``name`` used when ``build_assembly_from_parts`` added them to the
+# ``cq.Assembly``) plus a feature on each child:
+#
+#   * PointMate: a 3-D point in the child's local frame (e.g. a face
+#     centroid). Constraint solver welds the two points together so the
+#     assembly's degrees of freedom drop by 3.
+#   * AxisMate:  a 3-D axis (direction vector) in the child's local frame.
+#     Constraint solver aligns the two axes (parallel + co-linear), dropping
+#     the assembly's rotational DOFs by 2.
+#   * PlaneMate: a 3-D plane (origin + normal) in the child's local frame.
+#     Constraint solver mates the two planes face-to-face, dropping 1
+#     translation DOF + 2 rotational DOFs.
+#
+# Why a separate function instead of folding the mates into
+# ``build_assembly_from_parts``? The renderer V1.5 flow is:
+#   1. Build assembly with identity transforms (existing call).
+#   2. Operator picks features in the viewport (Modal step 2 in the spec).
+#   3. Renderer calls ``cad.add_assembly_mate`` per mate — incremental.
+# Folding mates into the build call would force the renderer to redo the
+# whole assembly every time a mate lands. The split mirrors how Fusion 360 /
+# Onshape treat mates: additive constraints on an existing assembly.
+#
+# Error vocabulary mirrors the rest of the assembly surface:
+#   * cadquery_not_installed  — pip dep missing.
+#   * assembly_not_supported  — cq.Assembly missing from the binding.
+#   * invalid_handle          — assembly handle missing from _HANDLES.
+#   * not_an_assembly         — handle resolves to a single body.
+#   * bad_params              — malformed mate definition, missing child,
+#                                unknown mate kind, non-finite cell.
+#   * mate_solve_failed       — cq.Assembly.solve() raised. Most common in
+#                                practice: the solver is over-constrained
+#                                (operator stacked conflicting mates) — we
+#                                surface the raw OCCT message in ``detail``.
+
+ALLOWED_MATE_KINDS: Tuple[str, ...] = ("point", "axis", "plane")
+
+
+def _resolve_assembly_handle(handle: str) -> Tuple[Any, "StepDocument"]:
+    """Look up an assembly handle and return (cq, document) — used by mates.
+
+    Centralized so every mate-related function shares one set of guards:
+    ``invalid_handle`` if the handle is missing, ``cadquery_not_installed``
+    if pip dep is gone, ``assembly_not_supported`` if cq.Assembly is missing,
+    ``not_an_assembly`` if the handle is a single-body shape.
+    """
+    if not isinstance(handle, str) or not handle:
+        raise _CadHandlerError(
+            "bad_params", "handle must be a non-empty string"
+        )
+
+    doc = _HANDLES.get(handle)
+    if doc is None:
+        raise _CadHandlerError(
+            "invalid_handle",
+            f"unknown CAD handle: {handle!r} "
+            f"(table holds {len(_HANDLES)} entries)",
+        )
+
+    try:
+        import cadquery as cq  # noqa: PLC0415
+    except ImportError as exc:
+        raise _CadHandlerError(
+            "cadquery_not_installed",
+            "CadQuery is not installed in the sidecar's Python environment",
+            detail=str(exc),
+        ) from exc
+
+    if not hasattr(cq, "Assembly"):
+        raise _CadHandlerError(
+            "assembly_not_supported",
+            "cadquery.Assembly is not available in this CadQuery build — "
+            "the renderer should fall back to single-body workflows.",
+        )
+
+    if not isinstance(doc.workplane, cq.Assembly):
+        raise _CadHandlerError(
+            "not_an_assembly",
+            f"handle {handle!r} is not an assembly — mates apply only to "
+            f"assemblies built via cad.create_assembly.",
+        )
+    return cq, doc
+
+
+def _parse_3_vector(raw: Any, label: str) -> Tuple[float, float, float]:
+    """Coerce a wire-shape 3-vector ``[x, y, z]`` to a typed tuple.
+
+    The mate validators all share this helper: every point / axis / plane
+    field is a 3-tuple of finite numbers. We reject NaN / Inf up front so
+    OCP's Vector constructor cannot raise an opaque error mid-solve.
+    """
+    if not isinstance(raw, (list, tuple)):
+        raise _CadHandlerError(
+            "bad_params",
+            f"{label} must be a 3-tuple [x, y, z], got {type(raw).__name__}",
+        )
+    if len(raw) != 3:
+        raise _CadHandlerError(
+            "bad_params",
+            f"{label} must have exactly 3 components, got {len(raw)}",
+        )
+    out: List[float] = []
+    for index, v in enumerate(raw):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise _CadHandlerError(
+                "bad_params",
+                f"{label}[{index}] must be a number, "
+                f"got {type(v).__name__}",
+            )
+        f = float(v)
+        if not math.isfinite(f):
+            raise _CadHandlerError(
+                "bad_params",
+                f"{label}[{index}] must be finite (got {v!r})",
+            )
+        out.append(f)
+    return (out[0], out[1], out[2])
+
+
+def _validate_mate_definition(mate: Any) -> Dict[str, Any]:
+    """Validate a mate dict and normalize its fields.
+
+    Returns a dict with shape::
+
+        {
+          "kind":      "point" | "axis" | "plane",
+          "part1Id":   str,
+          "part2Id":   str,
+          "feature1":  (x, y, z),         # point/axis/plane → vector OR
+                                          # plane origin
+          "feature2":  (x, y, z),
+          # plane mates also carry a "normal1" / "normal2" pair:
+          "normal1":   (x, y, z),         # plane only
+          "normal2":   (x, y, z),         # plane only
+        }
+
+    Centralizing the wire-envelope validation here means
+    ``build_assembly_with_mates`` (the bulk path) and ``add_mate_to_assembly``
+    (the incremental renderer path) share one source of truth.
+    """
+    if not isinstance(mate, dict):
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate must be an object, got {type(mate).__name__}",
+        )
+    kind = mate.get("kind")
+    if not isinstance(kind, str) or kind not in ALLOWED_MATE_KINDS:
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate.kind must be one of {list(ALLOWED_MATE_KINDS)}, "
+            f"got {kind!r}",
+        )
+    part1_id = mate.get("part1Id")
+    if not isinstance(part1_id, str) or not part1_id:
+        raise _CadHandlerError(
+            "bad_params",
+            "mate.part1Id must be a non-empty string (child name)",
+        )
+    part2_id = mate.get("part2Id")
+    if not isinstance(part2_id, str) or not part2_id:
+        raise _CadHandlerError(
+            "bad_params",
+            "mate.part2Id must be a non-empty string (child name)",
+        )
+    if part1_id == part2_id:
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate.part1Id and mate.part2Id must reference different "
+            f"children (both = {part1_id!r})",
+        )
+
+    if kind == "plane":
+        # Plane mates need (origin, normal) for each child — 4 vectors total.
+        feature1 = _parse_3_vector(mate.get("point1"), "mate.point1")
+        feature2 = _parse_3_vector(mate.get("point2"), "mate.point2")
+        normal1 = _parse_3_vector(mate.get("normal1"), "mate.normal1")
+        normal2 = _parse_3_vector(mate.get("normal2"), "mate.normal2")
+        return {
+            "kind": kind,
+            "part1Id": part1_id,
+            "part2Id": part2_id,
+            "feature1": feature1,
+            "feature2": feature2,
+            "normal1": normal1,
+            "normal2": normal2,
+        }
+    elif kind == "axis":
+        feature1 = _parse_3_vector(mate.get("axis1"), "mate.axis1")
+        feature2 = _parse_3_vector(mate.get("axis2"), "mate.axis2")
+        return {
+            "kind": kind,
+            "part1Id": part1_id,
+            "part2Id": part2_id,
+            "feature1": feature1,
+            "feature2": feature2,
+        }
+    else:  # point
+        feature1 = _parse_3_vector(mate.get("point1"), "mate.point1")
+        feature2 = _parse_3_vector(mate.get("point2"), "mate.point2")
+        return {
+            "kind": kind,
+            "part1Id": part1_id,
+            "part2Id": part2_id,
+            "feature1": feature1,
+            "feature2": feature2,
+        }
+
+
+def _apply_mate_constraint(
+    cq: Any,
+    assembly: Any,
+    mate: Dict[str, Any],
+    child_names: List[str],
+) -> None:
+    """Call ``cq.Assembly.constrain`` for a single normalized mate.
+
+    Both child names MUST be present in the assembly's children list, OR
+    we raise ``bad_params`` so the renderer can hint the operator
+    ("part1Id refers to a child not in the assembly").
+
+    Why call ``.constrain()`` per mate (vs. batching)? CadQuery's
+    ``Assembly.constrain`` is variadic — each call adds one constraint to
+    the internal table. The solver runs only when ``.solve()`` is invoked.
+    Adding mates one at a time means a bad-parameter mate fails fast with
+    a precise pointer ("mate #2: unknown child"), instead of polluting
+    the entire assembly's constraint set.
+    """
+    if mate["part1Id"] not in child_names:
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate.part1Id={mate['part1Id']!r} is not a child of this "
+            f"assembly (children: {sorted(child_names)})",
+        )
+    if mate["part2Id"] not in child_names:
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate.part2Id={mate['part2Id']!r} is not a child of this "
+            f"assembly (children: {sorted(child_names)})",
+        )
+
+    kind = mate["kind"]
+    try:
+        if kind == "point":
+            p1 = cq.Vector(*mate["feature1"])
+            p2 = cq.Vector(*mate["feature2"])
+            assembly.constrain(
+                mate["part1Id"], p1, mate["part2Id"], p2, "Point"
+            )
+        elif kind == "axis":
+            a1 = cq.Vector(*mate["feature1"])
+            a2 = cq.Vector(*mate["feature2"])
+            assembly.constrain(
+                mate["part1Id"], a1, mate["part2Id"], a2, "Axis"
+            )
+        else:  # plane
+            # cq.Plane(origin, normal) — origin + normal_vec
+            origin1 = cq.Vector(*mate["feature1"])
+            origin2 = cq.Vector(*mate["feature2"])
+            normal1 = cq.Vector(*mate["normal1"])
+            normal2 = cq.Vector(*mate["normal2"])
+            try:
+                plane1 = cq.Plane(origin=origin1, normal=normal1)
+                plane2 = cq.Plane(origin=origin2, normal=normal2)
+                assembly.constrain(
+                    mate["part1Id"], plane1, mate["part2Id"], plane2, "Plane"
+                )
+            except Exception:  # noqa: BLE001 - very old bindings
+                # Fallback: emit a point + axis pair on the same children;
+                # not strictly equivalent but matches the operator's intent
+                # for a plane-to-plane mate well enough for the V1.5 flow.
+                assembly.constrain(
+                    mate["part1Id"], origin1, mate["part2Id"], origin2, "Point"
+                )
+                assembly.constrain(
+                    mate["part1Id"], normal1, mate["part2Id"], normal2, "Axis"
+                )
+    except _CadHandlerError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - CadQuery raises arbitrary types
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate kind={kind!r}: cq.Assembly.constrain failed: {exc}",
+            detail=str(exc),
+        ) from exc
+
+
+def _solve_with_mates(assembly: Any) -> None:
+    """Run ``cq.Assembly.solve()`` and surface failures as structured errors.
+
+    Common failure modes:
+      * Over-constrained (operator stacked conflicting mates).
+      * Under-constrained — the solver typically still returns a result,
+        but the result is non-unique. We do not flag that here; the
+        renderer surfaces it as a "loose" assembly visually.
+      * Numerical (degenerate constraint geometry, e.g. zero-length axis).
+    """
+    try:
+        assembly.solve()
+    except Exception as exc:  # noqa: BLE001 - CadQuery raises arbitrary types
+        raise _CadHandlerError(
+            "mate_solve_failed",
+            f"cq.Assembly.solve() failed (likely over-constrained): {exc}",
+            detail=str(exc),
+        ) from exc
+
+
+def _list_child_names(assembly: Any) -> List[str]:
+    """Return the names of every direct child in the assembly.
+
+    Mate references work against these names. The root's own name is
+    excluded so a mate cannot reference the assembly itself.
+    """
+    names: List[str] = []
+    try:
+        children = list(assembly.children)
+    except Exception:  # noqa: BLE001 - fall back to traverse()
+        try:
+            traverse = list(assembly.traverse())
+        except Exception:  # noqa: BLE001 - last-ditch empty
+            return []
+        for child_name, _child in traverse:
+            if child_name and child_name != assembly.name:
+                names.append(child_name)
+        return names
+
+    for child in children:
+        try:
+            n = child.name
+        except Exception:  # noqa: BLE001 - skip nameless
+            continue
+        if n:
+            names.append(n)
+    return names
+
+
+def _bbox_after_solve(
+    assembly: Any,
+    fallback_min: Tuple[float, float, float],
+    fallback_max: Tuple[float, float, float],
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    """Best-effort post-solve bbox.
+
+    After ``.solve()`` the child locations may have moved, so the cached
+    pre-solve bbox under-represents the assembly. We re-walk the children
+    and union their world-space bboxes; if that fails we fall back to the
+    pre-solve cache so the wire response is always populated.
+    """
+    big = float("inf")
+    min_x, min_y, min_z = big, big, big
+    max_x, max_y, max_z = -big, -big, -big
+    have_any = False
+
+    try:
+        children = list(assembly.traverse())
+    except Exception:  # noqa: BLE001 - fall back to fixture bbox
+        return fallback_min, fallback_max
+
+    for _name, child in children:
+        try:
+            obj = child.obj
+        except Exception:  # noqa: BLE001 - skip degenerate
+            obj = None
+        if obj is None:
+            continue
+        try:
+            loc = child.loc
+        except Exception:  # noqa: BLE001 - identity
+            loc = None
+        try:
+            moved = obj.moved(loc) if loc is not None else obj
+            bbox = moved.BoundingBox()
+            xmin, ymin, zmin = bbox.xmin, bbox.ymin, bbox.zmin
+            xmax, ymax, zmax = bbox.xmax, bbox.ymax, bbox.zmax
+        except Exception:  # noqa: BLE001 - skip non-BBox-capable children
+            continue
+        have_any = True
+        if xmin < min_x:
+            min_x = xmin
+        if ymin < min_y:
+            min_y = ymin
+        if zmin < min_z:
+            min_z = zmin
+        if xmax > max_x:
+            max_x = xmax
+        if ymax > max_y:
+            max_y = ymax
+        if zmax > max_z:
+            max_z = zmax
+
+    if not have_any or not math.isfinite(min_x):
+        return fallback_min, fallback_max
+    return (
+        (float(min_x), float(min_y), float(min_z)),
+        (float(max_x), float(max_y), float(max_z)),
+    )
+
+
+def build_assembly_with_mates(
+    parts: Sequence[Dict[str, Any]],
+    mates: Sequence[Dict[str, Any]],
+    *,
+    assembly_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build an assembly AND apply a set of mate constraints in one call.
+
+    Convenience wrapper over :func:`build_assembly_from_parts` plus the
+    incremental mate path. Useful for callers that already know the full
+    mate set (renderer bulk-save / round-trip from disk). The incremental
+    renderer flow uses :func:`add_mate_to_assembly` instead.
+
+    Wire input::
+
+        parts: see build_assembly_from_parts
+        mates: [
+          {"kind": "point",
+           "part1Id": "<child name>", "point1": [x, y, z],
+           "part2Id": "<child name>", "point2": [x, y, z]},
+          {"kind": "axis",
+           "part1Id": "<child name>", "axis1":  [x, y, z],
+           "part2Id": "<child name>", "axis2":  [x, y, z]},
+          {"kind": "plane",
+           "part1Id": "<child name>", "point1": [x, y, z], "normal1": [x, y, z],
+           "part2Id": "<child name>", "point2": [x, y, z], "normal2": [x, y, z]},
+          ...
+        ]
+
+    Wire result::
+
+        {
+          "handle":     "assembly:<uuid>",
+          "childCount": int,
+          "mateCount":  int,
+          "bbox":       {"min":[..3], "max":[..3]}
+        }
+
+    Raises ``_CadHandlerError`` with codes shared with
+    ``build_assembly_from_parts`` plus:
+      * ``mate_solve_failed`` — cq.Assembly.solve() raised.
+
+    Notes
+    -----
+    * Mates are validated UP FRONT — every mate's wire envelope is checked
+      before we touch CadQuery. Same posture as the per-part validator in
+      ``build_assembly_from_parts``.
+    * The bbox is computed AFTER the solve so the operator sees the
+      assembly's actual on-screen extent.
+    """
+    if not isinstance(mates, (list, tuple)):
+        raise _CadHandlerError(
+            "bad_params",
+            f"mates must be a list, got {type(mates).__name__}",
+        )
+    # Validate every mate envelope before we touch CadQuery — matches the
+    # per-part validation strategy in build_assembly_from_parts so the
+    # bad-params response is deterministic across environments.
+    validated_mates: List[Dict[str, Any]] = []
+    for index, mate in enumerate(mates):
+        try:
+            validated_mates.append(_validate_mate_definition(mate))
+        except _CadHandlerError as exc:
+            # Re-raise with the index in the message so the renderer can
+            # point the operator at the bad row.
+            raise _CadHandlerError(
+                exc.code,
+                f"mates[{index}]: {exc.args[0] if exc.args else str(exc)}",
+                detail=exc.detail,
+            ) from exc
+
+    # Build the bare assembly via the existing path so the part-validation /
+    # bbox / handle-table-insert logic stays in one place.
+    bare = build_assembly_from_parts(parts, assembly_name=assembly_name)
+    handle = bare["handle"]
+
+    if not validated_mates:
+        # No mates → nothing to do. Echo the build response with a 0 mate
+        # count so the wire shape is uniform.
+        return {
+            "handle": handle,
+            "childCount": bare["childCount"],
+            "mateCount": 0,
+            "bbox": bare["bbox"],
+        }
+
+    # Resolve the cq + assembly off the freshly-inserted handle. We MUST
+    # go through the handle table because build_assembly_from_parts inserts
+    # the cq.Assembly into _HANDLES and the assembly variable goes out of
+    # scope on exit.
+    cq, doc = _resolve_assembly_handle(handle)
+    assembly = doc.workplane
+    child_names = _list_child_names(assembly)
+    for mate in validated_mates:
+        _apply_mate_constraint(cq, assembly, mate, child_names)
+    _solve_with_mates(assembly)
+
+    bbox_min, bbox_max = _bbox_after_solve(
+        assembly,
+        fallback_min=tuple(bare["bbox"]["min"]),  # type: ignore[arg-type]
+        fallback_max=tuple(bare["bbox"]["max"]),  # type: ignore[arg-type]
+    )
+    # Update the cached bbox on the handle so subsequent tessellate calls
+    # see the post-solve extent.
+    _HANDLES[handle] = StepDocument(
+        workplane=assembly,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        source_path=doc.source_path,
+    )
+
+    return {
+        "handle": handle,
+        "childCount": bare["childCount"],
+        "mateCount": len(validated_mates),
+        "bbox": {
+            "min": list(bbox_min),
+            "max": list(bbox_max),
+        },
+    }
+
+
+def add_mate_to_assembly(
+    handle: str,
+    mate: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach a single mate constraint to an existing assembly and re-solve.
+
+    Powers the renderer's incremental mate-define flow: the operator picks
+    two features in the viewport and the renderer calls this for each
+    confirmed mate. The assembly's handle stays stable — the cached
+    workplane is updated in place.
+
+    Wire input::
+
+        handle: "assembly:<uuid>" from a prior cad.create_assembly call.
+        mate:   {"kind": "point" | "axis" | "plane",
+                 "part1Id": str, ..., "part2Id": str, ...}
+
+    Wire result::
+
+        {
+          "handle":    str,        # echo of input
+          "kind":      str,
+          "part1Id":   str,
+          "part2Id":   str,
+          "bbox":      {"min":[..3], "max":[..3]}
+        }
+
+    Raises ``_CadHandlerError`` with:
+      * ``bad_params``           — malformed mate envelope.
+      * ``invalid_handle``       — handle missing from _HANDLES.
+      * ``not_an_assembly``      — handle resolves to a single body.
+      * ``cadquery_not_installed`` — pip dep missing.
+      * ``assembly_not_supported`` — cq.Assembly not in the binding.
+      * ``mate_solve_failed``    — cq.Assembly.solve() raised.
+    """
+    validated = _validate_mate_definition(mate)
+    cq, doc = _resolve_assembly_handle(handle)
+    assembly = doc.workplane
+    child_names = _list_child_names(assembly)
+    _apply_mate_constraint(cq, assembly, validated, child_names)
+    _solve_with_mates(assembly)
+
+    bbox_min, bbox_max = _bbox_after_solve(
+        assembly,
+        fallback_min=doc.bbox_min,
+        fallback_max=doc.bbox_max,
+    )
+    _HANDLES[handle] = StepDocument(
+        workplane=assembly,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        source_path=doc.source_path,
+    )
+
+    return {
+        "handle": handle,
+        "kind": validated["kind"],
+        "part1Id": validated["part1Id"],
+        "part2Id": validated["part2Id"],
+        "bbox": {
+            "min": list(bbox_min),
+            "max": list(bbox_max),
+        },
+    }

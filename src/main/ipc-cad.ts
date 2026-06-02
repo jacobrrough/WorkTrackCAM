@@ -41,6 +41,10 @@
  */
 import { app, ipcMain } from 'electron'
 import type {
+  CadAddAssemblyMateParams,
+  CadAddAssemblyMateResult,
+  CadAssemblyMate,
+  CadAssemblyMateKind,
   CadDeclaredParameter,
   CadExecuteScriptMesh,
   CadExecuteScriptResult,
@@ -207,6 +211,25 @@ export type CadTessellateAssemblyResponse =
 export type CadExportAssemblyResponse =
   | { ok: true; result: CadExportAssemblyResult }
   | { ok: false; error: string; hint?: string }
+
+// ── cad:addAssemblyMate (CAD V1.5 — Wave 3 mate constraints) ────────────────
+//
+// Bridges the renderer's V1.5 AssemblyView Mates panel to the sidecar's
+// ``cad.add_assembly_mate`` handler. Single-mate-at-a-time call matches the
+// renderer's modal flow (operator picks two features → confirms → call).
+//
+// The payload is constrained to the typed ``CadAddAssemblyMateParams`` shape
+// here (unlike the permissive ``addAssemblyMate`` placeholder on
+// ``shop-types.ts``) so the IPC boundary catches structural drift between
+// the renderer and the sidecar BEFORE we burn the cost of a Python spawn.
+// The renderer can still cast through ``Record<string, unknown>`` if needed
+// — the validator just normalizes the shape.
+
+export type CadAddAssemblyMateResponse =
+  | { ok: true; result: CadAddAssemblyMateResult }
+  | { ok: false; error: string; hint?: string }
+
+export type CadAddAssemblyMatePayload = CadAddAssemblyMateParams
 
 // ── cad:projectDrawing / exportDrawing (CAD V2 -- 2D documentation) ─────────
 //
@@ -772,6 +795,146 @@ export function validateExportAssemblyPayload(
 }
 
 /**
+ * Validate a payload for the ``cad:addAssemblyMate`` IPC handler.
+ *
+ * Pure -- enforces the typed envelope shape so the sidecar can short-circuit
+ * before spawning a Python process. The deep mate validation
+ * (3-vector finite-number checks, child-name resolution) lives in the
+ * sidecar; this validator catches structural drift:
+ *   - ``handle`` must be a non-empty assembly handle string,
+ *   - ``mate.kind`` must be one of ``point`` / ``axis`` / ``plane``,
+ *   - ``mate.part1Id`` / ``mate.part2Id`` must be non-empty strings, AND
+ *   - per-kind feature payloads must be 3-tuples.
+ *
+ * Each rejected mate carries a hint that points the renderer at the
+ * specific bad field so the modal can surface a precise validation error
+ * BEFORE we round-trip to Python.
+ */
+export function validateAddAssemblyMatePayload(
+  raw: unknown,
+):
+  | { ok: true; payload: CadAddAssemblyMatePayload }
+  | CadAddAssemblyMateResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:addAssemblyMate requires { handle, mate }',
+    }
+  }
+  const p = raw as { handle?: unknown; mate?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (!p.mate || typeof p.mate !== 'object' || Array.isArray(p.mate)) {
+    return {
+      ok: false,
+      error: 'missing_mate',
+      hint: 'mate must be an object with { kind, part1Id, part2Id, ...features }',
+    }
+  }
+  const mateRaw = p.mate as Record<string, unknown>
+  const kind = mateRaw.kind
+  if (kind !== 'point' && kind !== 'axis' && kind !== 'plane') {
+    return {
+      ok: false,
+      error: 'invalid_mate_kind',
+      hint: 'mate.kind must be one of: point, axis, plane',
+    }
+  }
+  const part1Id = mateRaw.part1Id
+  if (typeof part1Id !== 'string' || part1Id.length === 0) {
+    return { ok: false, error: 'missing_part1Id' }
+  }
+  const part2Id = mateRaw.part2Id
+  if (typeof part2Id !== 'string' || part2Id.length === 0) {
+    return { ok: false, error: 'missing_part2Id' }
+  }
+  if (part1Id === part2Id) {
+    return {
+      ok: false,
+      error: 'invalid_mate',
+      hint: 'mate.part1Id and mate.part2Id must reference different children',
+    }
+  }
+  // Per-kind feature presence + shape checks. Deep finite-number checks are
+  // delegated to the sidecar -- a non-finite value would be caught there
+  // with a structured ``bad_params`` and surface to the operator as a
+  // sidecar_error envelope, same as every other CadQuery handler.
+  if (kind === 'point' || kind === 'plane') {
+    if (!looks3Vector(mateRaw.point1)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.point1 must be a [x, y, z] tuple of numbers',
+      }
+    }
+    if (!looks3Vector(mateRaw.point2)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.point2 must be a [x, y, z] tuple of numbers',
+      }
+    }
+  }
+  if (kind === 'axis') {
+    if (!looks3Vector(mateRaw.axis1)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.axis1 must be a [x, y, z] tuple of numbers',
+      }
+    }
+    if (!looks3Vector(mateRaw.axis2)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.axis2 must be a [x, y, z] tuple of numbers',
+      }
+    }
+  }
+  if (kind === 'plane') {
+    if (!looks3Vector(mateRaw.normal1)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.normal1 must be a [x, y, z] tuple of numbers',
+      }
+    }
+    if (!looks3Vector(mateRaw.normal2)) {
+      return {
+        ok: false,
+        error: 'invalid_mate',
+        hint: 'mate.normal2 must be a [x, y, z] tuple of numbers',
+      }
+    }
+  }
+  // Cast through ``unknown`` so the discriminated-union return type lines up.
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      mate: p.mate as unknown as CadAssemblyMate,
+    },
+  }
+}
+
+/**
+ * Shape guard: is this a 3-tuple of numbers? Used by the
+ * ``validateAddAssemblyMatePayload`` helper to reject malformed feature
+ * payloads at the IPC boundary. Allows ``int`` / ``float`` and rejects
+ * ``NaN`` / ``Infinity`` so the sidecar's stricter finite-number check
+ * never sees them.
+ */
+function looks3Vector(value: unknown): value is [number, number, number] {
+  if (!Array.isArray(value) || value.length !== 3) return false
+  for (const v of value) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return false
+  }
+  return true
+}
+
+/**
  * Validate a payload for the ``cad:projectDrawing`` IPC handler.
  *
  * Pure -- envelope-only. The sidecar walks the ``sheet.viewPlaceholders``
@@ -1298,6 +1461,480 @@ export function coerceProjectDrawingResult(
   return result
 }
 
+/**
+ * Coerce the raw ``cad.add_assembly_mate`` sidecar response into the
+ * strongly-typed ``CadAddAssemblyMateResult``. Returns ``null`` when the
+ * envelope is structurally unusable so the handler can fold to a
+ * deterministic ``sidecar_protocol_error`` instead of leaking ``undefined``
+ * into the renderer.
+ *
+ * Mirrors the defense-in-depth pattern used by
+ * ``coerceCreateAssemblyResult`` -- malformed bbox / handle drop to the
+ * null branch; ``kind`` is coerced to one of the discriminated values or
+ * the response is rejected entirely.
+ */
+export function coerceAddAssemblyMateResult(
+  raw: Record<string, unknown>,
+): CadAddAssemblyMateResult | null {
+  if (typeof raw.handle !== 'string' || raw.handle.length === 0) return null
+  if (typeof raw.part1Id !== 'string' || raw.part1Id.length === 0) return null
+  if (typeof raw.part2Id !== 'string' || raw.part2Id.length === 0) return null
+  if (raw.kind !== 'point' && raw.kind !== 'axis' && raw.kind !== 'plane') {
+    return null
+  }
+  if (!looksLikeBbox(raw.bbox)) return null
+  return {
+    handle: raw.handle,
+    kind: raw.kind as CadAssemblyMateKind,
+    part1Id: raw.part1Id,
+    part2Id: raw.part2Id,
+    bbox: raw.bbox,
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// CAD V1.5 — Drawing dimensions / sections / title block IPC layer.
+// Additive section; kept diff-isolated from the BUILD 1-6 surface above so
+// the V1.5 wave can land alongside the assembly-mate wave without merge
+// pain. All types / validators / coercers in this section are prefixed
+// with ``V15`` (or ``cad:dimensionDrawing`` / ``cad:sectionDrawing`` /
+// ``cad:attachTitleBlock`` for the IPC channel names) so they are easy to
+// spot in a diff.
+// ────────────────────────────────────────────────────────────────────────────
+
+import type {
+  CadAttachTitleBlockParams as V15CadAttachTitleBlockParams,
+  CadAttachTitleBlockResult as V15CadAttachTitleBlockResult,
+  CadDimensionDrawingParams as V15CadDimensionDrawingParams,
+  CadDimensionDrawingResult as V15CadDimensionDrawingResult,
+  CadDimensionKind as V15CadDimensionKind,
+  CadDimensionPoint2D as V15CadDimensionPoint2D,
+  CadDimensionSpec as V15CadDimensionSpec,
+  CadDrawingView as V15CadDrawingView,
+  CadSectionAxis as V15CadSectionAxis,
+  CadSectionDrawingParams as V15CadSectionDrawingParams,
+  CadSectionDrawingResult as V15CadSectionDrawingResult,
+  CadSectionKeepSide as V15CadSectionKeepSide,
+  CadSectionPlane as V15CadSectionPlane,
+  CadTitleBlockMetadata as V15CadTitleBlockMetadata,
+} from '../shared/sidecar-protocol'
+
+/** Allowed dimension kinds (V1.5). Mirrors the sidecar's vocabulary. */
+export const V15_DIMENSION_KINDS: readonly V15CadDimensionKind[] = [
+  'distance',
+  'radius',
+  'diameter',
+  'angle',
+] as const
+
+/** Allowed view names (V1.5). Mirrors the BUILD-3 drawing view vocabulary. */
+export const V15_DRAWING_VIEWS: readonly V15CadDrawingView[] = [
+  'front',
+  'top',
+  'right',
+  'iso',
+] as const
+
+/** Allowed section axes (V1.5). */
+export const V15_SECTION_AXES: readonly V15CadSectionAxis[] = ['x', 'y', 'z'] as const
+
+/** Allowed keep-sides for the section plane (V1.5). */
+export const V15_SECTION_KEEP_SIDES: readonly V15CadSectionKeepSide[] = [
+  'positive',
+  'negative',
+] as const
+
+export type V15CadDimensionDrawingPayload = V15CadDimensionDrawingParams
+export type V15CadSectionDrawingPayload = V15CadSectionDrawingParams
+export type V15CadAttachTitleBlockPayload = V15CadAttachTitleBlockParams
+
+export type V15CadDimensionDrawingResponse =
+  | { ok: true; result: V15CadDimensionDrawingResult }
+  | { ok: false; error: string; hint?: string }
+
+export type V15CadSectionDrawingResponse =
+  | { ok: true; result: V15CadSectionDrawingResult }
+  | { ok: false; error: string; hint?: string }
+
+export type V15CadAttachTitleBlockResponse =
+  | { ok: true; result: V15CadAttachTitleBlockResult }
+  | { ok: false; error: string; hint?: string }
+
+/**
+ * Validate a 2D point spec (``{x, y}``). Returns the same shape on success
+ * (so callers can keep their typed view) or a string error.
+ */
+function v15ValidatePoint2D(
+  raw: unknown,
+  field: string,
+): { ok: true; value: V15CadDimensionPoint2D } | { ok: false; error: string; hint: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'invalid_dimension', hint: `${field} must be an object with x/y numeric keys` }
+  }
+  const p = raw as { x?: unknown; y?: unknown }
+  if (typeof p.x !== 'number' || !Number.isFinite(p.x)) {
+    return { ok: false, error: 'invalid_dimension', hint: `${field}.x must be a finite number` }
+  }
+  if (typeof p.y !== 'number' || !Number.isFinite(p.y)) {
+    return { ok: false, error: 'invalid_dimension', hint: `${field}.y must be a finite number` }
+  }
+  return { ok: true, value: { x: p.x, y: p.y } }
+}
+
+/**
+ * Validate a single dimension spec. Returns the normalized spec or an
+ * error envelope ready to fold into the response.
+ */
+export function v15ValidateDimensionSpec(
+  raw: unknown,
+  index: number,
+): { ok: true; value: V15CadDimensionSpec } | { ok: false; error: string; hint: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      ok: false,
+      error: 'invalid_dimension',
+      hint: `dimensions[${index}] must be an object`,
+    }
+  }
+  const spec = raw as { kind?: unknown; label?: unknown }
+  const kind = spec.kind
+  if (typeof kind !== 'string' || !(V15_DIMENSION_KINDS as readonly string[]).includes(kind)) {
+    return {
+      ok: false,
+      error: 'invalid_dimension',
+      hint: `dimensions[${index}].kind must be one of: ${V15_DIMENSION_KINDS.join(', ')}`,
+    }
+  }
+  if (spec.label !== undefined && typeof spec.label !== 'string') {
+    return {
+      ok: false,
+      error: 'invalid_dimension',
+      hint: `dimensions[${index}].label must be a string when provided`,
+    }
+  }
+  // Per-kind validation.
+  const raw2 = raw as Record<string, unknown>
+  if (kind === 'distance') {
+    const p1 = v15ValidatePoint2D(raw2.p1, `dimensions[${index}].p1`)
+    if (!p1.ok) return p1
+    const p2 = v15ValidatePoint2D(raw2.p2, `dimensions[${index}].p2`)
+    if (!p2.ok) return p2
+    let offset: number | undefined
+    if (raw2.offset !== undefined) {
+      if (typeof raw2.offset !== 'number' || !Number.isFinite(raw2.offset)) {
+        return {
+          ok: false,
+          error: 'invalid_dimension',
+          hint: `dimensions[${index}].offset must be a finite number when provided`,
+        }
+      }
+      offset = raw2.offset
+    }
+    const out: V15CadDimensionSpec = {
+      kind: 'distance',
+      p1: p1.value,
+      p2: p2.value,
+      ...(offset !== undefined ? { offset } : {}),
+      ...(typeof spec.label === 'string' ? { label: spec.label } : {}),
+    }
+    return { ok: true, value: out }
+  }
+  if (kind === 'radius' || kind === 'diameter') {
+    const center = v15ValidatePoint2D(raw2.center, `dimensions[${index}].center`)
+    if (!center.ok) return center
+    const edge = v15ValidatePoint2D(raw2.edge, `dimensions[${index}].edge`)
+    if (!edge.ok) return edge
+    const out: V15CadDimensionSpec = {
+      kind,
+      center: center.value,
+      edge: edge.value,
+      ...(typeof spec.label === 'string' ? { label: spec.label } : {}),
+    }
+    return { ok: true, value: out }
+  }
+  // angle
+  const vertex = v15ValidatePoint2D(raw2.vertex, `dimensions[${index}].vertex`)
+  if (!vertex.ok) return vertex
+  const arm1 = v15ValidatePoint2D(raw2.arm1, `dimensions[${index}].arm1`)
+  if (!arm1.ok) return arm1
+  const arm2 = v15ValidatePoint2D(raw2.arm2, `dimensions[${index}].arm2`)
+  if (!arm2.ok) return arm2
+  const out: V15CadDimensionSpec = {
+    kind: 'angle',
+    vertex: vertex.value,
+    arm1: arm1.value,
+    arm2: arm2.value,
+    ...(typeof spec.label === 'string' ? { label: spec.label } : {}),
+  }
+  return { ok: true, value: out }
+}
+
+/**
+ * Validate the ``cad:dimensionDrawing`` IPC payload. Pure -- no FS / spawn
+ * / electron globals. Mirrors the shape of the BUILD-3 drawing validators.
+ */
+export function v15ValidateDimensionDrawingPayload(
+  raw: unknown,
+): { ok: true; payload: V15CadDimensionDrawingPayload } | V15CadDimensionDrawingResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:dimensionDrawing requires { handle, view, dimensions }',
+    }
+  }
+  const p = raw as { handle?: unknown; view?: unknown; dimensions?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(p.view)) {
+    return {
+      ok: false,
+      error: 'invalid_view',
+      hint: `view must be one of: ${V15_DRAWING_VIEWS.join(', ')}`,
+    }
+  }
+  if (!Array.isArray(p.dimensions)) {
+    return {
+      ok: false,
+      error: 'invalid_dimensions',
+      hint: 'dimensions must be an array (use [] for the bare projection)',
+    }
+  }
+  const dimensions: V15CadDimensionSpec[] = []
+  for (let i = 0; i < p.dimensions.length; i++) {
+    const v = v15ValidateDimensionSpec(p.dimensions[i], i)
+    if (!v.ok) return v
+    dimensions.push(v.value)
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      view: p.view as V15CadDrawingView,
+      dimensions,
+    },
+  }
+}
+
+/**
+ * Validate the ``cad:sectionDrawing`` IPC payload.
+ */
+export function v15ValidateSectionDrawingPayload(
+  raw: unknown,
+): { ok: true; payload: V15CadSectionDrawingPayload } | V15CadSectionDrawingResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:sectionDrawing requires { handle, view, plane }',
+    }
+  }
+  const p = raw as { handle?: unknown; view?: unknown; plane?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(p.view)) {
+    return {
+      ok: false,
+      error: 'invalid_view',
+      hint: `view must be one of: ${V15_DRAWING_VIEWS.join(', ')}`,
+    }
+  }
+  if (!p.plane || typeof p.plane !== 'object' || Array.isArray(p.plane)) {
+    return {
+      ok: false,
+      error: 'invalid_plane',
+      hint: 'plane must be an object with axis / offset / keepSide? keys',
+    }
+  }
+  const plane = p.plane as { axis?: unknown; offset?: unknown; keepSide?: unknown }
+  if (typeof plane.axis !== 'string' || !(V15_SECTION_AXES as readonly string[]).includes(plane.axis)) {
+    return {
+      ok: false,
+      error: 'invalid_plane',
+      hint: `plane.axis must be one of: ${V15_SECTION_AXES.join(', ')}`,
+    }
+  }
+  if (typeof plane.offset !== 'number' || !Number.isFinite(plane.offset)) {
+    return {
+      ok: false,
+      error: 'invalid_plane',
+      hint: 'plane.offset must be a finite number',
+    }
+  }
+  let keepSide: V15CadSectionKeepSide | undefined
+  if (plane.keepSide !== undefined) {
+    if (
+      typeof plane.keepSide !== 'string' ||
+      !(V15_SECTION_KEEP_SIDES as readonly string[]).includes(plane.keepSide)
+    ) {
+      return {
+        ok: false,
+        error: 'invalid_plane',
+        hint: `plane.keepSide must be one of: ${V15_SECTION_KEEP_SIDES.join(', ')}`,
+      }
+    }
+    keepSide = plane.keepSide as V15CadSectionKeepSide
+  }
+  const out: V15CadSectionPlane = {
+    axis: plane.axis as V15CadSectionAxis,
+    offset: plane.offset,
+    ...(keepSide !== undefined ? { keepSide } : {}),
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      view: p.view as V15CadDrawingView,
+      plane: out,
+    },
+  }
+}
+
+/**
+ * Validate the ``cad:attachTitleBlock`` IPC payload. The metadata fields
+ * are individually optional but must be strings when present.
+ */
+export function v15ValidateAttachTitleBlockPayload(
+  raw: unknown,
+): { ok: true; payload: V15CadAttachTitleBlockPayload } | V15CadAttachTitleBlockResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:attachTitleBlock requires { svg, metadata }',
+    }
+  }
+  const p = raw as { svg?: unknown; metadata?: unknown }
+  if (typeof p.svg !== 'string' || p.svg.length === 0) {
+    return {
+      ok: false,
+      error: 'missing_svg',
+      hint: 'svg must be a non-empty SVG markup string',
+    }
+  }
+  if (!p.metadata || typeof p.metadata !== 'object' || Array.isArray(p.metadata)) {
+    return {
+      ok: false,
+      error: 'invalid_metadata',
+      hint: 'metadata must be an object with title-block fields (name / scale / author / date / sheet)',
+    }
+  }
+  const metaRaw = p.metadata as Record<string, unknown>
+  const metadata: V15CadTitleBlockMetadata = {}
+  for (const field of ['name', 'scale', 'author', 'date', 'sheet'] as const) {
+    const v = metaRaw[field]
+    if (v === undefined || v === null) continue
+    if (typeof v !== 'string') {
+      return {
+        ok: false,
+        error: 'invalid_metadata',
+        hint: `metadata.${field} must be a string when provided`,
+      }
+    }
+    metadata[field] = v
+  }
+  return {
+    ok: true,
+    payload: {
+      svg: p.svg,
+      metadata,
+    },
+  }
+}
+
+/**
+ * Coerce the raw sidecar payload into ``CadDimensionDrawingResult``.
+ * Returns ``null`` if the response is structurally unusable so the handler
+ * can fold to ``sidecar_protocol_error``.
+ */
+export function v15CoerceDimensionDrawingResult(
+  raw: Record<string, unknown>,
+): V15CadDimensionDrawingResult | null {
+  if (typeof raw.svg !== 'string') return null
+  if (typeof raw.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(raw.view)) {
+    return null
+  }
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  const dimensionCount =
+    typeof raw.dimensionCount === 'number' &&
+    Number.isFinite(raw.dimensionCount) &&
+    Number.isInteger(raw.dimensionCount) &&
+    raw.dimensionCount >= 0
+      ? raw.dimensionCount
+      : 0
+  return {
+    svg: raw.svg,
+    view: raw.view as V15CadDrawingView,
+    bytes,
+    dimensionCount,
+  }
+}
+
+/** Coerce the raw sidecar payload into ``CadSectionDrawingResult``. */
+export function v15CoerceSectionDrawingResult(
+  raw: Record<string, unknown>,
+): V15CadSectionDrawingResult | null {
+  if (typeof raw.svg !== 'string') return null
+  if (typeof raw.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(raw.view)) {
+    return null
+  }
+  if (!raw.plane || typeof raw.plane !== 'object' || Array.isArray(raw.plane)) return null
+  const plane = raw.plane as Record<string, unknown>
+  if (typeof plane.axis !== 'string' || !(V15_SECTION_AXES as readonly string[]).includes(plane.axis)) {
+    return null
+  }
+  if (typeof plane.offset !== 'number' || !Number.isFinite(plane.offset)) return null
+  const keepSide =
+    typeof plane.keepSide === 'string' &&
+    (V15_SECTION_KEEP_SIDES as readonly string[]).includes(plane.keepSide)
+      ? (plane.keepSide as V15CadSectionKeepSide)
+      : 'positive'
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  return {
+    svg: raw.svg,
+    view: raw.view as V15CadDrawingView,
+    bytes,
+    plane: {
+      axis: plane.axis as V15CadSectionAxis,
+      offset: plane.offset,
+      keepSide,
+    },
+  }
+}
+
+/** Coerce the raw sidecar payload into ``CadAttachTitleBlockResult``. */
+export function v15CoerceAttachTitleBlockResult(
+  raw: Record<string, unknown>,
+): V15CadAttachTitleBlockResult | null {
+  if (typeof raw.svg !== 'string') return null
+  if (!raw.metadata || typeof raw.metadata !== 'object' || Array.isArray(raw.metadata)) return null
+  const meta = raw.metadata as Record<string, unknown>
+  const out: V15CadAttachTitleBlockResult['metadata'] = {
+    name: typeof meta.name === 'string' ? meta.name : '',
+    scale: typeof meta.scale === 'string' ? meta.scale : '',
+    author: typeof meta.author === 'string' ? meta.author : '',
+    date: typeof meta.date === 'string' ? meta.date : '',
+    sheet: typeof meta.sheet === 'string' ? meta.sheet : '',
+  }
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  return {
+    svg: raw.svg,
+    bytes,
+    metadata: out,
+  }
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerCadIpc(_ctx: MainIpcWindowContext): void {
@@ -1611,6 +2248,154 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
           ? r.result.bytesWritten
           : 0
       return { ok: true, result: { outPath, bytesWritten } }
+    },
+  )
+
+  // cad:addAssemblyMate -- CAD V1.5: attach a single mate (point / axis /
+  // plane) to an existing assembly handle. Delegates to the sidecar's
+  // ``cad.add_assembly_mate`` (Build 6). The validator gates structural
+  // drift at the boundary so a runaway renderer cannot funnel garbage at
+  // the JSON-RPC pipe -- bad mate kinds, missing feature payloads, etc.
+  // surface as deterministic ``{ ok: false, error, hint }`` envelopes
+  // before we burn the cost of a Python spawn.
+  //
+  // 60 s ceiling: a single ``cq.Assembly.constrain()`` + ``.solve()`` pass
+  // is microseconds for a handful of children; the budget mirrors
+  // ``cad:tessellateWithIds`` so even a pathologically over-constrained
+  // assembly surfaces a hang to the operator instead of waiting forever.
+  ipcMain.handle(
+    'cad:addAssemblyMate',
+    async (_e, raw: unknown): Promise<CadAddAssemblyMateResponse> => {
+      const v = validateAddAssemblyMatePayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.add_assembly_mate',
+        {
+          handle: v.payload.handle,
+          // Cast back to a JSON-serializable shape -- the wire only sees
+          // JSON.stringify-able objects, which the typed mate is.
+          mate: v.payload.mate as unknown as Record<string, unknown>,
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = coerceAddAssemblyMateResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.add_assembly_mate returned a malformed handle/bbox envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // ── CAD V1.5 (Drawing dimensions / sections / title block) handlers ──────
+  //
+  // Three additive IPC channels exposing the BUILD-7 sidecar surface. All
+  // three follow the same pattern as the BUILD-3 drawing handlers above —
+  // permissive envelope validation at the boundary, the sidecar owns the
+  // deep validation (dimension specs / section plane geometry / metadata
+  // shape). Budgets:
+  //   * dimensionDrawing — 60 s (re-projects the body, then composes SVG).
+  //   * sectionDrawing   — 90 s (extra cut operation can scale with body
+  //                              complexity; matches the BUILD-3 projection
+  //                              ceiling).
+  //   * attachTitleBlock — 15 s (pure SVG string manipulation; no CadQuery
+  //                              call required).
+
+  ipcMain.handle(
+    'cad:dimensionDrawing',
+    async (_e, raw: unknown): Promise<V15CadDimensionDrawingResponse> => {
+      const v = v15ValidateDimensionDrawingPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.dimension_drawing',
+        {
+          handle: v.payload.handle,
+          view: v.payload.view,
+          // Re-serialize through the typed surface so an upstream renderer
+          // that smuggled extras doesn't leak them through the wire.
+          dimensions: v.payload.dimensions as unknown as Record<string, unknown>[],
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceDimensionDrawingResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.dimension_drawing returned a malformed svg/view envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  ipcMain.handle(
+    'cad:sectionDrawing',
+    async (_e, raw: unknown): Promise<V15CadSectionDrawingResponse> => {
+      const v = v15ValidateSectionDrawingPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.section_drawing',
+        {
+          handle: v.payload.handle,
+          view: v.payload.view,
+          plane: v.payload.plane as unknown as Record<string, unknown>,
+        },
+        pyCtx,
+        90_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceSectionDrawingResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.section_drawing returned a malformed svg/plane envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  ipcMain.handle(
+    'cad:attachTitleBlock',
+    async (_e, raw: unknown): Promise<V15CadAttachTitleBlockResponse> => {
+      const v = v15ValidateAttachTitleBlockPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.attach_title_block',
+        {
+          svg: v.payload.svg,
+          metadata: v.payload.metadata as unknown as Record<string, unknown>,
+        },
+        pyCtx,
+        15_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceAttachTitleBlockResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.attach_title_block returned a malformed svg/metadata envelope',
+        }
+      }
+      return { ok: true, result: coerced }
     },
   )
 }

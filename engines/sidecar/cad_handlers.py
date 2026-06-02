@@ -93,8 +93,22 @@ try:
         export_drawing as _export_drawing_core,
         project_to_drawing as _project_to_drawing_core,
     )
+    # CAD V1.5 — additive drawing helpers (drawing dimensions / sections /
+    # title block). Imported next to the existing drawing core so the
+    # import-fallback branch covers both. Names prefixed with ``_v15_`` so
+    # this block stays diff-isolated from the BUILD-3 drawing core above.
+    from engines.cad.cadquery_drawing import (
+        ALLOWED_DIMENSION_KINDS as _V15_ALLOWED_DIMENSION_KINDS,
+        ALLOWED_SECTION_AXES as _V15_ALLOWED_SECTION_AXES,
+        TITLE_BLOCK_FIELDS as _V15_TITLE_BLOCK_FIELDS,
+        attach_title_block as _v15_attach_title_block_core,
+        dimension_drawing as _v15_dimension_drawing_core,
+        section_drawing as _v15_section_drawing_core,
+    )
     from engines.cad.cadquery_assembly import (
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
+        ALLOWED_MATE_KINDS as _ALLOWED_MATE_KINDS,
+        add_mate_to_assembly as _add_mate_core,
         build_assembly_from_parts as _build_assembly_core,
         export_assembly as _export_assembly_core,
         tessellate_assembly as _tessellate_assembly_core,
@@ -124,8 +138,19 @@ except ImportError:  # pragma: no cover - frozen-app import path
         export_drawing as _export_drawing_core,
         project_to_drawing as _project_to_drawing_core,
     )
+    # CAD V1.5 — frozen-app fallback for the additive drawing helpers.
+    from cad.cadquery_drawing import (  # type: ignore[no-redef]
+        ALLOWED_DIMENSION_KINDS as _V15_ALLOWED_DIMENSION_KINDS,
+        ALLOWED_SECTION_AXES as _V15_ALLOWED_SECTION_AXES,
+        TITLE_BLOCK_FIELDS as _V15_TITLE_BLOCK_FIELDS,
+        attach_title_block as _v15_attach_title_block_core,
+        dimension_drawing as _v15_dimension_drawing_core,
+        section_drawing as _v15_section_drawing_core,
+    )
     from cad.cadquery_assembly import (  # type: ignore[no-redef]
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
+        ALLOWED_MATE_KINDS as _ALLOWED_MATE_KINDS,
+        add_mate_to_assembly as _add_mate_core,
         build_assembly_from_parts as _build_assembly_core,
         export_assembly as _export_assembly_core,
         tessellate_assembly as _tessellate_assembly_core,
@@ -646,6 +671,183 @@ def solve_sketch(params: dict[str, Any]) -> dict[str, Any]:
     return _solve_sketch_payload_core(sketch_state, constraint_list)
 
 
+# ── BUILD 6 (Assembly mates — Wave 3 CAD V1.5): incremental mate handler ──
+#
+# Adds a single mate constraint (point / axis / plane) to an existing
+# assembly. Powers the renderer's V1.5 AssemblyView modal, which lets the
+# operator pick two features in the viewport and call this method once per
+# confirmed mate. The assembly handle stays stable across calls — the
+# sidecar updates the cached cq.Assembly + bbox in place.
+#
+# Wire result::
+#
+#     {
+#       "handle":  str,                       # echo of input
+#       "kind":    "point" | "axis" | "plane",
+#       "part1Id": str,
+#       "part2Id": str,
+#       "bbox":    {"min":[..3], "max":[..3]}  # post-solve extent
+#     }
+#
+# Error vocabulary mirrors the bulk assembly path with one addition:
+#   * 'mate_solve_failed' — cq.Assembly.solve() raised, usually because
+#                            the operator stacked conflicting mates
+#                            (over-constrained system).
+
+
+def _require_mate_payload(params: dict[str, Any]) -> dict[str, Any]:
+    """Validate the ``mate`` wire envelope BEFORE delegating.
+
+    Catches the common 'renderer forgot to wrap the kind in a string' /
+    'sent the mate as a list instead of an object' bugs with a structured
+    ``bad_params`` instead of letting them surface as opaque KeyErrors.
+    """
+    raw = params.get("mate")
+    if raw is None:
+        raise _CadHandlerError(
+            "bad_params",
+            "missing required param 'mate' (object with kind / part1Id / "
+            "part2Id / feature fields)",
+        )
+    if not isinstance(raw, dict):
+        raise _CadHandlerError(
+            "bad_params",
+            f"mate must be an object, got {type(raw).__name__}",
+        )
+    return raw
+
+
+def add_assembly_mate(params: dict[str, Any]) -> dict[str, Any]:
+    """Attach a mate constraint to an existing assembly handle.
+
+    See module docstring for the wire contract. Deep validation of the
+    mate envelope (feature shapes, finite-number checks, child-name
+    resolution) happens inside the assembly core — this wrapper only
+    enforces the envelope-level checks (handle present, mate is an
+    object) so the renderer can surface structured failures fast.
+    """
+    handle = _require_str(params, "handle")
+    mate = _require_mate_payload(params)
+    return _add_mate_core(handle, mate)
+
+
+# ── BUILD 7 (Drawing dimensions / sections / title block — CAD V1.5) ─────
+#
+# Three thin wrappers exposing the ``cadquery_drawing`` extensions to the
+# sidecar wire so the renderer's V1.5 DrawingView can build a real
+# mechanical drawing on top of the bare projection. All three operate on
+# top of an existing body handle (from ``cad.execute_script`` or
+# ``cad.import_step``) — they do NOT introduce a new handle category.
+#
+#   cad.dimension_drawing  — overlay a dimension annotation layer.
+#   cad.section_drawing    — slice the body and project the cut.
+#   cad.attach_title_block — stamp a title-block ``<g>`` into an SVG.
+#
+# Wire results::
+#
+#   cad.dimension_drawing:
+#     {"svg": str, "view": str, "bytes": int, "dimensionCount": int}
+#
+#   cad.section_drawing:
+#     {"svg": str, "view": str, "bytes": int,
+#      "plane": {"axis": str, "offset": float, "keepSide": str}}
+#
+#   cad.attach_title_block:
+#     {"svg": str, "bytes": int,
+#      "metadata": {"name": str, "scale": str, "author": str,
+#                    "date": str, "sheet": str}}
+#
+# Error vocabulary mirrors the BUILD-3 drawing path with two additions:
+#   * 'section_error'    — CadQuery raised during the cut/half-space
+#                            operation (degenerate plane offset, etc.).
+#   * 'bad_params'       — malformed dimension spec, unknown dimension
+#                            kind, non-finite coordinate, bad section axis,
+#                            empty SVG, non-string title-block field.
+#
+# Safety Rule 1 reminder: these methods DO NOT touch G-code / STL. The
+# annotated SVG is renderer-only; no downstream CAM logic reads it.
+
+
+def _require_list_param(params: dict[str, Any], key: str) -> list[Any]:
+    """Validate a list-typed param. Returns the list or raises ``bad_params``."""
+    val = params.get(key)
+    if val is None:
+        raise _CadHandlerError(
+            "bad_params", f"missing required param {key!r} (must be an array)"
+        )
+    if not isinstance(val, list):
+        raise _CadHandlerError(
+            "bad_params", f"{key!r} must be an array, got {type(val).__name__}"
+        )
+    return val
+
+
+def _require_dict_param(params: dict[str, Any], key: str) -> dict[str, Any]:
+    """Validate an object-typed param. Returns the dict or raises ``bad_params``."""
+    val = params.get(key)
+    if val is None:
+        raise _CadHandlerError(
+            "bad_params", f"missing required param {key!r} (must be an object)"
+        )
+    if not isinstance(val, dict):
+        raise _CadHandlerError(
+            "bad_params", f"{key!r} must be an object, got {type(val).__name__}"
+        )
+    return val
+
+
+def _require_v15_view_param(params: dict[str, Any]) -> str:
+    """Validate the ``view`` param. Identical to the BUILD-3 version, kept
+    local to this section so the V1.5 surface stays diff-isolated.
+    """
+    view = _require_str(params, "view")
+    if view not in _ALLOWED_DRAWING_VIEWS:
+        raise _CadHandlerError(
+            "bad_params",
+            f"view must be one of {sorted(_ALLOWED_DRAWING_VIEWS)}, "
+            f"got {view!r}",
+        )
+    return view
+
+
+def dimension_drawing(params: dict[str, Any]) -> dict[str, Any]:
+    """Project a body handle and overlay a dimension annotation layer.
+
+    See module docstring for the wire contract. The renderer pushes a fresh
+    payload every time the operator adds / edits a dimension; the sidecar
+    re-runs the base projection and folds the dimensions in. An empty
+    dimension list round-trips back to the bare projection.
+    """
+    handle = _require_str(params, "handle")
+    view = _require_v15_view_param(params)
+    dimensions = _require_list_param(params, "dimensions")
+    return _v15_dimension_drawing_core(handle, view, dimensions)
+
+
+def section_drawing(params: dict[str, Any]) -> dict[str, Any]:
+    """Slice the body behind ``handle`` and project the section view.
+
+    The cut is performed on a CLONE of the body — the handle table is not
+    mutated, so toggling the section view on and off is non-destructive.
+    """
+    handle = _require_str(params, "handle")
+    view = _require_v15_view_param(params)
+    plane = _require_dict_param(params, "plane")
+    return _v15_section_drawing_core(handle, view, plane)
+
+
+def attach_title_block(params: dict[str, Any]) -> dict[str, Any]:
+    """Stamp a title-block ``<g>`` into the bottom-right of an SVG.
+
+    Idempotent against an already-stamped SVG: the wrapper passes the call
+    straight through to the core, which detects the ``class="title-block"``
+    marker and skips re-stamping.
+    """
+    svg_text = _require_str(params, "svg")
+    metadata = _require_dict_param(params, "metadata")
+    return _v15_attach_title_block_core(svg_text, metadata)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "import_step": import_step,
     "tessellate": tessellate,
@@ -662,4 +864,10 @@ HANDLERS: dict[str, HandlerFn] = {
     "export_assembly": export_assembly,
     # BUILD 5 — Sketcher constraint solve
     "solve_sketch": solve_sketch,
+    # BUILD 6 — Assembly mate constraints (CAD V1.5)
+    "add_assembly_mate": add_assembly_mate,
+    # BUILD 7 — Drawing dimensions / sections / title block (CAD V1.5)
+    "dimension_drawing": dimension_drawing,
+    "section_drawing": section_drawing,
+    "attach_title_block": attach_title_block,
 }

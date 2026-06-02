@@ -36,11 +36,17 @@ import type { Plate } from '../../shared/manufacture-schema'
  * Slice IPC routes through the optional `onSlicePlate` / `onSliceAllPlates`
  * callbacks passed by `ManufactureWorkspace`.
  *
- * V3 follow-up: move the `renderPlateThumbnail` offscreen Three.js render
- * (currently invoked synchronously on the main renderer thread by the
- * parent `ManufactureWorkspace`) into a Web Worker so plate-strip refreshes
- * never block paint. The data-URL prop wiring here is already worker-safe
- * (the parent owns whichever side computes the URL).
+ * V3 follow-up (LANDED — Wave-2 W3): the offscreen Three.js render moves
+ * into a Web Worker (`plate-thumbnail.ts` returns `Promise<string|null>`
+ * instead of a synchronous string). The data-URL prop wiring here was
+ * already worker-safe; the only new contract is an optional
+ * `plateThumbnailsLoading` prop the parent flips to `true` while the
+ * worker is computing and back to `false` (or removes the entry) once the
+ * promise resolves. The strip then overlays the existing
+ * `.plate-thumb__preview-loading` spinner (CSS shipped in Wave 1, see
+ * `manufacture.css`) on top of whatever preview is currently rendered
+ * (placeholder hue OR cached <img>) so the layout never reflows when the
+ * thumbnail swaps in.
  */
 
 /**
@@ -79,11 +85,31 @@ export type PlateTabsProps = {
    * where offscreen WebGL rendering is unavailable, and gives the
    * parent freedom to skip rendering for empty/loading plates.
    *
-   * V3 follow-up: the parent moves the offscreen render into a Web
-   * Worker so plate-strip refreshes never block paint. The prop
-   * contract here is unchanged.
+   * V3 follow-up (LANDED — Wave-2 W3): the parent moved the offscreen
+   * render into a Web Worker (`plate-thumbnail.ts` returns a
+   * Promise<string|null>). The prop contract here is unchanged for
+   * resolved values — the data-URL still arrives as a string, and the
+   * explicit-null sentinel still triggers the colored-rect placeholder.
+   * While the worker is computing, the parent leaves the entry undefined
+   * AND flips `plateThumbnailsLoading[plate.id]` to true (see below) so
+   * the strip overlays a spinner without reflowing the tile.
    */
   plateThumbnails?: Readonly<Record<string, string | null>>
+  /**
+   * Optional per-plate "worker is computing this thumbnail" flag. When
+   * true, the strip renders the `.plate-thumb__preview-loading` overlay
+   * on top of the existing preview (placeholder OR cached <img>) so the
+   * operator sees a spinner without the tile reflowing. Missing entries
+   * are treated as `false` (not loading). The CSS for the overlay was
+   * shipped in Wave 1 alongside the `.plate-thumb__preview` wrapper.
+   *
+   * V3 contract (with worker plate-thumbnail.ts):
+   *   - worker dispatched     -> loading[id] = true,  thumbnails[id] = undefined
+   *   - worker resolved (ok)  -> loading[id] = false, thumbnails[id] = '<url>'
+   *   - worker resolved (null)-> loading[id] = false, thumbnails[id] = null
+   *   - never dispatched      -> both absent (legacy placeholder path)
+   */
+  plateThumbnailsLoading?: Readonly<Record<string, boolean>>
   /** Called when the user selects a different plate. */
   onSelectPlate: (plateId: string) => void
   /** Called when the user clicks the "+" tile to add a new plate. */
@@ -130,6 +156,7 @@ export function PlateTabs({
   activePlateId,
   plateStatuses,
   plateThumbnails,
+  plateThumbnailsLoading,
   onSelectPlate,
   onAddPlate,
   onRemovePlate,
@@ -292,6 +319,11 @@ export function PlateTabs({
             const status: PlateStatus = plateStatuses?.[plate.id] ?? 'idle'
             const statusLabel = PLATE_STATUS_LABEL[status]
             const thumbnailDataUrl = plateThumbnails?.[plate.id] ?? null
+            // V3 worker contract: the parent flips this to true while the
+            // worker is computing. We overlay the loading spinner regardless
+            // of whether the underlying preview is a placeholder or a stale
+            // cached <img>, so the tile never reflows on swap-in.
+            const isThumbnailLoading = plateThumbnailsLoading?.[plate.id] === true
             const thumbClass = [
               'plate-thumb',
               isActive ? 'plate-thumb--active' : '',
@@ -321,6 +353,14 @@ export function PlateTabs({
                         aria-hidden="true"
                       />
                     )}
+                    {isThumbnailLoading ? (
+                      <div
+                        className="plate-thumb__preview-loading"
+                        role="status"
+                        aria-label={`Rendering preview for ${plate.label}`}
+                        data-testid={`plate-thumb-loading-${plate.id}`}
+                      />
+                    ) : null}
                     <input
                       ref={editInputRef}
                       type="text"
@@ -369,6 +409,14 @@ export function PlateTabs({
                         aria-hidden="true"
                       />
                     )}
+                    {isThumbnailLoading ? (
+                      <span
+                        className="plate-thumb__preview-loading"
+                        role="status"
+                        aria-label={`Rendering preview for ${plate.label}`}
+                        data-testid={`plate-thumb-loading-${plate.id}`}
+                      />
+                    ) : null}
                     <span className="plate-thumb__name">{plate.label}</span>
                     <span
                       className={`plate-thumb__status plate-thumb__status--${status}`}

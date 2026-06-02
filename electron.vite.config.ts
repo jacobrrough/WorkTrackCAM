@@ -45,6 +45,20 @@ export default defineConfig({
         '@renderer': resolve(__dirname, 'src/renderer/src')
       }
     },
+    // Vite bundles `new Worker(new URL('./*.ts', import.meta.url),
+    // { type: 'module' })` automatically; the explicit `worker` block
+    // below pins the output format so the plate-thumbnail worker (and
+    // any future renderer worker) ships as a true ES module rather
+    // than the legacy IIFE format. ESM workers let Three.js + project
+    // utilities resolve via the same import graph the main renderer
+    // uses, which keeps the bundle size honest (no second Three.js
+    // copy) and means the worker code is statically analyzable for
+    // tree-shaking. We do NOT register the React plugin in the worker
+    // pipeline -- workers never render JSX. Additive-only: the main
+    // `plugins` array (react, monaco) is unchanged.
+    worker: {
+      format: 'es'
+    },
     plugins: [
       react(),
       // Only the editor worker is wired — CadQuery scripts are Python,

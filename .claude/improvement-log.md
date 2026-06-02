@@ -17099,3 +17099,143 @@ When the user asked "set up new agent stacks to handle all deferred work" the re
 10. `1a14c1b` Wave 1 docs sync
 11. `96e6019` Wave 2 parallel S + A (sketcher + planegcs + assemblies + drawings)
 12. (about to land) Wave 2 docs sync + .gitignore for orchestration temp files
+
+
+---
+
+## FOLLOW-UP WAVE (3 PARALLEL STACKS) — 2026-06-02 — Security + CAD V1.5 + UX V1.5
+
+> User directive: "set up new stacks to handle all the follow ups".
+> Three parallel workflows tackling every documented follow-up from the
+> prior session. Combined: 13 build agents + 3 validators across orthogonal
+> file slices. All returned green; gates 14,327 / 0 / 2 + tsc clean +
+> pytest 88/0/34-skip. Net Δ +138 vitest + +8 pytest active cases from
+> baseline 14,189 + 80/26-skip.
+
+### Stack DEP — Security (task wwv019q89, 3 sequential agents, 20 min, 241K tokens)
+
+**Audit phase**: enumerated 17 distinct local advisories (npm dedupes by package; Dependabot dedupes by GHSA ID — explains the 21-vs-17 delta). Classified into 4 clusters:
+- **Cluster A** safe-fix (no --force, no breaking): 7 packages, 6 advisories — `@tootallnate/once`, `@xmldom/xmldom` (×4 HIGH), `brace-expansion`, `ip-address`, `nanoid`, `postcss`, `tmp` (HIGH path-traversal)
+- **Cluster B** dev-only major bump: 9 packages all rooted in `tar <= 7.5.10` path-traversal (6 HIGH GHSAs) cascading through node-gyp / cacache / make-fetch-happen / @electron/rebuild / app-builder-lib / dmg-builder / electron-builder / electron-builder-squirrel-windows. ALL `dev:true` in package-lock — never ship to end users
+- **Cluster C** runtime via Monaco/DOMPurify: 8 advisories on `dompurify <=3.3.3` pulled by monaco-editor. npm audit fix wanted to DOWNGRADE monaco; instead bypassed via npm overrides
+- **Cluster D** untouchable: zero — every advisory had a fix path
+
+**Fix phase**:
+1. `npm audit fix` (no --force) — closed 6 advisories via 7 transitive bumps
+2. Added `"overrides": { "dompurify": "^3.4.7" }` to package.json — closed 2 advisories (dompurify + monaco-editor heads) without downgrading monaco. Verified via `npm ls dompurify --all` → monaco-editor@0.55.1 → dompurify@3.4.7
+3. **Deferred** the electron-builder 25.1.8 → 26.8.1 major bump — too risky pre-launch (minimatch v10 glob semantic changes, ASAR integrity on Windows, app-builder-bin v5.0, @electron/universal v2). Needs NSIS-installer pipeline validation. The 9 remaining HIGH advisories are 100% dev-only.
+
+**Final state**: 17 → 9 advisories (-47%). Zero critical, zero high runtime, zero moderate, zero low. All remaining HIGH but dev-only.
+
+**Document phase**: NEW `docs/SECURITY.md` (249 lines) covering posture + gate cadence + closed advisories + deferred-with-rationale + verification commands + responsible disclosure. README.md gained a Security section. CLAUDE.md Architecture Quick Reference gained a SECURITY.md entry with the mandatory rule that every cycle touching package.json runs npm audit and either closes or documents new advisories.
+
+### Stack CAD V1.5 — Sketcher + Assembly mates + Drawing dimensions (task w561n3tv2, 5 agents, 19 min, 793K tokens)
+
+**Sketcher upgrades** (`src/renderer/design/Sketch2DCanvas.tsx`, `sketch-tools.ts`, `sketch-state.ts`)
+- MvpSketchCanvas.runSolve now prefers `window.fab.cad.solveSketch` IPC bridge (planegcs-backed) with local `solver2d.ts` as deterministic fallback for SSR/test/pre-boot contexts
+- New `solving` state shows "Solving…" + `aria-busy` + `data-solving="true"` during round-trip
+- 3 new sketch tools: **spline** (3-point quadratic Bézier with mint-green tint), **parallel** (4-pick endpoints emit parallel constraint), **perpendicular** (same 4-pick shape). Arc was already wired
+- Defensive bridge access via `(window as unknown as {fab?: {cad?: {solveSketch?: ...}}}).fab?.cad?.solveSketch`
+- +13 vitest cases
+
+**AssemblyView mate constraints** (`engines/cad/cadquery_assembly.py`, `cad_handlers.py`, `sidecar-protocol.ts`, `ipc-cad.ts`, `AssemblyView.tsx`)
+- `build_assembly_with_mates` + `add_mate_to_assembly` (point/axis/plane) + 7 Python helpers
+- `cad.add_assembly_mate` sidecar method registered
+- Discriminated `CadAssemblyMate` union (point/axis/plane variants) + `CadAddAssemblyMateParams/Result` wire types
+- `validateAddAssemblyMatePayload` + `coerceAddAssemblyMateResult` + ipc-cad handler
+- AssemblyView Mates panel under parts list + Define-mate modal with kind/part/feature selectors
+- Backward compat: callers that omit the new `mates/onAddMate/onRemoveMate/initialMateModalOpen` props see the legacy V1 surface unchanged
+- +8 pytest (3 Tier 1 + 5 Tier 2 cadquery-gated) + +10 vitest
+
+**DrawingView dimensions + sections + title block** (`engines/cad/cadquery_drawing.py`, `cad_handlers.py`, `sidecar-protocol.ts`, `ipc-cad.ts`, `DrawingView.tsx`)
+- `dimension_drawing` (pure SVG composition for dimension layer) + `section_drawing` (half-space cut for sections) + `attach_title_block` (idempotent bottom-right stamp)
+- 3 sidecar methods: `cad.dimension_drawing`, `cad.section_drawing`, `cad.attach_title_block`
+- Full discriminated union for dimension specs + section plane wire types
+- 3 ipc-cad handlers with validators + coercers
+- DrawingView Dimensions toolbar (4 buttons + count + Clear), Section toggle (axis dropdown + offset), Title block side panel
+- +pytest + +vitest tests
+
+**Preload bridges** — bridges for `addAssemblyMate`, `dimensionDrawing`, `sectionDrawing`, `attachTitleBlock` added to `src/preload/index.ts` + `src/renderer/src/shop-types.ts`
+
+### Stack UX V1.5 — Stage content + Worker thumbnails (task weh3sldiu, 4 agents, 16 min, 507K tokens)
+
+**Stage content** — Workflow-stage panel bodies (`ManufactureWorkspace.tsx` + NEW `gcode-layer-parser.ts` + NEW `gcode-toolpath-stats.ts`)
+- LayerPreviewBody (FDM Preview stage): parses OrcaSlicer `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` / `;LAYER_CHANGE` + PrusaSlicer + Cura + Slic3r dialects into sorted `LayerInfo[]`; renders a vertical layer scrubber (range input bound to `.layer-slider` BEM classes) with per-layer Z + estimated time + estimated filament readouts; EmptyState fallback
+- ToolpathSimulationBody (CNC Simulate stage): parses G0/G1/G2/G3 motion + modal continuation; accumulates rapid + cut distance; counts M6 tool changes + M3/M4 spindle starts; renders 9-row `.toolpath-stats` grid (Total / Motion / Rapid / Cut / Arc / Rapid-dist / Cut-dist / Tool-changes / Spindle-starts); EmptyState fallback
+- Both helpers are pure / side-effect-free
+- Layer numbers derived from sort-by-Z order (slicer `;LAYER:N` varies 0- vs 1-indexed across versions)
+- Per-layer estimates uniformly distribute the slicer's total-time / total-filament header across the layer count (OrcaSlicer doesn't emit true per-layer breakdowns)
+- Arc distance (G2/G3) uses chord length — exact for short arcs, conservative for long
+- +72 tests (30 layer-parser + 27 toolpath-stats + 15 stage-content render-pins)
+
+**Worker thumbnails** — NEW `plate-thumbnail-worker.ts` (Web Worker entry) + modified `plate-thumbnail.ts` + `electron.vite.config.ts`
+- Worker receives Float32Array positions + optional Uint32Array indices via postMessage (transferable buffers); reassembles BufferGeometry; runs OffscreenCanvas + WebGLRenderer + OrthographicCamera + fit-bounds; posts back `{dataUrl, reason?}`
+- Worker NEVER throws across wire — every failure mode is a structured `reason`
+- `plate-thumbnail.ts` preserves the existing synchronous `renderPlateThumbnail` (existing contract) + adds NEW async `requestPlateThumbnail(src, opts): Promise<{dataUrl, reason?, servedByWorker}>`
+- FNV-1a-keyed `thumbnailCache` lives on main thread; shared between sync + async paths
+- Lazy worker singleton via `new Worker(new URL('./plate-thumbnail-worker.ts', import.meta.url), { type: 'module' })`
+- Transfer list includes positions.buffer (and indices.buffer when present) so 100s of KB vertex data is moved, not cloned
+- 5s timeout default (overridable) so a stuck worker resolves with `reason:'worker-timeout'` instead of hanging
+- Fallback to synchronous main-thread render when Worker unavailable (node/vitest env)
+- Test hooks: `_setPlateThumbnailWorkerFactoryForTests` + `_terminatePlateThumbnailWorkerForTests` + `_setPlateThumbnailCacheForTests`
+- `electron.vite.config.ts` gained `worker: { format: 'es' }` (additive)
+- +24 worker dispatch tests + 52 existing PlateTabs tests still pass
+
+**PlateTabs consumer integration** (`PlateTabs.tsx`, `manufacture.css`)
+- PlateTabs handles async thumbnail-generation flow; renders `.plate-thumb__preview-loading` state while worker is computing
+- manufacture.css gained `.layer-slider*` + `.toolpath-stats*` BEM rules (all token-driven)
+- +11 render-pin tests
+
+### Cross-workflow composition
+Three workflows ran in parallel for ~20 minutes wall-clock. Shared files received additive-only edits:
+- `engines/sidecar/cad_handlers.py` — CAD V1.5's 3 agents (Sketcher / Assembly / Drawing) all added new dispatch entries in separate sections with header comments
+- `src/shared/sidecar-protocol.ts` — same additive pattern
+- `src/main/ipc-cad.ts` — same
+- `src/preload/index.ts` + `src/renderer/src/shop-types.ts` — Agent 4 (preload bridges) consolidated all new fields additively
+- `README.md` + `CLAUDE.md` — DEP's doc agent owned these for security entries
+
+The README.md was concurrently edited by the user/linter mid-flight (between the DEP doc agent and the final commit) — that edit is preserved. CLAUDE.md was similarly edited (the linter trimmed some prior-session bloat back to canonical form).
+
+Mid-flight cross-workflow flakes (CAD V1.5 saw 2 transient ipc-contract + manufacture stage-content failures, UX V1.5 saw similar) all resolved on the converged state. Final vitest read 14,327 pass / 0 fail / 2 skipped.
+
+### Test deltas (+138 vitest, +8 active pytest, +8 cadquery-gated skips)
+| Stack | Surface | Tests added |
+| --- | --- | --- |
+| DEP | (none — docs + deps only) | 0 |
+| CAD V1.5 | Sketcher tools | +13 |
+| CAD V1.5 | AssemblyView mates (Python + TSX) | +18 |
+| CAD V1.5 | DrawingView dimensions (Python + TSX) | ~+20 |
+| UX V1.5 | Stage content (parsers + render-pins) | +72 |
+| UX V1.5 | Worker thumbnails | +24 |
+| UX V1.5 | PlateTabs consumer | +11 |
+| | **Total** | **+158** (actual converged +138 reflects accounting drifts in shared-file additive merges) |
+
+### Quality gates
+| Checkpoint | npm test | tsc | test:python | npm audit (advisories) |
+| --- | --- | --- | --- | --- |
+| Pre-flight (HEAD 793902f) | 14,189 / 0 / 2 | clean | 80 / 0 / 26-skip | 17 (10H + 5M + 1L + monaco chain) |
+| Post (this commit) | 14,327 / 0 / 2 | clean | 88 / 0 / 34-skip | **9** (all HIGH but dev-only) |
+
+### G-code safety status
+**N/A this wave** — none of CAD V1.5, UX V1.5, or DEP touch `engines/cam/`, `src/main/cam-*`, `resources/posts/`, `resources/machines/`, or the post-process pipeline. The new gcode-layer-parser + gcode-toolpath-stats READ generated G-code for display only; they never mutate or emit. Safety Rule 1 preserved by construction.
+
+### Docs synced this wave
+- `README.md` — CAD Design workspace features updated with sketcher's new tools (parallel/perpendicular/spline) + AssemblyView Mates panel + DrawingView Dimensions/Sections/TitleBlock; new Security section linking docs/SECURITY.md
+- `CLAUDE.md` — Architecture Quick Reference gained docs/SECURITY.md entry with the mandatory npm-audit-per-cycle rule (also: linter normalized some prior bloat)
+- `docs/SECURITY.md` — NEW 249-line doc covering current posture, closed advisories, deferred-with-rationale, gate cadence table, verification commands, responsible disclosure
+- `docs/PRE-LAUNCH-READINESS.md` — (already up to date from prior wave; sketcher swap to IPC + assembly mates + drawing dimensions are V1.5 enhancements, not blocking real-world testing)
+- `.claude/improvement-log.md` — this entry
+
+### Remaining deferred (next sessions)
+1. **electron-builder 25 → 26 major bump** — 9 HIGH dev-only advisories. Bounded scope, needs NSIS-installer pipeline validation. Schedule for a dedicated build-tooling cycle.
+2. **CAD V1.5 polish**: per-layer slicer breakdowns (need true per-layer parsing, not uniform distribution); section drawings full hidden-line-removal at the cut plane (currently half-space).
+3. **CarveraCLI abort verb** — still waiting on upstream (was deferred from Wave 1).
+4. **V2-era**: real toolpath simulation (3D playback in viewport), full assembly mate solver convergence iterations, drawing-view dimension snap-to-vertex.
+
+### Session pace (cumulative across both days)
+- **9 workflow waves total**: CAD MVP + UI deep-dive + big UX + parallel A+B + Wave 1 parallel C+F+H + Wave 2 parallel S+A + Follow-up wave (DEP + CAD V1.5 + UX V1.5)
+- **~68 agents total**, **~9.8M tokens**, **~3.1h workflow wall-clock**
+- **vitest 13,611 (session start) → 14,327 (now)**, Δ **+716** tests, zero net regressions
+- **pytest 30 → 88 active** (+58 cases), 26 → 34 skipped (all cadquery/planegcs-gated)
+- **npm audit 17 → 9** advisories, all remaining HIGH but dev-only
+- **14 commits** on origin/main this session
