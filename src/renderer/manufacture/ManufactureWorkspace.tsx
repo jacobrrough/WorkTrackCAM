@@ -1825,9 +1825,31 @@ export function ManufactureWorkspace({
     </div>
   )
 
-  // CNC 'simulate' stage body — focused toolpath summary.
+  // CNC 'simulate' stage body — stats summary + full 3D simulation panel.
+  // Both `ToolpathSimulationBody` (text stats / empty-state) and
+  // `ManufactureCamSimulationPanel` (R3F 3D canvas) render together.
+  // The panel is guarded by `projectDir` since it needs a file-system path.
   const simulateStageBody: ReactNode = (
-    <ToolpathSimulationBody camOut={camOut} />
+    <div
+      className="workspace-stage-body workspace-stage-body--simulate-stage"
+      data-testid="workflow-stage-body-simulate-stage"
+    >
+      <ToolpathSimulationBody camOut={camOut} />
+      {projectDir ? (
+        <ManufactureCamSimulationPanel
+          projectDir={projectDir}
+          mfg={effectiveMfg}
+          tools={tools ?? null}
+          machine={camSimMachine}
+          layout="workspace"
+          stockSetupIndex={camResolvedSetupIdx}
+          previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
+          previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
+          camOut={camOut}
+          camStaleMeshRelativePaths={camStaleMeshRelativePaths}
+        />
+      ) : null}
+    </div>
   )
 
   // CNC 'send' stage body — Carvera upload + Laguna setup sheet + ProfileStack.

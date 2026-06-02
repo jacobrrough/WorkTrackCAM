@@ -1,5 +1,7 @@
 import type { AssemblyComponent } from './assembly-schema'
+import type { AssemblyMateConstraint } from './assembly-mate-schema'
 import { computeAssemblyKinematicPreviewTransforms, type AssemblyTransform6 } from './assembly-viewport-math'
+import { solveMateConstraints, type SolverConfig, type SolverConvergenceReport } from './assembly-solver-core'
 
 export type AssemblyJointViolation = {
   componentId: string
@@ -15,6 +17,12 @@ export type AssemblyKinematicsDiagnostics = {
   violations: AssemblyJointViolation[]
   clampedDofs: string[]
   residuals: number[]
+  /**
+   * Mate-solver convergence report. Present only when `solveAssemblyKinematics` was given a
+   * non-empty `mateConstraints` set (otherwise the legacy single-pass FK path runs and this is
+   * omitted). When present, `residuals` is filled from `convergenceReport.perConstraintResiduals`.
+   */
+  convergenceReport?: SolverConvergenceReport
 }
 
 export type AssemblyKinematicsSolveResult = {
@@ -34,8 +42,26 @@ function readState(c: AssemblyComponent, key: keyof NonNullable<AssemblyComponen
   return Number.isFinite(fromState) ? fromState : fallback
 }
 
-export function solveAssemblyKinematics(active: AssemblyComponent[]): AssemblyKinematicsSolveResult {
-  const transforms = computeAssemblyKinematicPreviewTransforms(active)
+/**
+ * Solve assembly kinematics for the active components.
+ *
+ * - When `mateConstraints` is **absent or empty**, runs the EXISTING single-pass forward-kinematics
+ *   preview + joint-limit clamp path unchanged (zero regression), and `diagnostics.convergenceReport`
+ *   is omitted with `residuals: []`.
+ * - When `mateConstraints` is **non-empty**, runs the iterative {@link solveMateConstraints} solver,
+ *   uses its solved transforms, attaches the `convergenceReport`, and fills `residuals` from the
+ *   report's per-constraint residual magnitudes. Joint-limit clamp diagnostics still run on top.
+ */
+export function solveAssemblyKinematics(
+  active: AssemblyComponent[],
+  mateConstraints?: AssemblyMateConstraint[],
+  solverConfig?: Partial<SolverConfig>
+): AssemblyKinematicsSolveResult {
+  const hasMates = mateConstraints != null && mateConstraints.length > 0
+  const mateResult = hasMates ? solveMateConstraints(active, mateConstraints!, solverConfig) : null
+  const transforms = mateResult
+    ? mateResult.transforms
+    : computeAssemblyKinematicPreviewTransforms(active)
   const violations: AssemblyJointViolation[] = []
   const clampedDofs: string[] = []
 
@@ -83,7 +109,8 @@ export function solveAssemblyKinematics(active: AssemblyComponent[]): AssemblyKi
     diagnostics: {
       violations,
       clampedDofs,
-      residuals: []
+      residuals: mateResult ? mateResult.report.perConstraintResiduals.map((r) => r.residual) : [],
+      ...(mateResult ? { convergenceReport: mateResult.report } : {})
     }
   }
 }

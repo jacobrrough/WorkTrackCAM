@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+import { assemblyMateConstraintsSchema } from './assembly-mate-schema'
+
+export { assemblyMateConstraintsSchema, assemblyMateConstraintSchema } from './assembly-mate-schema'
+export type {
+  AssemblyMateConstraint,
+  AssemblyMateConstraints,
+  AssemblyMateKind,
+  AssemblyMateFeature,
+  AssemblyMateAxis
+} from './assembly-mate-schema'
+
 /** Root assembly display name: trim; blank or whitespace-only becomes default. */
 const assemblyRootNameSchema = z.preprocess(
   (val) => (typeof val === 'string' ? val.trim() || undefined : val),
@@ -248,7 +259,9 @@ const assemblyIncomingSchema = z.object({
   name: assemblyRootNameSchema,
   components: z.array(assemblyComponentSchema).default([]),
   explodeView: assemblyExplodeViewMetadataSchema.optional(),
-  motionStudy: assemblyMotionStudyStubSchema.optional()
+  motionStudy: assemblyMotionStudyStubSchema.optional(),
+  /** Persisted mate constraints for the convergence solver. `.default([])` keeps legacy files parsing. */
+  mateConstraints: assemblyMateConstraintsSchema
 })
 
 /** Canonical on-disk / in-memory shape after load (v1 files migrate here). */
@@ -257,7 +270,9 @@ export const assemblyFileSchema = z.object({
   name: assemblyRootNameSchema,
   components: z.array(assemblyComponentSchema),
   explodeView: assemblyExplodeViewMetadataSchema.optional(),
-  motionStudy: assemblyMotionStudyStubSchema.optional()
+  motionStudy: assemblyMotionStudyStubSchema.optional(),
+  /** Persisted mate constraints (additive; `.default([])` keeps old assembly.json / .wtcam parsing). */
+  mateConstraints: assemblyMateConstraintsSchema
 })
 
 export type AssemblyFile = z.infer<typeof assemblyFileSchema>
@@ -802,7 +817,8 @@ export function parseAssemblyFile(input: unknown): AssemblyFile {
     name: p.name,
     components: migratedComponents,
     explodeView: p.explodeView,
-    motionStudy: p.motionStudy
+    motionStudy: p.motionStudy,
+    mateConstraints: p.mateConstraints
   }
 }
 
@@ -972,5 +988,5 @@ export function buildHierarchicalBomText(asm: AssemblyFile): string {
 }
 
 export function emptyAssembly(name = 'Assembly'): AssemblyFile {
-  return { version: 2, name, components: [] }
+  return { version: 2, name, components: [], mateConstraints: [] }
 }
