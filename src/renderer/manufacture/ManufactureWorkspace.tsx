@@ -10,10 +10,12 @@ import {
 import { EmptyState } from '../src/EmptyState'
 import {
   formatDurationShort,
-  formatFilamentMm,
-  parseLayers,
-  type LayerInfo
+  formatFilamentMm
 } from './gcode-layer-parser'
+import type {
+  FdmLayerBreakdown,
+  FdmLayerBreakdownResult
+} from '../../shared/fdm-gcode-layer-breakdown'
 import { formatDistanceMm, parseToolpathStats } from './gcode-toolpath-stats'
 import { resolveManufactureSetupForCam } from '../../shared/cam-cut-params'
 import { MESH_IMPORT_FILE_EXTENSIONS } from '../../shared/mesh-import-formats'
@@ -182,28 +184,38 @@ export function WorkflowStageTabs({ env, stage, onChange }: WorkflowStageTabsPro
 }
 
 /**
- * UX MOVE 5 — Layer preview body for the FDM `preview` workflow stage.
+ * CAD V1.5 — Layer preview body for the FDM `preview` workflow stage.
  *
  * When the operator switches the workflow stage to "Preview" the right-panel
- * content swaps to this focused view. The body parses OrcaSlicer K2 Plus
- * G-code (via `gcode-layer-parser.ts`) for `;BEFORE_LAYER_CHANGE` /
- * `;AFTER_LAYER_CHANGE` markers and renders a vertical layer scrubber on
- * the right side. Selecting a layer surfaces a metadata readout (layer
- * index, Z height, estimated per-layer time, estimated per-layer
- * filament). MVP: metadata only — no 3D layer rendering.
+ * content swaps to this focused view. The per-layer breakdown is produced by
+ * the streaming main-process parser (`slice:layerBreakdown` ->
+ * `src/main/slicer/fdm-gcode-stream-parser.ts`) so the renderer never loads
+ * multi-MB G-code text — it receives a compact `FdmLayerBreakdownResult`.
+ * The body renders a single-layer readout + a horizontal scrubber, plus a
+ * full per-layer table (index, Z, time, filament) and — when the slice
+ * carried `;TYPE:` annotations — a line-type breakdown row for the active
+ * layer.
+ *
+ * The breakdown reports REAL per-layer values when the slice carried
+ * per-layer comments and degrades gracefully to a uniform distribution from
+ * the header totals otherwise (see the parser docstring) — never worse than
+ * the legacy renderer-side coarse estimate.
  *
  * Pure presentation; no IPC or G-code mutation. Exported so the
  * `ManufactureWorkspace.stage-content.test.tsx` render-pin tests can mount
  * it directly via `renderToStaticMarkup` without dragging in Three.js or
  * the plate-state stack.
  *
- * Fallback path: when no G-code text is available (operator hasn't sliced
- * yet, or the file failed to read) the body renders the shared
- * `EmptyState` per CLAUDE.md convention.
+ * Fallback path: when no breakdown is available (operator hasn't sliced yet,
+ * the breakdown is still loading, or the file had no layer markers) the body
+ * renders the shared `EmptyState` per CLAUDE.md convention.
  */
 export interface LayerPreviewBodyProps {
-  /** G-code text of the most recent successful slice (empty when no slice yet). */
-  readonly gcodeText: string
+  /**
+   * Per-layer breakdown of the most recent successful slice, or null while
+   * loading / when no slice has run / when the breakdown IPC call failed.
+   */
+  readonly layerBreakdown: FdmLayerBreakdownResult | null
   /** Absolute path to the most recent successfully-sliced G-code (null if none). */
   readonly lastSliceGcodePath: string | null
   /**
@@ -218,14 +230,14 @@ export interface LayerPreviewBodyProps {
 }
 
 /**
- * Pick the visible layer from the parsed array given the (optional)
+ * Pick the visible layer from the breakdown array given the (optional)
  * selected index. Clamps to the first/last layer bounds and falls back
  * to the top layer when nothing is selected.
  */
 function pickActiveLayer(
-  layers: readonly LayerInfo[],
+  layers: readonly FdmLayerBreakdown[],
   selectedIndex: number | undefined
-): LayerInfo | null {
+): FdmLayerBreakdown | null {
   if (layers.length === 0) return null
   if (selectedIndex == null || !Number.isFinite(selectedIndex)) {
     return layers[layers.length - 1] ?? null
@@ -234,16 +246,31 @@ function pickActiveLayer(
   return layers[clamped - 1] ?? layers[layers.length - 1] ?? null
 }
 
+/**
+ * Render the active layer's line-type breakdown as a compact comma-joined
+ * summary (e.g. "Outer wall 12, Inner wall 24, Sparse infill 60"). Returns
+ * null when the layer carried no `;TYPE:` annotations so the caller can omit
+ * the row entirely.
+ */
+function formatLineTypeCounts(layer: FdmLayerBreakdown): string | null {
+  const counts = layer.lineTypeCounts
+  if (!counts) return null
+  const entries = Object.entries(counts).filter(([, n]) => typeof n === 'number' && n > 0)
+  if (entries.length === 0) return null
+  return entries.map(([type, n]) => `${type} ${n}`).join(', ')
+}
+
 export function LayerPreviewBody({
-  gcodeText,
+  layerBreakdown,
   lastSliceGcodePath,
   selectedLayerIndex,
   onSelectLayerIndex
 }: LayerPreviewBodyProps): ReactNode {
   const hasPath = (lastSliceGcodePath?.trim() ?? '').length > 0
-  const layers = parseLayers(gcodeText)
-  // Empty-state when either no slice file has been produced OR the
-  // produced file contained no recognisable OrcaSlicer layer markers.
+  const layers = layerBreakdown?.layers ?? []
+  // Empty-state when no slice file has been produced, the breakdown is still
+  // loading / failed (null), OR the produced file contained no recognisable
+  // OrcaSlicer layer markers.
   if (!hasPath || layers.length === 0) {
     return (
       <section
@@ -264,9 +291,10 @@ export function LayerPreviewBody({
   const active = pickActiveLayer(layers, selectedLayerIndex)
   // `active` is non-null because `layers.length > 0` is guarded above —
   // assert via a fallback so the JSX below can be unconditional.
-  const layer: LayerInfo = active ?? layers[layers.length - 1]!
+  const layer: FdmLayerBreakdown = active ?? layers[layers.length - 1]!
   const maxLayer = layers.length
   const minLayer = 1
+  const lineTypeSummary = formatLineTypeCounts(layer)
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>): void => {
     if (!onSelectLayerIndex) return
@@ -325,6 +353,17 @@ export function LayerPreviewBody({
               {formatFilamentMm(layer.estFilamentMm)}
             </dd>
           </div>
+          {lineTypeSummary != null && (
+            <div className="toolpath-stats__row">
+              <dt className="toolpath-stats__key">Line types</dt>
+              <dd
+                className="toolpath-stats__value"
+                data-testid="workflow-stage-preview-layer-linetypes"
+              >
+                {lineTypeSummary}
+              </dd>
+            </div>
+          )}
         </div>
       </dl>
       <div
@@ -360,6 +399,38 @@ export function LayerPreviewBody({
           Layer {layer.index} of {maxLayer}
         </span>
       </div>
+      <table
+        className="layer-breakdown-table"
+        data-testid="workflow-stage-preview-table"
+      >
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Z (mm)</th>
+            <th scope="col">Time</th>
+            <th scope="col">Filament</th>
+          </tr>
+        </thead>
+        <tbody>
+          {layers.map((row) => (
+            <tr
+              key={row.index}
+              data-testid={`workflow-stage-preview-table-row-${row.index}`}
+              className={
+                row.index === layer.index
+                  ? 'layer-breakdown-table__row layer-breakdown-table__row--active'
+                  : 'layer-breakdown-table__row'
+              }
+              aria-current={row.index === layer.index ? 'true' : undefined}
+            >
+              <td>{row.index}</td>
+              <td>{row.zMm.toFixed(2)}</td>
+              <td>{formatDurationShort(row.estTimeSec)}</td>
+              <td>{formatFilamentMm(row.estFilamentMm)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   )
 }
@@ -605,12 +676,14 @@ export function ManufactureWorkspace({
   // to Moonraker. `null` means no slice has succeeded this session.
   const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
 
-  // UX Wave 2 — actual G-code text loaded from `lastSliceGcodePath` so
-  // the LayerPreviewBody can parse layer markers. `null` while loading
-  // / when no slice has run. The loader effect is owned by the workspace
-  // (not the body) because the body is exported as a pure component for
-  // render-pin tests.
-  const [sliceGcodeText, setSliceGcodeText] = useState<string>('')
+  // CAD V1.5 — TRUE per-layer breakdown of the most recent slice, fetched
+  // from the streaming main-process parser via `fab.sliceLayerBreakdown`.
+  // `null` while loading / when no slice has run / when the IPC call fails.
+  // The fetch effect is owned by the workspace (not the body) because the
+  // body is exported as a pure component for render-pin tests. Session-only
+  // — never persisted.
+  const [sliceLayerBreakdown, setSliceLayerBreakdown] =
+    useState<FdmLayerBreakdownResult | null>(null)
 
   // Selected layer index for the Preview stage scrubber (1-based). When
   // null, the body falls back to the top layer (highest Z).
@@ -718,30 +791,32 @@ export function ManufactureWorkspace({
     writePersistedManufactureActionableOnly(actionableOnly)
   }, [actionableOnly])
 
-  // UX Wave 2 — load sliced G-code text from disk for the Layer
-  // preview scrubber. Runs whenever the slice path changes. The body
-  // is purely presentational; loading happens here and the parsed
-  // result flows through props (CLAUDE.md: read before write; existing
-  // `fab.readTextFile` already used by the Setup Sheet generator).
+  // CAD V1.5 — fetch the TRUE per-layer breakdown for the Layer preview
+  // stage. Runs whenever the slice path changes. The main-process parser
+  // streams the file line-by-line (constant memory — a tall K2 print is
+  // 1,500+ layers / 5–30 MB), so the renderer never loads the raw G-code
+  // text. The body is purely presentational; the breakdown flows through
+  // props. Degrades gracefully: on IPC failure or a no-op result the body
+  // falls back to its EmptyState.
   useEffect(() => {
     if (!lastSliceGcodePath?.trim()) {
-      setSliceGcodeText('')
+      setSliceLayerBreakdown(null)
       setSelectedPreviewLayer(null)
       return
     }
     let cancelled = false
     void fab
-      .readTextFile(lastSliceGcodePath)
-      .then((text) => {
+      .sliceLayerBreakdown({ gcodePath: lastSliceGcodePath })
+      .then((r) => {
         if (cancelled) return
-        setSliceGcodeText(text)
+        setSliceLayerBreakdown(r.ok ? r.result : null)
         setSelectedPreviewLayer(null)
       })
       .catch(() => {
         if (cancelled) return
-        // Silently drop — body falls back to EmptyState when no
-        // recognisable layer markers are present.
-        setSliceGcodeText('')
+        // Silently drop — body falls back to EmptyState when no breakdown
+        // is available.
+        setSliceLayerBreakdown(null)
         setSelectedPreviewLayer(null)
       })
     return () => {
@@ -1798,7 +1873,7 @@ export function ManufactureWorkspace({
   // pure presentation component so render-pin tests don't need IPC.
   const previewStageBody: ReactNode = (
     <LayerPreviewBody
-      gcodeText={sliceGcodeText}
+      layerBreakdown={sliceLayerBreakdown}
       lastSliceGcodePath={lastSliceGcodePath}
       selectedLayerIndex={selectedPreviewLayer ?? undefined}
       onSelectLayerIndex={setSelectedPreviewLayer}

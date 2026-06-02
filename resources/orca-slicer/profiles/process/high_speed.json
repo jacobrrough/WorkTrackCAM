@@ -108,5 +108,6 @@
     "ironing_speed": "30",
     "interface_shells": "0",
     "standby_temperature_delta": "-5",
-    "gcode_label_objects": "0"
+    "gcode_label_objects": "0",
+    "gcode_comments": "1"
 }

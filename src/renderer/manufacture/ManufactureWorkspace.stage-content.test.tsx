@@ -7,13 +7,20 @@
  *
  *   FDM (K2 Plus):
  *     - 'preview' → `LayerPreviewBody` (EmptyState when no slice /
- *                   layer scrubber + metadata readout when G-code text
- *                   has been parsed for OrcaSlicer layer markers).
+ *                   layer scrubber + metadata readout + per-layer table
+ *                   when a `FdmLayerBreakdownResult` is present).
  *
  *   CNC (Laguna / Carvera):
  *     - 'simulate' → `ToolpathSimulationBody` (EmptyState when no
  *                    G-code / statistics readout when G-code parses
  *                    cleanly).
+ *
+ * CAD V1.5 update: `LayerPreviewBody` no longer takes raw `gcodeText`. The
+ * coarse renderer-side `parseLayers` flow was replaced by the streaming
+ * main-process parser (`slice:layerBreakdown` ->
+ * `src/main/slicer/fdm-gcode-stream-parser.ts`); the body now takes a
+ * `layerBreakdown: FdmLayerBreakdownResult | null` prop. These fixtures
+ * build that result shape directly.
  *
  * Uses `react-dom/server.renderToStaticMarkup` (matches the Wave 1
  * setup + `WorkflowStageTabs.test.tsx`) so the test runs in the
@@ -31,6 +38,11 @@ import {
   type LayerPreviewBodyProps,
   type ToolpathSimulationBodyProps
 } from './ManufactureWorkspace'
+import type {
+  FdmLayerBreakdown,
+  FdmLayerBreakdownResult,
+  FdmLineTypeCounts
+} from '../../shared/fdm-gcode-layer-breakdown'
 
 // ─── window.fab shim ─────────────────────────────────────────────────────────
 // ManufactureWorkspace.tsx imports several modules that touch `window.fab`
@@ -41,7 +53,11 @@ const gAsRecord = globalThis as unknown as Record<string, unknown>
 gAsRecord['fab'] = {
   filamentsList: vi.fn().mockResolvedValue([]),
   moonrakerPush: vi.fn().mockResolvedValue({ ok: true, filename: 'noop.gcode' }),
-  readTextFile: vi.fn().mockResolvedValue('')
+  readTextFile: vi.fn().mockResolvedValue(''),
+  sliceLayerBreakdown: vi.fn().mockResolvedValue({
+    ok: true,
+    result: { layers: [], totalTimeSec: null, totalFilamentMm: null, layerCount: 0 }
+  })
 }
 gAsRecord['window'] = globalThis
 
@@ -53,20 +69,49 @@ function renderSimulate(props: ToolpathSimulationBodyProps): string {
   return renderToStaticMarkup(createElement(ToolpathSimulationBody, props))
 }
 
-// OrcaSlicer K2 Plus sample: 3 layers + total estimates header.
-const ORCA_K2_GCODE = [
-  '; estimated printing time (normal mode) = 30m',
-  '; total filament used [mm] = 3000',
-  ';BEFORE_LAYER_CHANGE',
-  ';0.20',
-  'G1 X0 Y0 E5',
-  ';BEFORE_LAYER_CHANGE',
-  ';0.40',
-  'G1 X10 Y10 E10',
-  ';BEFORE_LAYER_CHANGE',
-  ';0.60',
-  'G1 X20 Y20 E15'
-].join('\n')
+/** Build a single layer with optional overrides. */
+function makeLayer(over: Partial<FdmLayerBreakdown> & { index: number; zMm: number }): FdmLayerBreakdown {
+  return {
+    estTimeSec: null,
+    estFilamentMm: null,
+    lineTypeCounts: null,
+    maxSpeedMmMin: null,
+    ...over
+  }
+}
+
+/** Build a result from a list of layers + optional header totals. */
+function makeResult(
+  layers: FdmLayerBreakdown[],
+  totals?: { totalTimeSec?: number | null; totalFilamentMm?: number | null }
+): FdmLayerBreakdownResult {
+  return {
+    layers,
+    totalTimeSec: totals?.totalTimeSec ?? null,
+    totalFilamentMm: totals?.totalFilamentMm ?? null,
+    layerCount: layers.length
+  }
+}
+
+// OrcaSlicer K2 Plus sample equivalent: 3 layers (Z 0.20 / 0.40 / 0.60) with
+// the slicer header reporting 30m total time + 3000mm filament. The legacy
+// uniform distribution => 600s / 1000mm per layer, exactly what the streaming
+// parser produces as its fallback. (Matches the old ORCA_K2_GCODE fixture's
+// observable output.)
+const ORCA_K2_RESULT: FdmLayerBreakdownResult = makeResult(
+  [
+    makeLayer({ index: 1, zMm: 0.2, estTimeSec: 600, estFilamentMm: 1000 }),
+    makeLayer({ index: 2, zMm: 0.4, estTimeSec: 600, estFilamentMm: 1000 }),
+    makeLayer({ index: 3, zMm: 0.6, estTimeSec: 600, estFilamentMm: 1000 })
+  ],
+  { totalTimeSec: 1800, totalFilamentMm: 3000 }
+)
+
+// No-header equivalent: 2 layers, no per-layer time/filament.
+const NO_HEADER_RESULT: FdmLayerBreakdownResult = makeResult([
+  makeLayer({ index: 1, zMm: 0.2 }),
+  makeLayer({ index: 2, zMm: 0.4 })
+])
 
 // Carvera 3-axis CNC sample with M3 + M6 + arc + cut moves.
 const CARVERA_GCODE = [
@@ -84,31 +129,31 @@ const CARVERA_GCODE = [
 ].join('\n')
 
 describe('LayerPreviewBody — FDM "preview" stage body', () => {
-  it('renders the EmptyState "Layer preview — slice first" when no slice has run', () => {
-    const html = renderPreview({ gcodeText: '', lastSliceGcodePath: null })
+  it('renders the EmptyState "Layer preview — slice first" when no breakdown', () => {
+    const html = renderPreview({ layerBreakdown: null, lastSliceGcodePath: null })
     expect(html).toContain('data-testid="workflow-stage-body-preview"')
     expect(html).toContain('data-testid="workflow-stage-preview-empty"')
     expect(html).toContain('Layer preview — slice first')
   })
 
   it('treats whitespace-only lastSliceGcodePath as "no slice yet"', () => {
-    const html = renderPreview({ gcodeText: ORCA_K2_GCODE, lastSliceGcodePath: '   ' })
+    const html = renderPreview({ layerBreakdown: ORCA_K2_RESULT, lastSliceGcodePath: '   ' })
     expect(html).toContain('data-testid="workflow-stage-preview-empty"')
     expect(html).not.toContain('data-testid="workflow-stage-preview-stats"')
   })
 
-  it('renders the EmptyState when the path is set but G-code has no layer markers', () => {
+  it('renders the EmptyState when the path is set but the breakdown has no layers', () => {
     const html = renderPreview({
-      gcodeText: 'G1 X0\nG1 X10\nG1 X20',
+      layerBreakdown: makeResult([]),
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
     })
-    // Path is set but no layer markers — still empty-state.
+    // Path is set but zero layers — still empty-state.
     expect(html).toContain('data-testid="workflow-stage-preview-empty"')
   })
 
-  it('renders the layer-scrubber + metadata readout when G-code parses', () => {
+  it('renders the layer-scrubber + metadata readout when a breakdown is present', () => {
     const html = renderPreview({
-      gcodeText: ORCA_K2_GCODE,
+      layerBreakdown: ORCA_K2_RESULT,
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
     })
     // EmptyState is gone once we have parsed layers.
@@ -124,17 +169,17 @@ describe('LayerPreviewBody — FDM "preview" stage body', () => {
 
   it('defaults the selected layer to the top (highest-Z) when no selection prop set', () => {
     const html = renderPreview({
-      gcodeText: ORCA_K2_GCODE,
+      layerBreakdown: ORCA_K2_RESULT,
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
     })
-    // 3 layers parsed; default picks the top one (index 3 / 3).
+    // 3 layers; default picks the top one (index 3 / 3).
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-index">3 \/ 3</)
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-z">0\.60 mm</)
   })
 
   it('honours selectedLayerIndex prop to drive the metadata readout', () => {
     const html = renderPreview({
-      gcodeText: ORCA_K2_GCODE,
+      layerBreakdown: ORCA_K2_RESULT,
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode',
       selectedLayerIndex: 1
     })
@@ -142,30 +187,70 @@ describe('LayerPreviewBody — FDM "preview" stage body', () => {
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-z">0\.20 mm</)
   })
 
-  it('surfaces per-layer time + filament estimates when the slicer header is present', () => {
+  it('surfaces per-layer time + filament estimates', () => {
     const html = renderPreview({
-      gcodeText: ORCA_K2_GCODE,
+      layerBreakdown: ORCA_K2_RESULT,
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
     })
-    // 30m / 3 layers = 10m per layer
+    // 600s per layer => "10m 0s"
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-time">10m 0s</)
-    // 3000mm / 3 layers = 1000mm per layer => "1.00 m"
+    // 1000mm per layer => "1.00 m"
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-filament">1\.00 m</)
   })
 
-  it('falls back to em-dash for time/filament when slicer headers are missing', () => {
-    const noHeader = [
-      ';BEFORE_LAYER_CHANGE',
-      ';0.20',
-      ';BEFORE_LAYER_CHANGE',
-      ';0.40'
-    ].join('\n')
+  it('falls back to em-dash for time/filament when the breakdown has null values', () => {
     const html = renderPreview({
-      gcodeText: noHeader,
+      layerBreakdown: NO_HEADER_RESULT,
       lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
     })
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-time">—</)
     expect(html).toMatch(/data-testid="workflow-stage-preview-layer-filament">—</)
+  })
+
+  it('renders a per-layer table with one row per layer', () => {
+    const html = renderPreview({
+      layerBreakdown: ORCA_K2_RESULT,
+      lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
+    })
+    expect(html).toContain('data-testid="workflow-stage-preview-table"')
+    expect(html).toContain('data-testid="workflow-stage-preview-table-row-1"')
+    expect(html).toContain('data-testid="workflow-stage-preview-table-row-2"')
+    expect(html).toContain('data-testid="workflow-stage-preview-table-row-3"')
+    // Row 3's Z renders in the table cell.
+    expect(html).toContain('0.60')
+  })
+
+  it('marks the active layer row with aria-current', () => {
+    const html = renderPreview({
+      layerBreakdown: ORCA_K2_RESULT,
+      lastSliceGcodePath: '/tmp/proj/output/slice.gcode',
+      selectedLayerIndex: 2
+    })
+    // The active row (index 2) carries aria-current; render order puts the
+    // attribute right before the row's testid is far, so just assert both
+    // the active class + the aria attribute appear.
+    expect(html).toContain('layer-breakdown-table__row--active')
+    expect(html).toContain('aria-current="true"')
+  })
+
+  it('omits the line-type row when no layer carries lineTypeCounts', () => {
+    const html = renderPreview({
+      layerBreakdown: ORCA_K2_RESULT,
+      lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
+    })
+    expect(html).not.toContain('data-testid="workflow-stage-preview-layer-linetypes"')
+  })
+
+  it('renders the line-type row for the active layer when lineTypeCounts present', () => {
+    const counts: FdmLineTypeCounts = { 'Outer wall': 4, 'Sparse infill': 12 }
+    const result = makeResult([makeLayer({ index: 1, zMm: 0.2, lineTypeCounts: counts })])
+    const html = renderPreview({
+      layerBreakdown: result,
+      lastSliceGcodePath: '/tmp/proj/output/slice.gcode'
+    })
+    expect(html).toContain('data-testid="workflow-stage-preview-layer-linetypes"')
+    expect(html).toContain('Outer wall 4')
+    expect(html).toContain('Sparse infill 12')
   })
 })
 
@@ -215,9 +300,9 @@ describe('ToolpathSimulationBody — CNC "simulate" stage body', () => {
 
 describe('Stage-body data-testid contracts', () => {
   it('LayerPreviewBody always carries the workflow-stage-body-preview testid', () => {
-    const empty = renderPreview({ gcodeText: '', lastSliceGcodePath: null })
+    const empty = renderPreview({ layerBreakdown: null, lastSliceGcodePath: null })
     const ready = renderPreview({
-      gcodeText: ORCA_K2_GCODE,
+      layerBreakdown: ORCA_K2_RESULT,
       lastSliceGcodePath: '/tmp/x.gcode'
     })
     expect(empty).toContain('data-testid="workflow-stage-body-preview"')

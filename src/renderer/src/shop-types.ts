@@ -14,6 +14,7 @@ import type { CpsImportSummary } from '../../main/machine-cps-import'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import type { MaterialAuditResult } from '../../shared/material-audit'
+import type { FdmLayerBreakdownResult } from '../../shared/fdm-gcode-layer-breakdown'
 import type { EnvironmentId } from './environments/registry'
 import type {
   CadCreateAssemblyPayload,
@@ -120,6 +121,17 @@ export declare const window: Window & {
      * &quot;is FDM slicing available?&quot; preflight UI. No subprocess spawn.
      */
     slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
+    /**
+     * CAD V1.5 — TRUE per-layer slice breakdown for the K2 Plus FDM Preview
+     * stage. Streams the sliced G-code file in the main process and returns
+     * real per-layer time / filament / line-type stats, degrading to a
+     * uniform distribution from the header totals when per-layer comments
+     * are absent. Session-only; never persisted.
+     */
+    sliceLayerBreakdown: (payload: { gcodePath: string }) => Promise<
+      | { ok: true; result: FdmLayerBreakdownResult }
+      | { ok: false; error: string; hint?: string }
+    >
     toolsRead: (dir: string) => Promise<ToolLibraryFile>
     toolsSave: (dir: string, lib: ToolLibraryFile) => Promise<void>
     toolsImport: (dir: string, payload: { kind: 'csv' | 'json' | 'fusion' | 'fusion_csv'; content: string }) => Promise<ToolLibraryFile>

@@ -13,6 +13,7 @@ import type { MaterialRecord } from '../shared/material-schema'
 import type { FilamentRecord } from '../shared/filament-schema'
 import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-cli-run'
 import type { GcodeTempSample } from '../shared/gcode-temp-validator'
+import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { PartFeaturesFile } from '../shared/part-features-schema'
@@ -166,6 +167,18 @@ export type Api = {
    * render "Bundled" vs "Not bundled — run scripts/bundle-orca-slicer.ps1".
    */
   slicerOrcaStatus: () => Promise<{ bundled: boolean; expectedPath: string; platform: string }>
+  /**
+   * CAD V1.5 — TRUE per-layer slice breakdown for the K2 Plus FDM Preview
+   * stage. Streams the sliced G-code file in the main process
+   * (`slice:layerBreakdown` -> `fdm-gcode-stream-parser.ts`) and returns
+   * real per-layer time / filament / line-type stats, degrading gracefully
+   * to a uniform distribution from the header totals when per-layer comments
+   * are absent. Session-only result; never persisted.
+   */
+  sliceLayerBreakdown: (payload: { gcodePath: string }) => Promise<
+    | { ok: true; result: FdmLayerBreakdownResult }
+    | { ok: false; error: string; hint?: string }
+  >
 
   // ── Manufacture file ─────────────────────────────────────────────────────
   manufactureLoad: (projectDir: string) => Promise<ManufactureFile>
@@ -764,6 +777,7 @@ const api: Api = {
   },
   sliceOrca: (payload) => ipcRenderer.invoke('slice:orca', payload),
   slicerOrcaStatus: () => ipcRenderer.invoke('slicer:orcaStatus'),
+  sliceLayerBreakdown: (payload) => ipcRenderer.invoke('slice:layerBreakdown', payload),
 
   // Manufacture file
   manufactureLoad: (projectDir) => ipcRenderer.invoke('manufacture:load', projectDir),

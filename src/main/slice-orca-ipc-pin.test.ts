@@ -343,3 +343,105 @@ describe('G. Three-machine cross-cut: DIRECT on K2, INDIRECT on Laguna + Carvera
     }
   })
 })
+
+// ── CAD V1.5: slice:layerBreakdown end-to-end plumbing ──────────────────────
+// New per-layer slice-breakdown channel. Same source-pin discipline as the
+// slice:orca section above — pin each layer of the wire (handler, preload,
+// shop-types) so a careless rename / drop / re-route fails CI.
+//
+// The `slice:layerBreakdown` handler is anchored from its `ipcMain.handle(
+// 'slice:layerBreakdown'` call to the NEXT `ipcMain.handle(` (the docstring
+// above the call references the channel only in backtick prose + an error-
+// string, never as `ipcMain.handle('slice:layerBreakdown'`, so the anchor is
+// unique).
+function layerBreakdownHandlerBody(): string {
+  const m = IPC_SRC.match(/ipcMain\.handle\(\s*'slice:layerBreakdown',[\s\S]+?(?=ipcMain\.handle\(\s*')/)
+  expect(m).not.toBeNull()
+  return m ? m[0] : ''
+}
+
+describe('H. ipc-fabrication registers slice:layerBreakdown inside registerFabricationIpc', () => {
+  it('H1: handler is registered for the slice:layerBreakdown channel', () => {
+    expect(IPC_SRC).toMatch(/ipcMain\.handle\(\s*'slice:layerBreakdown'/)
+  })
+
+  it('H2: the registration lives inside the registerFabricationIpc function body', () => {
+    // registerFabricationIpc is the ONLY exported register* function in this
+    // module; the IPC-ordering invariant (src/main/index.ts) depends on the
+    // handler being registered here (called in app.whenReady() before
+    // createWindow()). Assert the channel string appears AFTER the
+    // `export function registerFabricationIpc(` declaration.
+    const fnIdx = IPC_SRC.indexOf('export function registerFabricationIpc(')
+    const channelIdx = IPC_SRC.indexOf("ipcMain.handle(\n    'slice:layerBreakdown'")
+    expect(fnIdx).toBeGreaterThanOrEqual(0)
+    expect(channelIdx).toBeGreaterThan(fnIdx)
+  })
+
+  it('H3: handler imports + calls the streaming parser', () => {
+    expect(IPC_SRC).toContain("from './slicer/fdm-gcode-stream-parser'")
+    expect(IPC_SRC).toContain('parseFdmGcodeLayersFromFile')
+    expect(layerBreakdownHandlerBody()).toContain('parseFdmGcodeLayersFromFile(payload.gcodePath)')
+  })
+
+  it('H4: handler payload carries gcodePath: string', () => {
+    expect(layerBreakdownHandlerBody()).toContain('gcodePath: string')
+  })
+
+  it('H5: handler rejects missing / null-byte gcodePath at the boundary', () => {
+    const body = layerBreakdownHandlerBody()
+    expect(body).toContain("'missing_gcode_path'")
+    expect(body).toContain("payload.gcodePath.includes('\\0')")
+    expect(body).toContain("'invalid_path'")
+  })
+
+  it('H6: handler returns the FdmLayerBreakdownResult under `result` on success', () => {
+    const body = layerBreakdownHandlerBody()
+    expect(body).toContain('ok: true as const, result')
+  })
+
+  it('H7: handler folds parser failures into a clean { ok:false } envelope', () => {
+    const body = layerBreakdownHandlerBody()
+    expect(body).toContain("'layer_breakdown_failed'")
+    expect(body).toMatch(/catch\s*\(/)
+  })
+
+  it('H8: handler does NOT emit any G## or M## tokens + no non-K2 vendor ids (Safety Rule 1)', () => {
+    const body = layerBreakdownHandlerBody()
+    expect(body).not.toMatch(/\bG[0-9]+\b/)
+    expect(body).not.toMatch(/\bM[0-9]+\b/)
+    expect(body).not.toMatch(/Laguna|RichAuto|Carvera|Makera|spindle|rotary/i)
+  })
+})
+
+describe('I. preload + shop-types bridge sliceLayerBreakdown onto the channel', () => {
+  it('I1: preload Api type declares sliceLayerBreakdown', () => {
+    expect(PRELOAD_SRC).toContain('sliceLayerBreakdown:')
+  })
+
+  it('I2: preload implementation invokes the slice:layerBreakdown channel', () => {
+    expect(PRELOAD_SRC).toContain("ipcRenderer.invoke('slice:layerBreakdown', payload)")
+  })
+
+  it('I3: preload signature takes { gcodePath } and returns the result envelope', () => {
+    const m = PRELOAD_SRC.match(/sliceLayerBreakdown: \(payload: \{ gcodePath: string \}\) =>[\s\S]+?>\n/)
+    expect(m).not.toBeNull()
+    if (m) {
+      expect(m[0]).toContain('FdmLayerBreakdownResult')
+    }
+  })
+
+  it('I4: shop-types window.fab declares sliceLayerBreakdown', () => {
+    expect(SHOP_TYPES_SRC).toContain('sliceLayerBreakdown:')
+    expect(SHOP_TYPES_SRC).toContain('FdmLayerBreakdownResult')
+  })
+
+  it('I5: workspace fetches the breakdown via fab.sliceLayerBreakdown (not the old readTextFile+parseLayers flow)', () => {
+    // Whitespace-tolerant (the file is CRLF; the call wraps `void fab` ->
+    // `.sliceLayerBreakdown(...)` across lines).
+    expect(WORKSPACE_SRC).toMatch(
+      /fab\s*\.sliceLayerBreakdown\(\{\s*gcodePath:\s*lastSliceGcodePath\s*\}\)/
+    )
+    // The coarse renderer-side parse flow for the Preview body is gone.
+    expect(WORKSPACE_SRC).not.toContain('parseLayers(gcodeText)')
+  })
+})

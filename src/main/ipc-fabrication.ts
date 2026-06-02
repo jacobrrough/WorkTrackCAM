@@ -26,6 +26,8 @@ import {
 import { moonrakerCancel, moonrakerPause, moonrakerPush, moonrakerResume, moonrakerStatus } from './moonraker-push'
 import { moonrakerInfo } from './moonraker-info'
 import { runOrcaSlice } from './slicer/orca-wrapper'
+import { parseFdmGcodeLayersFromFile } from './slicer/fdm-gcode-stream-parser'
+import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { FdmCapabilityFields, GcodeTempSample } from '../shared/gcode-temp-validator'
 import {
   deleteUserMachine,
@@ -392,6 +394,51 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         return {
           ok: false as const,
           error: 'orca_unavailable',
+          hint: msg
+        }
+      }
+    }
+  )
+
+  // CAD V1.5 — TRUE per-layer slice breakdown for the K2 Plus FDM Preview
+  // stage. Replaces the renderer-side coarse uniform distribution
+  // (`gcode-layer-parser.ts`) with real per-layer stats parsed by the
+  // streaming main-process parser (`./slicer/fdm-gcode-stream-parser.ts`).
+  // The parser reads the file line-by-line (constant memory — a tall K2
+  // print is 1,500+ layers / 5–30 MB) and degrades gracefully to uniform
+  // distribution when per-layer comments are absent. Session-only result;
+  // never persisted. Plan: docs/plans/cad-v15-per-layer-slicer-breakdowns.md.
+  //
+  // Security: null-byte rejection mirrors the `slice:orca` handler above;
+  // the renderer is the only caller and passes the absolute on-disk path
+  // recorded in `lastSliceGcodePath` after a successful slice.
+  ipcMain.handle(
+    'slice:layerBreakdown',
+    async (
+      _e,
+      payload: { gcodePath: string }
+    ): Promise<
+      | { ok: true; result: FdmLayerBreakdownResult }
+      | { ok: false; error: string; hint?: string }
+    > => {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false as const, error: 'invalid_payload', hint: 'slice:layerBreakdown requires { gcodePath }' }
+      }
+      if (typeof payload.gcodePath !== 'string' || payload.gcodePath.length === 0) {
+        return { ok: false as const, error: 'missing_gcode_path' }
+      }
+      // Null-byte rejection — same pattern as `slice:orca` / `fs:readBase64`.
+      if (payload.gcodePath.includes('\0')) {
+        return { ok: false as const, error: 'invalid_path' }
+      }
+      try {
+        const result = await parseFdmGcodeLayersFromFile(payload.gcodePath)
+        return { ok: true as const, result }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return {
+          ok: false as const,
+          error: 'layer_breakdown_failed',
           hint: msg
         }
       }
