@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "WorkTrackCAM — CNC toolpath generation, FDM slicing, and machine management",
+  "author": "WorkTrack",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -89,15 +90,7 @@
       }
     ],
     "win": {
-      "target": "nsis",
-      "publisherName": "WorkTrack",
-      "icon": "build/icons/icon.ico"
-    },
-    "linux": {
-      "icon": "build/icons/icon.png"
-    },
-    "mac": {
-      "icon": "build/icons/icon.png"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,

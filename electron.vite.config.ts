@@ -66,7 +66,20 @@ export default defineConfig({
       // / HTML). Keeping the worker list minimal trims ~2 MB off the
       // renderer bundle relative to the default `['editorWorkerService',
       // 'css', 'html', 'json', 'typescript']` set.
-      monacoEditorPlugin({ languageWorkers: ['editorWorkerService'] })
+      monacoEditorPlugin({
+        languageWorkers: ['editorWorkerService'],
+        // electron-vite sets the renderer `build.outDir` to an ABSOLUTE path.
+        // vite-plugin-monaco-editor's default worker-output path is
+        // `path.join(root, buildOutDir, 'monacoeditorwork')`, and joining the
+        // renderer root with an absolute `buildOutDir` on Windows yields a
+        // malformed nested path (`src/renderer/C:/.../out/renderer/...`) that
+        // `mkdirSync` then fails on (ENOENT). Pin the dist path to the
+        // (absolute) buildOutDir only, so the workers land at
+        // `out/renderer/monacoeditorwork` — which the renderer base (`./`) +
+        // the default `monacoeditorwork` publicPath resolves to at runtime.
+        customDistPath: (_root: string, outDir: string): string =>
+          resolve(outDir, 'monacoeditorwork')
+      })
     ]
   }
 })
