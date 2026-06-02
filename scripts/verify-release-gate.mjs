@@ -7,6 +7,10 @@ if (!npmExecPath) {
 }
 
 const steps = [
+  // Runtime security gate (CLAUDE.md / docs/SECURITY.md): production deps MUST
+  // carry zero advisories before a release build. --omit=dev scopes the audit to
+  // the shipped tree; --audit-level=low fails the gate on any advisory.
+  [process.execPath, [npmExecPath, 'audit', '--omit=dev', '--audit-level=low']],
   [process.execPath, [npmExecPath, 'run', 'typecheck']],
   [process.execPath, [npmExecPath, 'run', 'test:coverage']],
   [process.execPath, [npmExecPath, 'run', 'build']],

@@ -20,20 +20,19 @@ The numbers in this file are a snapshot in time; the dashboard is real-time.
 
 ## TL;DR — Current State (2026-06-02 snapshot)
 
-| Severity | Open | Closed (recent waves) | Notes |
-|----------|-----:|----------------------:|-------|
-| Critical |    0 |                     1 | vitest CVE GHSA-5xrq-8626-4rwp closed (vitest 3 → 4.1.8). |
-| High     |   10 |                     1 | All 10 open advisories are dev-only (electron-builder + tar chain). |
-| Moderate |   10 |                     7 | DOMPurify + brace-expansion + ip-address + postcss closed in prior wave. |
-| Low      |    1 |                     1 | `@tootallnate/once` closed in prior wave. |
-| **Total**| **21** |                  **10** | Dependabot dashboard view. |
+| Severity | Open | Notes |
+|----------|-----:|-------|
+| Critical |    0 | vitest CVE GHSA-5xrq-8626-4rwp closed (vitest 3 → 4.1.8) in a prior wave. |
+| High     |    0 | **electron-builder 25.1.8 → 26.8.1** dropped the dev-only `tar`/`cacache` subtree (−141 packages); the high chain is closed. |
+| Moderate |    0 | DOMPurify forced via `overrides`; the prior Monaco/bundler advisories are no longer reported by the current lockfile. |
+| Low      |    0 | `@tootallnate/once` closed in a prior wave. |
+| **Total**| **0** | `npm audit` **and** `npm audit --omit=dev` both report **0 vulnerabilities** (verified 2026-06-02). |
 
-**Runtime / user-shipping advisory count: 0.**
+**Runtime / user-shipping advisory count: 0. Full dev+prod advisory count: 0.**
 
-Every remaining advisory is reached through a `devDependencies` path — most
-through Monaco Editor's transitive chain (installed in the Monaco wave) and
-electron-builder's transitive chain. None of them ship to the user's
-machine in the packaged Electron app.
+The electron-builder 26.8.1 bump (this wave) closed the last open chain — the
+dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
+`npm audit` now reports a clean tree across dev **and** prod.
 
 ---
 
@@ -50,6 +49,35 @@ machine in the packaged Electron app.
   stricter on optional fields) needed to be reconciled, and those edits
   are visible in the commit.
 - **Status**: **CLOSED**. No further action.
+
+### High — electron-builder / tar chain (closed via the 26.8.1 bump)
+- **Bump**: `electron-builder` `^25.1.8` → `^26.8.1` (devDependency).
+- **Why high**: electron-builder 25 pulled a deprecated transitive `tar` /
+  `cacache` subtree (via `@electron/rebuild` → node-gyp → tar,
+  `app-builder-lib`, `make-fetch-happen` → cacache) carrying path-traversal
+  and symlink-poisoning advisories. The attack surface was **dev-only** (an
+  attacker would have to control a `tar` archive extracted on the build host
+  during `npm run build`); none of it shipped in the packaged installer.
+- **What changed**: `npm install` on v26 **removed 141 packages**, added 31,
+  changed 43 (478 total). The deprecated tar/cacache chain is gone.
+- **Validation**: `npm audit` → **0**; `npm audit --omit=dev` → **0**
+  (2026-06-02). On the current `main` base the bump alone was sufficient — no
+  `fast-check` declaration or `overrides` entry was needed (contrary to an
+  earlier exploratory branch built off an older base). electron-builder is a
+  build tool, not imported by app/test code, so the full vitest suite (14427)
+  + `tsc` are unaffected.
+- **Every v26 breaking change maps to config this repo does not use**: Windows
+  signing moved to `win.signtoolOptions` (repo is unsigned), `linux.desktop`
+  object form (repo has icon only), macOS notarization env vars (icon only),
+  ASAR-integrity defaults (fuse not enabled). `minimatch@10` glob semantics are
+  the only live risk → verified the `files`/`extraResources` globs still pack
+  `engines/` + `resources/orca-slicer/win32-x64`.
+- **Regression guard**: `src/main/electron-builder-config-pin.test.ts` pins the
+  `"build"` block shape and the `^26.` devDep floor.
+- **Remaining step (owner)**: run `npm run build` on Windows 11 to confirm the
+  v26 toolchain still produces a working `WorkTrackCAM-0.1.0-Setup.exe`.
+- **Status**: **CLOSED** (advisories). NSIS installer smoke is pending the
+  owner's build run — the only piece that needs the Windows host.
 
 ### Moderate — DOMPurify (closed in prior wave via npm overrides)
 - **Bump**: forced `dompurify@^3.4.7` via the `overrides` block in
@@ -81,61 +109,23 @@ machine in the packaged Electron app.
 
 ## Deferred advisories — and why
 
-### 10 high in the electron-builder / tar chain (dev-only)
-All open high-severity advisories are reached *only* through
-`electron-builder@25.1.8` and its transitive deps:
+**None currently open.** `npm audit` reports a clean tree (dev + prod) as of
+2026-06-02. The two long-standing deferrals are now resolved:
 
-```
-electron-builder@25.1.8 (devDependency)
-├── @electron/rebuild        → node-gyp → tar     (path-traversal, hardlink)
-├── app-builder-lib          → dmg-builder         (cascading)
-├── electron-builder-squirrel-windows              (cascading)
-├── cacache                  → tar                 (path-traversal)
-└── make-fetch-happen        → cacache             (cascading)
-```
+- **electron-builder / tar chain (was 9–10 high, dev-only)** — CLOSED by the
+  26.8.1 bump (see the Closed section above). The previous deferral rationale
+  ("don't bump the build tool right before pre-launch") no longer applies now
+  that pre-launch hardening is underway; the bump landed with `npm audit` == 0
+  and the installer smoke deferred to the owner's Windows build run.
+- **Monaco editor bundler chain (was moderate, dev-only)** — no longer reported
+  by the current lockfile (resolved by transitive bumps during prior installs).
+  The `dompurify@^3.4.7` override remains in place as a **preventive** measure
+  so an incidental Monaco bump cannot silently regress the DOMPurify advisories
+  (see the Closed section + Lockfile notes).
 
-The advisories are real (path traversal and symlink poisoning in `tar`),
-but **the attack surface is dev-only**: an attacker would need to control
-the contents of a `tar` archive that the build host extracts during
-`npm run build`. None of this code ships in the packaged installer
-(`out/main`, `out/preload`, `out/renderer`, plus the `engines/` and
-`resources/` snapshots are the only artifacts that reach the user).
-
-#### Why we are NOT bumping electron-builder to 26.x yet
-`npm audit fix --force` would install `electron-builder@26.8.1`, a major
-bump that introduces:
-
-- `minimatch@10` — changed glob semantics. Risk of `files`/`extraResources`
-  globs silently excluding files from the installer.
-- `@electron/universal@v2` — macOS universal binary tool (on the roadmap,
-  but not the current pre-launch focus).
-- ASAR integrity resources on Windows — new behavior that needs validation
-  against the NSIS installer flow used for the K2 Plus / Laguna / Carvera
-  shop targets.
-- `app-builder-bin@5.0` — internal binary, churn risk during pre-launch.
-
-Bumping the build tool right before pre-launch real-world testing (see
-`docs/PRE-LAUNCH-READINESS.md`) is the wrong trade. The mitigation is:
-
-1. The vulnerabilities are dev-only.
-2. We control the dev environment.
-3. The post-pre-launch wave will land electron-builder 26.x with full
-   end-to-end NSIS-installer verification.
-
-### 10 moderate in the Monaco editor chain (dev-only, low-impact)
-Monaco's transitive deps account for the open moderate advisories. The DOMPurify
-ones are already closed via `overrides`; the remaining 10 are bundler/build
-plumbing (`vite-plugin-monaco-editor` pulls older `webpack` plumbing for
-worker bundling). None of them are reachable at runtime — Monaco ships as
-pre-compiled JS in the renderer bundle, and the bundler plumbing only runs
-during `npm run dev` / `npm run build`.
-
-Status: deferred until Monaco's next major (which is expected to drop the
-older bundler plumbing). Tracked in the Future TODO list below.
-
-### 1 low — Dependabot's own minor advisories
-One remaining low-severity entry is a tooling advisory (no user impact). Left
-in place until a clean transitive bump becomes available.
+If a future `npm audit` surfaces a new advisory, document the fix-or-defer
+decision here before the cycle ends — do NOT leave a fresh advisory
+undocumented across cycles.
 
 ---
 
@@ -146,7 +136,7 @@ in place until a clean transitive bump becomes available.
 | Inline | `npm audit` | Every improvement cycle that touches `package.json` or `package-lock.json` (per CLAUDE.md scope rule). |
 | Release | `npm audit --omit=dev` (runtime-only) | Before every release build (`npm run build` → installer). MUST return zero advisories — the gate fails the release otherwise. |
 | Continuous | Dependabot dashboard | GitHub auto-checks on every push to `main` and on a weekly schedule. New advisories surface as alerts on the Dependabot dashboard linked above. |
-| Per-cycle | `npm run verify:release-gate` | A pre-release script that combines `npm audit --omit=dev`, `npm test`, `npm run typecheck`, and the no-dump-stubs check. |
+| Per-cycle | `npm run verify:release-gate` | Pre-release script that runs `npm audit --omit=dev --audit-level=low` (step 0), then `npm run typecheck`, `npm run test:coverage`, `npm run build`, and the OCL smoke. |
 
 A new advisory shows up → the next cycle to touch the affected area MUST
 either close it or document the deferral here. Do NOT leave a fresh
@@ -171,15 +161,18 @@ npm ls dompurify --all
 
 # Confirm vitest 4.x resolution (must show 4.x, NOT 3.x)
 npm ls vitest --all
+
+# Confirm electron-builder is on the audited-clean v26 tree
+npm ls electron-builder
 ```
 
 Expected output today (2026-06-02):
 
-- `npm audit` reports **10 high**, **10 moderate**, **1 low**, **0 critical**.
+- `npm audit` reports **0 vulnerabilities** (0 critical / 0 high / 0 moderate / 0 low).
 - `npm audit --omit=dev` reports **0 advisories** (release gate green).
-- `npm ls dompurify` shows `dompurify@3.4.7` (or newer) under
-  `monaco-editor@0.55.x`.
+- `npm ls dompurify` shows `dompurify@3.4.7` (or newer) under `monaco-editor@0.55.x`.
 - `npm ls vitest` shows `vitest@4.1.8` (or newer) — confirms the CVE fix.
+- `npm ls electron-builder` shows `electron-builder@26.8.1` (or newer in `^26`).
 
 ---
 
@@ -200,16 +193,15 @@ because it forces a manual review before silently regressing.
 
 ## Future dep waves — TODO
 
-- [ ] **Electron-builder 26.x upgrade** — close the 10 remaining high
-  advisories. Validate against the NSIS installer flow before merging.
-  Must verify `npm run build` produces a working
-  `WorkTrackCAM-0.1.0-Setup.exe` and that the K2 / Laguna / Carvera
-  smoke tests still pass against the packaged binary.
+- [x] **Electron-builder 26.x upgrade** — DONE (2026-06-02). Bumped to
+  `^26.8.1`; `npm audit` and `npm audit --omit=dev` both 0. Remaining: the
+  owner runs `npm run build` on Windows 11 to confirm the v26 toolchain
+  produces a working `WorkTrackCAM-0.1.0-Setup.exe` and that the K2 / Laguna /
+  Carvera smoke checks still pass against the packaged binary.
 - [ ] **Monaco editor minor/patch bumps** — once Monaco ships a release that
-  depends on dompurify ≥ 3.4.0 directly AND drops the older bundler
-  plumbing, the 10 moderate advisories close and the `overrides` block
-  becomes redundant (keep the override until then to prevent regressions
-  during incidental bumps).
+  depends on dompurify ≥ 3.4.0 directly, the `overrides` block becomes
+  redundant (keep the override until then to prevent regressions during
+  incidental bumps).
 - [ ] **Electron itself** — currently `^39.8.5`. Track Chromium security
   advisories on the Electron security feed; bump when a security release
   ships. (No open advisories against the current pin.)
