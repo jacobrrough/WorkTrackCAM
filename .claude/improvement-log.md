@@ -17317,3 +17317,48 @@ every block sets --accent.
 8/10 themes are dark (incl. the Titanium default) and render correctly on the current
 shell now. The 2 light themes (Machinist, Precision) are best-effort on the dark-built
 legacy shell and become pixel-correct on the ground-up new shell (P3).
+
+
+## WorkTrack3D Overhaul -- P3 (scaffold): ground-up new shell, dark-launched behind __APP_SHELL__
+
+The new shell EXISTS and boots CAD-first, behind a build flag so the default build
+keeps booting the proven ShopApp until the P5 cutover.
+
+- NEW `src/renderer/app/`: `WorkTrack3DApp` (root) -> `AppProviders` (reused) ->
+  `AppShell` (CSS-grid frame) -> `TopBar` (brand, project, machine status + wired
+  E-stop via window.fab.machine.estop, command/settings/help launchers) +
+  `WorkspaceNav` (Design/Assemble/Make/Drawings/Workshop/Utilities rail) +
+  `WorkspaceHost` (renders one workspace) + `StatusBar`. Plus `useWorkspaceRouter`
+  (replaces the legacy phase/navSection/designOpen tangle with one explicit router;
+  default 'design' = CAD-first).
+- `WorkspaceHost` reuses the real `DesignWorkspace` (Design/Assemble/Drawings ->
+  its internal tabs) fully wired (initialScript/onSave/onSendToCam/onToast).
+  Manufacture/Workshop/Utilities are `EmptyState` placeholders for the next
+  increment. The reused `SettingsDrawer` is mounted, so the 10-theme picker works
+  from the new shell.
+- Dark-launch flag `__APP_SHELL__` in electron.vite.config.ts (main + renderer;
+  `WT_SHELL=next` -> 'next') and vitest.config.ts ('legacy'). main.tsx picks
+  `Root = __APP_SHELL__ === 'next' ? WorkTrack3DApp : ShopApp`. Default build is
+  behaviorally unchanged.
+- NEW `styles/shell/app-shell.css` (.wt-* BEM namespace; no collision with the
+  legacy .cc-*/.shop-*); all colors come from the themed tokens so the new shell
+  reskins with the theme picker. Imported last in index.css.
+
+### Quality gates
+| Checkpoint | npm test | tsc | electron-vite build |
+| --- | --- | --- | --- |
+| P3 scaffold | 14,588 / 0 / 2-skip (386 files) | clean | OK (renderer+main+preload bundle) |
+
+No new tests + no regressions (the app/ files are flag-gated, imported by nothing in
+the test graph). Verified by typecheck + a full production bundle; a live Electron
+render (`WT_SHELL=next npm run dev`) is the operator's visual check -- not
+screenshotable from this environment.
+
+### G-code safety status
+N/A -- shell / UI only.
+
+### Remaining for the new shell (before P5 cutover)
+Wire Manufacture (the ~25-prop ManufactureWorkspace + a useCamSession job-state hook),
+Workshop (WorkshopDashboard), Utilities, the command palette + help overlays,
+machine/CAM env selection + data-environment, and FirstLaunchWizard. Then P5: flip
+`__APP_SHELL__` default to 'next' and retire ShopApp + legacy shell CSS.
