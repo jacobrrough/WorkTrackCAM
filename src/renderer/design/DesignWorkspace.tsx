@@ -83,7 +83,7 @@ import {
 } from './selection-state'
 
 /** Default starter script seeded when the user clicks the empty-state CTA. */
-export const STARTER_SCRIPT = `# WorkTrackCAM CadQuery starter — a parametric box.
+export const STARTER_SCRIPT = `# WorkTrack3D CadQuery starter — a parametric box.
 # Edit dimensions or add cq.* operations, then hit Run.
 import cadquery as cq
 

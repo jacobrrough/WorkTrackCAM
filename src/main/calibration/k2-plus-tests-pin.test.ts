@@ -360,9 +360,9 @@ describe('E. Required pre/post sequences', () => {
     }
   })
 
-  it('E4: every test header tags the WorkTrackCAM provenance', () => {
+  it('E4: every test header tags the WorkTrack3D provenance', () => {
     for (const r of all()) {
-      expect(r.gcode).toContain('WorkTrackCAM K2 Plus Calibration')
+      expect(r.gcode).toContain('WorkTrack3D K2 Plus Calibration')
     }
   })
 })

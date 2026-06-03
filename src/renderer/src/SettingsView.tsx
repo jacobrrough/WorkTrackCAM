@@ -1,5 +1,5 @@
 /**
- * SettingsView -- Real, structured Settings panel for WorkTrackCAM.
+ * SettingsView -- Real, structured Settings panel for WorkTrack3D.
  *
  * Rebuilt as the "Real Settings view" pass (replaces the legacy two-field engine-
  * path form). Organized into four semantic subsections, each in its own

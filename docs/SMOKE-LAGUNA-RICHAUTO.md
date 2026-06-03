@@ -1,6 +1,6 @@
 # Laguna Swift 5x10 -- RichAuto A-series transfer smoke checklist
 
-**Audience**: Jacob (Palmdale, CA shop) running G-code emitted by WorkTrackCAM on the **Laguna Swift 5x10** through its **RichAuto A-series handheld pendant** for the first time. This is the bench procedure to verify the post-process pipeline reaches the controller, the controller accepts the file, and the spindle behaves the way the post header advertises.
+**Audience**: Jacob (Palmdale, CA shop) running G-code emitted by WorkTrack3D on the **Laguna Swift 5x10** through its **RichAuto A-series handheld pendant** for the first time. This is the bench procedure to verify the post-process pipeline reaches the controller, the controller accepts the file, and the spindle behaves the way the post header advertises.
 
 **Last updated**: 2026-06-01.
 
@@ -26,11 +26,11 @@
 
 Do NOT run this on a machine someone else is wiring into or working under. The Laguna's 60" x 120" envelope (CLAUDE.md USER CONTEXT #2 -- `workAreaMm` 1524 x 3048 x 203 mm) means the gantry sweeps a large body of air at full feed; clear the keep-out zone before cycle start.
 
-## Step 1 -- post and export from WorkTrackCAM
+## Step 1 -- post and export from WorkTrack3D
 
 The objective: emit a `.nc` (or `.mmg` / `.prg` if your saved jobs use those extensions) file with the right Mach3-superset header for the RichAuto A-series.
 
-1. In WorkTrackCAM, open the **My Shop** quick-select and pick **Laguna Swift 5x10**.
+1. In WorkTrack3D, open the **My Shop** quick-select and pick **Laguna Swift 5x10**.
 2. Confirm the active machine card shows:
    - Work envelope: `1524 x 3048 x 203 mm` (60" x 120" x ~8")
    - Spindle range: `8000-18000 RPM` (CLAUDE.md USER CONTEXT #2 documents the 6,000-24,000 RPM hardware ceiling; the bundled 3 HP profile clamps to 8000-18000 RPM -- if you need to run a 6 HP variant outside that band, duplicate the profile in the Library drawer rather than editing the bundled one)
@@ -98,7 +98,7 @@ Sign-off line:
 
 ## E-stop / abort (Laguna)
 
-The Laguna Swift 5x10 is the **physical-only** machine for E-stop in WorkTrackCAM. By design, there is **no network or USB abort path**. The RichAuto A-series handheld pendant has no remote-control API that WorkTrackCAM can target; the file lives on a USB stick and the controller runs it autonomously. Once the cycle is running, the only abort paths are mechanical.
+The Laguna Swift 5x10 is the **physical-only** machine for E-stop in WorkTrack3D. By design, there is **no network or USB abort path**. The RichAuto A-series handheld pendant has no remote-control API that WorkTrack3D can target; the file lives on a USB stick and the controller runs it autonomously. Once the cycle is running, the only abort paths are mechanical.
 
 > **READ THIS FIRST.** The Laguna's primary aborts are:
 > 1. **Pendant E-stop** (red mushroom on the RichAuto A-series handheld). Hit this first if it's the closest.
@@ -121,7 +121,7 @@ This is intentional. Adding a fake "abort" path that did nothing useful would be
 
 The Laguna E-stop sub-step is a tabletop drill, not a real abort:
 
-1. With the Laguna powered ON and the pendant unlocked but **no job running**, click the AppHeader **E-stop** button in WorkTrackCAM. Confirm the dialog.
+1. With the Laguna powered ON and the pendant unlocked but **no job running**, click the AppHeader **E-stop** button in WorkTrack3D. Confirm the dialog.
 2. Read the toast. Confirm it tells you (in plain English) to press the pendant's physical E-stop, and confirm it does NOT claim any network action was taken.
 3. Walk to the machine. With the operator standing at the typical job-start position, time how many seconds it takes to reach (a) the pendant E-stop, (b) the control-box E-stop. Both should be reachable without moving feet during a runaway, per the Safety section above.
 4. Twist the pendant E-stop to confirm it untwists / re-arms cleanly (do this with no spindle command in flight). A stuck E-stop is a real failure mode that has to be fixed before any production cut.
@@ -131,7 +131,7 @@ Sign-off line for Jacob:
 
 ### Why not add a remote abort path later?
 
-The RichAuto A-series pendant **does not expose a network API**. It is a closed-system handheld with a USB-A port for file input and an Ethernet port for firmware updates only -- there is no documented or supported abort-over-network endpoint. Reverse-engineering one would be a safety-critical experiment that WorkTrackCAM is intentionally not in the business of running.
+The RichAuto A-series pendant **does not expose a network API**. It is a closed-system handheld with a USB-A port for file input and an Ethernet port for firmware updates only -- there is no documented or supported abort-over-network endpoint. Reverse-engineering one would be a safety-critical experiment that WorkTrack3D is intentionally not in the business of running.
 
 If a future controller swap (e.g. retrofitting the Laguna with a Mach3-on-PC head or a LinuxCNC controller) adds a real remote abort path, this section will be updated to wire it up. Until then: **physical E-stop is the path. The AppHeader button is a reminder, not a control.**
 
@@ -149,7 +149,7 @@ If a future controller swap (e.g. retrofitting the Laguna with a Mach3-on-PC hea
 | **Pendant displays the file but reports "format error"** | USB stick is NTFS or exFAT (some A-series revs only accept FAT32) | Reformat the USB to FAT32 on the workstation; re-export and re-insert |
 | **Coordinates come out 25.4x too small** | Controller booted in inches (G20) and the post header's `G21` did not register (rare, but possible if the program tape `%` marker was stripped) | Confirm Step 1.7 -- the first non-blank line MUST be `%`. Re-export if missing |
 | **Decimal-comma mistakes** -- coordinates like `X1,524` or `Y3,048` rejected | Workstation locale wrote a comma as the decimal separator in a hand-edited file | Open the `.nc` in a text editor and replace `,` with `.` -- the post never emits comma-decimal output; this is only a risk if the file was hand-edited on a non-English locale workstation |
-| **Pendant reports "unsupported G-code" mid-program** | A line from a custom post or hand-edit uses syntax outside the Mach3 superset (e.g. canned drilling cycles G81/G83 from a Fanuc post pasted in) | Re-export from WorkTrackCAM using the bundled `vcarve_mach3.hbs` template -- it emits only G0/G1/G2/G3/G4 + M3/M5/M7/M9/M30, all in the A-series accepted set |
+| **Pendant reports "unsupported G-code" mid-program** | A line from a custom post or hand-edit uses syntax outside the Mach3 superset (e.g. canned drilling cycles G81/G83 from a Fanuc post pasted in) | Re-export from WorkTrack3D using the bundled `vcarve_mach3.hbs` template -- it emits only G0/G1/G2/G3/G4 + M3/M5/M7/M9/M30, all in the A-series accepted set |
 | **Spindle does not start** -- toolpath runs in the air with the spindle silent | Spindle-on M-code stripped, OR the VFD is in a fault state from a prior overcurrent | Confirm the `.nc` contains `M3 S<rpm>` BEFORE the first G1. Check the VFD panel for a fault code; clear and re-arm before re-running |
 | **Dust hood does not fire when `dustCollection` was ON** | The hood is wired to a different M-code (some Laguna installs use M8 or a custom M-code) | Either wire the hood to the M7 output, OR re-export with `dustCollection: false` and switch the hood manually at cycle start |
 | **Program ends but pendant stays in "running" state** | Footer terminator is `M2` instead of `M30` (cross-contamination from a Carvera template) | Re-export -- the `vcarve_mach3.hbs` template always emits `M30`. If you see `M2`, the wrong template was used |

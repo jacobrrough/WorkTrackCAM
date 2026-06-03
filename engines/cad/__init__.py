@@ -1,4 +1,4 @@
-"""CadQuery-backed CAD engines for WorkTrackCAM.
+"""CadQuery-backed CAD engines for WorkTrack3D.
 
 This package owns the pure functional core for STEP import + tessellation
 that the sidecar handlers in ``engines/sidecar/cad_handlers.py`` call into.

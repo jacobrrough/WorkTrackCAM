@@ -1,4 +1,4 @@
-"""WorkTrackCAM Python sidecar — JSON-RPC request loop.
+"""WorkTrack3D Python sidecar — JSON-RPC request loop.
 
 Wire contract
 =============

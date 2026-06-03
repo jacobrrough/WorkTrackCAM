@@ -52,7 +52,7 @@ function computeNormal(a, b, c) {
  * @param {string} [headerText]  ASCII header (truncated to 80 bytes).
  * @returns {Buffer}
  */
-function trianglesToBinaryStl(triangles, headerText = 'WorkTrackCAM sample STL') {
+function trianglesToBinaryStl(triangles, headerText = 'WorkTrack3D sample STL') {
   const buf = Buffer.alloc(HEADER_BYTES + 4 + TRI_BYTES * triangles.length)
   // Header -- intentionally avoid leading "solid" so strict parsers
   // don't mis-detect as ASCII STL.

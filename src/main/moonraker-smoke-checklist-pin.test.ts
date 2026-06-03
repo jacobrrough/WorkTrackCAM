@@ -148,7 +148,7 @@ describe('[P2-K2-PUSH] smoke-checklist pin -- docs/SMOKE-K2-MOONRAKER.md', () =>
     const stepHeaders = [
       '## Step 0 -- pre-flight',
       '## Step 1 -- mock-server sanity',
-      '## Step 2 -- launch and configure WorkTrackCAM',
+      '## Step 2 -- launch and configure WorkTrack3D',
       '## Step 3 -- upload-only test',
       '## Step 4 -- upload + start a 5-minute air-print',
       '## Step 5 -- pause / resume / cancel',
@@ -181,7 +181,7 @@ describe('[P2-K2-PUSH] smoke-checklist pin -- docs/SMOKE-K2-MOONRAKER.md', () =>
     }
 
     it('F-final-acceptance: calibration-cube acceptance gate present', () => {
-      expect(docText).toContain('Calibration cube printed via WorkTrackCAM Moonraker push')
+      expect(docText).toContain('Calibration cube printed via WorkTrack3D Moonraker push')
     })
   })
 

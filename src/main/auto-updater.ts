@@ -1,5 +1,5 @@
 /**
- * Auto-update lifecycle for WorkTrackCAM.
+ * Auto-update lifecycle for WorkTrack3D.
  *
  * Uses electron-updater to check for updates from GitHub Releases (or a
  * configured update server). The module is safe to import in any environment
@@ -130,7 +130,7 @@ async function safeCheckForUpdates(settingsUpdateUrl?: string): Promise<void> {
     autoUpdater.on('error', (err: Error) => {
       // Don't surface "no published versions" or network errors as critical
       const msg = err.message || 'Unknown update error'
-      console.warn('[WorkTrackCAM] Auto-update error (non-fatal):', msg)
+      console.warn('[WorkTrack3D] Auto-update error (non-fatal):', msg)
       setStatus({ state: 'error', message: msg })
     })
 
@@ -149,7 +149,7 @@ async function safeCheckForUpdates(settingsUpdateUrl?: string): Promise<void> {
       // Silently ignore expected failures (dev, offline, no releases)
       setStatus({ state: 'idle' })
     } else {
-      console.warn('[WorkTrackCAM] Auto-update check failed (non-fatal):', msg)
+      console.warn('[WorkTrack3D] Auto-update check failed (non-fatal):', msg)
       setStatus({ state: 'error', message: msg })
     }
   }

@@ -1,1 +1,1 @@
-"""WorkTrackCAM Python engines (CAM, mesh, OCCT helpers)."""
+"""WorkTrack3D Python engines (CAM, mesh, OCCT helpers)."""

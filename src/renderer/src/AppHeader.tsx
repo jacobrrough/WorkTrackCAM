@@ -356,7 +356,7 @@ export function ShopBrandBar({
         <span className="cc-header__logo" aria-hidden="true">
           {activeEnv?.iconGlyph ?? '◆'}
         </span>
-        <span className="cc-header__brand">WorkTrackCAM</span>
+        <span className="cc-header__brand">WorkTrack3D</span>
         <button
           type="button"
           className="cc-header__machine-btn"

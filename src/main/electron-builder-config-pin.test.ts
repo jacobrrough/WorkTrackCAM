@@ -49,8 +49,8 @@ describe('electron-builder build config pin', () => {
   const b = PKG.build
 
   it('product identity is stable', () => {
-    expect(b.productName).toBe('WorkTrackCAM')
-    expect(b.appId).toBe('com.worktrack.cam')
+    expect(b.productName).toBe('WorkTrack3D')
+    expect(b.appId).toBe('com.worktrack.3d')
     expect(b.artifactName).toContain('${productName}-${version}-Setup.${ext}')
   })
 
@@ -61,8 +61,9 @@ describe('electron-builder build config pin', () => {
     expect(b.nsis.allowToChangeInstallationDirectory).toBe(true)
   })
 
-  it('.wtcam file association is declared', () => {
-    expect(b.fileAssociations[0]?.ext).toBe('wtcam')
+  it('.wt3d is the primary file association, with .wtcam kept as a legacy alias', () => {
+    expect(b.fileAssociations[0]?.ext).toBe('wt3d')
+    expect(b.fileAssociations[1]?.ext).toBe('wtcam')
   })
 
   it('sidecar engines + win32 OrcaSlicer + profiles are packed via extraResources', () => {

@@ -1,5 +1,5 @@
 /**
- * Material preset accuracy audit — cross-references WorkTrackCAM material
+ * Material preset accuracy audit — cross-references WorkTrack3D material
  * cut parameters against standard machining reference data.
  *
  * Checks surface speed, chip load, and plunge factor safety for each

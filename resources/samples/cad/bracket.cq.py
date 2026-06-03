@@ -1,4 +1,4 @@
-# WorkTrackCAM CadQuery starter: L-bracket
+# WorkTrack3D CadQuery starter: L-bracket
 #
 # A simple right-angle mounting bracket -- two perpendicular plates joined
 # by a fillet, each plate carries a counterbored mounting hole. Geared at

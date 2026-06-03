@@ -593,7 +593,7 @@ export type CadAssemblyChild = {
 export type CadCreateAssemblyParams = {
   /** Must be a non-empty array. */
   parts: CadAssemblyChild[]
-  /** Optional display name (defaults to "WorkTrackCAM-Assembly"). */
+  /** Optional display name (defaults to "WorkTrack3D-Assembly"). */
   name?: string
 }
 

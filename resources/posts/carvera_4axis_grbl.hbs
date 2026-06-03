@@ -31,7 +31,7 @@
   `siemens_4axis` / `heidenhain_4axis`) now route through THIS file via
   `src/main/machine-cps-import.ts` `postTemplateMap`. The dialect-enum
   entries are preserved in `src/shared/machine-schema.ts` so existing
-  user machine profiles in %APPDATA%/WorkTrackCAM/machines/ still load
+  user machine profiles in %APPDATA%/WorkTrack3D/machines/ still load
   (Safety Rule 2: never break saved projects). CPS-imported machines that
   declare those dialects emit Carvera/Smoothieware-compatible G-code, with
   a console warning from `machine-cps-import.ts` describing the fallback.

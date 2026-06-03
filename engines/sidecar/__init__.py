@@ -1,4 +1,4 @@
-"""WorkTrackCAM Python sidecar.
+"""WorkTrack3D Python sidecar.
 
 A per-job long-running subprocess the Electron main process spawns to drive
 CAD operations (CadQuery / OpenCascade) and CAM operations (OpenCAMLib).

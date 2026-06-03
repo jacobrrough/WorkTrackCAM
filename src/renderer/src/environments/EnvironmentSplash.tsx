@@ -93,7 +93,7 @@ export function EnvironmentSplash({
     <div className="env-splash">
       <div className="env-splash__header">
         <div className="env-splash__logo" aria-hidden="true">{'\u25C6'}</div>
-        <div className="env-splash__title">WorkTrackCAM</div>
+        <div className="env-splash__title">WorkTrack3D</div>
         <div className="env-splash__subtitle">Pick a shop environment to get started.</div>
       </div>
 

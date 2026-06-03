@@ -1,6 +1,6 @@
 # Mesh and CAM engine evaluation (Phase C)
 
-This document is the roadmap for **measuring** and **optionally replacing** WorkTrackCAM’s mesh and toolpath stack. It does not commit the product to any vendor or license.
+This document is the roadmap for **measuring** and **optionally replacing** WorkTrack3D’s mesh and toolpath stack. It does not commit the product to any vendor or license.
 
 ## Goals
 

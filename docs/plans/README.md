@@ -1,4 +1,4 @@
-# WorkTrackCAM — Implementation Plans
+# WorkTrack3D — Implementation Plans
 
 Committable, code-grounded implementation plans for the final remaining follow-up items.
 Produced **plan-only** (no production code changed) on **2026-06-02** by a 7-stack parallel

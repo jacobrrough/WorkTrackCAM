@@ -147,7 +147,7 @@ function buildCubeStl(sideMm: number): Buffer {
   const countSize = 4
   const triSize = 50
   const buf = Buffer.alloc(headerSize + countSize + triSize * tris.length)
-  buf.write('WorkTrackCAM E2E cube fixture', 0, 'ascii')
+  buf.write('WorkTrack3D E2E cube fixture', 0, 'ascii')
   buf.writeUInt32LE(tris.length, headerSize)
 
   let off = headerSize + countSize

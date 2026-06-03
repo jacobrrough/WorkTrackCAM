@@ -1,5 +1,5 @@
 """
-OpenCAMLib strategies for WorkTrackCAM (optional dependency).
+OpenCAMLib strategies for WorkTrack3D (optional dependency).
 
 Install: ``pip install opencamlib`` (wheels typically Python 3.7–3.11; other
 versions may need a local build).

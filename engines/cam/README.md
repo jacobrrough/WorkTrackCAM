@@ -1,6 +1,6 @@
 # CAM engines (Python)
 
-WorkTrackCAM's CAM backend runs as a Python sidecar bundled with the
+WorkTrack3D's CAM backend runs as a Python sidecar bundled with the
 standalone Electron app. The stack is:
 
 - **CadQuery** (Apache 2) — parametric B-rep modeling on OpenCascade.

@@ -3,7 +3,7 @@
  *
  * Pins the contract of `src/renderer/shell/shellLayoutStorage.ts` -- the
  * renderer-side localStorage-backed persistence helper for the Browser and
- * Properties column widths that frame the centre canvas in the WorkTrackCAM
+ * Properties column widths that frame the centre canvas in the WorkTrack3D
  * shell. Sister cycles in the renderer pure-helper paired-pin chain:
  *   119 [ID-0196] derive-features
  *   124 [ID-0201] viewport3d-bounds
@@ -258,7 +258,7 @@ describe('[ID-0233] shellLayoutStorage key constants', () => {
     expect(SHELL_PROPERTIES_WIDTH_KEY).toBe('ufs_shell_properties_px')
   })
 
-  it('keys carry the WorkTrackCAM "ufs_" prefix (cross-helper convention)', () => {
+  it('keys carry the WorkTrack3D "ufs_" prefix (cross-helper convention)', () => {
     expect(SHELL_BROWSER_WIDTH_KEY.startsWith('ufs_')).toBe(true)
     expect(SHELL_PROPERTIES_WIDTH_KEY.startsWith('ufs_')).toBe(true)
   })

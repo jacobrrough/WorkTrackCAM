@@ -14,6 +14,7 @@ import {
 } from './python-dep-check'
 import { initAutoUpdater } from './auto-updater'
 import { loadSettings } from './settings-store'
+import { migrateLegacyUserData } from './userdata-migration'
 
 registerMainProcessDiagnostics()
 
@@ -35,7 +36,7 @@ function createWindow(): void {
       sandbox: true,
       webSecurity: true
     },
-    title: 'WorkTrackCAM'
+    title: 'WorkTrack3D'
   })
 
   // Block navigation to external URLs (prevents renderer XSS from escaping the app)
@@ -66,6 +67,23 @@ function createWindow(): void {
 let cachedDepCheck: PythonDepCheckOutcome | null = null
 
 app.whenReady().then(async () => {
+  // ── One-time userData migration (WorkTrackCAM → WorkTrack3D rename) ───
+  // Renaming productName relocates Electron's userData dir, so bring the
+  // operator's settings + machine/material/tool/post profiles across on the
+  // first launch of the renamed build. Runs before any loadSettings() below.
+  // Best-effort: any failure is logged and swallowed so it can never block
+  // startup — worst case the operator re-enters their settings.
+  try {
+    const migration = await migrateLegacyUserData()
+    if (migration.migrated) {
+      console.warn(
+        `[WorkTrack3D] Migrated user data from ${migration.from} (${migration.copied.join(', ')})`
+      )
+    }
+  } catch (err) {
+    console.warn('[WorkTrack3D] Legacy userData migration skipped (non-fatal):', err)
+  }
+
   // ── Content Security Policy ─────────────────────────────────────────
   // Restricts script, style, and connection sources to the app itself.
   // In dev mode, allow the Vite dev server origin; in production only
@@ -147,10 +165,10 @@ app.whenReady().then(async () => {
       cachedDepCheck = await checkPythonDeps(pythonPath)
       const warning = buildPythonDepsUserMessage(cachedDepCheck)
       if (warning) {
-        console.warn('[WorkTrackCAM] Python dependency warning:', warning)
+        console.warn('[WorkTrack3D] Python dependency warning:', warning)
       }
     } catch (err) {
-      console.error('[WorkTrackCAM] Failed to run startup dep check:', err)
+      console.error('[WorkTrack3D] Failed to run startup dep check:', err)
     }
   })()
 

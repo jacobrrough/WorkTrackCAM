@@ -82,7 +82,7 @@ function build() {
 
 function main() {
   const tris = build()
-  const buf = trianglesToBinaryStl(tris, 'WorkTrackCAM Carvera 4-axis rotary pen blank')
+  const buf = trianglesToBinaryStl(tris, 'WorkTrack3D Carvera 4-axis rotary pen blank')
   const outDir = path.resolve(__dirname, '..', '..', 'resources', 'samples', 'makera-carvera-4axis')
   fs.mkdirSync(outDir, { recursive: true })
   const outPath = path.join(outDir, 'carvera-rotary-pen-sample.stl')

@@ -1,4 +1,4 @@
-"""OpenCAMLib-backed CAM handlers for the WorkTrackCAM sidecar.
+"""OpenCAMLib-backed CAM handlers for the WorkTrack3D sidecar.
 
 End-to-end OCL dispatcher. Reuses the shared strategy core in
 ``engines/cam/ocl_strategies.py`` so the sidecar and the legacy

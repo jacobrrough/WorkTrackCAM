@@ -78,7 +78,7 @@ export interface GcodeHeaderHealth {
      */
     hasPowerLossRecovery?: boolean
     /**
-     * Adaptive-probing sentinel presence. K2 Plus's WorkTrackCAM
+     * Adaptive-probing sentinel presence. K2 Plus's WorkTrack3D
      * OrcaSlicer profile emits the K2-style "; MINX = ... ; MAXX = ..."
      * print-area annotation that triggers adaptive probing inside the
      * START_PRINT Klipper macro; users who roll their own start gcode
@@ -293,7 +293,7 @@ export function hasPowerLossRecoveryHeader(headerText: string): boolean {
  * Convenience predicate -- true when the bounded header text contains an
  * adaptive-probing sentinel that the K2 Plus firmware recognizes.
  *
- * The K2 Plus WorkTrackCAM OrcaSlicer profile at
+ * The K2 Plus WorkTrack3D OrcaSlicer profile at
  * `resources/orca-slicer/profiles/machines/creality-k2-plus.ini` emits
  * this K2-specific annotation as the FIRST line of `machine_start_gcode`:
  *
@@ -312,7 +312,7 @@ export function hasPowerLossRecoveryHeader(headerText: string): boolean {
  * Recognised patterns (case-insensitive):
  *
  *   - `; MINX = ...` / `; MAXX = ...` annotation block (K2 Plus
- *     WorkTrackCAM OrcaSlicer profile convention)
+ *     WorkTrack3D OrcaSlicer profile convention)
  *   - `BED_MESH_CALIBRATE` (live Klipper probe -- the substantive call)
  *   - `BED_MESH_PROFILE LOAD=...` (load a saved mesh; counts because
  *     the slicer is actively asking the firmware to apply mesh-leveling

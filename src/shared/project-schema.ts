@@ -178,14 +178,14 @@ export const appSettingsSchema = z.object({
    */
   defaultMachineId: z.string().optional(),
   /**
-   * WorkTrackCAM: default post template filename under `resources/posts` for **New machine draft**
+   * WorkTrack3D: default post template filename under `resources/posts` for **New machine draft**
    * in File → Settings → Machine Manager. Empty/unset falls back to `grbl-mm.gcode.hbs`.
    */
   camDefaultPostTemplate: z.string().optional(),
-  /** WorkTrackCAM: default dialect for new machine drafts (matches machine profile `dialect`). */
+  /** WorkTrack3D: default dialect for new machine drafts (matches machine profile `dialect`). */
   camDefaultMachineDialect: z.enum(['grbl', 'mach3', 'generic_mm']).optional(),
   /**
-   * WorkTrackCAM: user acknowledged that generated G-code is unverified until post, units, and
+   * WorkTrack3D: user acknowledged that generated G-code is unverified until post, units, and
    * machine clearances are checked (see docs/MACHINES.md).
    */
   camGcodeSafetyAcknowledged: z.boolean().optional(),

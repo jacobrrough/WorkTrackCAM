@@ -254,7 +254,7 @@ describe('checkGcodeHeaderHealth edge cases', () => {
 // ── Klipper power-loss recovery (PLR) sentinel ──────────────────────────────
 
 /**
- * Fixture: WorkTrackCAM K2 Plus OrcaSlicer profile's machine_start_gcode
+ * Fixture: WorkTrack3D K2 Plus OrcaSlicer profile's machine_start_gcode
  * pattern (the `; MINX = ...` adaptive-probing annotation followed by the
  * START_PRINT macro invocation). The K2 Plus profile lives at
  * `resources/orca-slicer/profiles/machines/creality-k2-plus.ini` and is

@@ -1,6 +1,6 @@
 # 4th-Axis CAM — reference & first-job runbook
 
-> **Audience.** Operators running the Makera Carvera with the 4th Axis HD rotary attachment (or any other 4-axis rotary machine WorkTrackCAM supports). Read this before generating your first rotary G-code.
+> **Audience.** Operators running the Makera Carvera with the 4th Axis HD rotary attachment (or any other 4-axis rotary machine WorkTrack3D supports). Read this before generating your first rotary G-code.
 
 This document has two parts. Part 1 is the **concept primer** — how the 4-axis engine represents a rotary job, which strategy does what, and the coordinate conventions the post follows. Part 2 is the **first-job runbook** — a concrete end-to-end walkthrough that cuts a simple groove around a round bar on the Carvera, from STL-less setup to verified air cut.
 
@@ -12,7 +12,7 @@ If you only have 15 minutes, skip to Part 2. Come back for Part 1 when a paramet
 
 ### Coordinate frame
 
-WorkTrackCAM's 4-axis engine uses one coordinate convention throughout. All posts, validators, and simulators share it; you should too.
+WorkTrack3D's 4-axis engine uses one coordinate convention throughout. All posts, validators, and simulators share it; you should too.
 
 - **X** is the axial position along the rotation axis — the length of the stock. `X = 0` is the chuck face, `X > 0` is toward the tailstock. Negative X is a bug: the validator rejects it, and the post-compile envelope check flags it.
 - **Y** is **always zero** in the output G-code. The rotary attachment centers the workpiece on the Y=0 plane; any non-zero Y would miss the part or hit the chuck.
@@ -183,7 +183,7 @@ Total time: about 10 minutes at the computer, plus the air cut.
 - 3 mm (or 1/8″ = 3.175 mm) two-flute flat end mill. Slot one of the ATC carousel; but since ATC is disabled in 4-axis mode, this is a **manual tool change** — load the tool by hand into the ER11 collet and tighten.
 
 **In-app prep:**
-- Open WorkTrackCAM and create a new project.
+- Open WorkTrack3D and create a new project.
 - Pick the **Makera Carvera (4th Axis HD)** environment from the environment switcher. This loads the `makera-carvera-4axis` machine profile and forces the 4-axis UI.
 
 ### Step 1 — configure stock

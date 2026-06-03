@@ -150,7 +150,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     test: /invalid\s*(?:session|project)\s*file/i,
     title: 'Invalid project file',
-    suggestion: 'The file format is not recognized. Ensure it was saved by WorkTrackCAM.',
+    suggestion: 'The file format is not recognized. Ensure it was saved by WorkTrack3D.',
   },
 ]
 

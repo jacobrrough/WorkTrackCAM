@@ -8,7 +8,7 @@
  *
  * This component is now reachable on demand from the command palette
  * ("Show app tour…") and from the Help drawer as a quick reminder of
- * the four core steps of a WorkTrackCAM workflow. The educational
+ * the four core steps of a WorkTrack3D workflow. The educational
  * content was preserved verbatim so users who liked it still have it.
  *
  * The legacy `fab-onboarding-dismissed-v1` localStorage key is no
@@ -66,10 +66,10 @@ export function OnboardingOverlay({ onDismiss }: { onDismiss: () => void }): Rea
       <div className="onboarding-card">
         <div className="onboarding-header">
           <h1 id="onboarding-title" className="onboarding-title">
-            Welcome to WorkTrackCAM
+            Welcome to WorkTrack3D
           </h1>
           <p className="onboarding-subtitle">
-            Professional CAM software for CNC milling, routing, and FDM printing.
+            Professional CAD-to-CAM software for design, CNC milling, routing, and FDM printing.
           </p>
         </div>
 

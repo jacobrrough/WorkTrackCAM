@@ -137,7 +137,7 @@ describe('Creality K2 Plus — FDM capability header [ID-0092]', () => {
       for (const line of sampleToolpath) {
         expect(gcode).toContain('\n' + line + '\n')
       }
-      expect(gcode).toContain('; End of WorkTrackCAM passthrough output')
+      expect(gcode).toContain('; End of WorkTrack3D passthrough output')
     })
   })
 

@@ -21,7 +21,7 @@
  *   - **Laguna Swift 5x10** (CNC router, RichAuto A-series via VCarve
  *     Pro export): the production post template is `vcarve_mach3.hbs`.
  *     The actual physical controller is RichAuto A-series, but the
- *     workflow is `WorkTrackCAM -> VCarve Pro post export -> RichAuto
+ *     workflow is `WorkTrack3D -> VCarve Pro post export -> RichAuto
  *     handheld import`; the Mach3-superset dialect emitted by VCarve
  *     Pro is what the RichAuto firmware ingests.
  *   - **Makera Carvera + 4th Axis Rotary**: BOTH production posts ride

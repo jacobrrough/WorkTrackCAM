@@ -1,4 +1,4 @@
-"""CadQuery-backed CAD handlers for the WorkTrackCAM sidecar.
+"""CadQuery-backed CAD handlers for the WorkTrack3D sidecar.
 
 End-to-end CadQuery dispatcher. Reuses the shared core in
 ``engines/cad/cadquery_import.py`` so the import/tessellate numerics live in

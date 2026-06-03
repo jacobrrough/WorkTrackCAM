@@ -55,7 +55,7 @@ function main() {
   if (tris.length !== 12) {
     throw new Error(`Expected 12 triangles for a cube; got ${tris.length}`)
   }
-  const buf = trianglesToBinaryStl(tris, 'WorkTrackCAM K2 Plus 20mm calibration cube')
+  const buf = trianglesToBinaryStl(tris, 'WorkTrack3D K2 Plus 20mm calibration cube')
   const outDir = path.resolve(__dirname, '..', '..', 'resources', 'samples', 'creality-k2-plus')
   fs.mkdirSync(outDir, { recursive: true })
   const outPath = path.join(outDir, 'calibration-cube-20mm.stl')

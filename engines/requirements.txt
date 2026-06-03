@@ -1,4 +1,4 @@
-# WorkTrackCAM Python sidecar dependencies
+# WorkTrack3D Python sidecar dependencies
 # Python 3.9-3.11 required (OpenCAMLib wheel compatibility range).
 #
 # Install:

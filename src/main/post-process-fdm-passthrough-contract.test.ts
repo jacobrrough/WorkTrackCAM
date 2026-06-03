@@ -6,7 +6,7 @@
  * `post-process-k2-capabilities.test.ts` (which pins ONLY the four
  * [ID-0092] capability header lines + Safety Rule 2 byte-identical
  * baseline). The k2-capabilities file does NOT pin: ruler-line scaffolding,
- * the WorkTrackCAM banner / Machine identity / Work-volume line ordering,
+ * the WorkTrack3D banner / Machine identity / Work-volume line ordering,
  * the operationLabel optional emission, the disclaimer block content,
  * the toolpath verbatim contract for the empty-toolpath edge case, the
  * footer banner + end-marker line, the Safety-Rule-1 PostContext-leak
@@ -347,7 +347,7 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
       const rulerCount = lines.filter((l) => l === RULER).length
       expect(rulerCount).toBe(4)
       expect(gcode).toContain(`; Machine: ${machine.name} (${machine.id})`)
-      expect(gcode).toContain('; End of WorkTrackCAM passthrough output')
+      expect(gcode).toContain('; End of WorkTrack3D passthrough output')
       // No actual G-code lines between the third and fourth rulers.
       const rulerIdx = lines
         .map((l, i) => (l === RULER ? i : -1))
@@ -392,11 +392,11 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
   // (H) Footer banner + end-marker
   // ------------------------------------------------------------------
   describe('(H) footer banner', () => {
-    it('emits `; End of WorkTrackCAM passthrough output` as the LAST non-blank line', async () => {
+    it('emits `; End of WorkTrack3D passthrough output` as the LAST non-blank line', async () => {
       const machine = bareFdm()
       const { gcode } = await renderPost(RESOURCES_ROOT, machine, [...SAMPLE_TOOLPATH])
       const lines = gcode.split('\n').filter((l) => l !== '')
-      expect(lines[lines.length - 1]).toBe('; End of WorkTrackCAM passthrough output')
+      expect(lines[lines.length - 1]).toBe('; End of WorkTrack3D passthrough output')
     })
 
     it('the fourth ruler line directly precedes the end-marker line', async () => {
@@ -407,7 +407,7 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
         .map((l, i) => (l === RULER ? i : -1))
         .filter((i) => i >= 0)
       const r3 = rulerIdx[3]!
-      expect(lines[r3 + 1]).toBe('; End of WorkTrackCAM passthrough output')
+      expect(lines[r3 + 1]).toBe('; End of WorkTrack3D passthrough output')
     })
   })
 

@@ -1,6 +1,6 @@
 # Slicing — OrcaSlicer integration
 
-WorkTrackCAM ships the Creality K2 Plus FDM pipeline by bundling the
+WorkTrack3D ships the Creality K2 Plus FDM pipeline by bundling the
 **OrcaSlicer** CLI and driving it from the Electron main process.
 
 ## Why OrcaSlicer
@@ -70,8 +70,8 @@ outside git. Two pieces of infrastructure materialize it:
 ### Day-zero checklist on a fresh Windows clone
 
 ```powershell
-git clone https://github.com/jacobrrough/WorkTrackCAM.git
-cd WorkTrackCAM
+git clone https://github.com/jacobrrough/WorkTrack3D.git
+cd WorkTrack3D
 npm install
 pwsh ./scripts/bundle-orca-slicer.ps1   # downloads + extracts OrcaSlicer
 npm run build                            # electron-builder packs it

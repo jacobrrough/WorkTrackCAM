@@ -300,7 +300,7 @@ def _build_binary_stl(
 
     # Header: 80 bytes of free-form data. Conventionally we put a short
     # human-readable tag; tools that read it back ignore it.
-    header = b"WorkTrackCAM CadQuery STL".ljust(80, b"\x00")
+    header = b"WorkTrack3D CadQuery STL".ljust(80, b"\x00")
     count_bytes = struct.pack("<I", triangle_count)
 
     # Each triangle: 3 floats normal + 3*3 floats vertices + uint16 attr = 50 bytes

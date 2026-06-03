@@ -230,7 +230,7 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
   // The 4-axis subsystem rewrite (April 2026) collapsed all 4-axis post output
   // to the GRBL/Carvera dialect. The non-GRBL 4-axis templates were deleted but
   // the dialect enum is preserved so existing user machine profiles in
-  // %APPDATA%/WorkTrackCAM/machines/ continue to load. Imported CPS files for
+  // %APPDATA%/WorkTrack3D/machines/ continue to load. Imported CPS files for
   // those dialects now point at `carvera_4axis_grbl.hbs` instead (renamed from
   // `cnc_4axis_grbl.hbs` in the pre-launch punch-list rank-16 cleanup -- the
   // "grbl" suffix is retained because the dialect enum entry is `grbl_4axis`,

@@ -28,10 +28,10 @@ describe('app-product', () => {
     expect(isWorkspaceAllowed('manufacture', 'cad')).toBe(false)
   })
 
-  it('getAppDisplayName maps products', () => {
-    expect(getAppDisplayName('cad')).toBe('WorkTrackCAD')
-    expect(getAppDisplayName('cam')).toBe('WorkTrackCAM')
-    expect(getAppDisplayName('unified')).toBe('Unified Fab Studio')
+  it('getAppDisplayName returns the unified WorkTrack3D brand for every build', () => {
+    expect(getAppDisplayName('cad')).toBe('WorkTrack3D')
+    expect(getAppDisplayName('cam')).toBe('WorkTrack3D')
+    expect(getAppDisplayName('unified')).toBe('WorkTrack3D')
   })
 
   it('getSplashLead returns non-empty strings', () => {

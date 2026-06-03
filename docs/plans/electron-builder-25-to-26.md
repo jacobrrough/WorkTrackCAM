@@ -38,7 +38,7 @@ v25 tar/cacache chain carries. Every v26 breaking change lands on config keys th
 
 1. `package.json` declares `"electron-builder": "^26.x"` (latest stable; confirm at install time).
 2. `npm install` succeeds; `package-lock.json` regenerated.
-3. `npm run build` produces a working `dist/WorkTrackCAM-0.1.0-Setup.exe` NSIS installer on Windows 11.
+3. `npm run build` produces a working `dist/WorkTrack3D-0.1.0-Setup.exe` NSIS installer on Windows 11.
 4. `npm run typecheck` + `npm test` green, zero regressions.
 5. `npm audit --omit=dev` returns **0**; the 10 high dev-only advisories close (or are re-documented).
 6. `scripts/verify-release-gate.mjs` gains the audit step and passes all stages.

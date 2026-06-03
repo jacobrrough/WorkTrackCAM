@@ -1,8 +1,8 @@
 {
-  "name": "worktrack-cam",
+  "name": "worktrack-3d",
   "version": "0.1.0",
   "private": true,
-  "description": "WorkTrackCAM — CNC toolpath generation, FDM slicing, and machine management",
+  "description": "WorkTrack3D — CAD-to-CAM: parametric modeling, CNC toolpaths, FDM slicing, and machine management",
   "author": "WorkTrack",
   "main": "out/main/index.js",
   "scripts": {
@@ -53,8 +53,8 @@
     "dompurify": "^3.4.7"
   },
   "build": {
-    "productName": "WorkTrackCAM",
-    "appId": "com.worktrack.cam",
+    "productName": "WorkTrack3D",
+    "appId": "com.worktrack.3d",
     "artifactName": "${productName}-${version}-Setup.${ext}",
     "directories": {
       "buildResources": "build"
@@ -98,13 +98,19 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "WorkTrackCAM"
+      "shortcutName": "WorkTrack3D"
     },
     "fileAssociations": [
       {
+        "ext": "wt3d",
+        "name": "WorkTrack3D Project",
+        "description": "WorkTrack3D project file",
+        "role": "Editor"
+      },
+      {
         "ext": "wtcam",
-        "name": "WorkTrackCAM Project",
-        "description": "WorkTrackCAM project file",
+        "name": "WorkTrack3D Project (legacy)",
+        "description": "Legacy WorkTrackCAM project file — opens in WorkTrack3D",
         "role": "Editor"
       }
     ]

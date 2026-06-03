@@ -1,4 +1,4 @@
-# WorkTrackCAM CadQuery starter: rotary cylinder + helical groove
+# WorkTrack3D CadQuery starter: rotary cylinder + helical groove
 #
 # A 30 mm OD x 80 mm cylindrical blank with a shallow helical groove cut
 # into its outer surface. Geared at the Makera Carvera + 4th-axis HD

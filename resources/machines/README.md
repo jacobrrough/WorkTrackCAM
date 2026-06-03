@@ -2,7 +2,7 @@
 
 JSON files loaded at runtime by [`src/main/machines.ts`](../../src/main/machines.ts) and validated with [`src/shared/machine-schema.ts`](../../src/shared/machine-schema.ts). **Every numeric field in the schema is millimeters or mm/min** (`workAreaMm`, `maxFeedMmMin`) — there is no separate inch field; duplicate a profile and edit values if you think in inches (multiply by 25.4).
 
-WorkTrackCAM ships **four** production machine profiles, one per supported environment:
+WorkTrack3D ships **four** production machine profiles, one per supported environment:
 
 | `id` | Display name | Environment | `kind` | `postTemplate` | `dialect` |
 |------|----------------|---------------|--------|----------------|-----------|

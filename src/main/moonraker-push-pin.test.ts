@@ -161,17 +161,17 @@ describe('moonraker-push PIN A -- module shape', () => {
 // ─── B. SOURCE-text purity ───────────────────────────────────────────
 
 describe('moonraker-push PIN B -- SOURCE-text purity', () => {
-  it('B1: SOURCE byte-size is exactly 25435', () => {
+  it('B1: SOURCE byte-size is exactly 25434', () => {
     // Updated post-CFS-v1 (+ Klipper PLR / adaptive-probing advisory
     // warnings): file grew with the new `cfsSlotId` payload field, the
     // pure `buildUploadUrlForK2Cfs` helper, the threading through
     // `uploadFileMultipart` + `moonrakerPush`, and the two new advisory
     // warning paths driven by `checkGcodeHeaderHealth.fields.has*`.
-    expect(SOURCE_BYTES).toBe(25435)
+    expect(SOURCE_BYTES).toBe(25434)
   })
-  it('B2: SOURCE UTF-16 length (.length) is exactly 25123', () => {
+  it('B2: SOURCE UTF-16 length (.length) is exactly 25122', () => {
     // Updated post-CFS-v1. See B1 for context.
-    expect(SOURCE_TEXT.length).toBe(25123)
+    expect(SOURCE_TEXT.length).toBe(25122)
   })
   it('B3: SOURCE_LINES split-by-LF length matches the on-disk line count (post CFS-v1 + PLR/probe advisory additions)', () => {
     // Updated post-CFS-v1 / PLR / adaptive-probing: file now carries
@@ -711,9 +711,9 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K4: SOURCE_TEXT references moonraker.readthedocs.io (canonical Moonraker docs URL)', () => {
     expect(SOURCE_TEXT.includes('moonraker.readthedocs.io')).toBe(true)
   })
-  it('K5: SOURCE_BYTES is exactly 25435 (regression net for any silent byte drift)', () => {
+  it('K5: SOURCE_BYTES is exactly 25434 (regression net for any silent byte drift)', () => {
     // Updated post-CFS-v1. See B1 docstring for the additions.
-    expect(SOURCE_BYTES).toBe(25435)
+    expect(SOURCE_BYTES).toBe(25434)
   })
   it('K6: SOURCE has 156 non-ASCII chars total (147 box-drawing + 8 em-dash + 1 arrow)', () => {
     let count = 0
@@ -769,7 +769,7 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
     // line-count or utf16-length will fail at least one of these.
     // Updated post-CFS-v1. See B1 docstring for the additions.
     expect(SOURCE_LINES.length).toBe(680)
-    expect(SOURCE_BYTES).toBe(25435)
-    expect(SOURCE_TEXT.length).toBe(25123)
+    expect(SOURCE_BYTES).toBe(25434)
+    expect(SOURCE_TEXT.length).toBe(25122)
   })
 })

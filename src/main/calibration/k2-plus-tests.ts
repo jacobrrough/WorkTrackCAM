@@ -379,7 +379,7 @@ function k2EndSequence(): string[] {
 function headerComment(title: string): string[] {
   return [
     '; ===========================================================================',
-    `; WorkTrackCAM K2 Plus Calibration: ${title}`,
+    `; WorkTrack3D K2 Plus Calibration: ${title}`,
     '; Klipper / Moonraker-flavor G-code; safe for Creality K2 Plus firmware.',
     '; Stays under K2_PLUS_HARDWARE_CEILINGS (see src/shared/k2-plus-slice-presets.ts).',
     '; ===========================================================================',

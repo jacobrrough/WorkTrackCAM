@@ -1,5 +1,5 @@
 /**
- * ShopApp -- WorkTrackCAM
+ * ShopApp -- WorkTrack3D
  *
  * Environment-first workflow:
  *   1. EnvironmentSplash -- three-card picker (VCarve Pro / Creality Print /

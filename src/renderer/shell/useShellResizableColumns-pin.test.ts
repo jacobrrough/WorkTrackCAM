@@ -15,7 +15,7 @@
  * shop-stock-bounds, 131 [ID-0208] command-palette-memory.
  *
  * Cross-cuts every machine indirectly -- the resizable-shell columns frame
- * the entire WorkTrackCAM UI and are present for every operator workflow on
+ * the entire WorkTrack3D UI and are present for every operator workflow on
  * every target machine (Creality K2 Plus FDM, Laguna Swift 5x10 router,
  * Makera Carvera + 4-axis). Drift in clamp ranges, persisted-key strings,
  * pointer-event lifecycle, or asymmetric-delta arithmetic would break the

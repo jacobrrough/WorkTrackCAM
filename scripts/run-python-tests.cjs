@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cross-platform Python test runner for WorkTrackCAM.
+ * Cross-platform Python test runner for WorkTrack3D.
  *
  * Re-adds `npm run test:python` (removed during the 2026-05-27 pivot
  * away from the FreeCAD addon path). Runs pytest against:

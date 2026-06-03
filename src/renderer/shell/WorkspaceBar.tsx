@@ -5,7 +5,7 @@ export type Workspace = 'design' | 'assemble' | 'manufacture' | 'utilities'
 type Props = {
   workspace: Workspace
   onChange: (w: Workspace) => void
-  /** When set, only these workbenches are shown (e.g. WorkTrackCAD vs WorkTrackCAM builds). */
+  /** When set, only these workbenches are shown (e.g. CAD-only vs CAM-only workspace filtering). */
   allowedWorkspaces?: Workspace[] | null
 }
 

@@ -1,4 +1,4 @@
-# WorkTrackCAM
+# WorkTrack3D
 
 **Professional CAD + CAM + FDM Slicer Desktop App**
 Parametric CAD modeling, CNC toolpath generation, 4-axis machining, heightfield strategies, FDM slicing, and full machine management — all in one Electron app for a one-shop workflow. Built to rival Fusion 360 / Mastercam quality.
@@ -27,8 +27,8 @@ Parametric CAD modeling, CNC toolpath generation, 4-axis machining, heightfield 
 
 ## Quick Start
 0. Install OrcaSlicer 2.3.2+ and bundle: `pwsh ./scripts/bundle-orca-slicer.ps1`
-1. `git clone https://github.com/jacobrrough/WorkTrackCAM.git`
-2. `cd WorkTrackCAM`
+1. `git clone https://github.com/jacobrrough/WorkTrack3D.git`
+2. `cd WorkTrack3D`
 3. Install Node: `npm install`
 4. Install Python engine: `pip install -r engines/requirements.txt` (Python ≥ 3.9)
 5. `npm run dev` (development)
@@ -87,7 +87,7 @@ The .wtcam project file holds both the CAD designs and the CAM jobs, so you can 
 Electron • React 19 • TypeScript • Three.js • Python sidecar (CadQuery for CAD + OpenCAMLib for CAM) • OrcaSlicer • Zod • Vite • **Vitest 4** • pytest
 
 ## Security
-WorkTrackCAM ships zero runtime advisories (`npm audit --omit=dev` returns 0). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full posture — closed CVEs (including the critical vitest GHSA-5xrq-8626-4rwp closed in commit 61fb5fa via vitest 3 → 4.1.8), deferred dev-only advisories (electron-builder + Monaco transitive chain), the per-release `npm audit --omit=dev` gate cadence, and a pointer to the live [GitHub Dependabot dashboard](https://github.com/jacobrrough/WorkTrackCAM/security/dependabot). Report a vulnerability via the repo's [private advisory form](https://github.com/jacobrrough/WorkTrackCAM/security/advisories/new) — do NOT file a public issue.
+WorkTrack3D ships zero runtime advisories (`npm audit --omit=dev` returns 0). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full posture — closed CVEs (including the critical vitest GHSA-5xrq-8626-4rwp closed in commit 61fb5fa via vitest 3 → 4.1.8), deferred dev-only advisories (electron-builder + Monaco transitive chain), the per-release `npm audit --omit=dev` gate cadence, and a pointer to the live [GitHub Dependabot dashboard](https://github.com/jacobrrough/WorkTrack3D/security/dependabot). Report a vulnerability via the repo's [private advisory form](https://github.com/jacobrrough/WorkTrack3D/security/advisories/new) — do NOT file a public issue.
 
 **License**: MIT (see LICENSE)
 

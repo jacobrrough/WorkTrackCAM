@@ -83,7 +83,7 @@ describe('appSettingsSchema JSON field validation', () => {
   })
 })
 
-describe('appSettingsSchema WorkTrackCAM fields', () => {
+describe('appSettingsSchema WorkTrack3D fields', () => {
   it('parses partial settings with manufacturing default and safety fields', () => {
     const parsed = appSettingsSchema.parse({
       theme: 'dark',

@@ -1,4 +1,4 @@
-"""CadQuery Assembly support for the WorkTrackCAM sidecar.
+"""CadQuery Assembly support for the WorkTrack3D sidecar.
 
 Provides parametric multi-part assembly construction backed by ``cq.Assembly``.
 Mirrors the structure of ``cadquery_import.py`` and ``cadquery_script.py``:
@@ -196,7 +196,7 @@ def build_assembly_from_parts(
     # transforms (e.g. zero-scale rows) and we want a structured error rather
     # than a bare OCP traceback.
     try:
-        assembly = cq.Assembly(name=assembly_name or "WorkTrackCAM-Assembly")
+        assembly = cq.Assembly(name=assembly_name or "WorkTrack3D-Assembly")
         for doc, transform, child_name in validated:
             location = _location_from_matrix(cq, transform)
             assembly.add(doc.workplane, name=child_name, loc=location)
@@ -817,7 +817,7 @@ def _write_binary_stl_from_flat_mesh(
         good.append(((nx / mag, ny / mag, nz / mag), v0, v1, v2))
 
     triangle_count = len(good)
-    header = b"WorkTrackCAM CadQuery Assembly STL".ljust(80, b"\x00")
+    header = b"WorkTrack3D CadQuery Assembly STL".ljust(80, b"\x00")
     count_bytes = struct.pack("<I", triangle_count)
     tri_struct = struct.Struct("<12fH")
     body_parts: List[bytes] = []

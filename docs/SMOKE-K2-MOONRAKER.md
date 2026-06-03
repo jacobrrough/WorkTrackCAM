@@ -15,20 +15,20 @@ This document is the bench procedure Jacob runs to verify, on his actual K2 Plus
 | K2 Plus on same LAN as the workstation | yes | router DHCP table |
 | Moonraker reachable from a browser | `http://<ip-or-hostname>` returns Fluidd UI | n/a |
 | K2 Plus firmware | Klipper-based + Moonraker (stock K2 Plus OS) | `Settings -> About` on the touchscreen |
-| WorkTrackCAM build | `npm run build` clean from a Phase 2 commit | terminal |
+| WorkTrack3D build | `npm run build` clean from a Phase 2 commit | terminal |
 | Test G-code file | a Cura-sliced `.gcode` <= 5 MiB targeting K2 Plus | external Cura with profile `creality_k2_plus.def.json` |
 
 Do NOT run this against a stranger printer or a printer you do not physically control. The push API does not authenticate by default on a stock K2 Plus; the safety net is your LAN, not the protocol.
 
 ## Finding the K2 Plus on your LAN (do this before Step 0)
 
-Everything below uses `<printer-host>` as a placeholder. You need to resolve that to a real address before you can curl anything or type a URL into WorkTrackCAM. There are three ways to find the K2 Plus on your LAN, in order of reliability:
+Everything below uses `<printer-host>` as a placeholder. You need to resolve that to a real address before you can curl anything or type a URL into WorkTrack3D. There are three ways to find the K2 Plus on your LAN, in order of reliability:
 
 1. **Router DHCP table (most reliable).** Log in to your router's admin page (commonly `http://192.168.1.1` or `http://192.168.0.1`), open the DHCP / connected-clients / device-list page, and look for a hostname like `K2Plus`, `CrealityK2`, or a MAC vendor of `Creality`. Note the IPv4 address (e.g. `192.168.1.42`). **Strongly recommended**: while you are in the router UI, set a **DHCP reservation** for that MAC -- this pins the IP across reboots and means every URL in this checklist keeps working forever.
 2. **K2 Plus touchscreen.** On the printer, tap `Settings -> Network -> WiFi` (or `Settings -> Network -> Ethernet` if wired). The current IPv4 address is displayed on the network status screen. Use this if you cannot reach the router UI -- but remember the IP can change at the next DHCP lease renewal unless you set a reservation per (1).
 3. **mDNS (`k2plus.local`).** Stock Creality K2 Plus OS advertises itself on mDNS. From the workstation, `ping k2plus.local` (or `ping K2Plus.local` -- case sometimes matters on Linux). If it resolves, you can use `http://k2plus.local:7125` everywhere `<printer-host>` appears. **Caveat**: mDNS is convenient but flaky -- it stops working on guest VLANs, networks with mDNS reflection disabled, some VPN configurations, and occasionally just at random. Use it as a fallback, not as the primary.
 
-### Hostname vs IP -- which to use in WorkTrackCAM
+### Hostname vs IP -- which to use in WorkTrack3D
 
 | Form | Pros | Cons | When to use |
 | --- | --- | --- | --- |
@@ -77,7 +77,7 @@ Confirm the local build can hit a mock Moonraker. This is a sanity check that th
 
 If either file is red, FIX THE BUILD before pointing it at hardware. A mock failure means the real printer will fault in a way the test surface does not catch.
 
-## Step 2 -- launch and configure WorkTrackCAM
+## Step 2 -- launch and configure WorkTrack3D
 
 1. Start the desktop app: `npm run dev` (or run the packaged build).
 2. Open the **My Shop** quick-select; pick **Creality K2 Plus**.
@@ -90,7 +90,7 @@ If either file is red, FIX THE BUILD before pointing it at hardware. A mock fail
 The objective: prove the multipart upload reaches `/server/files/upload` and the file shows up in Fluidd's queue, WITHOUT starting a print.
 
 1. Pick a tiny pre-sliced test file. A 20-line air-print is included as `tests/fixtures/k2-airprint-20lines.gcode` if available; otherwise slice a 5x5x1 mm cube in Cura with the K2 Plus profile and save it.
-2. In WorkTrackCAM, click **Push to printer** with **Start after upload = OFF**.
+2. In WorkTrack3D, click **Push to printer** with **Start after upload = OFF**.
 3. Expected app behavior:
    - Status toast / banner: `Uploaded <filename> to K2 Plus`.
    - No spinner over `printer/print/start` (because we did not start).
@@ -116,7 +116,7 @@ The objective: prove `POST /printer/print/start?filename=<...>` lights up the pr
 
 ONLY proceed if Step 3 passed. Use a slicer-emitted "air-print" gcode that homes, then runs G1 moves with the extruder OFF and the heaters OFF. Do NOT use a real benchy yet.
 
-1. In WorkTrackCAM, push the air-print with **Start after upload = ON**.
+1. In WorkTrack3D, push the air-print with **Start after upload = ON**.
 2. Expected app behavior:
    - Status toast: `Print started: <filename>`.
    - The printer status panel polls `/printer/objects/query?print_stats` and shows `printing -> progress -> complete` over the run.
@@ -145,10 +145,10 @@ The three endpoints exercised in this step (used by `moonrakerPause`, `moonraker
 Procedure:
 
 1. Push a 10-minute air-print with start.
-2. Two minutes in, click **Pause** in WorkTrackCAM. Expected: touchscreen reports paused; `print_stats.state` -> `paused`. (Wire: `POST /printer/print/pause`.)
+2. Two minutes in, click **Pause** in WorkTrack3D. Expected: touchscreen reports paused; `print_stats.state` -> `paused`. (Wire: `POST /printer/print/pause`.)
 3. Click **Resume**. Expected: touchscreen reports printing; `print_stats.state` -> `printing`. (Wire: `POST /printer/print/resume`.)
 4. One minute later, click **Cancel**. Expected: print stops, head homes, `print_stats.state` -> `cancelled`. (Wire: `POST /printer/print/cancel`.)
-5. Optional curl confirmation if the WorkTrackCAM UI buttons are not yet wired:
+5. Optional curl confirmation if the WorkTrack3D UI buttons are not yet wired:
    ```
    curl -sS -m 5 -X POST http://<printer-host>/printer/print/pause
    curl -sS -m 5 -X POST http://<printer-host>/printer/print/resume
@@ -160,7 +160,7 @@ Sign-off line for Jacob:
 
 ## E-stop / abort (K2 Plus)
 
-The K2 Plus is the ONE machine in the My-Shop fleet that has a **clean network E-stop path**: the firmware exposes `POST /printer/emergency_stop` over Moonraker, and Klipper turns that into an `M112` firmware halt. WorkTrackCAM's red **E-stop** button in the AppHeader (top-right, always visible) targets this endpoint whenever the active machine is `creality-k2-plus`.
+The K2 Plus is the ONE machine in the My-Shop fleet that has a **clean network E-stop path**: the firmware exposes `POST /printer/emergency_stop` over Moonraker, and Klipper turns that into an `M112` firmware halt. WorkTrack3D's red **E-stop** button in the AppHeader (top-right, always visible) targets this endpoint whenever the active machine is `creality-k2-plus`.
 
 ### What the button does
 
@@ -228,13 +228,13 @@ Sign-off line for Jacob:
 Slice a real 20x20x10 mm calibration cube (NOT a benchy yet -- a benchy is the *next* test, after the cube proves the pipeline) with the K2 Plus profile, push with **Start after upload = ON**, and watch the print. This is the END-TO-END acceptance gate for `[P2-K2-PUSH]`.
 
 Sign-off line for Jacob:
-- [ ] Calibration cube printed via WorkTrackCAM Moonraker push  /  signed _________________  /  date __________
+- [ ] Calibration cube printed via WorkTrack3D Moonraker push  /  signed _________________  /  date __________
 
 When this line is signed, `[P2-K2-PUSH]` is DONE for the K2 Plus Definition-of-Done in CLAUDE.md PHASE 2.
 
 ## What is NOT in this checklist
 
-- The slicer integration (`[P2-K2-SLICE]`) is a separate Phase 2 item and is currently BLOCKED on Jacob's sign-off in `docs/SLICING.md`. While it is blocked, the smoke checklist assumes the operator slices in external Cura with `resources/slicer/creality_k2_plus.def.json`. After `[P2-K2-SLICE]` lands, this checklist will be augmented with a Step 2.5 ("slice via WorkTrackCAM") and Step 7 will become the load-and-slice-and-push-and-watch single-click flow that the K2 Plus Definition-of-Done in CLAUDE.md actually requires.
+- The slicer integration (`[P2-K2-SLICE]`) is a separate Phase 2 item and is currently BLOCKED on Jacob's sign-off in `docs/SLICING.md`. While it is blocked, the smoke checklist assumes the operator slices in external Cura with `resources/slicer/creality_k2_plus.def.json`. After `[P2-K2-SLICE]` lands, this checklist will be augmented with a Step 2.5 ("slice via WorkTrack3D") and Step 7 will become the load-and-slice-and-push-and-watch single-click flow that the K2 Plus Definition-of-Done in CLAUDE.md actually requires.
 - Multi-color (CFS) verification. Single-extruder first; CFS after.
 - RFID filament tag verification. Out of scope for the push pipeline; the slicer profile owns it.
 

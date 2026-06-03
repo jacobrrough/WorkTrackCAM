@@ -177,7 +177,7 @@ export function buildMigrationPipeline<TLatest>(
   }
 }
 
-// ─── Concrete migration helpers for WorkTrackCAM schemas ──────────────────
+// ─── Concrete migration helpers for WorkTrack3D schemas ──────────────────
 
 /**
  * Manufacture file v1 -> v2 migration (Gap #7 v1: multi-plate / multi-job project).

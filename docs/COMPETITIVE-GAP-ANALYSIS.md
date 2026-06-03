@@ -1,4 +1,4 @@
-# WorkTrackCAM — Competitive Gap Analysis
+# WorkTrack3D — Competitive Gap Analysis
 
 **Date:** 2026-05-27
 **Scope:** Research-only. No production code touched. Benchmark targets are Fusion 360 Manufacture, Mastercam 2026, VCarve Pro, OrcaSlicer, Bambu Studio, and the modern professional-desktop-app UX baseline. Findings are constrained by `CLAUDE.md` **My-Shop-Only Mode** — every gap below directly benefits Creality K2 Plus, Laguna Swift 5x10, or Makera Carvera (3- or 4-axis).
@@ -7,7 +7,7 @@
 
 ## 1. Current state summary
 
-WorkTrackCAM today is a surprisingly broad foundation. The Manufacture pipeline covers **30+ operation kinds** (`src/shared/manufacture-schema.ts` lines 175-367) including 2D contour/pocket/drill/chamfer, 3D adaptive/waterline/raster/scallop/spiral/morph/trochoidal/steep-shallow, 4-axis roughing/finishing/contour/indexed/continuous, 5-axis contour/swarf/flowline, probing (5 cycle types), thread-mill, laser, PCB iso/drill/contour, and FDM slice. Three target machine profiles ship (`resources/machines/*.json`), plus 7 Handlebars post-processors (`resources/posts/`). The backend has been pivoted post-2026-05-27 to a CadQuery + OpenCAMLib + OrcaSlicer Python sidecar (`engines/sidecar/main.py`, `src/main/sidecar/python-bridge.ts`, `src/main/slicer/orca-wrapper.ts`).
+WorkTrack3D today is a surprisingly broad foundation. The Manufacture pipeline covers **30+ operation kinds** (`src/shared/manufacture-schema.ts` lines 175-367) including 2D contour/pocket/drill/chamfer, 3D adaptive/waterline/raster/scallop/spiral/morph/trochoidal/steep-shallow, 4-axis roughing/finishing/contour/indexed/continuous, 5-axis contour/swarf/flowline, probing (5 cycle types), thread-mill, laser, PCB iso/drill/contour, and FDM slice. Three target machine profiles ship (`resources/machines/*.json`), plus 7 Handlebars post-processors (`resources/posts/`). The backend has been pivoted post-2026-05-27 to a CadQuery + OpenCAMLib + OrcaSlicer Python sidecar (`engines/sidecar/main.py`, `src/main/sidecar/python-bridge.ts`, `src/main/slicer/orca-wrapper.ts`).
 
 UX scaffolding is already in place but thin: an `OnboardingOverlay` (4 static cards), a `HelpPanel` (shortcuts/glossary/operations/tips), a command palette (`src/renderer/commands/CommandPalette.tsx`), a 152-entry Fusion-style command catalog (87 implemented / 45 partial / 16 planned — `src/shared/fusion-style-command-catalog.ts`), a working undo/redo manager (`src/renderer/src/undo-manager.ts`), 398 `aria-*` attributes across 67 files, and a sketch canvas (`Sketch2DCanvas.tsx`) covering lines, arcs, splines, fillet/chamfer, trim, pattern, mirror. The Settings view is **two fields long** (`SettingsView.tsx`: Python path + CuraEngine path) — that is the single biggest visible UX shortfall today. OrcaSlicer profiles for K2 Plus (standard + high-speed) exist (`resources/orca-slicer/profiles/`), and Moonraker direct upload is wired (`src/main/moonraker-push.ts`). Mesh import handles STL/STEP/IGES/OBJ/PLY/GLTF/3MF/OFF/DAE/FBX/DXF (`src/shared/mesh-import-formats.ts`).
 
@@ -18,7 +18,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 ## 2. Competitor feature scan
 
 ### Fusion 360 Manufacture
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | Setup wizard with Model/Stock/Post tabs and 5 WCS-orientation modes | Yes ([source](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Defining-Work-Coordinate-Systems-in-the-Fusion-360-CAM-Workspace.html)) | Have WcsOriginPicker (10 points) and MultiSetupWizard, but no guided "new setup" wizard with model-orientation pick modes |
 | Tool library import (Fusion .tools ZIP, HSMWorks CSV) | Yes | Yes — `src/main/tools-import.ts` handles both, plus generic CSV/JSON |
@@ -30,7 +30,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | Post library | 100s of community posts | 7 posts ship; no post browser/picker UI |
 
 ### Mastercam 2026
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | 2D, 3D, 4-, 5-axis, turning, Swiss, wire-EDM ([source](https://www.gmccs.de/downloads/pdf/mastercam/WhatsNew.pdf)) | Yes | Mill yes; turning is **planning-only** (`cnc_lathe_turn`); no Swiss / EDM (out of scope) |
 | Critical Depths feature (machine flat areas inside a 3D pass) | New in 2026 | Not implemented |
@@ -38,7 +38,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | Blade Expert (turbomachinery) | Yes | Out of scope |
 
 ### VCarve Pro (Laguna Swift 5x10 environment)
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | True-shape nesting of vectors and components | Yes ([source](https://www.vectric.com/products/vcarve/)) | **Not implemented** — no nesting engine anywhere in `src/` |
 | V-carving + prism carving + fluting + texturing | Yes | V-carving via `cnc_chamfer` exists; prism/fluting/texturing not implemented |
@@ -47,7 +47,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | Sheet job set-up sheets | Yes | Yes — `src/renderer/src/setup-sheet.ts` |
 
 ### OrcaSlicer
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | Calibration suite: temp tower, max volumetric, pressure advance, adaptive PA, flow ratio, retraction, tolerance, cornering (jerk/junction-dev), input shaping, VFA ([source](https://github.com/SoftFever/OrcaSlicer/wiki/Calibration)) | Yes (10 calibration tests) | **Not implemented** — no calibration UI; we just call Orca for slicing |
 | Seam painter ([source](https://www.orcaslicer.com/wiki/print_prepare/prepare_seam_painting)) | Yes | Not implemented |
@@ -57,7 +57,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | Cloud profile sync (community profiles) | Yes | Not implemented (out of scope) |
 
 ### Bambu Studio
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | Auto-orient (overhang area + bottom area + convex hull heuristic) ([source](https://wiki.bambulab.com/en/software/bambu-studio/auto-orientation)) | Yes | **Not implemented** |
 | Auto-arrange on plate | Yes | Not implemented |
@@ -67,7 +67,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | MakerWorld profile browser | Yes | Out of scope |
 
 ### Klipper / Moonraker ecosystem (K2 Plus targets this)
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | Embedded thumbnail PNG in G-code (read by Mainsail/Fluidd file list) ([source](https://docs.mainsail.xyz/overview/features/thumbnails)) | Yes (industry standard) | **Not implemented** — Orca itself emits one but our pipeline doesn't verify or surface it |
 | Moonraker direct upload | Yes | Yes — `src/main/moonraker-push.ts` |
@@ -75,7 +75,7 @@ What's **missing** vs. mature competitors is mostly polish, library breadth, and
 | Power-loss recovery G-code blocks | K2 supports | K2 profile has the flag; passthrough post emits a comment but no validation |
 
 ### Desktop UX baseline
-| Capability | Has it | WorkTrackCAM status |
+| Capability | Has it | WorkTrack3D status |
 |---|---|---|
 | Command palette (Ctrl+K) | Modern norm | Yes |
 | Undo/redo (Ctrl+Z / Ctrl+Y) | Modern norm | Engine yes (`undo-manager.ts`); not registered in keyboard shortcut table (`app-keyboard-shortcuts.ts`) — confirmed absent |
@@ -119,7 +119,7 @@ Ranked by impact-to-effort. Effort: S (1–3 h), M (1–2 days), L (1–2 weeks)
 
 ## 5. Big bets (L/XL effort that close the gap)
 
-1. **Full K2 Plus calibration suite (Gap #4)**. Ship the five Orca calibration tests as one-click jobs in a new "Calibrate" sub-tab under Manufacture. The G-code is parametric (start/end temps, step, etc.) so this is mostly UI + parameter forms feeding Orca CLI with bundled test STLs. **Impact**: makes WorkTrackCAM the *only* desktop CAM+slicer that does this for the K2 Plus. **Effort**: 1–2 weeks.
+1. **Full K2 Plus calibration suite (Gap #4)**. Ship the five Orca calibration tests as one-click jobs in a new "Calibrate" sub-tab under Manufacture. The G-code is parametric (start/end temps, step, etc.) so this is mostly UI + parameter forms feeding Orca CLI with bundled test STLs. **Impact**: makes WorkTrack3D the *only* desktop CAM+slicer that does this for the K2 Plus. **Effort**: 1–2 weeks.
 2. **True-shape nesting for Laguna sheet jobs (Gap #9)** — **v1 SHIPPED 2026-05-27**. v1 is a from-scratch bottom-left-fill (BLF) routine in `src/main/nesting/true-shape-v1.ts` with axis-aligned bounding-box overlap (no external libs ported, no license risk). It's exposed as the `nesting:nest-polygons` IPC and a Laguna-only "Nest parts on stock" button in `LagunaNestingPanel.tsx`. Honest v1 limitations: BLF over-reserves space for non-rectangular parts and ships only 0°/90° rotations. **v2 plan**: port SVGnest / Deepnest (MIT) NFP+GA into the existing module while keeping the `NestResult` / `Placement` contract stable; add a `nestVersion: 'v1' | 'v2'` field so renderer can A/B diff. **v2 effort**: 1–2 weeks port.
 
 ---

@@ -170,7 +170,7 @@ function build() {
 
 function main() {
   const tris = build()
-  const buf = trianglesToBinaryStl(tris, 'WorkTrackCAM Carvera 3-axis pocket sample')
+  const buf = trianglesToBinaryStl(tris, 'WorkTrack3D Carvera 3-axis pocket sample')
   const outDir = path.resolve(__dirname, '..', '..', 'resources', 'samples', 'makera-carvera-3axis')
   fs.mkdirSync(outDir, { recursive: true })
   const outPath = path.join(outDir, 'carvera-pocket-sample.stl')

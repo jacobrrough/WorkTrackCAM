@@ -1,6 +1,6 @@
-# WorkTrackCAM CadQuery starter: engraved sign-board
+# WorkTrack3D CadQuery starter: engraved sign-board
 #
-# A 200 x 100 x 6 mm rectangular plate with "WorkTrackCAM" text recessed
+# A 200 x 100 x 6 mm rectangular plate with "WorkTrack3D" text recessed
 # into the front face. Sized for a Laguna Swift 5x10 v-carve or pocket
 # operation on hardwood / plywood signage stock. The recess depth is
 # small (1.2 mm) so the same model works for a 60-degree v-bit carve or
@@ -16,7 +16,7 @@ import cadquery as cq
 plate_length = 200.0   # mm -- along X
 plate_width = 100.0    # mm -- along Y
 plate_thickness = 6.0  # mm -- along Z, raw stock thickness
-text_string = "WorkTrackCAM"
+text_string = "WorkTrack3D"
 text_size = 24.0       # mm -- nominal cap height
 text_depth = 1.2       # mm -- cut depth into the top face
 text_font = "Arial"    # any system font; falls back to default if missing

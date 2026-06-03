@@ -452,7 +452,7 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
       warnings.push(
         `${filename}: no '; thumbnail begin' block detected in the G-code header. ` +
           'The upload will still work, but Mainsail/Fluidd will show a plain filename in the K2 Plus file picker. ' +
-          "Re-slice with OrcaSlicer's `thumbnails` setting enabled (already set in the WorkTrackCAM K2 profile)."
+          "Re-slice with OrcaSlicer's `thumbnails` setting enabled (already set in the WorkTrack3D K2 profile)."
       )
     }
     if (headerHealth.missingFields.length > 0 && headerHealth.missingFields.length < 4) {

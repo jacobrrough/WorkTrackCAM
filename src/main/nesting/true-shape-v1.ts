@@ -23,7 +23,7 @@
  * very non-rectangular parts, leaving real material on the floor that v2 can
  * recover. v1 NEVER places parts overlapping; it errs on the side of unplaced.
  *
- * License hygiene: this module is written from scratch by the WorkTrackCAM
+ * License hygiene: this module is written from scratch by the WorkTrack3D
  * project. No external library is copied or ported. There is no Deepnest /
  * nfp-polygon / clipper-lib source in this file or its dependencies. v2 may
  * port a permissively-licensed (MIT / Apache / BSD) NFP routine; that port

@@ -4,8 +4,8 @@ export type AppWorkspaceId = 'design' | 'assemble' | 'manufacture' | 'utilities'
 /**
  * Build-time product, injected as `__APP_PRODUCT__` by electron-vite (main + renderer).
  * - `unified`: all workbenches (default for `npm run dev` / legacy)
- * - `cad`: WorkTrackCAD — design + assembly + file utilities
- * - `cam`: WorkTrackCAM — manufacture + file utilities
+ * - `cad`: WorkTrack3D — design + assembly + file utilities
+ * - `cam`: WorkTrack3D — manufacture + file utilities
  */
 export type AppProduct = 'unified' | 'cad' | 'cam'
 
@@ -17,15 +17,10 @@ export function getAppProductFromBuild(): AppProduct {
   return 'unified'
 }
 
-export function getAppDisplayName(product: AppProduct): string {
-  switch (product) {
-    case 'cad':
-      return 'WorkTrackCAD'
-    case 'cam':
-      return 'WorkTrackCAM'
-    default:
-      return 'Unified Fab Studio'
-  }
+export function getAppDisplayName(_product: AppProduct): string {
+  // One unified product brand across every build variant — WorkTrack3D is a
+  // single CAD-to-CAM app; CAD vs CAM is a workspace inside it, not a product.
+  return 'WorkTrack3D'
 }
 
 export function getAppWindowTitle(product: AppProduct): string {

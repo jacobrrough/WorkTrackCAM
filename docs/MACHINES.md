@@ -1,6 +1,6 @@
 # Machines — profile reference & safety notes
 
-> **Audience.** Operators about to run WorkTrackCAM-generated G-code on a real machine. Before you bolt the part in, read the section for your machine.
+> **Audience.** Operators about to run WorkTrack3D-generated G-code on a real machine. Before you bolt the part in, read the section for your machine.
 
 Machine profiles live in [`resources/machines/`](../resources/machines/) as JSON files. Each profile pins down the work envelope, spindle range, axis count, A-axis orientation (if rotary), post-process dialect, and which Handlebars template renders the final G-code. Profiles are validated at load time against [`src/shared/machine-schema.ts`](../src/shared/machine-schema.ts); an invalid profile is rejected before any toolpath runs. **All numeric fields are millimeters or mm/min** — there is no inch variant.
 
@@ -8,7 +8,7 @@ You almost never edit these files by hand. Use the **Library** drawer in-app to 
 
 ## Bundled profiles
 
-WorkTrackCAM ships four production profiles — one per supported environment. Every field listed below is enforced by the runtime validator and fed into the post processor for the header, WCS block, spindle dialect, and envelope checks.
+WorkTrack3D ships four production profiles — one per supported environment. Every field listed below is enforced by the runtime validator and fed into the post processor for the header, WCS block, spindle dialect, and envelope checks.
 
 ### `makera-carvera-3axis` — Makera Carvera (3-axis mode)
 
@@ -40,7 +40,7 @@ Same base machine as the 3-axis profile, but the 4th Axis HD rotary attachment h
 
 ### `laguna-swift-5x10` — Laguna Swift 5×10 (VCarve Pro environment)
 
-Large flat-bed router. Used through VCarve Pro toolpaths; WorkTrackCAM emits Mach3 dialect.
+Large flat-bed router. Used through VCarve Pro toolpaths; WorkTrack3D emits Mach3 dialect.
 
 - **Work area:** ~1,524 × 3,048 mm table (profile `workAreaMm.z: 203` mm — gantry under-clearance)
 - **Dialect:** `mach3` — the Laguna Swift's RichAuto A-series handheld accepts Mach3 G-code as a strict superset (`G21`, `G90`, `G17`, `G0`/`G1`/`G2`/`G3`, `M3`/`M5`, `S`, `F`, `M7`/`M9`, `M30`, and `%` tape markers are all honored). See the [`vcarve_mach3.hbs`](../resources/posts/vcarve_mach3.hbs) preamble for the per-feature rationale; roadmap [ID-0004] / [ID-0063] track the decision history.
@@ -79,7 +79,7 @@ All seven fields are **optional** — absent fields fall back to slicer-definiti
 
 #### Moonraker upload safety pipeline (K2 Plus)
 
-The K2 Plus ships Creality Klipper + Moonraker + Fluidd, so WorkTrackCAM pushes sliced G-code directly via the Moonraker HTTP API. Two guard layers sit in front of the upload and both are enforced automatically when an FDM profile declares the ceilings above:
+The K2 Plus ships Creality Klipper + Moonraker + Fluidd, so WorkTrack3D pushes sliced G-code directly via the Moonraker HTTP API. Two guard layers sit in front of the upload and both are enforced automatically when an FDM profile declares the ceilings above:
 
 1. **Pre-upload temperature validation.** Before the multipart upload starts, [`src/main/moonraker-push.ts`](../src/main/moonraker-push.ts) reads the G-code header (bounded to 128 KiB via [`src/main/gcode-header-read.ts`](../src/main/gcode-header-read.ts) — see roadmap [ID-0075]), parses every `M104`/`M109`/`M140`/`M141`/`M190` and Klipper `SET_HEATER_TEMPERATURE HEATER=chamber TARGET=…` command, and cross-checks each target against the active machine profile's declared ceilings. On any violation the function returns early with `ok: false`, attaches a structured `tempValidation` result, and **no bytes cross the network**. On the `startAfterUpload: true` path the `/printer/print/start` POST is also skipped. See roadmap [ID-0070] / [ID-0071] / [ID-0073].
 2. **IPC-layer capability resolution.** The renderer only has to pass `machineId` to the `moonraker:push` IPC handler; [`src/main/ipc-fabrication.ts`](../src/main/ipc-fabrication.ts) resolves the machine profile, extracts the FDM capability subset, and threads it into `moonrakerPush`. Explicit `machineCapabilities` on the payload still wins (including explicit `null` to opt out). See roadmap [ID-0078].
@@ -138,7 +138,7 @@ If your controller is not on this list, copy the closest dialect, change the pro
 
 ## Emergency Stop (E-stop)
 
-WorkTrackCAM hosts a red **E-stop** button in the **AppHeader** (top-right of the window, **always visible** regardless of which workspace you are in -- Design, Manufacture, Workshop, Settings). It is the single in-app affordance for "stop the active machine right now." This section is the architecture summary; the per-machine **bench drills** live in the SMOKE docs cross-referenced below.
+WorkTrack3D hosts a red **E-stop** button in the **AppHeader** (top-right of the window, **always visible** regardless of which workspace you are in -- Design, Manufacture, Workshop, Settings). It is the single in-app affordance for "stop the active machine right now." This section is the architecture summary; the per-machine **bench drills** live in the SMOKE docs cross-referenced below.
 
 ### Architecture in one paragraph
 
@@ -160,11 +160,11 @@ The confirm dialog cannot be bypassed. There is intentionally no keyboard shortc
 
 ### Why three different paths?
 
-The three machines have **three fundamentally different abort architectures** that WorkTrackCAM intentionally surfaces honestly rather than abstracting over:
+The three machines have **three fundamentally different abort architectures** that WorkTrack3D intentionally surfaces honestly rather than abstracting over:
 
-- **K2 Plus** ships an open, documented network API (Moonraker) that exposes a clean firmware-halt endpoint. The community ecosystem has used `M112`-over-Moonraker in production for years. WorkTrackCAM can safely target this as a first-class abort path.
-- **Carvera** ships a closed first-party desktop app (Makera Controller) that has no headless mode. The community CLI we use for uploads (`carvera-cli`) **also** offers an abort subcommand, but its abort path has not stabilized across the CLI version history. WorkTrackCAM exposes the partial path while being explicit that the **physical e-stop is the primary**.
-- **Laguna** runs through a closed pendant (RichAuto A-series) with no documented remote-abort API. The bytes leave WorkTrackCAM on a USB stick and the workstation has no path to the running cycle at all. Adding a fake remote abort would be **dangerous** (the operator might be misled into believing a network stop was in flight); a reminder toast is the safest possible behavior.
+- **K2 Plus** ships an open, documented network API (Moonraker) that exposes a clean firmware-halt endpoint. The community ecosystem has used `M112`-over-Moonraker in production for years. WorkTrack3D can safely target this as a first-class abort path.
+- **Carvera** ships a closed first-party desktop app (Makera Controller) that has no headless mode. The community CLI we use for uploads (`carvera-cli`) **also** offers an abort subcommand, but its abort path has not stabilized across the CLI version history. WorkTrack3D exposes the partial path while being explicit that the **physical e-stop is the primary**.
+- **Laguna** runs through a closed pendant (RichAuto A-series) with no documented remote-abort API. The bytes leave WorkTrack3D on a USB stick and the workstation has no path to the running cycle at all. Adding a fake remote abort would be **dangerous** (the operator might be misled into believing a network stop was in flight); a reminder toast is the safest possible behavior.
 
 Pretending all three machines have the same E-stop story would be a safety lie. The docs and the UI both call out the difference so the operator knows what they actually have.
 
@@ -188,7 +188,7 @@ Operators must run the relevant sub-step **once per machine** before relying on 
 
 ## Safety — verifying posted G-code
 
-Every G-code file WorkTrackCAM posts is **unverified** until you prove it out on your control. The post templates say so in the header comments. Do this every time, especially after a profile or post-template change.
+Every G-code file WorkTrack3D posts is **unverified** until you prove it out on your control. The post templates say so in the header comments. Do this every time, especially after a profile or post-template change.
 
 1. **Open the `.nc` file and read the first 20 lines.** Confirm units (`G21`), absolute mode (`G90`), the right WCS (`G54`–`G59` per your fixture), spindle-on M-code, and safe Z retract are present in that order.
 2. **Scan the last 10 lines.** The program end should be `M2` for Carvera, `M30` for most other controllers. Spindle should be `M5`, coolant should be off (`M9`), and the machine should park somewhere safe.
@@ -198,7 +198,7 @@ Every G-code file WorkTrackCAM posts is **unverified** until you prove it out on
 
 ## Adding a custom profile
 
-If you run a machine WorkTrackCAM doesn't bundle, add a profile via the Library drawer (preferred) or drop a JSON file into `{userData}/machines/`.
+If you run a machine WorkTrack3D doesn't bundle, add a profile via the Library drawer (preferred) or drop a JSON file into `{userData}/machines/`.
 
 Minimum fields — required by the schema:
 

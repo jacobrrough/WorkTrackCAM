@@ -1,5 +1,5 @@
 /**
- * WorkTrackCAM preload — exposes CAM/fabrication + core IPC to the renderer.
+ * WorkTrack3D preload — exposes CAM/fabrication + core IPC to the renderer.
  * Design, assembly, drawing, and kernel build APIs are NOT included.
  */
 import { contextBridge, ipcRenderer } from 'electron'

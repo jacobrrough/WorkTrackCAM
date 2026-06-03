@@ -263,7 +263,7 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
   const [error, setError] = useState<string | null>(null)
 
   // Step 1 state
-  const [projectName, setProjectName] = useState('New WorkTrackCAM Project')
+  const [projectName, setProjectName] = useState('New WorkTrack3D Project')
   const [parentDir, setParentDir] = useState<string>(defaultProjectsRoot ?? '')
 
   // Step 2 state -- which card; which Makera variant.
@@ -505,7 +505,7 @@ export function FirstLaunchWizard(props: FirstLaunchWizardProps): React.ReactEle
     >
       <div className="onboarding-card flw-card">
         <header className="flw-header">
-          <h1 id="flw-title" className="onboarding-title">Welcome to WorkTrackCAM</h1>
+          <h1 id="flw-title" className="onboarding-title">Welcome to WorkTrack3D</h1>
           <p className="onboarding-subtitle">
             Let&apos;s set up your first project. (Step {step} of 3)
           </p>

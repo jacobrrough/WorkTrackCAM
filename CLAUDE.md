@@ -1,4 +1,4 @@
-# WorkTrackCAM — Project Rules
+# WorkTrack3D — Project Rules
 
 ## Identity
 Professional CAM/FDM slicing desktop app (Electron, React 19, TypeScript, Three.js). Target quality: Fusion 360 / Mastercam / SolidCAM. **Standalone app — NOT a FreeCAD addon.**
@@ -8,7 +8,7 @@ The user explicitly switched the foundation to mature open-source libraries bund
 - **CadQuery** (Apache 2) — parametric B-rep CAD on OpenCascade. Python sidecar.
 - **OpenCAMLib** (LGPL) — drop-cutter / push-cutter / waterline toolpath generation. Python.
 - **OrcaSlicer** (AGPL) — bundled CLI for K2 Plus FDM slicing. Replaces the deleted CuraEngine bundle.
-- The user **never sees** these libraries — they're internal bundled dependencies. The product is WorkTrackCAM.
+- The user **never sees** these libraries — they're internal bundled dependencies. The product is WorkTrack3D.
 
 ## USER CONTEXT — TARGET MACHINES (MUST BE FOLLOWED 100%)
 The owner (Jacob, Palmdale, CA) operates ONLY the three machines below. All development — slicer profiles, CAM strategies, post-processors, machine profiles, UI defaults, validation rules, test fixtures — MUST be perfected for these three machines FIRST. Ignore every other machine, controller, or firmware target until these three are flawless. Do NOT add speculative support for machines not on this list.

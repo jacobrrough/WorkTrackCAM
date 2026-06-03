@@ -1,4 +1,4 @@
-# WorkTrackCAM CadQuery starter: filleted cube (CAD V1 selection target)
+# WorkTrack3D CadQuery starter: filleted cube (CAD V1 selection target)
 #
 # Despite the legacy filename, this starter ships a 30 mm cube with 5 mm
 # fillets on ALL 12 edges. It exists to give the new CAD V1 selection
