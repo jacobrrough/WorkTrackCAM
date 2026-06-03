@@ -157,13 +157,30 @@ export const appSettingsSchema = z.object({
   /** Most recently opened project folders (absolute paths), newest first. */
   recentProjectPaths: z.array(z.string()).optional().default([]),
   /**
-   * UI theme. `system` defers to the OS prefers-color-scheme; persists as a hint
-   * to the renderer which flips a `data-theme` attribute on the root. Existing
-   * stored settings with `dark` / `light` continue to parse unchanged.
-   * Roadmap: real consumer wiring lands with the theme-flip cycle; this field is
-   * persisted today and read by `SettingsView.tsx` for the General subsection.
+   * UI theme. One of the 10 WorkTrack3D themes (see renderer/theme/theme-registry.ts
+   * + styles/themes.css), or `system` (OS prefers-color-scheme). Legacy `dark` /
+   * `light` still parse and are mapped to `titanium` / `precision` by the renderer's
+   * `resolveTheme`; the default `dark` therefore resolves to the brand theme
+   * (Titanium). `useTheme` flips the `data-theme` attribute on <html>. Additive:
+   * every value that parsed before still parses (no migration needed).
    */
-  theme: z.enum(['dark', 'light', 'system']).default('dark'),
+  theme: z
+    .enum([
+      'graphite',
+      'blueprint',
+      'machinist',
+      'carbon',
+      'titanium',
+      'neon',
+      'slate',
+      'precision',
+      'hud',
+      'heritage',
+      'system',
+      'dark',
+      'light'
+    ])
+    .default('dark'),
   /**
    * Display unit hint for the General subsection of Settings. The renderer
    * formats lengths in this unit; the backend G-code emitters are unchanged

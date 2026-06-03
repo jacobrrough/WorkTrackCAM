@@ -1,10 +1,12 @@
 /* ============================================================
    WorkTrack3D — CSS Entry Point
-   Import order: tokens → reset → primitives → layout → components
-   → workspace → manufacture → utilities
+   Import order: tokens(primitives) → themes(colors) → reset →
+   primitives → layout → components → workspace → manufacture →
+   utilities
    ============================================================ */
 
 @import './tokens.css';
+@import './themes.css';
 @import './reset.css';
 @import './primitives.css';
 @import './layout.css';

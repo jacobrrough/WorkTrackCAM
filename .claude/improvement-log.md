@@ -17270,3 +17270,50 @@ User-directed program (supersedes the improvement rotation for this stretch): re
 
 ### Next (WorkTrack3D program)
 P2 swappable 10-theme token system (default = user's chosen mockup) -> P3 new shell scaffold behind `__APP_SHELL__` flag (reuse Viewport3D/Design/Manufacture; rebuild TopBar/Nav/Status) -> P4 CAD-first boot -> P5 cutover + retire old shell -> parity stacks 1..11 starting with Associative Drawings & BOM.
+
+
+## WorkTrack3D Overhaul -- P2: Swappable 10-theme token system (default Titanium)
+
+User picked theme #5 (Titanium) as the default; all 10 kept in the in-app picker.
+
+- **3-layer token model.** `styles/tokens.css` reduced to theme-agnostic PRIMITIVES
+  (spacing, radii, type, layout dims, motion, design-accent, shell dims). NEW
+  `styles/themes.css` (generated) holds the COLOR tokens: `:root` defaults to
+  Titanium + `[data-theme='<id>']` x10, with the per-environment accent overrides
+  moved to the END so machine-env accents (vcarve orange / creality red-orange /
+  makera blue / design purple) still win over the active theme accent. Every theme
+  defines the FULL legacy token set (bg0-4, txt0-2, accent ramp, ok/warn/err/info +
+  dims, glass, shadows, elevation) -- so the existing ~11k-line component CSS
+  reskins with ZERO component edits (it references those exact names).
+- `index.css` import order: tokens(primitives) -> themes(colors) -> reset -> ... so
+  `--focus-ring` (primitive, references the themed `--accent-dim`) resolves per theme.
+- NEW `src/renderer/theme/theme-registry.ts` (single source: 10 ThemeMeta +
+  DEFAULT_THEME='titanium' + isThemeId) and `useTheme.ts` (`resolveTheme` maps legacy
+  dark->titanium / light->precision / system->OS pref; `applyTheme` imperative one-shot;
+  `useTheme` hook for the P3 shell).
+- Applied at app entry (`main.tsx`) on boot from persisted settings (themes.css :root
+  default = no unstyled flash). Settings picker now lists all 10 themes + System and
+  applies INSTANTLY on change.
+- `project-schema` theme enum widened to the 10 ids + system + legacy dark/light
+  (default stays 'dark', which resolves to Titanium). Additive -- every previously
+  valid value still parses; no migration.
+- +9 theme tests (registry + resolveTheme + applyTheme; node-safe, document stubbed
+  + restored for the single-thread pool).
+
+### Quality gates
+| Checkpoint | npm test | tsc |
+| --- | --- | --- |
+| Pre (P1 end) | 14,579 / 0 / 2-skip (385 files) | clean |
+| Post | **14,588 / 0 / 2-skip (386 files)** | clean |
+
+themes.css structurally verified: 15 balanced blocks (:root + 10 themes + 4 env),
+every block sets --accent.
+
+### G-code safety status
+**N/A** -- P2 touches only renderer styling + theme TS + the settings schema. No
+`engines/cam/`, `src/main/cam-*`, `resources/posts/**`, or `resources/machines/**`.
+
+### Note
+8/10 themes are dark (incl. the Titanium default) and render correctly on the current
+shell now. The 2 light themes (Machinist, Precision) are best-effort on the dark-built
+legacy shell and become pixel-correct on the ground-up new shell (P3).

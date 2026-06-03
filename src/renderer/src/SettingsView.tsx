@@ -23,6 +23,8 @@ import type { Toast } from './shop-types'
 import { fab } from './shop-types'
 import type { MachineProfile } from '../../shared/machine-schema'
 import type { FilamentRecord } from '../../shared/filament-schema'
+import { THEMES, type ThemeId } from '../theme/theme-registry'
+import { resolveTheme, applyTheme } from '../theme/useTheme'
 
 export interface SettingsViewProps {
   onToast: (k: Toast['kind'], m: string) => void
@@ -81,10 +83,10 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
   }, [onToast])
 
   // ── Reads ───────────────────────────────────────────────────────────────
-  const theme = useMemo<'dark' | 'light' | 'system'>(() => {
-    const v = settings.theme
-    if (v === 'light' || v === 'system') return v
-    return 'dark'
+  // The select offers the 10 named themes + System. Legacy 'dark'/'light' map to
+  // their resolved theme so the right pill is highlighted for older settings.
+  const theme = useMemo<ThemeId | 'system'>(() => {
+    return settings.theme === 'system' ? 'system' : resolveTheme(settings.theme)
   }, [settings.theme])
 
   const units = useMemo<'mm' | 'inch'>(() => {
@@ -214,15 +216,21 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
             <select
               id="settings-theme"
               value={theme}
-              onChange={e => setField('theme', e.target.value)}
+              onChange={e => {
+                setField('theme', e.target.value)
+                applyTheme(e.target.value)
+              }}
               aria-describedby="settings-theme-hint"
             >
               <option value="system">System (follow OS)</option>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
+              {THEMES.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
             </select>
             <span id="settings-theme-hint" className="settings-hint">
-              Persists immediately; a future cycle wires the OS prefers-color-scheme flip.
+              Applies instantly. Ten themes to choose from, or follow your OS light/dark setting.
             </span>
           </div>
 

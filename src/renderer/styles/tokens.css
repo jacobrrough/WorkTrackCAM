@@ -1,38 +1,13 @@
 /* ============================================================
-   WorkTrack3D — Design Tokens  (v2 — Control Center overhaul)
-   Single source of truth for all visual properties.
+   WorkTrack3D — Primitives  (theme-agnostic design tokens)
+   Spacing, radii, type, layout, motion. The COLOR tokens and the
+   10 swappable themes (+ per-environment accent overrides) live in
+   themes.css, imported immediately after this file. CSS custom
+   properties resolve at use-time, so --focus-ring referencing the
+   themed --accent-dim below resolves correctly per active theme.
    ============================================================ */
 
 :root {
-  /* ── Backgrounds (darkest → lightest) ── */
-  --bg0: #0a0b0d;
-  --bg1: #111318;
-  --bg2: #181a22;
-  --bg3: #1f222e;
-  --bg4: #282c3a;
-  --border: #262a38;
-  --border-hi: #363c52;
-
-  /* ── Text ── */
-  --txt0: #eaecf2;
-  --txt1: #9da3bc;
-  --txt2: #6b7394;
-
-  /* ── Accent ── */
-  --accent: #4d8aff;
-  --accent-hi: #6ea0ff;
-  --accent-dim: rgba(77,138,255,0.14);
-
-  /* ── Semantic ── */
-  --ok:   #34d399;
-  --warn: #fbbf24;
-  --err:  #f87171;
-  --info: #38bdf8;
-  --ok-dim:   rgba(52,211,153,0.12);
-  --warn-dim: rgba(251,191,36,0.12);
-  --err-dim:  rgba(248,113,113,0.10);
-  --info-dim: rgba(56,189,248,0.10);
-
   /* ── Radii ── */
   --radius: 6px;
   --radius-sm: 4px;
@@ -88,23 +63,6 @@
   --ease-in-expo: cubic-bezier(0.7, 0, 0.84, 0);
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* ── Elevation (layered box-shadows) ── */
-  --elevation-1: 0 1px 3px rgba(0,0,0,0.3);
-  --elevation-2: 0 4px 14px rgba(0,0,0,0.4);
-  --elevation-3: 0 8px 30px rgba(0,0,0,0.45);
-  --elevation-4: 0 20px 60px rgba(0,0,0,0.6);
-
-  /* ── Surface / glass ── */
-  --surface-overlay: rgba(255,255,255,0.03);
-  --glass-bg: rgba(17,19,24,0.85);
-  --glass-border: rgba(255,255,255,0.06);
-
-  /* ── Overlays ── */
-  --overlay-bg: rgba(0,0,0,0.65);
-  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-  --shadow-md: 0 8px 30px rgba(0,0,0,0.4);
-  --shadow-lg: 0 20px 60px rgba(0,0,0,0.6);
-
   /* ── Layout (v2 Control Center) ── */
   --header-h: 44px;
   --nav-rail-w: 48px;
@@ -115,21 +73,9 @@
   --toolbar-h: 48px;
   --left-w: 264px;
 
-  /* ── Accent opacity scale ── */
-  --accent-8:  rgba(77,138,255,0.08);
-  --accent-10: rgba(77,138,255,0.10);
-  --accent-12: rgba(77,138,255,0.12);
-  --accent-16: rgba(77,138,255,0.16);
-  --accent-20: rgba(77,138,255,0.20);
-  --accent-28: rgba(77,138,255,0.28);
-
-  /* ── Design accent (parametric workspace — peer of the three machine envs)
-     Kept as standalone tokens so cross-env design surfaces (the brand-bar
-     design pill, the Ctrl+Shift+D launch chip) stay purple regardless of
-     which machine env is currently active. The [data-environment='design']
-     override (below) re-maps --accent and friends inside the Design
-     overlay; these tokens stay constant so the cross-env affordances read
-     consistently as "design = purple". */
+  /* ── Design accent (constant — cross-env "design = purple" affordance).
+     Kept theme-independent so the design pill / Ctrl+Shift+D chip stay
+     recognizably purple regardless of the active theme or machine env. */
   --design-accent: #7c5cff;
   --design-accent-hi: #9579ff;
   --design-accent-text: #c4b5fd;
@@ -142,56 +88,6 @@
   --shell-status-h: 24px;
   --shell-banner-h: 32px;
   --shell-resize-w: 5px;
-}
-
-/* ── Per-environment accent overrides ── */
-[data-environment='vcarve_pro'] {
-  --accent: #e09040;
-  --accent-hi: #f0a050;
-  --accent-dim: rgba(224, 144, 64, 0.14);
-  --accent-8:  rgba(224, 144, 64, 0.08);
-  --accent-10: rgba(224, 144, 64, 0.10);
-  --accent-12: rgba(224, 144, 64, 0.12);
-  --accent-16: rgba(224, 144, 64, 0.16);
-  --accent-20: rgba(224, 144, 64, 0.20);
-  --accent-28: rgba(224, 144, 64, 0.28);
-}
-[data-environment='creality_print'] {
-  --accent: #ff6a3d;
-  --accent-hi: #ff8557;
-  --accent-dim: rgba(255, 106, 61, 0.14);
-  --accent-8:  rgba(255, 106, 61, 0.08);
-  --accent-10: rgba(255, 106, 61, 0.10);
-  --accent-12: rgba(255, 106, 61, 0.12);
-  --accent-16: rgba(255, 106, 61, 0.16);
-  --accent-20: rgba(255, 106, 61, 0.20);
-  --accent-28: rgba(255, 106, 61, 0.28);
-}
-[data-environment='makera_cam'] {
-  --accent: #5cb3ff;
-  --accent-hi: #7dc4ff;
-  --accent-dim: rgba(92, 179, 255, 0.14);
-  --accent-8:  rgba(92, 179, 255, 0.08);
-  --accent-10: rgba(92, 179, 255, 0.10);
-  --accent-12: rgba(92, 179, 255, 0.12);
-  --accent-16: rgba(92, 179, 255, 0.16);
-  --accent-20: rgba(92, 179, 255, 0.20);
-  --accent-28: rgba(92, 179, 255, 0.28);
-}
-/* Design environment — parametric CadQuery workspace. Soft purple sits
-   distinctly apart from the three machine environment hues (orange
-   wood-routing, red-orange FDM, blue precision-CNC) so the DesignWorkspace
-   reads as a fourth peer in the brand-bar and splash card grid. */
-[data-environment='design'] {
-  --accent: #7c5cff;
-  --accent-hi: #9579ff;
-  --accent-dim: rgba(124, 92, 255, 0.14);
-  --accent-8:  rgba(124, 92, 255, 0.08);
-  --accent-10: rgba(124, 92, 255, 0.10);
-  --accent-12: rgba(124, 92, 255, 0.12);
-  --accent-16: rgba(124, 92, 255, 0.16);
-  --accent-20: rgba(124, 92, 255, 0.20);
-  --accent-28: rgba(124, 92, 255, 0.28);
 }
 
 /* ── Reduced motion ── */
