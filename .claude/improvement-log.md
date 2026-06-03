@@ -17362,3 +17362,10 @@ Wire Manufacture (the ~25-prop ManufactureWorkspace + a useCamSession job-state 
 Workshop (WorkshopDashboard), Utilities, the command palette + help overlays,
 machine/CAM env selection + data-environment, and FirstLaunchWizard. Then P5: flip
 `__APP_SHELL__` default to 'next' and retire ShopApp + legacy shell CSS.
+
+
+### P3 (shell wiring, follow-on)
+AppShell now: adopts the operator's last machine (or first installed) on mount
+(CAD-first -- no blocking picker); applies the active machine's environment accent
+via `data-environment`; mounts the reused `HelpPanel` with an F1 / Escape keydown.
+Flag-gated; default build unchanged. tsc clean; 14,588 tests pass.
