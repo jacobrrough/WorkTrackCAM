@@ -11,6 +11,13 @@ import { WorkspaceHost } from './WorkspaceHost'
 import { StatusBar } from './StatusBar'
 import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { HelpPanel } from '../src/HelpPanel'
+import { NewShellCommandPalette } from './NewShellCommandPalette'
+import { KeyboardShortcutsDialog } from '../src/KeyboardShortcutsDialog'
+import {
+  isTypableKeyboardTarget,
+  matchesCommandPaletteToggle,
+  matchesKeyboardShortcutsReference
+} from '../../shared/app-keyboard-shortcuts'
 
 /**
  * The new WorkTrack3D shell frame: a CSS grid of TopBar / WorkspaceNav /
@@ -22,29 +29,36 @@ import { HelpPanel } from '../src/HelpPanel'
 export function AppShell(): ReactElement {
   const { sessionMachine, setSessionMachine, machines, lastMachineId, loadToolsForMachine } =
     useMachineSession()
-  const { setCmdOpen, helpOpen, setHelpOpen } = useUI()
+  const { setCmdOpen, showShortcuts, setShowShortcuts, helpOpen, setHelpOpen } = useUI()
   const { pushToast } = useToast()
   const { activeWorkspace, setActiveWorkspace } = useWorkspaceRouter('design')
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // Reuse the global F1 = Help / Escape = close-overlays bindings. The command
-  // palette + full shortcuts dialog are wired in the next increment.
+  // Global shortcuts: Ctrl/Cmd+K command palette, Ctrl/Cmd+Shift+? shortcuts
+  // reference, F1 help, Escape closes overlays. Reuses the shared matchers so
+  // the bindings stay identical to the legacy shell.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const el = e.target as HTMLElement | null
-      const typing = el ? /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable : false
-      if (typing) return
-      if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+      if (isTypableKeyboardTarget(e.target)) return
+      if (matchesCommandPaletteToggle(e)) {
+        e.preventDefault()
+        setCmdOpen((x) => !x)
+      } else if (matchesKeyboardShortcutsReference(e)) {
+        e.preventDefault()
+        setShowShortcuts((x) => !x)
+      } else if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
         e.preventDefault()
         setHelpOpen((x) => !x)
       } else if (e.key === 'Escape') {
+        setCmdOpen(false)
+        setShowShortcuts(false)
         setHelpOpen(false)
         setSettingsOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setHelpOpen])
+  }, [setCmdOpen, setShowShortcuts, setHelpOpen])
 
   // CAD-first: there is no splash machine-picker. Once the machine library has
   // loaded (MachineSessionProvider fetches it on mount), adopt the operator's
@@ -83,6 +97,12 @@ export function AppShell(): ReactElement {
 
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onToast={pushToast} />
       {helpOpen ? <HelpPanel onClose={() => setHelpOpen(false)} /> : null}
+      {showShortcuts ? <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /> : null}
+      <NewShellCommandPalette
+        onNavigate={setActiveWorkspace}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
     </div>
   )
 }

@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import { fab } from '../src/shop-types'
 import { useToast } from '../contexts/ToastContext'
+import { EnvSwitcher } from './EnvSwitcher'
 
 /** Narrow view of the preload bridge's machine.estop channel (see shop-types). */
 interface EstopBridge {
@@ -69,6 +70,8 @@ export function TopBar({
       <span className="wt-project" title={projectName}>
         {projectName}
       </span>
+
+      <EnvSwitcher />
 
       <div className="wt-topbar__spacer" />
 

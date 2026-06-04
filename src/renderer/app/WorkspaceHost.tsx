@@ -3,6 +3,8 @@ import type { ReactElement } from 'react'
 import DesignWorkspace, { STARTER_SCRIPT } from '../design/DesignWorkspace'
 import { EmptyState } from '../src/EmptyState'
 import { useToast } from '../contexts/ToastContext'
+import { WorkshopHost } from './WorkshopHost'
+import { UtilitiesHost } from './UtilitiesHost'
 import type { WorkspaceId } from './useWorkspaceRouter'
 
 /**
@@ -58,17 +60,9 @@ export function WorkspaceHost({
         </div>
       )
     case 'workshop':
-      return (
-        <div className="wt-placeholder">
-          <EmptyState icon="📊" title="Workshop" body="Machine dashboard + job history are coming to the new shell." />
-        </div>
-      )
+      return <WorkshopHost />
     case 'utilities':
-      return (
-        <div className="wt-placeholder">
-          <EmptyState icon="🧰" title="Utilities" body="Import / export, tool libraries, and post management are coming to the new shell." />
-        </div>
-      )
+      return <UtilitiesHost />
     default:
       return (
         <div className="wt-placeholder">

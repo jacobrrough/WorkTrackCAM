@@ -249,3 +249,51 @@
 .wt-status__spacer {
   flex: 1;
 }
+
+/* ── Env switcher (in the TopBar) ── */
+.wt-envswitch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.wt-envswitch__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: none;
+  background: transparent;
+  color: var(--txt2);
+  border-radius: calc(var(--radius-sm) - 1px);
+  cursor: pointer;
+  font: var(--weight-semibold) var(--text-sm) / 1 var(--font);
+  transition: var(--transition-fast);
+}
+.wt-envswitch__btn:hover {
+  color: var(--txt0);
+  background: var(--bg2);
+}
+.wt-envswitch__btn--active {
+  color: var(--accent);
+  background: var(--accent-12);
+  box-shadow: inset 0 0 0 1px var(--accent-dim);
+}
+.wt-envswitch__icon {
+  font-size: 13px;
+  line-height: 1;
+}
+.wt-envswitch__name {
+  white-space: nowrap;
+}
+
+/* ── Workspace host (Workshop / Utilities mount full-bleed reused panels) ── */
+.wt-workspace-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg1);
+}

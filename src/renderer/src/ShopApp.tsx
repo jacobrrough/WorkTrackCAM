@@ -45,7 +45,6 @@ import { generateSetupSheet, parseGcodeStats } from './setup-sheet'
 import type { SetupSheetJob } from './setup-sheet'
 // window-state is now handled by UIContext
 import {
-  APP_KEYBOARD_SHORTCUT_GROUPS,
   isTypableKeyboardTarget,
   matchesKeyboardShortcutsReference,
   matchesOpenProject,
@@ -54,6 +53,7 @@ import {
   matchesDesignEnvSwitch,
 } from '../../shared/app-keyboard-shortcuts'
 import { useFocusTrap } from './useFocusTrap'
+import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { useUndo } from './useUndo'
 import { PropertyEditCommand, AddItemCommand, DeleteItemCommand } from './undo-manager'
 import { formatErrorForToast } from './error-messages'
@@ -689,46 +689,6 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
               })}
             </Fragment>
           ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Keyboard Shortcuts Reference Dialog ──────────────────────────────────────
-function KeyboardShortcutsDialog({ onClose }: { onClose: () => void }): React.ReactElement {
-  const trapRef = useFocusTrap<HTMLDivElement>()
-  return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={onClose}>
-      <div ref={trapRef} className="modal-dialog modal-dialog--md shortcuts-dialog" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <span id="shortcuts-title" className="modal-title">Keyboard Shortcuts</span>
-          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose} aria-label="Close">{'\u2715'}</button>
-        </div>
-        <div className="modal-body shortcuts-dialog__body">
-          {APP_KEYBOARD_SHORTCUT_GROUPS.map(group => (
-            <section key={group.id} className="shortcuts-group">
-              <h3 className="shortcuts-group__title">{group.title}</h3>
-              <table className="shortcuts-table">
-                <tbody>
-                  {group.rows.map((row, i) => (
-                    <tr key={i} className="shortcuts-table__row">
-                      <td className="shortcuts-table__action">{row.action}</td>
-                      <td className="shortcuts-table__keys">
-                        <kbd className="shortcuts-kbd">{row.keysWin}</kbd>
-                      </td>
-                      {row.context && (
-                        <td className="shortcuts-table__context">{row.context}</td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ))}
-        </div>
-        <div className="modal-footer">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>

@@ -17369,3 +17369,15 @@ AppShell now: adopts the operator's last machine (or first installed) on mount
 (CAD-first -- no blocking picker); applies the active machine's environment accent
 via `data-environment`; mounts the reused `HelpPanel` with an F1 / Escape keydown.
 Flag-gated; default build unchanged. tsc clean; 14,588 tests pass.
+
+
+### P3 (shell wiring): env switcher + command palette + shortcuts + Workshop + Utilities
+Built in parallel by 4 subagents to fixed contracts, then integrated:
+- `app/EnvSwitcher.tsx` — 3-env machine switcher in the TopBar (replicates handleQuickSwitchEnv + variant memory).
+- `app/NewShellCommandPalette.tsx` — Ctrl+K palette (navigate workspaces, settings/help, theme switch).
+- `src/KeyboardShortcutsDialog.tsx` — EXTRACTED from ShopApp (now shared by both shells); Ctrl+Shift+?.
+- `app/WorkshopHost.tsx` mounts the real WorkshopDashboard; `app/UtilitiesHost.tsx` mounts the real LibraryView.
+AppShell wires the palette/shortcuts + extends the keydown handler (reused shared matchers).
+Flag-gated; default build unchanged. tsc clean + electron-vite build OK + 14,588 tests pass.
+Remaining new-shell piece: the Manufacture (CAM) workspace — a dedicated integration (needs project
+management + a ManufactureFile->CAM-run path, which is net-new and G-code-sensitive).
