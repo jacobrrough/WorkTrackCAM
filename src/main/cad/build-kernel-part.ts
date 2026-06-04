@@ -89,6 +89,10 @@ export async function buildKernelPartFromProject(params: {
     .update(featuresParsed ? JSON.stringify(featuresParsed) : '')
     .digest('hex')
   const kernelOpsFromFeatures = featuresParsed?.kernelOps
+  // Design-level roll-back marker (Fusion timeline "roll back to here").
+  // Additive: undefined/-1 builds all ops. The build replays only
+  // kernelOps[0..rolledBackTo]; later ops stay on disk but are excluded.
+  const rolledBackTo = featuresParsed?.rolledBackTo
 
   const payloadResult = buildKernelBuildPayload(parsed)
   if (!payloadResult.ok) {
@@ -113,7 +117,7 @@ export async function buildKernelPartFromProject(params: {
     return { ok: false, error: payloadResult.error, manifest }
   }
 
-  const payload = attachKernelPostOpsToPayload(payloadResult.payload, kernelOpsFromFeatures)
+  const payload = attachKernelPostOpsToPayload(payloadResult.payload, kernelOpsFromFeatures, rolledBackTo)
   await writeFile(payloadPath, JSON.stringify(payload, null, 2), 'utf-8')
 
   const script = join(getEnginesRoot(), 'occt', 'build_part.py')

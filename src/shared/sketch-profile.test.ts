@@ -188,6 +188,73 @@ describe('sketch-profile / kernel payload', () => {
     expect(merged.postSolidOps).toBeUndefined()
   })
 
+  it('attachKernelPostOpsToPayload honors rolledBackTo (inclusive cut) and recomputes version', () => {
+    const d = emptyDesign()
+    d.entities = [{ id: '1', kind: 'rect', cx: 0, cy: 0, w: 10, h: 10, rotation: 0 }]
+    const r = buildKernelBuildPayload(d)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    // ops: [fillet(0), pattern(1, v3 op), chamfer(2)]. Roll back to index 0 ->
+    // only the fillet builds, so the payload stays v2 (no v3 pattern present).
+    const merged = attachKernelPostOpsToPayload(
+      r.payload,
+      [
+        { kind: 'fillet_all', radiusMm: 0.5 },
+        { kind: 'pattern_rectangular', countX: 2, countY: 1, spacingXMm: 30, spacingYMm: 0 },
+        { kind: 'chamfer_all', lengthMm: 0.2 }
+      ],
+      0
+    )
+    expect(merged.postSolidOps).toEqual([{ kind: 'fillet_all', radiusMm: 0.5 }])
+    expect(merged.version).toBe(2)
+  })
+
+  it('attachKernelPostOpsToPayload: rolledBackTo combines with suppress (cut first, then suppress)', () => {
+    const d = emptyDesign()
+    d.entities = [{ id: '1', kind: 'rect', cx: 0, cy: 0, w: 10, h: 10, rotation: 0 }]
+    const r = buildKernelBuildPayload(d)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    // Roll back through index 1, then drop the suppressed fillet -> chamfer only.
+    const merged = attachKernelPostOpsToPayload(
+      r.payload,
+      [
+        { kind: 'fillet_all', radiusMm: 0.5, suppressed: true },
+        { kind: 'chamfer_all', lengthMm: 0.2 },
+        { kind: 'fillet_all', radiusMm: 0.9 }
+      ],
+      1
+    )
+    expect(merged.postSolidOps).toEqual([{ kind: 'chamfer_all', lengthMm: 0.2 }])
+  })
+
+  it('attachKernelPostOpsToPayload: rolledBackTo of -1 builds all ops (no cut)', () => {
+    const d = emptyDesign()
+    d.entities = [{ id: '1', kind: 'rect', cx: 0, cy: 0, w: 10, h: 10, rotation: 0 }]
+    const r = buildKernelBuildPayload(d)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const ops: Parameters<typeof attachKernelPostOpsToPayload>[1] = [
+      { kind: 'fillet_all', radiusMm: 0.5 },
+      { kind: 'chamfer_all', lengthMm: 0.2 }
+    ]
+    expect(attachKernelPostOpsToPayload(r.payload, ops, -1).postSolidOps).toEqual(ops)
+  })
+
+  it('attachKernelPostOpsToPayload: a stale rolledBackTo (out of range) builds all ops', () => {
+    const d = emptyDesign()
+    d.entities = [{ id: '1', kind: 'rect', cx: 0, cy: 0, w: 10, h: 10, rotation: 0 }]
+    const r = buildKernelBuildPayload(d)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const ops: Parameters<typeof attachKernelPostOpsToPayload>[1] = [
+      { kind: 'fillet_all', radiusMm: 0.5 },
+      { kind: 'chamfer_all', lengthMm: 0.2 }
+    ]
+    // Marker beyond the end -> ignored, never silently shortens the build.
+    expect(attachKernelPostOpsToPayload(r.payload, ops, 7).postSolidOps).toEqual(ops)
+  })
+
   it('kernelPayloadVersionForOps uses v3 for pattern / boolean / sheet tab / shell openDirection', () => {
     expect(
       kernelPayloadVersionForOps(1, [{ kind: 'pattern_rectangular', countX: 2, countY: 1, spacingXMm: 30, spacingYMm: 0 }])

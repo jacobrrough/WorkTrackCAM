@@ -537,7 +537,27 @@ export const partFeatureItemSchema = z.object({
 export const partFeaturesFileSchema = z.object({
   version: z.literal(1).describe('Part features schema version'),
   items: z.array(partFeatureItemSchema).describe('Ordered feature items for the design tree browser'),
-  kernelOps: z.array(kernelPostSolidOpSchema).optional().describe('Ordered post-solid kernel operations for CadQuery build')
+  kernelOps: z.array(kernelPostSolidOpSchema).optional().describe('Ordered post-solid kernel operations for CadQuery build'),
+  /**
+   * Design-level roll-back marker (Fusion timeline "roll back to here").
+   *
+   * Inclusive index into `kernelOps`: the build replays `kernelOps[0..rolledBackTo]`
+   * and keeps later ops on disk but skips them when generating the solid. `-1`
+   * (or the field absent) means "build all ops" — the previous behaviour.
+   *
+   * Index-based (not op-id) because `kernelOps` is already a purely positional
+   * timeline (no `order`/`id` field; the kernel applies the array "in sequence as
+   * written"), so an index is the lowest-risk marker that matches the existing
+   * model. Per-op `suppressed` (the `suppressKernel` mixin) handles enable/disable;
+   * this field handles the timeline cut.
+   *
+   * Additive and `.optional()` (no `version` bump) so every existing v1
+   * `part/features.json` — saved before the editable timeline landed and carrying
+   * no `rolledBackTo` — parses unchanged and behaves as "build all". Mirrors the
+   * `projectSchema.designModels` additive pattern; honours Safety Rule 2 (never
+   * break existing saved designs).
+   */
+  rolledBackTo: z.number().int().min(-1).optional().describe('Inclusive kernelOps index to replay up to; -1/absent builds all')
 })
 
 export type PartFeaturesFile = z.infer<typeof partFeaturesFileSchema>

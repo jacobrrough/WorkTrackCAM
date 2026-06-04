@@ -17552,3 +17552,48 @@ blocker.)
 No G-code paths. Python-only change (TS suite unaffected — green at 14,759 this session).
 NEXT (foundation, queued): solver backend swap (planegcs→python-solvespace) + the solveSketch
 bridge contract + param-override AST substitution. Stack 7.4 (editable feature timeline) running.
+
+
+### Stack #7.4 (agent-orchestrated): Editable feature timeline (reorder / suppress / roll-back)
+Workflow (Map -> Build[schema|resolve] -> Renderer -> Verify, 5 agents); main loop verified + the
+foundation #11 fix (committed just prior) means the kernel build path now actually runs in the venv.
+
+WHAT THE WORKFLOW BUILT (additive, back-compat confirmed):
+- `src/shared/part-features-schema.ts`: ONE new additive field `rolledBackTo: z.number().int().min(-1)
+  .optional()` (inclusive index into kernelOps; -1/undefined = build all). Per-op `suppressed` already
+  existed (suppressKernel mixin). NO version bump (still v1); pre-timeline files parse unchanged
+  (load-bearing back-compat test added).
+- NEW pure `src/renderer/design/feature-timeline-resolve.ts` `resolveTimeline(ops, edit)` — pipeline
+  reorder -> rollback-truncate -> suppress-filter; total + deterministic (empty/stale-marker/all-
+  suppressed never crash); non-destructive (input array never mutated). + `validateTimelineOrder`.
+- NEW pure `src/renderer/design/feature-timeline-actions.ts` `applyTimelineAction(state, action)` —
+  discriminated move|reorder|suppress|setRollback|clearRollback -> {changed, state}; rejected gestures
+  return the identical state ref (callers skip the IPC save).
+- `FeatureTree.tsx` KernelTimeline sub-component: HTML5 drag + keyboard ▲/▼ roving-tabindex reorder,
+  per-op suppress toggle (dimmed/struck), roll-back marker (rows below greyed). Token-driven CSS.
+- Build-path cut: `sketch-profile.ts activeKernelOpsForPython(ops, rolledBackTo?)` +
+  `src/main/cad/build-kernel-part.ts` reads the marker -> the persisted rollback actually shortens the
+  Build STEP (CAD kernel path, NOT a G-code path).
+KEY DECISION (Safety Rule 1 — geometry is sacred): suppressing an op that a LATER op depends on
+excludes ONLY the suppressed op and leaves the dependents; the kernel rebuild then FAILS LOUDLY rather
+than silently producing broken geometry. No auto-cascade, no silent "safe" substitution.
+
+VERIFY (adversarial): SHIP-able — all 6 invariants hold, ZERO correctness bugs. Findings:
+- [1] MEDIUM: the editable-timeline UI is UNREACHABLE end-to-end — DesignSessionProvider is mounted
+  nowhere in production code; both DesignWorkspace render sites (WorkspaceHost.tsx:43, ShopApp.tsx:2580)
+  pass none of the new props. PRE-EXISTING dormancy (the older moveKernelOp/setKernelOpSuppressedAt
+  editors were already unwired the same way) -> Stack 4 is NO regression, it extends a dormant surface.
+  Flagged for a wiring follow-up (spawn task).
+- [2] LOW: two parallel copies of the rollback cut (resolveTimeline vs sketch-profile.applyKernelRollback)
+  — provably equivalent for committed state, both unit-tested; drift risk only.
+- [3] LOW/UX: positional marker means a reorder silently moves the build boundary (ops carry no stable
+  id; documented; surfaces once [1] is wired).
+
+RESULTS: tsc clean; full TS suite 14,837 pass (+78); no G-code; additive schema; no `any`.
+
+SYSTEMIC NOTE (2nd consecutive stack): both 7.3 (dead solveSketch bridge) and 7.4 (unmounted
+DesignSessionProvider) shipped capability that is correct + tested but NOT wired into the running app.
+The CAD parity surface is outpacing its integration. Highest-leverage next work is INTEGRATION
+(mount DesignSessionProvider + thread timeline props; solver backend swap; solveSketch bridge), not more
+net-new features. Foundation #11 (CadQuery exec) is now fixed, so local end-to-end validation is finally
+possible. NEXT: recommend pivoting to a wiring/integration pass before Stack 7.5.

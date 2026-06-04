@@ -46,11 +46,45 @@ function normalizeKernelOpForPython(op: KernelPostSolidOpPayload): KernelPostSol
   return op
 }
 
-/** Queue rows with `suppressed: true` are skipped for the kernel JSON (order preserved on disk). */
-export function activeKernelOpsForPython(ops: KernelPostSolidOp[] | undefined): KernelPostSolidOpPayload[] {
+/**
+ * Apply the design-level roll-back marker to the persisted (already final-order)
+ * `kernelOps`, returning the slice the build should consider. Inclusive:
+ * `[0..rolledBackTo]`. `undefined` / `-1` keeps all; a stale marker outside
+ * `[0, len-1]` is ignored (keep all) so a leftover pointer never silently
+ * shortens the build.
+ *
+ * This is the SHARED-layer twin of the renderer's
+ * `feature-timeline-resolve.resolveTimeline` roll-back step. The persisted
+ * `kernelOps` array is already in its final order (the UI commits reorders to
+ * disk), so the build needs only the rollback cut + suppress filter — the two
+ * tails of the same pipeline. Both sides treat the marker as an inclusive index
+ * into the on-disk array, so the on-screen "N of M ops will build" preview and
+ * the actual Build STEP can never disagree.
+ */
+function applyKernelRollback(
+  ops: KernelPostSolidOp[],
+  rolledBackTo: number | undefined
+): KernelPostSolidOp[] {
+  if (rolledBackTo === undefined || rolledBackTo === -1) return ops
+  if (!Number.isInteger(rolledBackTo) || rolledBackTo < 0 || rolledBackTo >= ops.length) return ops
+  return ops.slice(0, rolledBackTo + 1)
+}
+
+/**
+ * Queue rows with `suppressed: true` are skipped for the kernel JSON (order
+ * preserved on disk). When `rolledBackTo` is supplied, the timeline is first
+ * cut at the inclusive roll-back marker (see {@link applyKernelRollback}); ops
+ * after the marker stay on disk but are omitted here. The argument is ADDITIVE
+ * — callers that omit it get the previous suppress-only behaviour unchanged.
+ */
+export function activeKernelOpsForPython(
+  ops: KernelPostSolidOp[] | undefined,
+  rolledBackTo?: number
+): KernelPostSolidOpPayload[] {
   if (!ops?.length) return []
+  const considered = applyKernelRollback(ops, rolledBackTo)
   const out: KernelPostSolidOpPayload[] = []
-  for (const o of ops) {
+  for (const o of considered) {
     if (o.suppressed) continue
     const { suppressed: _s, ...rest } = o
     out.push(normalizeKernelOpForPython(rest))
@@ -2457,12 +2491,22 @@ export function kernelPayloadVersionForOps(
 /** Max closed profiles sent for `solidKind: loft` (kernel + preview). */
 export const LOFT_MAX_PROFILES = 16
 
-/** Merge kernel ops from `part/features.json` for CadQuery regeneration. */
+/**
+ * Merge kernel ops from `part/features.json` for CadQuery regeneration.
+ *
+ * `rolledBackTo` is the design-level roll-back marker (additive — omit for the
+ * previous behaviour). When set, the build replays only `kernelOps[0..marker]`;
+ * later ops stay on disk but are excluded from `postSolidOps`. Suppressed ops in
+ * the considered range are dropped as before. The version is computed from the
+ * EFFECTIVE op list so a rolled-back build that drops every v3/v4 op falls back
+ * to the correct lower payload version.
+ */
 export function attachKernelPostOpsToPayload(
   payload: KernelBuildPayload,
-  ops: KernelPostSolidOp[] | undefined
+  ops: KernelPostSolidOp[] | undefined,
+  rolledBackTo?: number
 ): KernelBuildPayload {
-  const active = activeKernelOpsForPython(ops)
+  const active = activeKernelOpsForPython(ops, rolledBackTo)
   if (active.length === 0) return payload
   const version = kernelPayloadVersionForOps(payload.version, active as KernelPostSolidOp[])
   return { ...payload, version, postSolidOps: active as KernelPostSolidOp[] }

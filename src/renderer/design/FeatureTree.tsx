@@ -62,8 +62,16 @@
  * being able to mutate it.
  */
 
-import { useMemo, useState, type ChangeEvent, type JSX } from 'react'
+import {
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type JSX,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { EmptyState } from '../src/EmptyState'
+import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 
 export interface FeatureTreeOperation {
   /** 1-based script line number where this operation was emitted. */
@@ -91,6 +99,89 @@ export interface FeatureTreeParameter {
   readonly value: FeatureTreeParameterValue
   /** Drives which `<input>` variant we render. */
   readonly kind: FeatureTreeParameterKind
+}
+
+/**
+ * Human-readable label for a kernel timeline op. The `kind` discriminator is a
+ * snake_case wire token (`boolean_union_box`, `fillet_select`); operators want
+ * a verb + noun. Pure mapping — no geometry, no truncation.
+ */
+export function kernelOpLabel(op: KernelPostSolidOp): string {
+  switch (op.kind) {
+    case 'fillet_all':
+      return `Fillet all · ${op.radiusMm} mm`
+    case 'fillet_select':
+      return `Fillet ${op.edgeDirection} · ${op.radiusMm} mm`
+    case 'chamfer_all':
+      return `Chamfer all · ${op.lengthMm} mm`
+    case 'chamfer_select':
+      return `Chamfer ${op.edgeDirection} · ${op.lengthMm} mm`
+    case 'shell_inward':
+      return `Shell ${op.thicknessMm} mm`
+    case 'boolean_union_box':
+      return 'Union box'
+    case 'boolean_subtract_box':
+      return 'Subtract box'
+    case 'boolean_intersect_box':
+      return 'Intersect box'
+    case 'boolean_subtract_cylinder':
+      return 'Subtract cylinder'
+    case 'boolean_combine_profile':
+      return `Combine profile (${op.mode})`
+    case 'pattern_rectangular':
+      return `Rect pattern ${op.countX}×${op.countY}`
+    case 'pattern_circular':
+      return `Circular pattern ×${op.count}`
+    case 'pattern_linear_3d':
+      return `Linear pattern ×${op.count}`
+    case 'pattern_path':
+      return `Path pattern ×${op.count}`
+    case 'mirror_union_plane':
+      return `Mirror union (${op.plane})`
+    case 'split_keep_halfspace':
+      return `Split keep ${op.keep} ${op.axis}`
+    case 'hole_from_profile':
+      return `Hole (${op.mode})`
+    case 'transform_translate':
+      return 'Move / translate'
+    case 'press_pull_profile':
+      return `Press-pull ${op.deltaMm} mm`
+    case 'thicken_offset':
+      return `Thicken ${op.distanceMm} mm`
+    case 'thicken_scale':
+      return `Thicken (scale) ${op.deltaMm} mm`
+    case 'sheet_tab_union':
+      return 'Sheet tab'
+    case 'sheet_fold':
+      return `Sheet fold ${op.bendAngleDeg}°`
+    case 'sheet_flat_pattern':
+      return 'Flat pattern'
+    case 'thread_wizard':
+      return `Thread ${op.designation}`
+    case 'thread_cosmetic':
+      return 'Thread (cosmetic)'
+    case 'coil_cut':
+      return `Coil cut ×${op.turns}`
+    case 'sweep_profile_path':
+    case 'sweep_profile_path_true':
+      return 'Sweep along path'
+    case 'pipe_path':
+      return 'Pipe along path'
+    case 'loft_guide_rails':
+      return 'Loft guide rails'
+    case 'plastic_rule_fillet':
+      return `Plastic fillet ${op.radiusMm} mm`
+    case 'plastic_boss':
+      return 'Plastic boss'
+    case 'plastic_lip_groove':
+      return `Plastic ${op.mode}`
+    default: {
+      // Exhaustiveness guard: a new op kind must add a label above. Fall back
+      // to the raw kind so the UI degrades gracefully rather than throwing.
+      const fallback: { kind: string } = op
+      return fallback.kind
+    }
+  }
 }
 
 export interface FeatureTreeProps {
@@ -127,6 +218,40 @@ export interface FeatureTreeProps {
   readonly onParamsChange?: (
     overrides: Record<string, FeatureTreeParameterValue>
   ) => void
+  /**
+   * The editable kernel-op timeline (`part/features.json` `kernelOps[]`). When
+   * omitted or empty, the timeline section is suppressed entirely — existing
+   * hosts (the splash preview, the DesignWorkspace Operations panel) render
+   * unchanged. When present, the section renders one row per op with
+   * drag-to-reorder, keyboard move up/down, a per-op suppress toggle, and a
+   * roll-back marker.
+   *
+   * The parent owns this array (it is persisted on disk); FeatureTree is
+   * presentational and reports every edit through the callbacks below. This
+   * mirrors the `operations` / `parameters` contract — the component never
+   * mutates the data it is handed.
+   */
+  readonly kernelOps?: ReadonlyArray<KernelPostSolidOp>
+  /**
+   * Inclusive roll-back marker index into `kernelOps` (the persisted
+   * `rolledBackTo`). `undefined` or `-1` means "build all". Ops at indices
+   * strictly greater than this render greyed as "rolled back".
+   */
+  readonly rolledBackTo?: number
+  /**
+   * Keyboard "move up / down" of the op at `index` by `delta` (±1). The
+   * accessible alternative to a drag. Wired to the session context's
+   * `moveKernelOp`. Omit (with the others) to render the timeline read-only.
+   */
+  readonly onKernelMove?: (index: number, delta: -1 | 1) => void
+  /** Completed drag: move the op at `from` to land at `to`. */
+  readonly onKernelReorder?: (from: number, to: number) => void
+  /** Toggle the suppress flag of the op at `index`. */
+  readonly onKernelSuppressToggle?: (index: number, suppressed: boolean) => void
+  /** Set the inclusive roll-back marker to `index`. */
+  readonly onKernelSetRollback?: (index: number) => void
+  /** Clear the roll-back marker (back to "build all"). */
+  readonly onKernelClearRollback?: () => void
 }
 
 /**
@@ -399,6 +524,240 @@ function ReadOnlyParameters({
   )
 }
 
+/**
+ * Editable kernel-op timeline section (the Fusion / SolidWorks "feature
+ * timeline"). Owns a small `useState` for the in-flight drag, so — like
+ * `EditableParameters` — it lives in a dedicated component the top-level
+ * `FeatureTree` only mounts when the timeline is present, keeping the op-only
+ * render path hook-free for the legacy render-pin tests.
+ *
+ * Interaction model (all reported through the props; this component never
+ * mutates the op array):
+ *   - **Drag-to-reorder**: each row is `draggable`; drop on another row fires
+ *     `onReorder(from, to)`.
+ *   - **Keyboard move**: ▲ / ▼ buttons fire `onMove(index, -1 | +1)` — the
+ *     accessible alternative, matching the app's roving-tabindex pattern (only
+ *     the active row's controls are tabbable; ArrowUp / ArrowDown move focus,
+ *     Home / End jump to the ends).
+ *   - **Suppress toggle**: a per-row button fires `onSuppressToggle`. A
+ *     suppressed row renders dimmed with a distinct icon.
+ *   - **Roll-back marker**: a per-row "⏱" button fires `onSetRollback`; the
+ *     section header carries a "Clear" button (`onClearRollback`). Ops at
+ *     indices strictly greater than the marker render greyed as "rolled back".
+ */
+interface KernelTimelineProps {
+  readonly kernelOps: ReadonlyArray<KernelPostSolidOp>
+  readonly rolledBackTo: number | undefined
+  readonly onMove: ((index: number, delta: -1 | 1) => void) | undefined
+  readonly onReorder: ((from: number, to: number) => void) | undefined
+  readonly onSuppressToggle: ((index: number, suppressed: boolean) => void) | undefined
+  readonly onSetRollback: ((index: number) => void) | undefined
+  readonly onClearRollback: (() => void) | undefined
+}
+
+/**
+ * Is the op at `index` past the roll-back marker (i.e. excluded from the build,
+ * shown greyed)? `undefined` / `-1` marker -> nothing is rolled back.
+ */
+export function isRolledBack(index: number, rolledBackTo: number | undefined): boolean {
+  if (rolledBackTo === undefined || rolledBackTo < 0) return false
+  return index > rolledBackTo
+}
+
+function KernelTimeline({
+  kernelOps,
+  rolledBackTo,
+  onMove,
+  onReorder,
+  onSuppressToggle,
+  onSetRollback,
+  onClearRollback,
+}: KernelTimelineProps): JSX.Element {
+  // Index of the row currently being dragged (null when idle). Drives the
+  // drop-target styling + the reorder dispatch.
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  // Roving tabindex: which row's controls are currently tabbable. Starts at 0.
+  const [activeRow, setActiveRow] = useState(0)
+  // Clamp against the live length so a delete that shrinks the list below the
+  // stored index never strands focus with no tabbable row.
+  const effectiveActiveRow = Math.min(activeRow, kernelOps.length - 1)
+
+  const editable = onMove != null || onReorder != null
+
+  const handleDragStart = (index: number) => (e: DragEvent<HTMLLIElement>): void => {
+    setDragIndex(index)
+    // Required for Firefox to initiate a drag; the payload is the source index.
+    e.dataTransfer.setData('text/plain', String(index))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  const handleDragOver = (e: DragEvent<HTMLLIElement>): void => {
+    if (dragIndex === null) return
+    e.preventDefault() // allow the drop
+    e.dataTransfer.dropEffect = 'move'
+  }
+
+  const handleDrop = (index: number) => (e: DragEvent<HTMLLIElement>): void => {
+    e.preventDefault()
+    const from = dragIndex
+    setDragIndex(null)
+    if (from === null || from === index) return
+    onReorder?.(from, index)
+  }
+
+  const handleDragEnd = (): void => {
+    setDragIndex(null)
+  }
+
+  // Roving-tabindex keyboard nav over the rows, mirroring
+  // ManufactureSubTabStrip: ArrowUp/Down move focus, Home/End jump.
+  const handleRowKeyDown = (index: number) => (e: ReactKeyboardEvent<HTMLLIElement>): void => {
+    const last = kernelOps.length - 1
+    let next: number | null = null
+    if (e.key === 'ArrowDown') next = Math.min(last, index + 1)
+    else if (e.key === 'ArrowUp') next = Math.max(0, index - 1)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = last
+    if (next === null) return
+    e.preventDefault()
+    setActiveRow(next)
+    // Move DOM focus to the newly active row so the keyboard user follows it.
+    const root = e.currentTarget.parentElement
+    const target = root?.querySelector<HTMLElement>(`[data-kernel-row="${next}"]`)
+    target?.focus()
+  }
+
+  return (
+    <section
+      className="cad-kernel-timeline"
+      data-testid="cad-kernel-timeline"
+      aria-label="Kernel operation timeline"
+    >
+      <div className="cad-kernel-timeline__head">
+        <span className="cad-kernel-timeline__title">Timeline</span>
+        {rolledBackTo !== undefined && rolledBackTo >= 0 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs cad-kernel-timeline__clear"
+            data-testid="cad-kernel-rollback-clear"
+            disabled={onClearRollback == null}
+            onClick={() => onClearRollback?.()}
+          >
+            Clear roll-back
+          </button>
+        )}
+      </div>
+      <ol className="cad-kernel-timeline__list">
+        {kernelOps.map((op, index) => {
+          const suppressed = op.suppressed === true
+          const rolledBack = isRolledBack(index, rolledBackTo)
+          const isMarker = rolledBackTo !== undefined && rolledBackTo >= 0 && index === rolledBackTo
+          const tabbable = index === effectiveActiveRow
+          const classes = [
+            'cad-kernel-row',
+            suppressed ? 'cad-kernel-row--suppressed' : '',
+            rolledBack ? 'cad-kernel-row--rolled-back' : '',
+            isMarker ? 'cad-kernel-row--marker' : '',
+            dragIndex === index ? 'cad-kernel-row--dragging' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')
+          return (
+            <li
+              key={index}
+              className={classes}
+              data-testid="cad-kernel-row"
+              data-kernel-row={index}
+              data-kernel-kind={op.kind}
+              data-suppressed={suppressed ? 'true' : 'false'}
+              data-rolled-back={rolledBack ? 'true' : 'false'}
+              draggable={editable}
+              tabIndex={tabbable ? 0 : -1}
+              aria-label={`${kernelOpLabel(op)}${suppressed ? ' (suppressed)' : ''}${rolledBack ? ' (rolled back)' : ''}`}
+              onFocus={() => setActiveRow(index)}
+              onKeyDown={handleRowKeyDown(index)}
+              onDragStart={editable ? handleDragStart(index) : undefined}
+              onDragOver={editable ? handleDragOver : undefined}
+              onDrop={editable ? handleDrop(index) : undefined}
+              onDragEnd={editable ? handleDragEnd : undefined}
+            >
+              <span className="cad-kernel-row__grip" aria-hidden="true">
+                {editable ? '⠿' : ''}
+              </span>
+              <span className="cad-kernel-row__index" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span className="cad-kernel-row__label">{kernelOpLabel(op)}</span>
+              <span className="cad-kernel-row__controls">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs cad-kernel-row__btn"
+                  data-testid="cad-kernel-move-up"
+                  tabIndex={tabbable ? 0 : -1}
+                  disabled={onMove == null || index === 0}
+                  aria-label={`Move ${kernelOpLabel(op)} up`}
+                  onClick={() => onMove?.(index, -1)}
+                >
+                  {'▲'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs cad-kernel-row__btn"
+                  data-testid="cad-kernel-move-down"
+                  tabIndex={tabbable ? 0 : -1}
+                  disabled={onMove == null || index === kernelOps.length - 1}
+                  aria-label={`Move ${kernelOpLabel(op)} down`}
+                  onClick={() => onMove?.(index, 1)}
+                >
+                  {'▼'}
+                </button>
+                <button
+                  type="button"
+                  className={
+                    suppressed
+                      ? 'btn btn-ghost btn-xs cad-kernel-row__btn cad-kernel-row__btn--suppressed'
+                      : 'btn btn-ghost btn-xs cad-kernel-row__btn'
+                  }
+                  data-testid="cad-kernel-suppress"
+                  tabIndex={tabbable ? 0 : -1}
+                  aria-pressed={suppressed}
+                  disabled={onSuppressToggle == null}
+                  aria-label={
+                    suppressed
+                      ? `Enable ${kernelOpLabel(op)}`
+                      : `Suppress ${kernelOpLabel(op)}`
+                  }
+                  title={suppressed ? 'Suppressed — click to enable' : 'Suppress this op'}
+                  onClick={() => onSuppressToggle?.(index, !suppressed)}
+                >
+                  {suppressed ? '◌' : '●'}
+                </button>
+                <button
+                  type="button"
+                  className={
+                    isMarker
+                      ? 'btn btn-ghost btn-xs cad-kernel-row__btn cad-kernel-row__btn--marker'
+                      : 'btn btn-ghost btn-xs cad-kernel-row__btn'
+                  }
+                  data-testid="cad-kernel-rollback"
+                  tabIndex={tabbable ? 0 : -1}
+                  aria-pressed={isMarker}
+                  disabled={onSetRollback == null}
+                  aria-label={`Roll back to ${kernelOpLabel(op)}`}
+                  title="Roll back the build to this op"
+                  onClick={() => onSetRollback?.(index)}
+                >
+                  {'⏱'}
+                </button>
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
 export function FeatureTree(props: FeatureTreeProps): JSX.Element {
   const {
     operations,
@@ -406,17 +765,25 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
     parameters,
     paramOverrides,
     onParamsChange,
+    kernelOps,
+    rolledBackTo,
+    onKernelMove,
+    onKernelReorder,
+    onKernelSuppressToggle,
+    onKernelSetRollback,
+    onKernelClearRollback,
   } = props
 
   const editable = onParamsChange != null
   const hasParameters = parameters != null && parameters.length > 0
+  const hasKernelOps = kernelOps != null && kernelOps.length > 0
 
-  // The empty-state pin: empty operations AND no parameters fall back
-  // to the canonical EmptyState. When parameters are present we keep
-  // the param section visible even when operations are empty so the
-  // operator can still edit defaults (a script that defines params but
-  // has no ops yet — typical first edit state).
-  if (operations.length === 0 && !hasParameters) {
+  // The empty-state pin: empty operations, no parameters, AND no kernel
+  // timeline fall back to the canonical EmptyState. When parameters or a
+  // kernel timeline are present we keep those sections visible even when the
+  // sidecar operations list is empty (a built model whose script has been
+  // cleared still has a timeline worth editing).
+  if (operations.length === 0 && !hasParameters && !hasKernelOps) {
     return (
       <EmptyState
         testId="cad-feature-empty-state"
@@ -483,6 +850,18 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
             )
           })}
         </ol>
+      )}
+
+      {hasKernelOps && kernelOps != null && (
+        <KernelTimeline
+          kernelOps={kernelOps}
+          rolledBackTo={rolledBackTo}
+          onMove={onKernelMove}
+          onReorder={onKernelReorder}
+          onSuppressToggle={onKernelSuppressToggle}
+          onSetRollback={onKernelSetRollback}
+          onClearRollback={onKernelClearRollback}
+        />
       )}
     </div>
   )

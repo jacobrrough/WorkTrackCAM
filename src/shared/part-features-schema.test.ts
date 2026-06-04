@@ -621,6 +621,51 @@ describe('part-features-schema', () => {
     expect(parsed.kernelOps?.[0]).toMatchObject({ kind: 'fillet_all', suppressed: true })
   })
 
+  // --- Editable timeline (suppress + roll-back) additive fields ---
+
+  it('back-compat: a features file WITHOUT the new timeline fields still parses (load-bearing)', () => {
+    // Exactly the shape an existing v1 part/features.json had before the editable
+    // timeline landed: kernel ops with NO `suppressed`, and NO `rolledBackTo`.
+    const legacy = {
+      version: 1,
+      items: [{ id: 'sk1', kind: 'sketch', label: 'Sketch1' }],
+      kernelOps: [
+        { kind: 'fillet_all', radiusMm: 1 },
+        { kind: 'chamfer_all', lengthMm: 0.5 }
+      ]
+    }
+    const parsed = partFeaturesFileSchema.parse(legacy)
+    // Old files gain neither field — `rolledBackTo` stays absent (means "build all"),
+    // and per-op `suppressed` stays undefined.
+    expect(parsed.rolledBackTo).toBeUndefined()
+    expect(parsed.kernelOps?.[0]?.suppressed).toBeUndefined()
+    expect(parsed.kernelOps).toHaveLength(2)
+  })
+
+  it('round-trips a features file WITH rolledBackTo and per-op suppressed', () => {
+    const withTimeline = {
+      version: 1 as const,
+      items: [],
+      kernelOps: [
+        { kind: 'fillet_all' as const, radiusMm: 1 },
+        { kind: 'chamfer_all' as const, lengthMm: 0.5, suppressed: true },
+        { kind: 'shell_inward' as const, thicknessMm: 2 }
+      ],
+      rolledBackTo: 1
+    }
+    const raw = JSON.stringify(withTimeline)
+    const again = partFeaturesFileSchema.parse(JSON.parse(raw) as unknown)
+    expect(again.rolledBackTo).toBe(1)
+    expect(again.kernelOps?.[1]).toMatchObject({ kind: 'chamfer_all', suppressed: true })
+    expect(again.kernelOps).toHaveLength(3)
+  })
+
+  it('accepts rolledBackTo of -1 (explicit "build all" sentinel) and rejects < -1', () => {
+    expect(partFeaturesFileSchema.parse({ version: 1, items: [], rolledBackTo: -1 }).rolledBackTo).toBe(-1)
+    expect(() => partFeaturesFileSchema.parse({ version: 1, items: [], rolledBackTo: -2 })).toThrow()
+    expect(() => partFeaturesFileSchema.parse({ version: 1, items: [], rolledBackTo: 1.5 })).toThrow()
+  })
+
   it('parses sheet_fold and sheet_flat_pattern', () => {
     const parsed = partFeaturesFileSchema.parse({
       version: 1,

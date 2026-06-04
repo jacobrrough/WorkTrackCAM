@@ -20,6 +20,7 @@ import {
 } from '../../shared/kernel-inspect-hash'
 import type { KernelManifest } from '../../shared/kernel-manifest-schema'
 import { defaultPartFeatures, type KernelPostSolidOp, type PartFeaturesFile } from '../../shared/part-features-schema'
+import { applyTimelineAction, type TimelineState } from './feature-timeline-actions'
 import { linearPatternSketch, mirrorDesignAcrossYAxis } from './design-ops'
 import { derivePartFeatures } from './derive-features'
 import { meshToStlBase64 } from './export-stl'
@@ -128,7 +129,11 @@ export type DesignSessionValue = {
   appendKernelOp: (op: KernelPostSolidOp) => Promise<void>
   removeKernelOpAt: (index: number) => Promise<void>
   moveKernelOp: (index: number, delta: -1 | 1) => Promise<void>
+  /** Drag-to-reorder: move the kernel op at `from` to land at `to`. */
+  reorderKernelOps: (from: number, to: number) => Promise<void>
   setKernelOpSuppressedAt: (index: number, suppressed: boolean) => Promise<void>
+  /** Set (index >= 0) or clear (`null`) the design-level roll-back marker. */
+  setKernelRollbackMarker: (index: number | null) => Promise<void>
   updateFeatureSuppressed: (featureId: string, suppressed: boolean) => void
   solveReport: string
   onStatus?: (msg: string) => void
@@ -711,6 +716,71 @@ export function DesignSessionProvider({
     [fab, projectDir, features, design, onStatus]
   )
 
+  /**
+   * Persist the result of a timeline gesture. Folds the pure
+   * `applyTimelineAction` next-state (kernelOps + rolledBackTo) back onto the
+   * current features file and writes it through the SAME `featuresSave` +
+   * `setFeatures` + status path the other kernel-op editors use (so a Build
+   * STEP picks up the change identically). On a rejected gesture it surfaces
+   * the reason and does NOT save. Returns nothing; errors are toasted.
+   */
+  const persistTimelineState = useCallback(
+    async (base: PartFeaturesFile, nextTimeline: TimelineState, status: string) => {
+      if (!projectDir) return
+      const next: PartFeaturesFile = {
+        ...base,
+        kernelOps: nextTimeline.kernelOps as KernelPostSolidOp[],
+        // Drop the key entirely when there is no marker so the persisted file
+        // stays canonical (matches the schema's "absent === build all").
+        ...(nextTimeline.rolledBackTo === undefined ? {} : { rolledBackTo: nextTimeline.rolledBackTo })
+      }
+      if (nextTimeline.rolledBackTo === undefined && 'rolledBackTo' in next) {
+        delete (next as { rolledBackTo?: number }).rolledBackTo
+      }
+      try {
+        await fab.featuresSave(projectDir, JSON.stringify(next))
+        setFeatures(next)
+        onStatus?.(status)
+      } catch (e) {
+        onStatus?.(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [fab, projectDir, onStatus]
+  )
+
+  const reorderKernelOps = useCallback(
+    async (from: number, to: number) => {
+      if (!projectDir) return
+      const base = features ?? derivePartFeatures(design, null)
+      const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+      const result = applyTimelineAction(state, { type: 'reorder', from, to })
+      if (!result.changed) {
+        onStatus?.(result.reason)
+        return
+      }
+      await persistTimelineState(base, result.state, result.status)
+    },
+    [projectDir, features, design, onStatus, persistTimelineState]
+  )
+
+  const setKernelRollbackMarker = useCallback(
+    async (index: number | null) => {
+      if (!projectDir) return
+      const base = features ?? derivePartFeatures(design, null)
+      const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+      const result = applyTimelineAction(
+        state,
+        index === null ? { type: 'clearRollback' } : { type: 'setRollback', index }
+      )
+      if (!result.changed) {
+        onStatus?.(result.reason)
+        return
+      }
+      await persistTimelineState(base, result.state, result.status)
+    },
+    [projectDir, features, design, onStatus, persistTimelineState]
+  )
+
   const updateFeatureSuppressed = useCallback(
     async (featureId: string, suppressed: boolean) => {
       if (!features || !projectDir) return
@@ -758,7 +828,9 @@ export function DesignSessionProvider({
       appendKernelOp,
       removeKernelOpAt,
       moveKernelOp,
+      reorderKernelOps,
       setKernelOpSuppressedAt,
+      setKernelRollbackMarker,
       updateFeatureSuppressed,
       solveReport,
       onStatus,
@@ -792,7 +864,9 @@ export function DesignSessionProvider({
       appendKernelOp,
       removeKernelOpAt,
       moveKernelOp,
+      reorderKernelOps,
       setKernelOpSuppressedAt,
+      setKernelRollbackMarker,
       updateFeatureSuppressed,
       onStatus,
       onExportedStl

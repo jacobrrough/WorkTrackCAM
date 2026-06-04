@@ -68,6 +68,7 @@ import {
   type FeatureTreeOperation,
   type FeatureTreeParameter
 } from './FeatureTree'
+import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 import { fab } from '../src/shop-types'
 import type {
   CadExecuteScriptMesh,
@@ -276,6 +277,28 @@ export interface DesignWorkspaceProps {
    * driving the "Add part" callback.
    */
   readonly initialAssemblyParts?: readonly AssemblyPart[]
+  /**
+   * The editable kernel-op timeline for the active part
+   * (`part/features.json` `kernelOps[]`). Optional pass-through: a host that
+   * owns the DesignSessionContext threads the live array + edit callbacks here
+   * so the FeatureTree's Operations panel grows the reorder / suppress /
+   * roll-back timeline. Omitted by hosts that don't have a session yet
+   * (the splash preview, the render-pin tests), in which case the timeline
+   * section simply does not render and every existing Part-view pin holds.
+   */
+  readonly kernelOps?: ReadonlyArray<KernelPostSolidOp>
+  /** Inclusive roll-back marker into `kernelOps` (`undefined`/`-1` = build all). */
+  readonly rolledBackTo?: number
+  /** Keyboard move up/down of the kernel op at `index` by `delta` (±1). */
+  readonly onKernelMove?: (index: number, delta: -1 | 1) => void
+  /** Completed drag: move the kernel op at `from` to land at `to`. */
+  readonly onKernelReorder?: (from: number, to: number) => void
+  /** Toggle the suppress flag of the kernel op at `index`. */
+  readonly onKernelSuppressToggle?: (index: number, suppressed: boolean) => void
+  /** Set the inclusive roll-back marker to `index`. */
+  readonly onKernelSetRollback?: (index: number) => void
+  /** Clear the roll-back marker (back to "build all"). */
+  readonly onKernelClearRollback?: () => void
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -308,6 +331,13 @@ export function DesignWorkspace({
   initialSelection = null,
   initialViewMode = 'part',
   initialAssemblyParts = [],
+  kernelOps,
+  rolledBackTo,
+  onKernelMove,
+  onKernelReorder,
+  onKernelSuppressToggle,
+  onKernelSetRollback,
+  onKernelClearRollback,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   /**
@@ -1007,7 +1037,16 @@ export function DesignWorkspace({
               Line {parseError.line}: {parseError.message}
             </div>
           ) : (
-            <FeatureTree operations={featureRows} />
+            <FeatureTree
+              operations={featureRows}
+              kernelOps={kernelOps}
+              rolledBackTo={rolledBackTo}
+              onKernelMove={onKernelMove}
+              onKernelReorder={onKernelReorder}
+              onKernelSuppressToggle={onKernelSuppressToggle}
+              onKernelSetRollback={onKernelSetRollback}
+              onKernelClearRollback={onKernelClearRollback}
+            />
           )}
         </div>
 
