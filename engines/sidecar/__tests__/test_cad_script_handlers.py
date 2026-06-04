@@ -438,16 +438,6 @@ result = cq.Workplane('XY').box(length, width, height)
 
 
 @requires_cadquery
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing: buildParameters override is clobbered by the script's own "
-        "default assignment (raw exec sets the name, then `L = 10` overwrites it) "
-        "— needs cqgi-style AST substitution. Was masked by the #11 __import__ "
-        "failure until the sandbox fix let scripts exec; now visible. Tracked in "
-        "foundation hardening (parametric override)."
-    ),
-    strict=False,
-)
 def test_execute_script_build_parameters_round_trip_changes_bbox() -> None:
     """CAD V1 round-trip pin: the same script run twice with different
     ``buildParameters`` overrides MUST produce different geometry.

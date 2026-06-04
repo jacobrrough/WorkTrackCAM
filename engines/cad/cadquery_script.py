@@ -304,7 +304,20 @@ def execute_script(
     # already rejected by scan_banned_tokens / blocked here by root name.
     namespace["__builtins__"]["__import__"] = _sandboxed_import
 
+    # Parse to an AST so build-parameter overrides can be applied cqgi-style
+    # (below) before compiling. Equivalent to ``compile(script, ...)`` when
+    # there are no overrides.
+    try:
+        tree = ast.parse(script, "<cad_script>", "exec")
+    except SyntaxError as exc:
+        raise _CadHandlerError(
+            "script_exec_error",
+            f"script syntax error on line {exc.lineno}: {exc.msg}",
+            detail=str(exc),
+        ) from exc
+
     if build_parameters:
+        validated: Dict[str, Any] = {}
         for k, v in build_parameters.items():
             if not isinstance(k, str) or not k.isidentifier():
                 raise _CadHandlerError(
@@ -317,16 +330,33 @@ def execute_script(
                     f"build parameter {k!r} must be number / bool / str, "
                     f"got {type(v).__name__}",
                 )
-            namespace[k] = v
+            validated[k] = v
+        # cqgi-style override: a script declares a parameter as a bare top-level
+        # default (``L = 10``). Pre-seeding ``namespace[k]`` is NOT enough — the
+        # script's own ``L = 10`` runs during exec and clobbers it. So replace
+        # the default LITERAL in the AST for each overridden top-level
+        # ``<name> = <literal>``. Parameters with no matching top-level
+        # assignment fall back to namespace injection (a script that reads an
+        # undeclared name still gets the override).
+        substituted = set()
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in validated
+            ):
+                name = node.targets[0].id
+                node.value = ast.copy_location(
+                    ast.Constant(validated[name]), node.value
+                )
+                substituted.add(name)
+        for k, v in validated.items():
+            if k not in substituted:
+                namespace[k] = v
+        ast.fix_missing_locations(tree)
 
-    try:
-        compiled = compile(script, "<cad_script>", "exec")
-    except SyntaxError as exc:
-        raise _CadHandlerError(
-            "script_exec_error",
-            f"script syntax error on line {exc.lineno}: {exc.msg}",
-            detail=str(exc),
-        ) from exc
+    compiled = compile(tree, "<cad_script>", "exec")
 
     try:
         # noqa: S102 - intentional exec; sandbox docs above

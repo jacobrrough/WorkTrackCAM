@@ -571,16 +571,6 @@ def test_add_assembly_mate_rejects_unknown_mate_kind() -> None:
 
 @requires_cadquery
 @requires_assembly
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing, cadquery-2.7.0-specific: cq.Assembly.solve() raises "
-        "AttributeError 'Vector' object has no attribute 'located' "
-        "(occ_impl/solver.py). Masked by the #11 __import__ failure until the "
-        "sandbox fix let scripts exec. Tracked in foundation hardening (cadquery "
-        "version validation). strict=False so it xpasses on a fixed cadquery build."
-    ),
-    strict=False,
-)
 def test_add_assembly_mate_point_happy_path() -> None:
     """A point mate on a 2-cube assembly must succeed and return the same
     handle with the post-solve bbox populated. Load-bearing pin for the
@@ -617,16 +607,6 @@ def test_add_assembly_mate_point_happy_path() -> None:
 
 @requires_cadquery
 @requires_assembly
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing, cadquery-2.7.0-specific: cq.Assembly.solve() raises "
-        "AttributeError 'Vector' object has no attribute 'located' "
-        "(occ_impl/solver.py). Masked by the #11 __import__ failure until the "
-        "sandbox fix let scripts exec. Tracked in foundation hardening (cadquery "
-        "version validation). strict=False so it xpasses on a fixed cadquery build."
-    ),
-    strict=False,
-)
 def test_add_assembly_mate_axis_happy_path() -> None:
     """An axis mate on a 2-cube assembly must succeed. Confirms the axis
     path through ``_apply_mate_constraint`` is exercised."""
@@ -654,16 +634,6 @@ def test_add_assembly_mate_axis_happy_path() -> None:
 
 @requires_cadquery
 @requires_assembly
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing, cadquery-2.7.0-specific: cq.Assembly.solve() raises "
-        "AttributeError 'Vector' object has no attribute 'located' "
-        "(occ_impl/solver.py). Masked by the #11 __import__ failure until the "
-        "sandbox fix let scripts exec. Tracked in foundation hardening (cadquery "
-        "version validation). strict=False so it xpasses on a fixed cadquery build."
-    ),
-    strict=False,
-)
 def test_add_assembly_mate_plane_happy_path() -> None:
     """A plane mate on a 2-cube assembly must succeed. Plane mates carry
     both an origin and a normal per child — this exercises the wider

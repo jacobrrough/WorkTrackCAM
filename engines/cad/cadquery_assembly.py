@@ -1102,40 +1102,43 @@ def _apply_mate_constraint(
 
     kind = mate["kind"]
     try:
+        # CadQuery's assembly solver calls ``.located()`` / ``.location()`` on
+        # EVERY constraint arg (occ_impl/solver.py:toPODs), so each arg MUST be
+        # a Shape — a bare ``cq.Vector`` (Point/Axis) or ``cq.Plane`` (Plane)
+        # raises "'Vector' object has no attribute 'located'" at solve time.
+        # Build the equivalent Shape per kind: Vertex (point), Edge along the
+        # direction (axis), unbounded planar Face (plane).
         if kind == "point":
-            p1 = cq.Vector(*mate["feature1"])
-            p2 = cq.Vector(*mate["feature2"])
+            p1 = cq.Vertex.makeVertex(*mate["feature1"])
+            p2 = cq.Vertex.makeVertex(*mate["feature2"])
             assembly.constrain(
                 mate["part1Id"], p1, mate["part2Id"], p2, "Point"
             )
         elif kind == "axis":
-            a1 = cq.Vector(*mate["feature1"])
-            a2 = cq.Vector(*mate["feature2"])
+            # An Edge through the origin along the axis direction; the solver
+            # reads the edge's direction. Direction is validated non-zero
+            # upstream (``_validate_mate_definition``).
+            a1 = cq.Edge.makeLine(cq.Vector(0, 0, 0), cq.Vector(*mate["feature1"]))
+            a2 = cq.Edge.makeLine(cq.Vector(0, 0, 0), cq.Vector(*mate["feature2"]))
             assembly.constrain(
                 mate["part1Id"], a1, mate["part2Id"], a2, "Axis"
             )
         else:  # plane
-            # cq.Plane(origin, normal) — origin + normal_vec
-            origin1 = cq.Vector(*mate["feature1"])
-            origin2 = cq.Vector(*mate["feature2"])
-            normal1 = cq.Vector(*mate["normal1"])
-            normal2 = cq.Vector(*mate["normal2"])
-            try:
-                plane1 = cq.Plane(origin=origin1, normal=normal1)
-                plane2 = cq.Plane(origin=origin2, normal=normal2)
-                assembly.constrain(
-                    mate["part1Id"], plane1, mate["part2Id"], plane2, "Plane"
-                )
-            except Exception:  # noqa: BLE001 - very old bindings
-                # Fallback: emit a point + axis pair on the same children;
-                # not strictly equivalent but matches the operator's intent
-                # for a plane-to-plane mate well enough for the V1.5 flow.
-                assembly.constrain(
-                    mate["part1Id"], origin1, mate["part2Id"], origin2, "Point"
-                )
-                assembly.constrain(
-                    mate["part1Id"], normal1, mate["part2Id"], normal2, "Axis"
-                )
+            f1 = cq.Face.makePlane(
+                None,
+                None,
+                basePnt=cq.Vector(*mate["feature1"]),
+                dir=cq.Vector(*mate["normal1"]),
+            )
+            f2 = cq.Face.makePlane(
+                None,
+                None,
+                basePnt=cq.Vector(*mate["feature2"]),
+                dir=cq.Vector(*mate["normal2"]),
+            )
+            assembly.constrain(
+                mate["part1Id"], f1, mate["part2Id"], f2, "Plane"
+            )
     except _CadHandlerError:
         raise
     except Exception as exc:  # noqa: BLE001 - CadQuery raises arbitrary types

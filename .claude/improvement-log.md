@@ -17597,3 +17597,36 @@ The CAD parity surface is outpacing its integration. Highest-leverage next work 
 (mount DesignSessionProvider + thread timeline props; solver backend swap; solveSketch bridge), not more
 net-new features. Foundation #11 (CadQuery exec) is now fixed, so local end-to-end validation is finally
 possible. NEXT: recommend pivoting to a wiring/integration pass before Stack 7.5.
+
+
+### Foundation hardening #2 (CadQuery engine): assembly-solve + parametric-override FIXED
+"Fix the cadquery first" (user directive) before resuming parity stacks. Both bugs were the ones
+#11 unmasked once CAD scripts could finally exec in the venv. Done in the main loop with direct
+oversight (engine correctness, Safety Rule 5). Result: venv sidecar 180 passed / 6 skipped /
+ZERO xfailed (was 176 + 4 xfailed); system python 139 passed / 47 skipped.
+
+A — ASSEMBLY MATES (cadquery_assembly.py `_apply_mate_constraint`). Root cause: cadquery 2.7.0's
+assembly solver calls `.located()` / `.location()` on EVERY constraint arg (occ_impl/solver.py
+`toPODs`), so a bare `cq.Vector` (point/axis) or `cq.Plane` (plane) raised "'Vector' object has no
+attribute 'located'" at solve time — point/axis/plane mates were ALL broken. Determined empirically
+what cadquery 2.7.0 accepts and switched each kind to a real Shape: Point -> `cq.Vertex.makeVertex`,
+Axis -> `cq.Edge.makeLine` (origin -> direction), Plane -> `cq.Face.makePlane`. Removed the dead
+"very old bindings" fallback (it used the same broken Vectors). The 3 mate happy-path tests now PASS
+(xfail markers removed). This UNBLOCKS Parity Stack 5 (assembly joints/mates).
+
+B — PARAMETRIC OVERRIDE (cadquery_script.py exec path). Root cause: a script declares a param as a
+bare top-level default (`L = 10`); the old code pre-seeded `namespace["L"] = 25` but the script's own
+`L = 10` ran during exec and CLOBBERED it, so buildParameters overrides silently did nothing (the
+renderer's FeatureTree parametric editing was dead). Fix: cqgi-style — parse the script to an AST and
+REPLACE the default literal for each overridden top-level `<name> = <literal>` before compiling;
+params with no matching top-level assignment fall back to namespace injection (preserves prior
+behavior). The round-trip test (default L=10 -> maxX 5; override L=25 -> maxX 12.5) now PASSES (xfail
+removed). The no-override path is byte-equivalent (parse->compile(tree) == compile(script)).
+
+Why fix our code, not pin an old cadquery: passing non-Shape args was ALWAYS wrong for cadquery's
+solver contract; a lenient older build merely hid it. The Shape-based code is correct for the bundled
+2.7.0 and robust to version drift. No version pin needed.
+
+No G-code paths. Python-only (TS suite unaffected). Both fixes pin via the now-passing happy-path /
+round-trip tests. NEXT: resume parity stacks (each builds + wires its tool); Stack 5 (assembly mates)
+is now unblocked. (Stack 7.4-W — wiring the feature timeline into the shell — running in parallel.)
