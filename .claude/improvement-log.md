@@ -17381,3 +17381,23 @@ AppShell wires the palette/shortcuts + extends the keydown handler (reused share
 Flag-gated; default build unchanged. tsc clean + electron-vite build OK + 14,588 tests pass.
 Remaining new-shell piece: the Manufacture (CAM) workspace — a dedicated integration (needs project
 management + a ManufactureFile->CAM-run path, which is net-new and G-code-sensitive).
+
+
+### P3 (CAM UI): mounted the full Manufacture workspace in the new shell
+`WorkspaceHost` → Manufacture now renders the REAL `ManufactureWorkspace` (plates,
+setups, operations, ProfileStack, simulation) via NEW `app/ManufactureHost.tsx`
+(sources machines from context + settings via settingsGet/safeParse; projectDir
+from lastProjectPath; panelTab/importText local). Bundle modules 139 -> 747 -- the
+CAM subtree is now in the new shell.
+SAFETY: `onRunCam` / `onRunSlice` are advisory-only and generate NO G-code -- actual
+generation stays in the proven classic shell (default build) until the new-shell run
+path is wired + validated through the gcode-safety gate (the remaining CAM task).
+Flag-gated; default build unchanged. tsc clean + electron-vite build OK + 14,588 tests pass.
+
+### New-shell status: feature-complete (UI), pending only gcode-safe generation
+All six workspaces wired (Design / Assemble / Manufacture / Drawings / Workshop /
+Utilities) + overlays (command palette, shortcuts, Help, Settings/theme picker,
+EnvSwitcher, E-stop). CAD-first boot, themed (Titanium default + 10-theme picker),
+machine auto-select + env accent. The ONLY remaining new-shell work is the
+gcode-safety-gated wiring of onRunCam/onRunSlice so the new shell can itself emit
+G-code; then the P5 cutover (flip __APP_SHELL__, retire ShopApp + legacy CSS).

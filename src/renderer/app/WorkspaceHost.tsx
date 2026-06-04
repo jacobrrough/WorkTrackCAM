@@ -5,6 +5,7 @@ import { EmptyState } from '../src/EmptyState'
 import { useToast } from '../contexts/ToastContext'
 import { WorkshopHost } from './WorkshopHost'
 import { UtilitiesHost } from './UtilitiesHost'
+import { ManufactureHost } from './ManufactureHost'
 import type { WorkspaceId } from './useWorkspaceRouter'
 
 /**
@@ -50,15 +51,7 @@ export function WorkspaceHost({
         />
       )
     case 'manufacture':
-      return (
-        <div className="wt-placeholder">
-          <EmptyState
-            icon="🛠"
-            title="Manufacture"
-            body="The CAM workspace (toolpaths, slicing, simulation, post) is being wired into the new shell. The classic shell — still the default build — has full CAM until the next increment."
-          />
-        </div>
-      )
+      return <ManufactureHost />
     case 'workshop':
       return <WorkshopHost />
     case 'utilities':
