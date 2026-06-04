@@ -61,6 +61,17 @@ describe('MvpSketchCanvas — render contract', () => {
     expect(html).toContain('data-testid="sketch-mvp-clear"')
   })
 
+  it('renders the DOF badge in the "Not solved" state on first paint', () => {
+    const html = renderToStaticMarkup(
+      createElement(MvpSketchCanvas, { width: 800, height: 600, headless: true })
+    )
+    // The badge is always present so the operator can read constraint health;
+    // before any solve it shows the neutral "Not solved" state.
+    expect(html).toContain('data-testid="sketch-mvp-dof-badge"')
+    expect(html).toContain('data-status="not-solved"')
+    expect(html).toContain('Not solved')
+  })
+
   it('Solve / Undo / Redo are disabled on an empty sketch (no constraints, no history)', () => {
     const html = renderToStaticMarkup(
       createElement(MvpSketchCanvas, { width: 800, height: 600, headless: true })

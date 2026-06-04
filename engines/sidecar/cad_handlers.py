@@ -667,10 +667,21 @@ def export_assembly(params: dict[str, Any]) -> dict[str, Any]:
 #
 #   {
 #     "sketch": {<same shape as sketchState, points moved to satisfy the constraints>},
-#     "dof":    0    # always 0 on success (planegcs reports the degrees of
-#                    # freedom; the V1 handler refuses under-constrained
-#                    # systems and surfaces solver_under_constrained instead)
+#     "dof":    0,                       # real residual DOF (0 == fully constrained)
+#     # ── ADDITIVE diagnostics (CAD V1 Sketcher DOF badge) ───────────────
+#     "status": "fully",                 # "fully" | "under" | "over" | "conflicting"
+#     "conflictingConstraintIds": [],    # source constraint ids in conflict
+#     "redundantConstraintIds":   [],    # source constraint ids flagged redundant
+#     "underConstrainedEntityIds":[]     # sketch point ids still free to move
 #   }
+#
+# On the fully-constrained success path ``dof`` is 0 and the three id arrays
+# are empty, so callers that predate the diagnostics fields are unaffected.
+# The V1 handler still RAISES solver_under_constrained / solver_over_constrained
+# rather than returning a partial-solution success; the same DOF/status payload
+# rides along on the raised error's ``diagnostics`` attribute for callers that
+# want the structured data. See ``CadSolveSketchResult`` in
+# ``src/shared/sidecar-protocol.ts`` for the mirrored optional fields.
 #
 # Errors mirror the sketch_solver vocabulary: planegcs_not_installed,
 # invalid_sketch, invalid_constraint, solver_under_constrained,

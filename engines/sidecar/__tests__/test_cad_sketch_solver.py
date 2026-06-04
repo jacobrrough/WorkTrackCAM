@@ -32,6 +32,9 @@ import pytest
 
 from engines.cad.cadquery_import import _CadHandlerError
 from engines.cad.sketch_solver import (
+    SOLVE_STATUS_FULLY,
+    SOLVE_STATUS_OVER,
+    SOLVE_STATUS_UNDER,
     CoincidentConstraint,
     Constraint,
     DistanceConstraint,
@@ -43,6 +46,8 @@ from engines.cad.sketch_solver import (
     RadiusConstraint,
     Sketch,
     VerticalConstraint,
+    _diagnosis_to_payload,
+    _map_tags_to_sources,
     constraint_from_dict,
     constraints_from_list,
     sketch_from_dict,
@@ -322,6 +327,106 @@ def test_solve_payload_surfaces_planegcs_missing_when_absent() -> None:
     assert exc_info.value.code == "planegcs_not_installed"
 
 
+# ── Tier 1: DOF diagnostics helpers (no planegcs) ────────────────────────
+#
+# ``_diagnosis_to_payload`` / ``_map_tags_to_sources`` are pure functions that
+# translate a planegcs ``Diagnosis`` into the additive wire payload. They are
+# version-drift-tolerant (every field read is ``getattr``-guarded), so we can
+# exercise them with a lightweight fake Diagnosis WITHOUT planegcs installed —
+# this is the path that proves the DOF/status reporting shape directly, dodging
+# both the planegcs dependency and the CadQuery exec-sandbox entirely.
+
+
+class _FakeDiagnosis:
+    """Minimal stand-in for planegcs' Diagnosis used by the Tier-1 helpers."""
+
+    def __init__(
+        self,
+        *,
+        dof: int,
+        is_over: bool = False,
+        is_under: bool = False,
+        conflicting=(),
+        redundant=(),
+    ) -> None:
+        self.dof = dof
+        self.is_over_constrained = is_over
+        self.is_under_constrained = is_under
+        self.conflicting = conflicting
+        self.redundant = redundant
+
+
+def test_map_tags_to_sources_filters_and_sorts() -> None:
+    """Tags map back to source ids; unmapped (planegcs-internal) tags drop,
+    duplicates collapse, and the output is sorted for stable rendering."""
+    tag_to_source = {1: "cB", 2: "cA", 3: "cA"}
+    # tag 99 has no source mapping -> dropped; tags 2 & 3 both map to cA.
+    assert _map_tags_to_sources([1, 2, 3, 99], tag_to_source) == ["cA", "cB"]
+
+
+def test_map_tags_to_sources_handles_empty_and_none() -> None:
+    assert _map_tags_to_sources(None, {1: "c1"}) == []
+    assert _map_tags_to_sources((), {1: "c1"}) == []
+
+
+def test_diagnosis_payload_fully_constrained() -> None:
+    """dof == 0, not over/under -> 'fully' with empty id arrays."""
+    sketch = Sketch(points=[PointEntity(id="p1", x=0, y=0, fixed=True)])
+    payload = _diagnosis_to_payload(_FakeDiagnosis(dof=0), {}, sketch)
+    assert payload["dof"] == 0
+    assert payload["status"] == SOLVE_STATUS_FULLY
+    assert payload["conflictingConstraintIds"] == []
+    assert payload["redundantConstraintIds"] == []
+    assert payload["underConstrainedEntityIds"] == []
+
+
+def test_diagnosis_payload_under_constrained_lists_free_points() -> None:
+    """dof > 0 -> 'under', and every NON-fixed point id is reported as still
+    free to move (fixed points are excluded)."""
+    sketch = Sketch(
+        points=[
+            PointEntity(id="anchor", x=0, y=0, fixed=True),
+            PointEntity(id="free1", x=1, y=1),
+            PointEntity(id="free2", x=2, y=2),
+        ]
+    )
+    payload = _diagnosis_to_payload(
+        _FakeDiagnosis(dof=2, is_under=True), {}, sketch
+    )
+    assert payload["dof"] == 2
+    assert payload["status"] == SOLVE_STATUS_UNDER
+    assert payload["underConstrainedEntityIds"] == ["free1", "free2"]
+    assert payload["conflictingConstraintIds"] == []
+
+
+def test_diagnosis_payload_over_constrained_maps_conflicting_ids() -> None:
+    """An over-constrained diagnosis surfaces the conflicting SOURCE ids
+    (mapped from planegcs tags) and reports 'over'."""
+    sketch = Sketch(points=[PointEntity(id="p1", x=0, y=0)])
+    payload = _diagnosis_to_payload(
+        _FakeDiagnosis(
+            dof=0, is_over=True, conflicting=[10, 11], redundant=[12]
+        ),
+        {10: "cH", 11: "cV", 12: "cR"},
+        sketch,
+    )
+    assert payload["status"] == SOLVE_STATUS_OVER
+    assert payload["conflictingConstraintIds"] == ["cH", "cV"]
+    assert payload["redundantConstraintIds"] == ["cR"]
+    # Over-constrained never lists under-constrained entities.
+    assert payload["underConstrainedEntityIds"] == []
+
+
+def test_diagnosis_payload_none_is_neutral_fully() -> None:
+    """When diagnose() itself failed (None), report a neutral fully-determined
+    payload rather than raising."""
+    sketch = Sketch(points=[PointEntity(id="p1", x=0, y=0)])
+    payload = _diagnosis_to_payload(None, {}, sketch)
+    assert payload["dof"] == 0
+    assert payload["status"] == SOLVE_STATUS_FULLY
+    assert payload["underConstrainedEntityIds"] == []
+
+
 # ── Tier 2: full planegcs solve round trip ───────────────────────────────
 
 
@@ -441,3 +546,65 @@ def test_solve_over_constrained_returns_structured_error() -> None:
         "solver_over_constrained",
         "solver_failed",
     )
+
+
+# ── Tier 2: DOF / status reporting on the live solve path ─────────────────
+
+
+@requires_planegcs
+def test_solve_payload_success_carries_dof_diagnostics() -> None:
+    """A fully-constrained right triangle returns the ADDITIVE diagnostics
+    block: dof 0, status 'fully', and empty conflicting/redundant/under id
+    arrays — the data the renderer's DOF badge consumes."""
+    payload_sketch = {
+        "points": [
+            {"id": "p1", "x": 0.0, "y": 0.0, "fixed": True},
+            {"id": "p2", "x": 4.0, "y": 1.0},
+            {"id": "p3", "x": 1.0, "y": 4.0},
+        ],
+        "lines": [
+            {"id": "ln_bot", "p1": "p1", "p2": "p2"},
+            {"id": "ln_left", "p1": "p1", "p2": "p3"},
+        ],
+    }
+    constraint_payload = [
+        {"id": "h", "kind": "horizontal", "line": "ln_bot"},
+        {"id": "v", "kind": "vertical", "line": "ln_left"},
+        {"id": "d", "kind": "distance", "p1": "p2", "p2": "p3", "distance": 30.0},
+    ]
+    result = solve_sketch_payload(payload_sketch, constraint_payload)
+    # Backward-compat fields unchanged.
+    assert result["dof"] == 0
+    assert "sketch" in result
+    # ADDITIVE diagnostics present and consistent with a fully-defined sketch.
+    assert result["status"] == SOLVE_STATUS_FULLY
+    assert result["conflictingConstraintIds"] == []
+    assert result["redundantConstraintIds"] == []
+    assert result["underConstrainedEntityIds"] == []
+
+
+@requires_planegcs
+def test_solve_under_constrained_attaches_structured_diagnostics() -> None:
+    """An under-constrained sketch (a free point with no constraints pinning
+    it) still RAISES solver_under_constrained (V1 contract), but the raised
+    error now carries the structured ``diagnostics`` payload so a caller can
+    drive a DOF badge without re-parsing the message. dof must be > 0 and the
+    free point id must appear in underConstrainedEntityIds."""
+    payload_sketch = {
+        "points": [
+            {"id": "anchor", "x": 0.0, "y": 0.0, "fixed": True},
+            {"id": "loose", "x": 5.0, "y": 5.0},
+        ],
+    }
+    # No constraint touches ``loose`` -> the system is under-constrained.
+    with pytest.raises(_CadHandlerError) as exc_info:
+        solve_sketch_payload(payload_sketch, [])
+    err = exc_info.value
+    assert err.code == "solver_under_constrained"
+    diagnostics = getattr(err, "diagnostics", None)
+    assert diagnostics is not None, "expected structured diagnostics on the error"
+    assert diagnostics["status"] == SOLVE_STATUS_UNDER
+    assert diagnostics["dof"] > 0
+    assert "loose" in diagnostics["underConstrainedEntityIds"]
+    # The anchor is fixed and must NOT be listed as under-constrained.
+    assert "anchor" not in diagnostics["underConstrainedEntityIds"]

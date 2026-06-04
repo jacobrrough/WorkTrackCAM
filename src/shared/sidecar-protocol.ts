@@ -438,6 +438,11 @@ export type CadExportDrawingResult = {
 //   * 'solver_over_constrained'   — constraints conflict; renderer highlights the
 //                                    offending source ids (carried in the message)
 //   * 'solver_failed'             — planegcs returned a non-convergent status
+//
+// The success result additionally carries optional DOF diagnostics
+// (`status` / `conflictingConstraintIds` / `redundantConstraintIds` /
+// `underConstrainedEntityIds`) so the renderer can drive a live degrees-of-
+// freedom badge. These are ADDITIVE — see `CadSolveSketchResult` below.
 
 /** A 2D point in the sketch plane. `fixed` anchors the point. */
 export type SketchPoint = {
@@ -504,6 +509,19 @@ export type CadSolveSketchParams = {
   constraintList: SketchConstraint[]
 }
 
+/**
+ * Outcome of a constraint solve, mirroring planegcs' `diagnose()` plus the
+ * Assembly-mate DOF badge vocabulary (`design-assembly__solver-badge--*`).
+ *
+ *   - `'fully'`       — 0 residual DOF; the sketch is fully constrained
+ *                       (Fusion's green "fully defined" state).
+ *   - `'under'`       — `dof > 0`; some geometry is still free to move.
+ *   - `'over'`        — conflicting constraints with identifiable source ids.
+ *   - `'conflicting'` — conflicts detected but not mapped to a specific
+ *                       source row (planegcs-internal helper tags only).
+ */
+export type SketchSolveStatus = 'fully' | 'under' | 'over' | 'conflicting'
+
 export type CadSolveSketchResult = {
   /**
    * Updated sketch with points moved to satisfy the constraints. Lines /
@@ -513,12 +531,36 @@ export type CadSolveSketchResult = {
    */
   sketch: SketchState
   /**
-   * Degrees of freedom remaining after the solve. Always `0` on success in
-   * V1 — the handler raises `solver_under_constrained` when dof > 0 so this
-   * field is informational only. A future iteration may surface partial
-   * solutions and let the renderer decide whether to apply them.
+   * Degrees of freedom remaining after the solve. `0` on the fully-constrained
+   * success path. The V1 handler still raises `solver_under_constrained` when
+   * `dof > 0` rather than returning a partial-solution success, but the value
+   * now reflects planegcs' real `diagnose().dof` instead of a hard-coded
+   * constant (so a future partial-solution path can surface the true count).
    */
   dof: number
+  /**
+   * ADDITIVE (CAD V1 Sketcher DOF badge). Solve outcome classification.
+   * `'fully'` on the success path. Optional so callers/tests that predate the
+   * field keep compiling. See {@link SketchSolveStatus}.
+   */
+  status?: SketchSolveStatus
+  /**
+   * ADDITIVE. Source constraint ids that planegcs flagged as mutually
+   * conflicting (the renderer paints these red). Empty on success. Mirrors the
+   * over-constrained error's previously-stringified id list, now structured.
+   */
+  conflictingConstraintIds?: string[]
+  /**
+   * ADDITIVE. Source constraint ids planegcs flagged as redundant (already
+   * implied by the rest of the system). Empty on success.
+   */
+  redundantConstraintIds?: string[]
+  /**
+   * ADDITIVE. Ids of sketch points that still carry degrees of freedom when
+   * `status === 'under'` — the renderer tints these so the operator can see
+   * exactly what is unconstrained. Empty on the fully-constrained path.
+   */
+  underConstrainedEntityIds?: string[]
 }
 
 // ── cad.create_assembly / cad.tessellate_assembly / cad.export_assembly ──

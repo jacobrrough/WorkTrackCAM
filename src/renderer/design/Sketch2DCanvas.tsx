@@ -26,6 +26,14 @@ import {
 } from './sketch-tools'
 import { cloneDesign, solveSketch as runLocalSketchSolve, energy } from './solver2d'
 import {
+  adaptSolveResultToDiagnosis,
+  entityStrokeToken,
+  mapSolveDiagnosisToStatus,
+  selectDofBadgeView,
+  type SketchConstraintStatusMap,
+  type SketchSolveDiagnosis
+} from './sketch-solve-status'
+import {
   handleFilletClick,
   handleChamferClick,
   handleTrimClick,
@@ -1634,6 +1642,22 @@ export function MvpSketchCanvas({
   const [solverError, setSolverError] = useState<SketchSolveError | null>(null)
   const [lastResidual, setLastResidual] = useState<number | null>(null)
   /**
+   * Normalised solver diagnosis (DOF / status / conflicting-constraint ids)
+   * from the most recent solve, or ``null`` before the first solve. Drives the
+   * DOF badge and the per-entity colour-highlighting. Decoupled from the IPC
+   * wire shape via ``adaptSolveResultToDiagnosis`` so the mapper stays pure.
+   */
+  const [diagnosis, setDiagnosis] = useState<SketchSolveDiagnosis | null>(null)
+  /**
+   * True only when the active ``diagnosis`` came from the sidecar's real DOF
+   * analysis (``window.fab.cad.solveSketch`` → planegcs ``diagnose()``). The
+   * local energy-minimising fallback has no DOF concept, so when it produces
+   * the solve this stays ``false`` and the badge reads a neutral "Solved"
+   * instead of asserting a (possibly false) "Fully constrained". See
+   * ``selectDofBadgeView`` for the honesty contract.
+   */
+  const [dofAuthoritative, setDofAuthoritative] = useState(false)
+  /**
    * True while a sidecar ``window.fab.cad.solveSketch`` IPC round-trip is
    * in flight. The Solve button reflects this with a disabled state + a
    * ``data-solving`` attribute so the render-pin tests can pin the
@@ -1647,6 +1671,19 @@ export function MvpSketchCanvas({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const tool = useMemo(() => SKETCH_TOOLS.find((t) => t.id === activeToolId)!, [activeToolId])
+
+  /**
+   * Per-entity / per-constraint UI flags derived from the latest solver
+   * diagnosis. Recomputed whenever the sketch or the diagnosis changes so the
+   * canvas tints geometry (under = blue, fully = black, conflicting = red) and
+   * the DOF badge reflects the current solve. ``null`` diagnosis (pre-first-
+   * solve) yields a neutral under-constrained map so freshly-drawn geometry
+   * reads as "still free" rather than mis-claiming "fully constrained".
+   */
+  const statusMap: SketchConstraintStatusMap = useMemo(
+    () => mapSolveDiagnosisToStatus(state.sketch, diagnosis ?? {}),
+    [state.sketch, diagnosis]
+  )
 
   // Reset draft + numeric input when the user switches tools.
   useEffect(() => {
@@ -1667,11 +1704,16 @@ export function MvpSketchCanvas({
       if (sketch.constraints.length === 0) {
         setSolverError(null)
         setLastResidual(null)
+        setDiagnosis(null)
+        setDofAuthoritative(false)
         return
       }
       const designIn = sketchToDesign(sketch)
       // Read off the IPC bridge defensively: tests + SSR + dev hot-reload
       // can all surface a window without the ``fab.cad.solveSketch`` shape.
+      // The result type widens ``CadSolveSketchResult``'s additive DOF
+      // diagnostics (status / dof / conflicting+redundant ids) so the live
+      // badge + entity highlighting can read them (Gap #3, additive).
       const bridge =
         typeof window !== 'undefined'
           ? (window as unknown as {
@@ -1681,7 +1723,17 @@ export function MvpSketchCanvas({
                     sketch: Record<string, unknown>
                     constraints: unknown[]
                   }) => Promise<
-                    | { ok: true; result: { points: Record<string, { x: number; y: number; fixed?: boolean }>; residual?: number } }
+                    | {
+                        ok: true
+                        result: {
+                          points: Record<string, { x: number; y: number; fixed?: boolean }>
+                          residual?: number
+                          dof?: number
+                          status?: 'fully' | 'under' | 'over' | 'conflicting'
+                          conflictingConstraintIds?: string[]
+                          redundantConstraintIds?: string[]
+                        }
+                      }
                     | { ok: false; error: string; hint?: string }
                   >
                 }
@@ -1690,56 +1742,101 @@ export function MvpSketchCanvas({
           : undefined
       let solvedPoints: Record<string, { x: number; y: number; fixed?: boolean }>
       let residual: number | undefined
+      /**
+       * The bridge's DOF diagnosis when the sidecar path ran; ``null`` on the
+       * local-fallback path (solver2d has no DOF concept — we synthesise a
+       * residual-based diagnosis after categorising below).
+       */
+      let bridgeDiagnosis: SketchSolveDiagnosis | null = null
+
+      /**
+       * The local energy-minimising solve. Used when the IPC bridge is absent
+       * (tests / SSR / pre-bridge boot) AND as a graceful fallback when a
+       * present bridge call fails — a broken or unavailable sidecar solve
+       * degrades to a working local solve rather than spamming a per-keystroke
+       * error banner. Returns the solved points, or ``null`` if the local
+       * solver itself threw (in which case the error banner is surfaced).
+       */
+      const runLocalSolve = (): Record<
+        string,
+        { x: number; y: number; fixed?: boolean }
+      > | null => {
+        try {
+          const cloned = cloneDesign(designIn)
+          const solved = runLocalSketchSolve(cloned, 80, 0.35)
+          residual = energy(solved)
+          return Object.fromEntries(
+            Object.entries(solved.points).map(([k, v]) => [k, { x: v.x, y: v.y, fixed: v.fixed }])
+          )
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          setSolverError({ kind: 'numerical', message: `Solver crashed: ${message}` })
+          setLastResidual(null)
+          return null
+        }
+      }
+
       if (typeof bridge === 'function') {
         setSolving(true)
+        let fromBridge: Record<string, { x: number; y: number; fixed?: boolean }> | null = null
         try {
           const res = await bridge({
             sketch: designIn as unknown as Record<string, unknown>,
             constraints: designIn.constraints as unknown as unknown[]
           })
-          if (!res.ok) {
-            setSolverError({
-              kind: 'numerical',
-              message: res.hint ? `${res.error}: ${res.hint}` : res.error
-            })
-            setLastResidual(null)
-            return
+          if (res.ok) {
+            fromBridge = res.result.points
+            residual = res.result.residual
+            bridgeDiagnosis = adaptSolveResultToDiagnosis(res.result)
           }
-          solvedPoints = res.result.points
-          residual = res.result.residual
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          setSolverError({ kind: 'numerical', message: `Sidecar solver crashed: ${message}` })
-          setLastResidual(null)
-          return
+          // res.ok === false → leave fromBridge null and fall back to the local
+          // solver below. The sidecar solve path is currently inert (the
+          // IPC↔sidecar param/return contract is mismatched and planegcs is not
+          // bundled — tracked as a dedicated task), so degrading keeps live
+          // solving working instead of erroring on every edit.
+        } catch {
+          // Bridge threw (no sidecar / transport error) → graceful local fallback.
         } finally {
           setSolving(false)
         }
-      } else {
-        // Local fallback path (jsdom / vitest / pre-bridge boot).
-        let solved: DesignFileV2
-        try {
-          const cloned = cloneDesign(designIn)
-          solved = runLocalSketchSolve(cloned, 80, 0.35)
-          residual = energy(solved)
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          setSolverError({ kind: 'numerical', message: `Solver crashed: ${message}` })
-          setLastResidual(null)
-          return
+        if (fromBridge) {
+          solvedPoints = fromBridge
+        } else {
+          const local = runLocalSolve()
+          if (!local) return
+          solvedPoints = local
         }
-        solvedPoints = Object.fromEntries(
-          Object.entries(solved.points).map(([k, v]) => [k, { x: v.x, y: v.y, fixed: v.fixed }])
-        )
+      } else {
+        const local = runLocalSolve()
+        if (!local) return
+        solvedPoints = local
       }
       const outcome = categoriseSolveResult(sketch, solvedPoints, residual)
       if (!outcome.ok) {
         setSolverError(outcome.error)
         setLastResidual(outcome.error.residual ?? null)
+        // An error path always carries a verdict — the bridge's structured DOF
+        // report, or the local categoriser's over/under heuristic — so the
+        // badge shows it (authoritative). Surface a diagnosis even here so
+        // geometry still tints.
+        setDofAuthoritative(true)
+        setDiagnosis(
+          bridgeDiagnosis ?? {
+            status: outcome.error.kind === 'over-constrained' ? 'over' : 'under'
+          }
+        )
         return
       }
       setSolverError(null)
       setLastResidual(outcome.residual ?? null)
+      // Converged. The bridge supplies a real DOF verdict; the local solver
+      // cannot distinguish "fully" from "under" (it only minimises energy), so
+      // we tint geometry as resolved (status 'fully' = the normal
+      // defined-geometry colour) but keep ``dofAuthoritative`` false — the badge
+      // then reads the honest "Solved" rather than a possibly-false
+      // "Fully constrained".
+      setDofAuthoritative(bridgeDiagnosis !== null)
+      setDiagnosis(bridgeDiagnosis ?? { dof: 0, status: 'fully' })
       dispatch({ type: 'mergeSolvedPoints', points: outcome.points })
     },
     [dispatch]
@@ -1801,6 +1898,29 @@ export function MvpSketchCanvas({
       cx + (wx - ox) * scale,
       cy - (wy - oy) * scale
     ]
+    // Resolve the theme color tokens once per draw (canvas strokeStyle can't
+    // take ``var(--x)`` literals). ``getComputedStyle`` reads the live values
+    // so a theme swap re-tints on the next paint; the literal fallbacks keep
+    // jsdom / a detached canvas (no layout engine) painting a sane colour.
+    const cssVars = typeof window !== 'undefined' ? window.getComputedStyle(c) : null
+    const TOKEN_FALLBACK: Record<string, string> = {
+      '--err': '#e0726f',
+      '--accent': '#6f9fc4',
+      '--warn': '#e6b84a',
+      '--txt0': '#eef1f5',
+      '--txt2': '#868f9c'
+    }
+    const resolveToken = (tokenRef: string): string => {
+      // tokenRef looks like ``var(--err)``; pull the custom-property name out.
+      const name = tokenRef.replace(/^var\(/, '').replace(/\)$/, '').trim()
+      const live = cssVars?.getPropertyValue(name).trim()
+      return live && live.length > 0 ? live : TOKEN_FALLBACK[name] ?? '#eef1f5'
+    }
+    /** Status-driven stroke for an entity (falls back to the geometry default). */
+    const entityStroke = (entityId: string, fallback: string): string => {
+      const flags = statusMap.entityFlags.get(entityId)
+      return flags ? resolveToken(entityStrokeToken(flags)) : fallback
+    }
     for (const e of state.sketch.entities) {
       if (e.kind === 'line') {
         const a = state.sketch.points[e.startId]
@@ -1808,7 +1928,7 @@ export function MvpSketchCanvas({
         if (!a || !b) continue
         const [ax, ay] = wp(a.x, a.y)
         const [bx, by] = wp(b.x, b.y)
-        ctx.strokeStyle = 'rgba(220,220,220,0.95)'
+        ctx.strokeStyle = entityStroke(e.id, 'rgba(220,220,220,0.95)')
         ctx.lineWidth = 1.5
         ctx.beginPath()
         ctx.moveTo(ax, ay)
@@ -1818,7 +1938,7 @@ export function MvpSketchCanvas({
         const c0 = state.sketch.points[e.centerId]
         if (!c0) continue
         const [px, py] = wp(c0.x, c0.y)
-        ctx.strokeStyle = 'rgba(220,220,220,0.95)'
+        ctx.strokeStyle = entityStroke(e.id, 'rgba(220,220,220,0.95)')
         ctx.lineWidth = 1.5
         ctx.beginPath()
         ctx.arc(px, py, e.radius * scale, 0, Math.PI * 2)
@@ -1829,7 +1949,7 @@ export function MvpSketchCanvas({
         const v = state.sketch.points[e.viaId]
         const en = state.sketch.points[e.endId]
         if (!s || !v || !en) continue
-        ctx.strokeStyle = 'rgba(255,200,120,0.95)'
+        ctx.strokeStyle = entityStroke(e.id, 'rgba(255,200,120,0.95)')
         ctx.lineWidth = 1.5
         ctx.beginPath()
         const [sx, sy] = wp(s.x, s.y)
@@ -1847,7 +1967,7 @@ export function MvpSketchCanvas({
         const v = state.sketch.points[e.pointIds[1]!]
         const en = state.sketch.points[e.pointIds[2]!]
         if (!s || !v || !en) continue
-        ctx.strokeStyle = 'rgba(140,220,180,0.95)'
+        ctx.strokeStyle = entityStroke(e.id, 'rgba(140,220,180,0.95)')
         ctx.lineWidth = 1.5
         ctx.beginPath()
         const [sx, sy] = wp(s.x, s.y)
@@ -1860,7 +1980,7 @@ export function MvpSketchCanvas({
         const p = state.sketch.points[e.pointId]
         if (!p) continue
         const [px, py] = wp(p.x, p.y)
-        ctx.fillStyle = 'rgba(80,200,255,0.95)'
+        ctx.fillStyle = entityStroke(e.id, 'rgba(80,200,255,0.95)')
         ctx.beginPath()
         ctx.arc(px, py, 4, 0, Math.PI * 2)
         ctx.fill()
@@ -1886,7 +2006,7 @@ export function MvpSketchCanvas({
         ctx.fill()
       }
     }
-  }, [headless, state.sketch, draft, width, height, gridMm])
+  }, [headless, state.sketch, draft, width, height, gridMm, statusMap])
 
   useEffect(() => {
     draw()
@@ -2067,9 +2187,42 @@ export function MvpSketchCanvas({
     border: `1px solid ${kind === 'ok' ? 'var(--accent, #5b9aff)' : 'rgba(220,80,80,0.8)'}`,
     color: 'var(--fg, #e6e6e6)'
   })
+  /**
+   * DOF badge style keyed by the status modifier. Token-driven (fully = ok
+   * green, under = accent blue, over = err red, not-solved = muted) so the
+   * badge re-themes with the rest of the shell; literal fallbacks match the
+   * other inline styles in this MVP canvas.
+   */
+  const dofBadgeStyle = (
+    status: 'fully' | 'under' | 'over' | 'not-solved' | 'solved'
+  ): React.CSSProperties => {
+    const palette: Record<typeof status, { fg: string; bg: string; bd: string }> = {
+      fully: { fg: 'var(--ok, #5cc99a)', bg: 'var(--ok-dim, rgba(92,201,154,0.12))', bd: 'var(--ok, #5cc99a)' },
+      under: { fg: 'var(--accent, #6f9fc4)', bg: 'var(--accent-12, rgba(111,159,196,0.12))', bd: 'var(--accent, #6f9fc4)' },
+      over: { fg: 'var(--err, #e0726f)', bg: 'var(--err-dim, rgba(224,114,111,0.1))', bd: 'var(--err, #e0726f)' },
+      // Neutral "geometry settled, DOF not analysed" — deliberately NOT the
+      // green ``fully`` palette, so a local solve never *looks* like a verified
+      // fully-constrained sketch.
+      solved: { fg: 'var(--txt1, #c4ccd6)', bg: 'transparent', bd: 'var(--border, #424954)' },
+      'not-solved': { fg: 'var(--txt2, #868f9c)', bg: 'transparent', bd: 'var(--border, #424954)' }
+    }
+    const c = palette[status]
+    return {
+      padding: '3px 8px',
+      fontSize: '11px',
+      fontWeight: 600,
+      borderRadius: '3px',
+      whiteSpace: 'nowrap',
+      color: c.fg,
+      background: c.bg,
+      border: `1px solid ${c.bd}`
+    }
+  }
 
   const showNumericInput =
-    activeToolId === 'distanceConstraint' || activeToolId === 'radiusConstraint'
+    activeToolId === 'distanceConstraint' ||
+    activeToolId === 'radiusConstraint' ||
+    activeToolId === 'angleConstraint'
 
   return (
     <div
@@ -2154,6 +2307,8 @@ export function MvpSketchCanvas({
               setDraft(emptyDraft)
               setSolverError(null)
               setLastResidual(null)
+              setDiagnosis(null)
+              setDofAuthoritative(false)
               setHint(null)
             }}
             style={btnStyle}
@@ -2161,6 +2316,26 @@ export function MvpSketchCanvas({
           >
             Clear
           </button>
+          {/* Degrees-of-freedom badge (mirrors the assembly solver badge).
+              ``selectDofBadgeView`` enforces the honesty contract: "Not solved"
+              before the first solve, a neutral "Solved" after a local
+              (non-authoritative) solve, and the real verdict (Fully constrained /
+              Under-constrained: N DOF / Over-constrained — ids) ONLY when the
+              sidecar supplied a DOF diagnosis. The data-status attr drives the
+              colour. */}
+          {(() => {
+            const badge = selectDofBadgeView(diagnosis, dofAuthoritative, statusMap)
+            return (
+              <span
+                className={`sketch-mvp-dof-badge sketch-mvp-dof-badge--${badge.status}`}
+                data-testid="sketch-mvp-dof-badge"
+                data-status={badge.status}
+                style={dofBadgeStyle(badge.status)}
+              >
+                {badge.label}
+              </span>
+            )
+          })()}
           <span
             className="sketch-mvp-ribbon__hint"
             style={{ ...ribbonLabelStyle, marginLeft: 'auto' }}

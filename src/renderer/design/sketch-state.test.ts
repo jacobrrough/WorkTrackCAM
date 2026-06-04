@@ -391,3 +391,116 @@ describe('sketch-state — categoriseSolveResult', () => {
     if (r.ok) expect(r.points['p1']).toMatchObject({ x: 5, y: 5 })
   })
 })
+
+describe('sketch-state — Fusion-grade constraint kinds', () => {
+  function withTwoPoints(): ReturnType<typeof initialSketchState> {
+    let s = initialSketchState()
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'a', x: 0, y: 0 })
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'b', x: 10, y: 0 })
+    return s
+  }
+
+  it('maps equal → equal with both segment point pairs', () => {
+    let s = withTwoPoints()
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'c', x: 0, y: 5 })
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'd', x: 10, y: 5 })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'eq', kind: 'equal', a1Id: 'a', b1Id: 'b', a2Id: 'c', b2Id: 'd' }
+    })
+    const d = sketchToDesign(s.sketch)
+    const c = d.constraints[0]!
+    expect(c.type).toBe('equal')
+    if (c.type === 'equal') {
+      expect(c.a1.pointId).toBe('a')
+      expect(c.b2.pointId).toBe('d')
+    }
+  })
+
+  it('maps pointOnLine → collinear (p, a, b)', () => {
+    let s = withTwoPoints()
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'p', x: 5, y: 1 })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'pol', kind: 'pointOnLine', pId: 'p', aId: 'a', bId: 'b' }
+    })
+    const d = sketchToDesign(s.sketch)
+    const c = d.constraints[0]!
+    expect(c.type).toBe('collinear')
+    if (c.type === 'collinear') {
+      expect(c.a.pointId).toBe('p')
+      expect(c.b.pointId).toBe('a')
+      expect(c.c.pointId).toBe('b')
+    }
+  })
+
+  it('maps angle → angle and inlines the degree value under a parameter key', () => {
+    let s = withTwoPoints()
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'c', x: 0, y: 5 })
+    s = sketchReducer(s, { type: 'addPoint', pointId: 'd', x: 5, y: 5 })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'ang', kind: 'angle', a1Id: 'a', b1Id: 'b', a2Id: 'c', b2Id: 'd', value: 30 }
+    })
+    const d = sketchToDesign(s.sketch)
+    const c = d.constraints[0]!
+    expect(c.type).toBe('angle')
+    if (c.type === 'angle') {
+      expect(d.parameters[c.parameterKey]).toBe(30)
+    }
+  })
+
+  it('maps fix → fix anchoring a single point', () => {
+    let s = withTwoPoints()
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'fx', kind: 'fix', pointId: 'a' }
+    })
+    const d = sketchToDesign(s.sketch)
+    const c = d.constraints[0]!
+    expect(c.type).toBe('fix')
+    if (c.type === 'fix') expect(c.pointId).toBe('a')
+  })
+
+  it('maps concentric → concentric over two entity ids', () => {
+    let s = initialSketchState()
+    s = sketchReducer(s, { type: 'addCircle', id: 'C1', center: { id: 'c1', x: 0, y: 0 }, radius: 5 })
+    s = sketchReducer(s, { type: 'addCircle', id: 'C2', center: { id: 'c2', x: 9, y: 0 }, radius: 3 })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'cc', kind: 'concentric', entityAId: 'C1', entityBId: 'C2' }
+    })
+    const d = sketchToDesign(s.sketch)
+    const c = d.constraints[0]!
+    expect(c.type).toBe('concentric')
+    if (c.type === 'concentric') {
+      expect(c.entityAId).toBe('C1')
+      expect(c.entityBId).toBe('C2')
+    }
+  })
+
+  it('cascade-drops a fix constraint when its anchored point is orphaned by entity removal', () => {
+    let s = initialSketchState()
+    s = sketchReducer(s, { type: 'addLine', id: 'L', start: { id: 'a', x: 0, y: 0 }, end: { id: 'b', x: 5, y: 0 } })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'fx', kind: 'fix', pointId: 'a' }
+    })
+    s = sketchReducer(s, { type: 'removeEntity', id: 'L' })
+    // The line owned both points; removing it orphans 'a', so the fix drops.
+    expect(s.sketch.constraints).toHaveLength(0)
+    expect(s.sketch.points).toEqual({})
+  })
+
+  it('cascade-drops a concentric constraint when one of its circles is removed', () => {
+    let s = initialSketchState()
+    s = sketchReducer(s, { type: 'addCircle', id: 'C1', center: { id: 'c1', x: 0, y: 0 }, radius: 5 })
+    s = sketchReducer(s, { type: 'addCircle', id: 'C2', center: { id: 'c2', x: 9, y: 0 }, radius: 3 })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'cc', kind: 'concentric', entityAId: 'C1', entityBId: 'C2' }
+    })
+    s = sketchReducer(s, { type: 'removeEntity', id: 'C2' })
+    expect(s.sketch.constraints.find((c) => c.id === 'cc')).toBeUndefined()
+  })
+})

@@ -17463,3 +17463,53 @@ free-text is `_xml_escape`'d; pytests pin each (run on system python). Stack-1 X
 Additive schema (no version bump). No G-code. tsc clean; TS 14,691 pass (+51); pytest 117 pass (+23).
 Follow-ups (LOW/INFO): refactor Stack-1 escape test off execute_script (avoids #11); GD&T/detail
 not yet wired to drawing.json save; title-block hand-rolled escaping could use _xml_escape.
+
+
+### Stack #7.3 (agent-orchestrated): Sketch constraint-solver UX (DOF badge)
+Workflow (Map -> Build[solver|state] -> Renderer -> Verify, 5 agents); main loop ran the
+correctness gate + the operator-safety fix below.
+
+WHAT THE WORKFLOW BUILT (additive, verify-confirmed back-compat):
+- `engines/cad/sketch_solver.py` (+252): `_diagnosis_to_payload` + `solve(out_diagnostics=...)`
+  surface planegcs `diagnose()` -> dof / status ('fully'|'under'|'over'|'conflicting') /
+  conflicting+redundant constraint ids. `engines/sidecar/cad_handlers.py` + `sidecar-protocol.ts`
+  carry the additive fields (all optional; predating callers/tests still compile).
+- `src/renderer/design/sketch-tools.ts` (+264) + `sketch-state.ts` (+269): renderer-side
+  constraint-builder tools + DOF/status -> per-entity/per-constraint UI-flag model. Pure.
+- NEW pure `src/renderer/design/sketch-solve-status.ts`: maps a normalised solve diagnosis onto
+  entity tint tokens + the DOF badge label (4-valued wire 'conflicting' folds to 3-valued 'over').
+- `src/renderer/design/Sketch2DCanvas.tsx` (MvpSketchCanvas): live debounced re-solve, DOF badge,
+  under/over/conflicting entity highlighting (theme tokens), + angle-constraint value input.
+
+VERIFY (adversarial agent) caught THREE HIGH bugs -- the feature did NOT work end-to-end:
+- BUG 1: `coerceSolveSketchResult` (`src/main/ipc-cad.ts`) drops the new dof/status/ids ->
+  renderer reads `undefined` -> a fully-constrained sketch would badge "Under-constrained: 0 DOF".
+- BUG 2: the local-solver fallback unconditionally set `{dof:0,status:'fully'}` -> an
+  under-constrained sketch badged "Fully constrained" (the exact operator-misleading failure).
+- BUG 3 (PRE-EXISTING, Wave 2 96e6019): the IPC<->sidecar contract is mismatched (param names
+  `sketch/constraints` vs `sketchState/constraintList`; return `sketch.points` array vs top-level
+  `points` map) so the bridge is DEAD; planegcs is also not bundled (RISK 4). The sidecar DOF path
+  cannot function regardless -> the local solver is the only working path right now.
+
+MAIN-LOOP FIX (the self-contained, fully-validatable safety slice):
+- HONEST BADGE: new pure `selectDofBadgeView(diagnosis, dofAuthoritative, statusMap)` enforces a
+  3-state contract -- "Not solved" pre-solve, neutral "Solved" after a NON-authoritative (local)
+  solve, real verdict ONLY when the sidecar supplied a DOF diagnosis. A local solve can NEVER
+  read "Fully constrained" again. New `dofAuthoritative` state (true only on a structured bridge
+  diagnosis); neutral `solved` badge palette (txt1, deliberately NOT the green `fully`).
+- GRACEFUL DEGRADE: `runSolve` now falls back to the local energy solver on ANY bridge failure
+  (was: set error + return) -> a dead/contract-broken bridge degrades to a working local solve
+  instead of spamming a per-keystroke error banner. Numerical/over-constraint verdicts still show.
+- 9 new pure honesty-contract tests (incl. "local solve over an actually-under-constrained sketch
+  still reads Solved"). NO G-code paths touched.
+
+DEFERRED (flagged as a spawn task -- needs the planegcs venv to validate end-to-end, would bloat
+this commit): make the sidecar bridge LIVE = BUG 1 (coercer forward fields) + BUG 3a/3b (contract
+reconcile) + install/validate planegcs (un-skip the 5 @requires_planegcs tests; verify
+`_diagnosis_to_payload` reads REAL planegcs attribute names) + narrow the graceful-degrade to
+transport errors once the bridge works. The renderer is ready: it lights up the real DOF badge the
+moment the bridge returns a structured diagnosis.
+
+RESULTS: tsc clean; full TS suite 14,759 pass (+68); design suite 967 pass; sidecar sketch-solver
+pytest 26 pass / 5 skip (planegcs absent -> deferred). Additive schema/wire (Safety Rule 2). No `any`.
+NEXT: Stack #7.4 (editable feature timeline -- reorder/suppress/roll-back over kernelOps[] replay).

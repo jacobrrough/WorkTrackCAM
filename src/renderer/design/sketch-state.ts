@@ -167,6 +167,93 @@ export type PerpendicularConstraint = {
   b2Id: string
 }
 
+/** Equal length: |a1−b1| == |a2−b2| (two line segments share a length). */
+export type EqualConstraint = {
+  id: string
+  kind: 'equal'
+  a1Id: string
+  b1Id: string
+  a2Id: string
+  b2Id: string
+}
+
+/**
+ * Tangent: line (lineA→lineB) is tangent to the arc (arcStart, arcVia,
+ * arcEnd) at the chosen arc endpoint. The renderer resolves the arc
+ * entity's three point ids; the consumer picks the line endpoints + which
+ * arc end (and which line end) the tangency is enforced at.
+ */
+export type TangentConstraint = {
+  id: string
+  kind: 'tangent'
+  lineAId: string
+  lineBId: string
+  arcStartId: string
+  arcViaId: string
+  arcEndId: string
+  arcTangentAt: 'start' | 'end'
+  lineTangentAt: 'a' | 'b'
+}
+
+/** Concentric: two circle/arc entities are forced to share their center. */
+export type ConcentricConstraint = {
+  id: string
+  kind: 'concentric'
+  entityAId: string
+  entityBId: string
+}
+
+/** Symmetric: points a and b are mirror images across the line (laId—lbId). */
+export type SymmetricConstraint = {
+  id: string
+  kind: 'symmetric'
+  aId: string
+  bId: string
+  laId: string
+  lbId: string
+}
+
+/** Midpoint: point m sits at the midpoint of segment a—b. */
+export type MidpointConstraint = {
+  id: string
+  kind: 'midpoint'
+  mId: string
+  aId: string
+  bId: string
+}
+
+/** Point-on-line: point p is collinear with the segment a—b (lies on the line). */
+export type PointOnLineConstraint = {
+  id: string
+  kind: 'pointOnLine'
+  pId: string
+  aId: string
+  bId: string
+}
+
+/**
+ * Angle: angle between line (a1→b1) and (a2→b2) equals ``value`` degrees.
+ * Mirrors the design-schema ``angle`` constraint (solver minimizes
+ * (cos measured − cos target)²).
+ */
+export type AngleConstraint = {
+  id: string
+  kind: 'angle'
+  a1Id: string
+  b1Id: string
+  a2Id: string
+  b2Id: string
+  /** Target angle in degrees. */
+  value: number
+}
+
+/** Fix / lock: anchor a single point so the solver never moves it. */
+export type FixConstraint = {
+  id: string
+  kind: 'fix'
+  pointId: string
+}
+
 export type Constraint =
   | HorizontalConstraint
   | VerticalConstraint
@@ -175,6 +262,14 @@ export type Constraint =
   | RadiusConstraint
   | ParallelConstraint
   | PerpendicularConstraint
+  | EqualConstraint
+  | TangentConstraint
+  | ConcentricConstraint
+  | SymmetricConstraint
+  | MidpointConstraint
+  | PointOnLineConstraint
+  | AngleConstraint
+  | FixConstraint
 
 // ── State + reducer ──────────────────────────────────────────────────────────
 
@@ -299,26 +394,60 @@ function ensurePoint(
   }
 }
 
+/**
+ * Every POINT id a constraint references. Centralised so the cascade
+ * predicates and the orphan check stay in sync as new constraint kinds are
+ * added. Entity-id-only constraints (radius / concentric) contribute no
+ * point ids here -- see ``constraintEntityRefs``.
+ */
+function constraintPointRefs(c: Constraint): readonly string[] {
+  switch (c.kind) {
+    case 'horizontal':
+    case 'vertical':
+    case 'coincident':
+    case 'distance':
+      return [c.aId, c.bId]
+    case 'parallel':
+    case 'perpendicular':
+    case 'equal':
+    case 'angle':
+      return [c.a1Id, c.b1Id, c.a2Id, c.b2Id]
+    case 'tangent':
+      return [c.lineAId, c.lineBId, c.arcStartId, c.arcViaId, c.arcEndId]
+    case 'symmetric':
+      return [c.aId, c.bId, c.laId, c.lbId]
+    case 'midpoint':
+      return [c.mId, c.aId, c.bId]
+    case 'pointOnLine':
+      return [c.pId, c.aId, c.bId]
+    case 'fix':
+      return [c.pointId]
+    case 'radius':
+    case 'concentric':
+      return []
+    default: {
+      const _exhaustive: never = c
+      void _exhaustive
+      return []
+    }
+  }
+}
+
+/** Every ENTITY id a constraint references (radius / concentric). */
+function constraintEntityRefs(c: Constraint): readonly string[] {
+  if (c.kind === 'radius') return [c.entityId]
+  if (c.kind === 'concentric') return [c.entityAId, c.entityBId]
+  return []
+}
+
 /** Predicate: does this constraint reference any of the supplied entity ids? */
 function constraintTouchesEntity(c: Constraint, entityIds: ReadonlySet<string>): boolean {
-  if (c.kind === 'radius') return entityIds.has(c.entityId)
-  return false
+  return constraintEntityRefs(c).some((id) => entityIds.has(id))
 }
 
 /** Predicate: does this constraint reference any of the supplied point ids? */
 function constraintTouchesPoint(c: Constraint, pointIds: ReadonlySet<string>): boolean {
-  if (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'coincident' || c.kind === 'distance') {
-    return pointIds.has(c.aId) || pointIds.has(c.bId)
-  }
-  if (c.kind === 'parallel' || c.kind === 'perpendicular') {
-    return (
-      pointIds.has(c.a1Id) ||
-      pointIds.has(c.b1Id) ||
-      pointIds.has(c.a2Id) ||
-      pointIds.has(c.b2Id)
-    )
-  }
-  return false
+  return constraintPointRefs(c).some((id) => pointIds.has(id))
 }
 
 function collectEntityPointIds(e: SketchEntity): string[] {
@@ -338,18 +467,7 @@ function isPointOrphan(
     if (collectEntityPointIds(e).includes(pointId)) return false
   }
   for (const c of remainingConstraints) {
-    if (
-      (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'coincident' || c.kind === 'distance') &&
-      (c.aId === pointId || c.bId === pointId)
-    ) {
-      return false
-    }
-    if (
-      (c.kind === 'parallel' || c.kind === 'perpendicular') &&
-      (c.a1Id === pointId || c.b1Id === pointId || c.a2Id === pointId || c.b2Id === pointId)
-    ) {
-      return false
-    }
+    if (constraintPointRefs(c).includes(pointId)) return false
   }
   return true
 }
@@ -442,24 +560,18 @@ export function sketchReducer(state: SketchState, action: SketchAction): SketchS
       // when those points are about to disappear.
       const remainingConstraints = next.sketch.constraints.filter((c) => {
         if (constraintTouchesEntity(c, new Set([action.id]))) return false
-        // Cascade-drop point-level constraints only when the point becomes orphaned.
-        if (
-          (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'coincident' || c.kind === 'distance') &&
-          (ownedPointIds.has(c.aId) || ownedPointIds.has(c.bId))
-        ) {
-          const touchedIds = new Set<string>()
-          if (ownedPointIds.has(c.aId)) touchedIds.add(c.aId)
-          if (ownedPointIds.has(c.bId)) touchedIds.add(c.bId)
-          for (const pid of touchedIds) {
-            if (
-              isPointOrphan(
-                pid,
-                remainingEntities,
-                next.sketch.constraints.filter((other) => other.id !== c.id)
-              )
-            ) {
-              return false
-            }
+        // Cascade-drop point-level constraints only when one of the points
+        // they reference (and that the removed entity owned) becomes orphaned.
+        const touchedIds = constraintPointRefs(c).filter((pid) => ownedPointIds.has(pid))
+        for (const pid of touchedIds) {
+          if (
+            isPointOrphan(
+              pid,
+              remainingEntities,
+              next.sketch.constraints.filter((other) => other.id !== c.id)
+            )
+          ) {
+            return false
           }
         }
         return true
@@ -643,6 +755,75 @@ export function sketchToDesign(sketch: Sketch): DesignFileV2 {
         a2: { pointId: c.a2Id },
         b2: { pointId: c.b2Id }
       })
+    } else if (c.kind === 'equal') {
+      constraints.push({
+        id: c.id,
+        type: 'equal',
+        a1: { pointId: c.a1Id },
+        b1: { pointId: c.b1Id },
+        a2: { pointId: c.a2Id },
+        b2: { pointId: c.b2Id }
+      })
+    } else if (c.kind === 'tangent') {
+      constraints.push({
+        id: c.id,
+        type: 'tangent',
+        lineA: { pointId: c.lineAId },
+        lineB: { pointId: c.lineBId },
+        arcStart: { pointId: c.arcStartId },
+        arcVia: { pointId: c.arcViaId },
+        arcEnd: { pointId: c.arcEndId },
+        arcTangentAt: c.arcTangentAt,
+        lineTangentAt: c.lineTangentAt
+      })
+    } else if (c.kind === 'concentric') {
+      constraints.push({
+        id: c.id,
+        type: 'concentric',
+        entityAId: c.entityAId,
+        entityBId: c.entityBId
+      })
+    } else if (c.kind === 'symmetric') {
+      constraints.push({
+        id: c.id,
+        type: 'symmetric',
+        p1: { pointId: c.aId },
+        p2: { pointId: c.bId },
+        la: { pointId: c.laId },
+        lb: { pointId: c.lbId }
+      })
+    } else if (c.kind === 'midpoint') {
+      constraints.push({
+        id: c.id,
+        type: 'midpoint',
+        m: { pointId: c.mId },
+        a: { pointId: c.aId },
+        b: { pointId: c.bId }
+      })
+    } else if (c.kind === 'pointOnLine') {
+      // No dedicated point-on-line wire kind; ``collinear`` (p, a, b) is the
+      // exact equivalent (point p lies on the line through a—b).
+      constraints.push({
+        id: c.id,
+        type: 'collinear',
+        a: { pointId: c.pId },
+        b: { pointId: c.aId },
+        c: { pointId: c.bId }
+      })
+    } else if (c.kind === 'angle') {
+      const key = `ang_${c.id}`
+      parameters[key] = c.value
+      constraints.push({
+        id: c.id,
+        type: 'angle',
+        a1: { pointId: c.a1Id },
+        b1: { pointId: c.b1Id },
+        a2: { pointId: c.a2Id },
+        b2: { pointId: c.b2Id },
+        parameterKey: key
+      })
+    } else if (c.kind === 'fix') {
+      constraints.push({ id: c.id, type: 'fix', pointId: c.pointId })
     }
   }
   return {

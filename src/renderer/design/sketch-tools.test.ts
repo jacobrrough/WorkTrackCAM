@@ -24,22 +24,30 @@ function pick(x: number, y: number, opts: Partial<SketchPick> = {}): SketchPick 
 }
 
 describe('sketch-tools — palette catalogue', () => {
-  it('exposes the V1.5 tool set (5 draw + spline + 7 constraints + select)', () => {
+  it('exposes the full tool set (5 draw + spline + 16 constraints + select)', () => {
     const ids = SKETCH_TOOLS.map((t) => t.id).sort()
     expect(ids).toEqual(
       [
+        'angleConstraint',
         'arc',
         'circle',
         'coincidentConstraint',
+        'concentricConstraint',
         'distanceConstraint',
+        'equalConstraint',
+        'fixConstraint',
         'horizontalConstraint',
         'line',
+        'midpointConstraint',
         'parallelConstraint',
         'perpendicularConstraint',
+        'pointOnLineConstraint',
         'radiusConstraint',
         'rectangle',
         'select',
         'spline',
+        'symmetricConstraint',
+        'tangentConstraint',
         'verticalConstraint'
       ].sort()
     )
@@ -477,5 +485,170 @@ describe('sketch-tools — arc router (V1.5 reverification)', () => {
       noCtx
     )
     if (r.kind === 'commit') expect(r.resetDraft).toBe(true)
+  })
+})
+
+// ── Fusion-grade constraint additions ───────────────────────────────────────
+//
+// equal / angle / symmetric (4 point picks), midpoint / point-on-line (3 point
+// picks), fix (1 point), concentric (2 entity picks), tangent (line + arc).
+
+describe('sketch-tools — equal / angle / symmetric (4-pick) tools', () => {
+  const fourPicks: SketchToolDraft = {
+    picks: [
+      pick(0, 0, { pointId: 'a1' }),
+      pick(5, 0, { pointId: 'b1' }),
+      pick(0, 5, { pointId: 'a2' })
+    ]
+  }
+
+  it('equal commits an equal constraint over two segments', () => {
+    const r = handleSketchToolClick('equalConstraint', fourPicks, pick(5, 5, { pointId: 'b2' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'equal') {
+      expect(r.action.constraint.a1Id).toBe('a1')
+      expect(r.action.constraint.b2Id).toBe('b2')
+    }
+  })
+
+  it('symmetric commits with the pair + mirror-line points', () => {
+    const r = handleSketchToolClick('symmetricConstraint', fourPicks, pick(5, 5, { pointId: 'b2' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'symmetric') {
+      expect(r.action.constraint.aId).toBe('a1')
+      expect(r.action.constraint.bId).toBe('b1')
+      expect(r.action.constraint.laId).toBe('a2')
+      expect(r.action.constraint.lbId).toBe('b2')
+    }
+  })
+
+  it('angle requires a numeric value in the draft', () => {
+    const r = handleSketchToolClick('angleConstraint', fourPicks, pick(5, 5, { pointId: 'b2' }), noCtx)
+    expect(r.kind).toBe('error')
+  })
+
+  it('angle commits with the supplied degree value', () => {
+    const draft: SketchToolDraft = { ...fourPicks, numericValue: 45 }
+    const r = handleSketchToolClick('angleConstraint', draft, pick(5, 5, { pointId: 'b2' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'angle') {
+      expect(r.action.constraint.value).toBe(45)
+    }
+  })
+
+  it('equal rejects a collapsed pair (a1 == b1)', () => {
+    const bad: SketchToolDraft = {
+      picks: [
+        pick(0, 0, { pointId: 'a1' }),
+        pick(5, 0, { pointId: 'a1' }),
+        pick(0, 5, { pointId: 'a2' })
+      ]
+    }
+    const r = handleSketchToolClick('equalConstraint', bad, pick(5, 5, { pointId: 'b2' }), noCtx)
+    expect(r.kind).toBe('error')
+  })
+})
+
+describe('sketch-tools — midpoint / point-on-line (3-pick) tools', () => {
+  it('midpoint commits m + segment endpoints', () => {
+    const draft: SketchToolDraft = {
+      picks: [pick(2, 0, { pointId: 'm' }), pick(0, 0, { pointId: 'a' })]
+    }
+    const r = handleSketchToolClick('midpointConstraint', draft, pick(4, 0, { pointId: 'b' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'midpoint') {
+      expect(r.action.constraint.mId).toBe('m')
+      expect(r.action.constraint.aId).toBe('a')
+      expect(r.action.constraint.bId).toBe('b')
+    }
+  })
+
+  it('point-on-line commits p + line endpoints', () => {
+    const draft: SketchToolDraft = {
+      picks: [pick(2, 1, { pointId: 'p' }), pick(0, 0, { pointId: 'a' })]
+    }
+    const r = handleSketchToolClick('pointOnLineConstraint', draft, pick(4, 0, { pointId: 'b' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'pointOnLine') {
+      expect(r.action.constraint.pId).toBe('p')
+    }
+  })
+
+  it('midpoint rejects when the chosen point equals a segment endpoint', () => {
+    const draft: SketchToolDraft = {
+      picks: [pick(0, 0, { pointId: 'a' }), pick(0, 0, { pointId: 'a' })]
+    }
+    const r = handleSketchToolClick('midpointConstraint', draft, pick(4, 0, { pointId: 'b' }), noCtx)
+    expect(r.kind).toBe('error')
+  })
+})
+
+describe('sketch-tools — fix / concentric / tangent tools', () => {
+  it('fix anchors a single picked point', () => {
+    const r = handleSketchToolClick('fixConstraint', emptyDraft, pick(0, 0, { pointId: 'a' }), noCtx)
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'fix') {
+      expect(r.action.constraint.pointId).toBe('a')
+    }
+  })
+
+  it('fix rejects a pick that did not snap to a point', () => {
+    const r = handleSketchToolClick('fixConstraint', emptyDraft, pick(0, 0), noCtx)
+    expect(r.kind).toBe('error')
+  })
+
+  it('concentric commits two distinct circle/arc entity ids', () => {
+    const entities: SketchEntity[] = [
+      { id: 'C1', kind: 'circle', centerId: 'c1', radius: 5 },
+      { id: 'C2', kind: 'circle', centerId: 'c2', radius: 3 }
+    ]
+    const draft: SketchToolDraft = { picks: [pick(0, 0, { entityId: 'C1' })] }
+    const r = handleSketchToolClick('concentricConstraint', draft, pick(9, 0, { entityId: 'C2' }), {
+      entities
+    })
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'concentric') {
+      expect(r.action.constraint.entityAId).toBe('C1')
+      expect(r.action.constraint.entityBId).toBe('C2')
+    }
+  })
+
+  it('concentric rejects when the second pick repeats the first entity', () => {
+    const entities: SketchEntity[] = [{ id: 'C1', kind: 'circle', centerId: 'c1', radius: 5 }]
+    const draft: SketchToolDraft = { picks: [pick(0, 0, { entityId: 'C1' })] }
+    const r = handleSketchToolClick('concentricConstraint', draft, pick(0, 0, { entityId: 'C1' }), {
+      entities
+    })
+    expect(r.kind).toBe('error')
+  })
+
+  it('tangent resolves line + arc point ids from the two entity picks', () => {
+    const entities: SketchEntity[] = [
+      { id: 'L1', kind: 'line', startId: 'la', endId: 'lb' },
+      { id: 'A1', kind: 'arc', startId: 'as', viaId: 'av', endId: 'ae' }
+    ]
+    const draft: SketchToolDraft = { picks: [pick(0, 0, { entityId: 'L1' })] }
+    const r = handleSketchToolClick('tangentConstraint', draft, pick(5, 0, { entityId: 'A1' }), {
+      entities
+    })
+    expect(r.kind).toBe('commit')
+    if (r.kind === 'commit' && r.action.type === 'addConstraint' && r.action.constraint.kind === 'tangent') {
+      expect(r.action.constraint.lineAId).toBe('la')
+      expect(r.action.constraint.lineBId).toBe('lb')
+      expect(r.action.constraint.arcStartId).toBe('as')
+      expect(r.action.constraint.arcEndId).toBe('ae')
+    }
+  })
+
+  it('tangent rejects when the second pick is not an arc', () => {
+    const entities: SketchEntity[] = [
+      { id: 'L1', kind: 'line', startId: 'la', endId: 'lb' },
+      { id: 'L2', kind: 'line', startId: 'lc', endId: 'ld' }
+    ]
+    const draft: SketchToolDraft = { picks: [pick(0, 0, { entityId: 'L1' })] }
+    const r = handleSketchToolClick('tangentConstraint', draft, pick(5, 0, { entityId: 'L2' }), {
+      entities
+    })
+    expect(r.kind).toBe('error')
   })
 })

@@ -40,6 +40,22 @@ export type SketchToolId =
   | 'parallelConstraint'
   /** CAD V1.5: perpendicular constraint between two lines (four point picks). */
   | 'perpendicularConstraint'
+  /** Equal-length constraint between two line segments (four point picks). */
+  | 'equalConstraint'
+  /** Angle constraint between two lines (four point picks + a degree value). */
+  | 'angleConstraint'
+  /** Symmetric constraint: two points mirrored across a line (four point picks). */
+  | 'symmetricConstraint'
+  /** Midpoint constraint: a point at the midpoint of a segment (three point picks). */
+  | 'midpointConstraint'
+  /** Point-on-line constraint: a point lies on a segment's line (three point picks). */
+  | 'pointOnLineConstraint'
+  /** Concentric constraint: two circles/arcs share a center (two entity picks). */
+  | 'concentricConstraint'
+  /** Tangent constraint: a line tangent to an arc (one line + one arc entity pick). */
+  | 'tangentConstraint'
+  /** Fix / lock constraint: anchor a single point (one point pick). */
+  | 'fixConstraint'
 
 export type SketchToolKind = 'select' | 'draw' | 'constraint'
 
@@ -144,6 +160,62 @@ export const SKETCH_TOOLS: readonly SketchToolDescriptor[] = [
     kind: 'constraint',
     description: 'Force two lines perpendicular — pick endpoints (a1, b1, a2, b2).',
     requiredPicks: 4
+  },
+  {
+    id: 'equalConstraint',
+    label: 'Equal',
+    kind: 'constraint',
+    description: 'Force two segments to equal length — pick endpoints (a1, b1, a2, b2).',
+    requiredPicks: 4
+  },
+  {
+    id: 'angleConstraint',
+    label: 'Angle',
+    kind: 'constraint',
+    description: 'Pin the angle (deg) between two lines — pick endpoints (a1, b1, a2, b2).',
+    requiredPicks: 4
+  },
+  {
+    id: 'symmetricConstraint',
+    label: 'Symmetric',
+    kind: 'constraint',
+    description: 'Mirror two points across a line — pick the pair then the mirror line (a, b, la, lb).',
+    requiredPicks: 4
+  },
+  {
+    id: 'midpointConstraint',
+    label: 'Midpoint',
+    kind: 'constraint',
+    description: 'Pin a point to a segment midpoint — pick the point then both segment ends (m, a, b).',
+    requiredPicks: 3
+  },
+  {
+    id: 'pointOnLineConstraint',
+    label: 'Point on line',
+    kind: 'constraint',
+    description: 'Force a point onto a line — pick the point then both line ends (p, a, b).',
+    requiredPicks: 3
+  },
+  {
+    id: 'concentricConstraint',
+    label: 'Concentric',
+    kind: 'constraint',
+    description: 'Force two circles / arcs to share a center — pick both entities.',
+    requiredPicks: 2
+  },
+  {
+    id: 'tangentConstraint',
+    label: 'Tangent',
+    kind: 'constraint',
+    description: 'Force a line tangent to an arc — pick the line then the arc.',
+    requiredPicks: 2
+  },
+  {
+    id: 'fixConstraint',
+    label: 'Fix',
+    kind: 'constraint',
+    description: 'Anchor a point so the solver never moves it — pick one point.',
+    requiredPicks: 1
   }
 ] as const
 
@@ -518,6 +590,198 @@ export function handleSketchToolClick(
       resetDraft: true,
       action: { type: 'addConstraint', constraint },
       hint: `${tool === 'parallelConstraint' ? 'Parallel' : 'Perpendicular'} constraint added.`
+    }
+  }
+
+  // ── Four-point line-pair / mirror constraints (equal / angle / symmetric) ───
+  if (
+    tool === 'equalConstraint' ||
+    tool === 'angleConstraint' ||
+    tool === 'symmetricConstraint'
+  ) {
+    if (!pick.pointId) {
+      return {
+        kind: 'error',
+        message: 'Constraint requires picking existing points — click closer to a vertex.'
+      }
+    }
+    if (nextPicks.length < 4) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [p1, p2, p3, p4] = nextPicks
+    if (!p1?.pointId || !p2?.pointId || !p3?.pointId || !p4?.pointId) {
+      return { kind: 'error', message: 'All four picks must snap to existing points.' }
+    }
+    if (p1.pointId === p2.pointId || p3.pointId === p4.pointId) {
+      return { kind: 'error', message: 'Each pair needs two distinct points.' }
+    }
+    const id = nextId('c')
+    if (tool === 'equalConstraint') {
+      const constraint: Constraint = {
+        id,
+        kind: 'equal',
+        a1Id: p1.pointId,
+        b1Id: p2.pointId,
+        a2Id: p3.pointId,
+        b2Id: p4.pointId
+      }
+      return {
+        kind: 'commit',
+        resetDraft: true,
+        action: { type: 'addConstraint', constraint },
+        hint: 'Equal-length constraint added.'
+      }
+    }
+    if (tool === 'symmetricConstraint') {
+      const constraint: Constraint = {
+        id,
+        kind: 'symmetric',
+        aId: p1.pointId,
+        bId: p2.pointId,
+        laId: p3.pointId,
+        lbId: p4.pointId
+      }
+      return {
+        kind: 'commit',
+        resetDraft: true,
+        action: { type: 'addConstraint', constraint },
+        hint: 'Symmetric constraint added.'
+      }
+    }
+    // angle
+    const value = draft.numericValue
+    if (!Number.isFinite(value)) {
+      return {
+        kind: 'error',
+        message: 'Angle constraint needs a degree value. Type a number into the ribbon and re-pick.'
+      }
+    }
+    const constraint: Constraint = {
+      id,
+      kind: 'angle',
+      a1Id: p1.pointId,
+      b1Id: p2.pointId,
+      a2Id: p3.pointId,
+      b2Id: p4.pointId,
+      value: value as number
+    }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: `Angle constraint added (${(value as number).toFixed(1)}°).`
+    }
+  }
+
+  // ── Three-point constraints (midpoint / point-on-line) ──────────────────────
+  if (tool === 'midpointConstraint' || tool === 'pointOnLineConstraint') {
+    if (!pick.pointId) {
+      return {
+        kind: 'error',
+        message: 'Constraint requires picking existing points — click closer to a vertex.'
+      }
+    }
+    if (nextPicks.length < 3) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [first, a, b] = nextPicks
+    if (!first?.pointId || !a?.pointId || !b?.pointId) {
+      return { kind: 'error', message: 'All three picks must snap to existing points.' }
+    }
+    if (a.pointId === b.pointId) {
+      return { kind: 'error', message: 'The segment needs two distinct endpoints.' }
+    }
+    if (first.pointId === a.pointId || first.pointId === b.pointId) {
+      return { kind: 'error', message: 'Pick a point distinct from the segment endpoints first.' }
+    }
+    const id = nextId('c')
+    const constraint: Constraint =
+      tool === 'midpointConstraint'
+        ? { id, kind: 'midpoint', mId: first.pointId, aId: a.pointId, bId: b.pointId }
+        : { id, kind: 'pointOnLine', pId: first.pointId, aId: a.pointId, bId: b.pointId }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: tool === 'midpointConstraint' ? 'Midpoint constraint added.' : 'Point-on-line constraint added.'
+    }
+  }
+
+  // ── Fix / lock a single point ───────────────────────────────────────────────
+  if (tool === 'fixConstraint') {
+    if (!pick.pointId) {
+      return { kind: 'error', message: 'Fix constraint requires picking an existing point.' }
+    }
+    const constraint: Constraint = { id: nextId('c'), kind: 'fix', pointId: pick.pointId }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: 'Point fixed (anchored).'
+    }
+  }
+
+  // ── Concentric: two circle / arc entity picks ───────────────────────────────
+  if (tool === 'concentricConstraint') {
+    if (!pick.entityId) {
+      return { kind: 'error', message: 'Concentric constraint requires clicking a circle or arc.' }
+    }
+    const target = context.entities.find((e) => e.id === pick.entityId)
+    if (!target || (target.kind !== 'circle' && target.kind !== 'arc')) {
+      return { kind: 'error', message: 'Concentric constraint only applies to circles and arcs.' }
+    }
+    if (nextPicks.length < 2) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [first, second] = nextPicks
+    if (!first?.entityId || !second?.entityId) {
+      return { kind: 'error', message: 'Both picks must hit a circle or arc.' }
+    }
+    if (first.entityId === second.entityId) {
+      return { kind: 'error', message: 'Pick two distinct circles / arcs.' }
+    }
+    const constraint: Constraint = {
+      id: nextId('c'),
+      kind: 'concentric',
+      entityAId: first.entityId,
+      entityBId: second.entityId
+    }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: 'Concentric constraint added.'
+    }
+  }
+
+  // ── Tangent: one line entity + one arc entity ───────────────────────────────
+  if (tool === 'tangentConstraint') {
+    if (!pick.entityId) {
+      return { kind: 'error', message: 'Tangent constraint requires clicking a line then an arc.' }
+    }
+    if (nextPicks.length < 2) return { kind: 'updateDraft', draft: { ...draft, picks: nextPicks } }
+    const [linePick, arcPick] = nextPicks
+    if (!linePick?.entityId || !arcPick?.entityId) {
+      return { kind: 'error', message: 'Pick a line entity then an arc entity.' }
+    }
+    const lineEntity = context.entities.find((e) => e.id === linePick.entityId)
+    const arcEntity = context.entities.find((e) => e.id === arcPick.entityId)
+    if (!lineEntity || lineEntity.kind !== 'line') {
+      return { kind: 'error', message: 'First tangent pick must be a line.' }
+    }
+    if (!arcEntity || arcEntity.kind !== 'arc') {
+      return { kind: 'error', message: 'Second tangent pick must be an arc.' }
+    }
+    const constraint: Constraint = {
+      id: nextId('c'),
+      kind: 'tangent',
+      lineAId: lineEntity.startId,
+      lineBId: lineEntity.endId,
+      arcStartId: arcEntity.startId,
+      arcViaId: arcEntity.viaId,
+      arcEndId: arcEntity.endId,
+      arcTangentAt: 'start',
+      lineTangentAt: 'a'
+    }
+    return {
+      kind: 'commit',
+      resetDraft: true,
+      action: { type: 'addConstraint', constraint },
+      hint: 'Tangent constraint added.'
     }
   }
 

@@ -259,6 +259,145 @@ _KNOWN_CONSTRAINT_KINDS = (
 )
 
 
+# ── Solve diagnostics (DOF / status reporting) ────────────────────────────
+#
+# Fusion-grade sketcher UX needs a *live* degrees-of-freedom badge plus the
+# ability to paint conflicting / redundant constraints red and tint
+# under-constrained geometry. planegcs' ``diagnose()`` already computes all
+# of this; historically the V1 handler threw it away (it returned a constant
+# ``"dof": 0`` on success and only surfaced under/over-constraint as raised
+# errors). The helper below converts a planegcs ``Diagnosis`` into a flat,
+# JSON-friendly payload so the wire result can carry it ADDITIVELY:
+#
+#   {
+#     "dof": int,                          # residual degrees of freedom
+#     "status": "fully"|"under"|"over"|"conflicting",
+#     "conflictingConstraintIds": [str],   # source ids from diagnose().conflicting
+#     "redundantConstraintIds":   [str],   # source ids from diagnose().redundant
+#     "underConstrainedEntityIds":[str],   # sketch point ids still free to move
+#   }
+#
+# The renderer mirrors the Assembly mate badge
+# (``design-assembly__solver-badge--under/over-constrained``) to render this.
+
+# Status strings shared with the TS wire type ``SketchSolveStatus`` in
+# ``src/shared/sidecar-protocol.ts``. ``conflicting`` is reserved for the case
+# where diagnose() reports conflicts *without* a clean over/under signal; the
+# common over-constrained case maps to ``over``.
+SOLVE_STATUS_FULLY = "fully"
+SOLVE_STATUS_UNDER = "under"
+SOLVE_STATUS_OVER = "over"
+SOLVE_STATUS_CONFLICTING = "conflicting"
+
+
+def _map_tags_to_sources(
+    tags: Any, tag_to_source: Mapping[int, str]
+) -> List[str]:
+    """Map a planegcs tag iterable back to sorted, de-duplicated source ids.
+
+    ``diagnose()`` reports conflicts/redundancies as planegcs ConstraintTag
+    integers; we translate them to the renderer-supplied constraint ids via
+    ``tag_to_source``. Tags with no source mapping (planegcs-internal helper
+    constraints) are dropped. Defensive against a ``None`` / non-iterable
+    ``tags`` so a planegcs version that omits the attribute can't crash the
+    solve.
+    """
+    if not tags:
+        return []
+    out: set[str] = set()
+    try:
+        for t in tags:
+            key = int(t)
+            src = tag_to_source.get(key)
+            if src is not None:
+                out.add(src)
+    except TypeError:  # pragma: no cover - non-iterable from a planegcs shim
+        return []
+    return sorted(out)
+
+
+def _diagnosis_to_payload(
+    diagnosis: Any,
+    tag_to_source: Mapping[int, str],
+    sketch: "Sketch",
+) -> Dict[str, Any]:
+    """Convert a planegcs ``Diagnosis`` into the additive wire payload.
+
+    Pure / best-effort: every attribute read is guarded with ``getattr`` so a
+    minor planegcs version drift (renamed / missing diagnostic field) degrades
+    gracefully to a still-valid payload instead of raising. ``diagnosis`` may
+    be ``None`` (diagnose() failed) — we then report a neutral fully-determined
+    payload with an empty id set, since we have no better information.
+    """
+    if diagnosis is None:
+        return {
+            "dof": 0,
+            "status": SOLVE_STATUS_FULLY,
+            "conflictingConstraintIds": [],
+            "redundantConstraintIds": [],
+            "underConstrainedEntityIds": [],
+        }
+
+    raw_dof = getattr(diagnosis, "dof", 0)
+    try:
+        dof = int(raw_dof)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        dof = 0
+    if dof < 0:  # diagnose() never reports negative dof, but clamp defensively
+        dof = 0
+
+    is_over = bool(getattr(diagnosis, "is_over_constrained", False))
+    is_under = bool(getattr(diagnosis, "is_under_constrained", False))
+
+    conflicting_ids = _map_tags_to_sources(
+        getattr(diagnosis, "conflicting", None), tag_to_source
+    )
+    redundant_ids = _map_tags_to_sources(
+        getattr(diagnosis, "redundant", None), tag_to_source
+    )
+
+    if is_over:
+        # An over-constrained system whose conflicts all map to internal tags
+        # (no source id) is reported as ``conflicting`` so the renderer still
+        # flags it even when it can't highlight a specific row.
+        status = SOLVE_STATUS_OVER if conflicting_ids else SOLVE_STATUS_CONFLICTING
+        under_ids: List[str] = []
+    elif is_under or dof > 0:
+        status = SOLVE_STATUS_UNDER
+        # Best-effort under-constrained entity set: every non-fixed point can
+        # still be nudged by the operator when the system has residual DOF.
+        # planegcs does not expose a stable per-point free-param API across
+        # versions, so we conservatively list the movable points; the renderer
+        # tints these and the badge shows the exact ``dof`` count.
+        under_ids = [p.id for p in sketch.points if not p.fixed]
+    else:
+        status = SOLVE_STATUS_FULLY
+        under_ids = []
+
+    return {
+        "dof": dof,
+        "status": status,
+        "conflictingConstraintIds": conflicting_ids,
+        "redundantConstraintIds": redundant_ids,
+        "underConstrainedEntityIds": under_ids,
+    }
+
+
+def _attach_diagnostics(
+    err: _CadHandlerError, payload: Dict[str, Any]
+) -> _CadHandlerError:
+    """Stash the structured diagnostics dict onto a ``_CadHandlerError``.
+
+    Additive: sets a ``diagnostics`` attribute on the exception instance so a
+    caller that catches the over/under-constrained error can read the exact
+    DOF / conflicting-id payload (the same dict ``out_diagnostics`` receives)
+    instead of re-parsing the human-readable message. Does not alter ``code``
+    / ``message`` / ``detail`` — existing error-code assertions are unaffected.
+    """
+    err.diagnostics = payload  # type: ignore[attr-defined]
+    return err
+
+
 def _require_str(d: Mapping[str, Any], key: str, ctx: str) -> str:
     val = d.get(key)
     if not isinstance(val, str) or not val:
@@ -517,6 +656,7 @@ def _planegcs_available() -> bool:
 def solve(
     sketch: Sketch,
     constraints: Sequence[Constraint],
+    out_diagnostics: Optional[Dict[str, Any]] = None,
 ) -> Sketch:
     """Run planegcs on the sketch + constraints and return the updated sketch.
 
@@ -524,6 +664,14 @@ def solve(
     points moved to satisfy the constraints and copy the other entities
     forward (the renderer rebuilds lines / circles / arcs from the moved
     point coordinates).
+
+    ``out_diagnostics`` is an **optional, additive** out-parameter: pass a
+    mutable dict and ``solve`` fills it in-place with the DOF / status /
+    conflicting-id payload from :func:`_diagnosis_to_payload` (on both the
+    success path AND before raising for over/under-constrained systems, so a
+    caller that wants the structured data instead of just the error code can
+    read it off the dict). Leaving it ``None`` preserves the historical
+    behaviour exactly — callers/tests that ignore diagnostics see no change.
 
     Validation pass (BEFORE touching planegcs):
       * Every constraint references entity ids that exist in the sketch.
@@ -619,30 +767,40 @@ def solve(
 
     status_name = getattr(status, "name", str(status))
 
+    # Convert the planegcs diagnosis into the additive, JSON-friendly payload
+    # ONCE, up front, so every exit path (success or raise) can surface the
+    # same structured DOF / status / conflicting-id data. Populating
+    # ``out_diagnostics`` in-place keeps :func:`solve`'s return type unchanged.
+    diag_payload = _diagnosis_to_payload(diagnosis, tag_to_source, sketch)
+    if out_diagnostics is not None:
+        out_diagnostics.clear()
+        out_diagnostics.update(diag_payload)
+
     if diagnosis is not None and diagnosis.is_over_constrained:
-        conflicting_ids = sorted(
-            {
-                tag_to_source[int(t)]
-                for t in diagnosis.conflicting
-                if int(t) in tag_to_source
-            }
-        )
-        raise _CadHandlerError(
-            "solver_over_constrained",
-            (
-                "constraint system is over-constrained: "
-                f"{len(diagnosis.conflicting)} conflicting tags, "
-                f"affecting source constraints {conflicting_ids!r}"
+        conflicting_ids = diag_payload["conflictingConstraintIds"]
+        raise _attach_diagnostics(
+            _CadHandlerError(
+                "solver_over_constrained",
+                (
+                    "constraint system is over-constrained: "
+                    f"{len(getattr(diagnosis, 'conflicting', ()) or ())} "
+                    "conflicting tags, "
+                    f"affecting source constraints {conflicting_ids!r}"
+                ),
+                detail=f"conflicting={getattr(diagnosis, 'conflicting', None)!r} "
+                f"redundant={getattr(diagnosis, 'redundant', None)!r}",
             ),
-            detail=f"conflicting={diagnosis.conflicting!r} "
-            f"redundant={diagnosis.redundant!r}",
+            diag_payload,
         )
 
     if status_name not in ("Success", "Converged"):
-        raise _CadHandlerError(
-            "solver_failed",
-            f"planegcs solve returned {status_name}",
-            detail=diag_detail,
+        raise _attach_diagnostics(
+            _CadHandlerError(
+                "solver_failed",
+                f"planegcs solve returned {status_name}",
+                detail=diag_detail,
+            ),
+            diag_payload,
         )
 
     if diagnosis is not None and diagnosis.is_under_constrained:
@@ -652,13 +810,17 @@ def solve(
         # dedicated error code so the renderer can show "add more
         # constraints" without discarding the partial solution.
         # NOTE: the renderer may still want the partial solution — it can
-        # catch this code and re-run with a flag in a future iteration.
-        # For V1 we treat it as a hard error so the operator always sees
-        # the warning.
-        raise _CadHandlerError(
-            "solver_under_constrained",
-            f"constraint system is under-constrained: dof={diagnosis.dof}",
-            detail=f"dof={diagnosis.dof}",
+        # catch this code and read the attached ``diagnostics`` (or pass an
+        # ``out_diagnostics`` dict) to drive a live DOF badge without
+        # discarding the partial solve. For V1 we still raise so the operator
+        # always sees the warning.
+        raise _attach_diagnostics(
+            _CadHandlerError(
+                "solver_under_constrained",
+                f"constraint system is under-constrained: dof={diag_payload['dof']}",
+                detail=f"dof={diag_payload['dof']}",
+            ),
+            diag_payload,
         )
 
     # ── Build the solved Sketch ─────────────────────────────────────────
@@ -853,21 +1015,45 @@ def solve_sketch_payload(
     Validates the wire payload, runs the solve, and returns a JSON-friendly
     dict matching the ``CadSolveSketchResult`` wire type.
 
-    On a successful solve the result is::
+    On a successful (fully-constrained) solve the result is::
 
         {
           "sketch": {"points": [...], "lines": [...], ...},
-          "dof": 0
+          "dof": 0,                          # real residual DOF (0 == fully)
+          "status": "fully",                 # ADDITIVE
+          "conflictingConstraintIds": [],    # ADDITIVE
+          "redundantConstraintIds": [],      # ADDITIVE
+          "underConstrainedEntityIds": []    # ADDITIVE
         }
 
+    The four trailing fields are **additive** — older callers that only read
+    ``sketch`` / ``dof`` are unaffected. ``dof`` now reflects the *actual*
+    degrees of freedom reported by planegcs' ``diagnose()`` (still ``0`` on the
+    fully-constrained success path, so existing assertions hold) instead of a
+    hard-coded constant.
+
     On a solver failure / over-/under-constrained system we raise
-    ``_CadHandlerError`` and let the sidecar dispatch loop attach the
-    structured error envelope.
+    ``_CadHandlerError`` (unchanged) and let the sidecar dispatch loop attach
+    the structured error envelope. The same DOF / status / id payload is
+    additionally reachable off the raised exception's ``diagnostics`` attribute
+    for callers that want the structured data alongside the error code.
     """
     sketch = sketch_from_dict(sketch_state)
     constraints = constraints_from_list(constraint_list)
-    solved = solve(sketch, constraints)
-    return {
+    diagnostics: Dict[str, Any] = {}
+    solved = solve(sketch, constraints, out_diagnostics=diagnostics)
+    result: Dict[str, Any] = {
         "sketch": solved.to_dict(),
-        "dof": 0,
+        # ``dof`` stays for backward-compat; on the success path it equals
+        # ``diagnostics["dof"]`` (0 for a fully-constrained sketch).
+        "dof": int(diagnostics.get("dof", 0)),
+        "status": diagnostics.get("status", SOLVE_STATUS_FULLY),
+        "conflictingConstraintIds": diagnostics.get(
+            "conflictingConstraintIds", []
+        ),
+        "redundantConstraintIds": diagnostics.get("redundantConstraintIds", []),
+        "underConstrainedEntityIds": diagnostics.get(
+            "underConstrainedEntityIds", []
+        ),
     }
+    return result
