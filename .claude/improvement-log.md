@@ -17401,3 +17401,25 @@ EnvSwitcher, E-stop). CAD-first boot, themed (Titanium default + 10-theme picker
 machine auto-select + env accent. The ONLY remaining new-shell work is the
 gcode-safety-gated wiring of onRunCam/onRunSlice so the new shell can itself emit
 G-code; then the P5 cutover (flip __APP_SHELL__, retire ShopApp + legacy CSS).
+
+
+### Stack #9 (agent-orchestrated): new-shell CAM generation through the PROVEN engine
+Ran as a Workflow (Map -> Build -> Integrate -> Verify, 7 agents); main loop ran the
+G-code-safety gate + full verification + the hardening below.
+- NEW `manufacture/run-cam-for-op.ts` maps a ManufactureFile op -> the UNCHANGED
+  `fab().camRun` engine (same field mapping + proven resolveCamCutParams/setup
+  resolvers + 3-axis bake / 4-axis placement branch as ShopApp generate()).
+- NEW `manufacture/run-slice-for-op.ts` wraps `fab().sliceOrca`; NEW
+  `app/useProjectSession.ts` owns open/new/read-project.
+- `app/ManufactureHost.tsx` wires them, gates on a CNC machine (FDM K2 cannot post
+  CNC G-code), resolves the CNC id like camRunCncMachineId, and advises the operator
+  to verify program-zero/WCS + retracts (simulate) before running.
+SAFETY: renderer-only -- NO engines/cam, src/main/cam-*, resources/posts, or
+resources/machines changed, so the emitted G-code's machine-safety invariants (from
+the unchanged posts) are preserved. Generation writes a FILE; nothing is auto-sent.
+Adversarial G-code-safety review (workflow verify agent) found NO path that silently
+emits dangerous CNC G-code; engine fail-loud guards hold. Known fidelity gaps
+(R1 per-op placement transform, R6 material-tuned feeds) are mitigated by the verify
+advisory + no-auto-send and are the CUTOVER-GATING hardening (separate task) before the
+new-shell CAM can REPLACE the proven classic-shell CAM.
+Flag-gated; default build unchanged. tsc + electron-vite build + 14,588 tests green.
