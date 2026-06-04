@@ -1530,6 +1530,12 @@ import type {
   CadDrawingBomTableParams as V15CadDrawingBomTableParams,
   CadDrawingBomTableResult as V15CadDrawingBomTableResult,
   CadDrawingBomRow as V15CadDrawingBomRow,
+  CadAnnotateGdtParams as V15CadAnnotateGdtParams,
+  CadAnnotateGdtResult as V15CadAnnotateGdtResult,
+  CadGdtCharacteristic as V15CadGdtCharacteristic,
+  CadGdtFrameSpec as V15CadGdtFrameSpec,
+  CadDetailDrawingParams as V15CadDetailDrawingParams,
+  CadDetailDrawingResult as V15CadDetailDrawingResult,
 } from '../shared/sidecar-protocol'
 
 /** Allowed dimension kinds (V1.5). Mirrors the sidecar's vocabulary. */
@@ -1743,7 +1749,7 @@ export function v15ValidateSectionDrawingPayload(
       hint: 'cad:sectionDrawing requires { handle, view, plane }',
     }
   }
-  const p = raw as { handle?: unknown; view?: unknown; plane?: unknown }
+  const p = raw as { handle?: unknown; view?: unknown; plane?: unknown; label?: unknown }
   if (typeof p.handle !== 'string' || p.handle.length === 0) {
     return { ok: false, error: 'missing_handle' }
   }
@@ -1753,6 +1759,15 @@ export function v15ValidateSectionDrawingPayload(
       error: 'invalid_view',
       hint: `view must be one of: ${V15_DRAWING_VIEWS.join(', ')}`,
     }
+  }
+  // ``label`` is optional, additive operator free-text. Reject a non-string at
+  // the wire boundary; the sidecar normalizes + entity-escapes it (Safety Rule 4).
+  let sectionLabel: string | undefined
+  if (p.label !== undefined && p.label !== null) {
+    if (typeof p.label !== 'string') {
+      return { ok: false, error: 'invalid_label', hint: 'label must be a string when provided' }
+    }
+    sectionLabel = p.label
   }
   if (!p.plane || typeof p.plane !== 'object' || Array.isArray(p.plane)) {
     return {
@@ -1801,6 +1816,7 @@ export function v15ValidateSectionDrawingPayload(
       handle: p.handle,
       view: p.view as V15CadDrawingView,
       plane: out,
+      ...(sectionLabel !== undefined ? { label: sectionLabel } : {}),
     },
   }
 }
@@ -2405,6 +2421,298 @@ export function v15CoerceDrawingBomTableResult(
   }
 }
 
+// ── CAD V1.5 (GD&T feature control frames) types + validators + coercer ──────
+//
+// One additive IPC channel exposing the BUILD-10 sidecar surface:
+//   * cad:annotateGdt -- stamp GD&T feature-control-frame(s) into an SVG. Pure
+//     SVG composition; the sidecar does NOT recompute geometry. Like
+//     cad:drawingBomTable / cad:attachTitleBlock it operates on an SVG string.
+// Types / validators / coercers prefixed ``V15Gdt`` so they stay easy to spot
+// in a diff. Mirrors the BUILD-9 BOM-table handler shape.
+//
+// Safety Rule 4: datums + label are operator free-text. The sidecar entity-
+// escapes them; this boundary only validates the wire shape (re-serializing
+// through the typed surface so a smuggled extra field never reaches the wire).
+
+/** Allowed GD&T characteristics (V1.5). Mirrors the sidecar's vocabulary and
+ * ``gdtCharacteristicSchema`` in ``src/shared/drawing-annotation-schema.ts``. */
+export const V15_GDT_CHARACTERISTICS: readonly V15CadGdtCharacteristic[] = [
+  'straightness',
+  'flatness',
+  'circularity',
+  'cylindricity',
+  'profile_of_a_line',
+  'profile_of_a_surface',
+  'perpendicularity',
+  'angularity',
+  'parallelism',
+  'position',
+  'concentricity',
+  'symmetry',
+  'circular_runout',
+  'total_runout',
+] as const
+
+export type V15CadAnnotateGdtPayload = V15CadAnnotateGdtParams
+
+export type V15CadAnnotateGdtResponse =
+  | { ok: true; result: V15CadAnnotateGdtResult }
+  | { ok: false; error: string; hint?: string }
+
+/**
+ * Validate a single GD&T feature-control-frame spec. Returns the normalized
+ * frame or an error envelope. The sidecar re-validates + escapes; this only
+ * enforces the wire shape so a renderer typo fails fast at the boundary.
+ */
+export function v15ValidateGdtFrame(
+  raw: unknown,
+  index: number,
+): { ok: true; value: V15CadGdtFrameSpec } | { ok: false; error: string; hint: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}] must be an object` }
+  }
+  const f = raw as {
+    characteristic?: unknown
+    toleranceMm?: unknown
+    datums?: unknown
+    placement?: unknown
+    label?: unknown
+  }
+  if (
+    typeof f.characteristic !== 'string' ||
+    !(V15_GDT_CHARACTERISTICS as readonly string[]).includes(f.characteristic)
+  ) {
+    return {
+      ok: false,
+      error: 'invalid_gdt_frame',
+      hint: `frames[${index}].characteristic must be one of: ${V15_GDT_CHARACTERISTICS.join(', ')}`,
+    }
+  }
+  if (typeof f.toleranceMm !== 'number' || !Number.isFinite(f.toleranceMm) || f.toleranceMm < 0) {
+    return {
+      ok: false,
+      error: 'invalid_gdt_frame',
+      hint: `frames[${index}].toleranceMm must be a non-negative finite number`,
+    }
+  }
+  const datums: string[] = []
+  if (f.datums !== undefined && f.datums !== null) {
+    if (!Array.isArray(f.datums)) {
+      return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}].datums must be an array of strings` }
+    }
+    if (f.datums.length > 3) {
+      return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}].datums references at most 3 datums` }
+    }
+    for (let i = 0; i < f.datums.length; i++) {
+      const d = f.datums[i]
+      if (typeof d !== 'string' || d.length === 0) {
+        return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}].datums[${i}] must be a non-empty string` }
+      }
+      datums.push(d)
+    }
+  }
+  const pt = f.placement as { x?: unknown; y?: unknown } | undefined
+  if (
+    !pt ||
+    typeof pt.x !== 'number' ||
+    !Number.isFinite(pt.x) ||
+    typeof pt.y !== 'number' ||
+    !Number.isFinite(pt.y)
+  ) {
+    return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}].placement must be { x, y } finite numbers` }
+  }
+  let label: string | undefined
+  if (f.label !== undefined && f.label !== null) {
+    if (typeof f.label !== 'string') {
+      return { ok: false, error: 'invalid_gdt_frame', hint: `frames[${index}].label must be a string when provided` }
+    }
+    label = f.label
+  }
+  const value: V15CadGdtFrameSpec = {
+    characteristic: f.characteristic as V15CadGdtCharacteristic,
+    toleranceMm: f.toleranceMm,
+    placement: { x: pt.x, y: pt.y },
+    ...(datums.length > 0 ? { datums } : {}),
+    ...(label !== undefined ? { label } : {}),
+  }
+  return { ok: true, value }
+}
+
+/**
+ * Validate the ``cad:annotateGdt`` IPC payload. Combines the SVG check from
+ * ``v15ValidateDrawingBomTablePayload`` with per-frame validation.
+ */
+export function v15ValidateAnnotateGdtPayload(
+  raw: unknown,
+): { ok: true; payload: V15CadAnnotateGdtPayload } | V15CadAnnotateGdtResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:annotateGdt requires { svg, frames }',
+    }
+  }
+  const p = raw as { svg?: unknown; frames?: unknown }
+  if (typeof p.svg !== 'string' || p.svg.length === 0) {
+    return { ok: false, error: 'missing_svg', hint: 'svg must be a non-empty SVG markup string' }
+  }
+  if (!Array.isArray(p.frames)) {
+    return { ok: false, error: 'invalid_frames', hint: 'frames must be an array (use [] for no frames)' }
+  }
+  const frames: V15CadGdtFrameSpec[] = []
+  for (let i = 0; i < p.frames.length; i++) {
+    const v = v15ValidateGdtFrame(p.frames[i], i)
+    if (!v.ok) return v
+    frames.push(v.value)
+  }
+  return { ok: true, payload: { svg: p.svg, frames } }
+}
+
+/**
+ * Coerce the raw ``cad.annotate_gdt`` payload into the typed result. Returns
+ * ``null`` when the response is structurally unusable (missing svg) so the
+ * handler folds to ``sidecar_protocol_error``.
+ */
+export function v15CoerceAnnotateGdtResult(
+  raw: Record<string, unknown>,
+): V15CadAnnotateGdtResult | null {
+  if (typeof raw.svg !== 'string') return null
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  const frameCount =
+    typeof raw.frameCount === 'number' &&
+    Number.isFinite(raw.frameCount) &&
+    Number.isInteger(raw.frameCount) &&
+    raw.frameCount >= 0
+      ? raw.frameCount
+      : 0
+  return {
+    svg: raw.svg,
+    bytes,
+    frameCount,
+  }
+}
+
+// ── cad:detailDrawing (CAD V1.5 -- detail / crop view) ───────────────────────
+//
+// Crop a circular region of a parent projection and magnify it (e.g. 2:1). The
+// sidecar projects ONCE then re-frames the crop into a fresh <svg> whose
+// viewBox is the crop window and whose pixel size is scale x that window. The
+// validator gates the wire shape; the sidecar owns the projection + escaping
+// (Safety Rule 4: `label` is entity-escaped before any <text>).
+
+export type V15CadDetailDrawingPayload = V15CadDetailDrawingParams
+
+export type V15CadDetailDrawingResponse =
+  | { ok: true; result: V15CadDetailDrawingResult }
+  | { ok: false; error: string; hint?: string }
+
+/**
+ * Validate the ``cad:detailDrawing`` IPC payload. Pure -- no FS / spawn /
+ * electron globals. Mirrors the dimension/section validator posture: gate the
+ * envelope here, let the sidecar own the deep geometry + escaping.
+ */
+export function v15ValidateDetailDrawingPayload(
+  raw: unknown,
+): { ok: true; payload: V15CadDetailDrawingPayload } | V15CadDetailDrawingResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:detailDrawing requires { handle, view, center, radiusMm, scale?, label? }',
+    }
+  }
+  const p = raw as {
+    handle?: unknown
+    view?: unknown
+    center?: unknown
+    radiusMm?: unknown
+    scale?: unknown
+    label?: unknown
+  }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(p.view)) {
+    return {
+      ok: false,
+      error: 'invalid_view',
+      hint: `view must be one of: ${V15_DRAWING_VIEWS.join(', ')}`,
+    }
+  }
+  const center = v15ValidatePoint2D(p.center, 'center')
+  if (!center.ok) {
+    return { ok: false, error: center.error, hint: center.hint }
+  }
+  if (typeof p.radiusMm !== 'number' || !Number.isFinite(p.radiusMm) || p.radiusMm <= 0) {
+    return { ok: false, error: 'invalid_radius', hint: 'radiusMm must be a finite number greater than zero' }
+  }
+  let scale: number | undefined
+  if (p.scale !== undefined && p.scale !== null) {
+    if (typeof p.scale !== 'number' || !Number.isFinite(p.scale) || p.scale <= 0) {
+      return { ok: false, error: 'invalid_scale', hint: 'scale must be a finite number greater than zero when provided' }
+    }
+    scale = p.scale
+  }
+  let label: string | undefined
+  if (p.label !== undefined && p.label !== null) {
+    if (typeof p.label !== 'string') {
+      return { ok: false, error: 'invalid_label', hint: 'label must be a string when provided' }
+    }
+    label = p.label
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      view: p.view as V15CadDrawingView,
+      center: center.value,
+      radiusMm: p.radiusMm,
+      ...(scale !== undefined ? { scale } : {}),
+      ...(label !== undefined ? { label } : {}),
+    },
+  }
+}
+
+/**
+ * Coerce the raw ``cad.detail_drawing`` payload into the typed result. Returns
+ * ``null`` when the response is structurally unusable (missing svg/view) so the
+ * handler folds to ``sidecar_protocol_error``. The ``label`` echoed back is the
+ * sidecar's already-escaped string.
+ */
+export function v15CoerceDetailDrawingResult(
+  raw: Record<string, unknown>,
+): V15CadDetailDrawingResult | null {
+  if (typeof raw.svg !== 'string') return null
+  if (typeof raw.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(raw.view)) {
+    return null
+  }
+  if (!raw.center || typeof raw.center !== 'object' || Array.isArray(raw.center)) return null
+  const c = raw.center as { x?: unknown; y?: unknown }
+  if (typeof c.x !== 'number' || !Number.isFinite(c.x) || typeof c.y !== 'number' || !Number.isFinite(c.y)) {
+    return null
+  }
+  if (typeof raw.radiusMm !== 'number' || !Number.isFinite(raw.radiusMm)) return null
+  const scale =
+    typeof raw.scale === 'number' && Number.isFinite(raw.scale) ? raw.scale : 2
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  const label = typeof raw.label === 'string' ? raw.label : ''
+  return {
+    svg: raw.svg,
+    view: raw.view as V15CadDrawingView,
+    bytes,
+    center: { x: c.x, y: c.y },
+    radiusMm: raw.radiusMm,
+    scale,
+    label,
+  }
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerCadIpc(_ctx: MainIpcWindowContext): void {
@@ -2823,6 +3131,7 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
           handle: v.payload.handle,
           view: v.payload.view,
           plane: v.payload.plane as unknown as Record<string, unknown>,
+          ...(v.payload.label !== undefined ? { label: v.payload.label } : {}),
         },
         pyCtx,
         90_000,
@@ -2980,6 +3289,81 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
           ok: false,
           error: 'sidecar_protocol_error',
           hint: 'cad.drawing_bom_table returned a malformed svg/rowCount envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:annotateGdt -- stamp GD&T feature-control-frame(s) into an SVG from the
+  // caller-supplied frames. Pure SVG composition; the sidecar does NOT
+  // recompute geometry. Renderer-only; no G-code involved. Budget 15 s (string
+  // manipulation only, like drawingBomTable / attachTitleBlock). Safety Rule 4:
+  // datums + label are entity-escaped in the sidecar before injection.
+  ipcMain.handle(
+    'cad:annotateGdt',
+    async (_e, raw: unknown): Promise<V15CadAnnotateGdtResponse> => {
+      const v = v15ValidateAnnotateGdtPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.annotate_gdt',
+        {
+          svg: v.payload.svg,
+          // Re-serialize through the typed surface so an upstream renderer that
+          // smuggled extras doesn't leak them through the wire.
+          frames: v.payload.frames as unknown as Record<string, unknown>[],
+        },
+        pyCtx,
+        15_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceAnnotateGdtResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.annotate_gdt returned a malformed svg/frameCount envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:detailDrawing -- crop a circular region of a parent projection and
+  // magnify it (e.g. 2:1). The sidecar projects the parent view ONCE then
+  // re-frames the crop. Budget 60 s -- matches dimensionDrawing (re-projects
+  // the body, then composes SVG). Safety Rule 4: `label` is entity-escaped in
+  // the sidecar before injection into the <text> node. Renderer-only; no
+  // G-code involved.
+  ipcMain.handle(
+    'cad:detailDrawing',
+    async (_e, raw: unknown): Promise<V15CadDetailDrawingResponse> => {
+      const v = v15ValidateDetailDrawingPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.detail_drawing',
+        {
+          handle: v.payload.handle,
+          view: v.payload.view,
+          center: v.payload.center as unknown as Record<string, unknown>,
+          radiusMm: v.payload.radiusMm,
+          ...(v.payload.scale !== undefined ? { scale: v.payload.scale } : {}),
+          ...(v.payload.label !== undefined ? { label: v.payload.label } : {}),
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceDetailDrawingResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.detail_drawing returned a malformed svg/view envelope',
         }
       }
       return { ok: true, result: coerced }

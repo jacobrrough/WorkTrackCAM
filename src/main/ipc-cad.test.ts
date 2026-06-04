@@ -82,6 +82,13 @@ import {
   validateSolveSketchPayload,
   validateTessellateAssemblyPayload,
   validateTessellateWithIdsPayload,
+  v15ValidateAnnotateGdtPayload,
+  v15ValidateGdtFrame,
+  v15CoerceAnnotateGdtResult,
+  v15ValidateDetailDrawingPayload,
+  v15CoerceDetailDrawingResult,
+  v15ValidateSectionDrawingPayload,
+  V15_GDT_CHARACTERISTICS,
   type CadCreateAssemblyResponse,
   type CadExecuteResponse,
   type CadExportAssemblyResponse,
@@ -1565,5 +1572,400 @@ describe('cad:exportDrawing handler', () => {
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toBe('empty_drawing')
     expect(bridgeStopMock).toHaveBeenCalled()
+  })
+})
+
+// ── CAD V1.5 (GD&T feature control frames) IPC validators + coercer ──────────
+//
+// Boundary-shape coverage for the cad:annotateGdt channel. The deep escaping /
+// rendering guard lives in the Python pytest (test_gdt_datum_is_xml_escaped);
+// these pins verify the TS boundary rejects malformed frames before they reach
+// the wire and accepts a well-formed payload unchanged.
+
+describe('V15_GDT_CHARACTERISTICS', () => {
+  it('lists the 14 ASME Y14.5 characteristics', () => {
+    expect(V15_GDT_CHARACTERISTICS).toHaveLength(14)
+    expect(V15_GDT_CHARACTERISTICS).toContain('position')
+    expect(V15_GDT_CHARACTERISTICS).toContain('total_runout')
+  })
+})
+
+describe('v15ValidateGdtFrame', () => {
+  it('rejects a non-object frame', () => {
+    const r = v15ValidateGdtFrame(42, 0)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_gdt_frame')
+  })
+
+  it('rejects an unknown characteristic', () => {
+    const r = v15ValidateGdtFrame(
+      { characteristic: 'bogus', toleranceMm: 0.1, placement: { x: 0, y: 0 } },
+      0,
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_gdt_frame')
+  })
+
+  it('rejects a negative tolerance', () => {
+    const r = v15ValidateGdtFrame(
+      { characteristic: 'flatness', toleranceMm: -0.01, placement: { x: 0, y: 0 } },
+      0,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects more than 3 datums', () => {
+    const r = v15ValidateGdtFrame(
+      {
+        characteristic: 'position',
+        toleranceMm: 0.1,
+        datums: ['A', 'B', 'C', 'D'],
+        placement: { x: 0, y: 0 },
+      },
+      0,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects a non-string datum', () => {
+    const r = v15ValidateGdtFrame(
+      {
+        characteristic: 'position',
+        toleranceMm: 0.1,
+        datums: ['A', 5],
+        placement: { x: 0, y: 0 },
+      },
+      0,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects a malformed placement', () => {
+    const r = v15ValidateGdtFrame(
+      { characteristic: 'position', toleranceMm: 0.1, placement: { x: 'nope', y: 0 } },
+      0,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('accepts a well-formed frame and normalizes datums/label', () => {
+    const r = v15ValidateGdtFrame(
+      {
+        characteristic: 'position',
+        toleranceMm: 0.1,
+        datums: ['A', 'B'],
+        placement: { x: 10, y: 12 },
+        label: 'DATUM TARGET',
+      },
+      0,
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.value.characteristic).toBe('position')
+      expect(r.value.toleranceMm).toBe(0.1)
+      expect(r.value.datums).toEqual(['A', 'B'])
+      expect(r.value.placement).toEqual({ x: 10, y: 12 })
+      expect(r.value.label).toBe('DATUM TARGET')
+    }
+  })
+
+  it('accepts a frame with no datums (omits the key)', () => {
+    const r = v15ValidateGdtFrame(
+      { characteristic: 'straightness', toleranceMm: 0.05, placement: { x: 0, y: 0 } },
+      0,
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.datums).toBeUndefined()
+  })
+})
+
+describe('v15ValidateAnnotateGdtPayload', () => {
+  it('rejects a non-object payload', () => {
+    const r = v15ValidateAnnotateGdtPayload(null)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+  })
+
+  it('rejects an empty svg', () => {
+    const r = v15ValidateAnnotateGdtPayload({ svg: '', frames: [] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_svg')
+  })
+
+  it('rejects a non-array frames', () => {
+    const r = v15ValidateAnnotateGdtPayload({ svg: '<svg></svg>', frames: {} })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_frames')
+  })
+
+  it('propagates a per-frame validation error', () => {
+    const r = v15ValidateAnnotateGdtPayload({
+      svg: '<svg></svg>',
+      frames: [{ characteristic: 'nope', toleranceMm: 0.1, placement: { x: 0, y: 0 } }],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_gdt_frame')
+  })
+
+  it('accepts an empty frames array (layer-off round trip)', () => {
+    const r = v15ValidateAnnotateGdtPayload({ svg: '<svg></svg>', frames: [] })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.svg).toBe('<svg></svg>')
+      expect(r.payload.frames).toEqual([])
+    }
+  })
+
+  it('accepts a well-formed payload', () => {
+    const r = v15ValidateAnnotateGdtPayload({
+      svg: '<svg></svg>',
+      frames: [
+        { characteristic: 'position', toleranceMm: 0.1, datums: ['A'], placement: { x: 5, y: 5 } },
+      ],
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.frames).toHaveLength(1)
+      expect(r.payload.frames[0].characteristic).toBe('position')
+    }
+  })
+})
+
+describe('v15CoerceAnnotateGdtResult', () => {
+  it('returns null when svg is missing', () => {
+    expect(v15CoerceAnnotateGdtResult({ bytes: 10, frameCount: 1 })).toBeNull()
+  })
+
+  it('coerces a well-formed result', () => {
+    const out = v15CoerceAnnotateGdtResult({ svg: '<svg/>', bytes: 6, frameCount: 2 })
+    expect(out).not.toBeNull()
+    expect(out?.svg).toBe('<svg/>')
+    expect(out?.bytes).toBe(6)
+    expect(out?.frameCount).toBe(2)
+  })
+
+  it('recomputes bytes when absent and clamps a bad frameCount to 0', () => {
+    const out = v15CoerceAnnotateGdtResult({ svg: '<svg/>', frameCount: -3 })
+    expect(out).not.toBeNull()
+    expect(out?.bytes).toBe(Buffer.byteLength('<svg/>', 'utf8'))
+    expect(out?.frameCount).toBe(0)
+  })
+})
+
+// Boundary-shape coverage for the cad:sectionDrawing channel's NEW optional
+// `label` forwarding. The label is additive operator free-text the renderer's
+// Section control threads through; the sidecar normalizes + entity-escapes it
+// (Safety Rule 4 — verified in test_v15_section_label_is_xml_escaped). These
+// pins assert the TS boundary forwards a string label and rejects a non-string.
+describe('v15ValidateSectionDrawingPayload — section label forwarding', () => {
+  const goodPlane = { axis: 'z', offset: 0, keepSide: 'positive' }
+
+  it('omits the label key when not supplied (default A-A path preserved)', () => {
+    const r = v15ValidateSectionDrawingPayload({ handle: 'body:1', view: 'front', plane: goodPlane })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect('label' in r.payload).toBe(false)
+    }
+  })
+
+  it('forwards a string label verbatim (sidecar escapes it)', () => {
+    const r = v15ValidateSectionDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      plane: goodPlane,
+      label: '</text><script>alert(1)</script>',
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      // Boundary passes the raw string through; the sidecar is the escaping site.
+      expect(r.payload.label).toBe('</text><script>alert(1)</script>')
+    }
+  })
+
+  it('rejects a non-string label', () => {
+    const r = v15ValidateSectionDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      plane: goodPlane,
+      label: 42,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_label')
+  })
+})
+
+// Boundary-shape coverage for the cad:detailDrawing channel. The deep crop /
+// scaled-viewBox / escaping guards live in the Python pytest
+// (test_detail_drawing_returns_scaled_viewbox / _label_is_xml_escaped); these
+// pins verify the TS boundary rejects a malformed crop before it reaches the
+// wire and accepts a well-formed payload unchanged.
+
+describe('v15ValidateDetailDrawingPayload', () => {
+  const goodCenter = { x: 100, y: 80 }
+
+  it('rejects a non-object payload', () => {
+    const r = v15ValidateDetailDrawingPayload(null)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_payload')
+  })
+
+  it('rejects a missing handle', () => {
+    const r = v15ValidateDetailDrawingPayload({ view: 'front', center: goodCenter, radiusMm: 5 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('missing_handle')
+  })
+
+  it('rejects an unknown view', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'fornt',
+      center: goodCenter,
+      radiusMm: 5,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_view')
+  })
+
+  it('rejects a malformed center', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      center: { x: 'nope', y: 0 },
+      radiusMm: 5,
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects a non-positive radius', () => {
+    for (const radiusMm of [0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const r = v15ValidateDetailDrawingPayload({
+        handle: 'body:1',
+        view: 'front',
+        center: goodCenter,
+        radiusMm,
+      })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toBe('invalid_radius')
+    }
+  })
+
+  it('rejects a non-positive scale when provided', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      center: goodCenter,
+      radiusMm: 5,
+      scale: -2,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_scale')
+  })
+
+  it('rejects a non-string label when provided', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      center: goodCenter,
+      radiusMm: 5,
+      label: 42,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('invalid_label')
+  })
+
+  it('accepts a minimal payload and omits optional scale/label keys', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'top',
+      center: goodCenter,
+      radiusMm: 12.5,
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.handle).toBe('body:1')
+      expect(r.payload.view).toBe('top')
+      expect(r.payload.center).toEqual(goodCenter)
+      expect(r.payload.radiusMm).toBe(12.5)
+      expect(r.payload.scale).toBeUndefined()
+      expect(r.payload.label).toBeUndefined()
+    }
+  })
+
+  it('accepts a full payload (scale + label)', () => {
+    const r = v15ValidateDetailDrawingPayload({
+      handle: 'body:1',
+      view: 'front',
+      center: goodCenter,
+      radiusMm: 8,
+      scale: 2,
+      label: 'DETAIL A',
+    })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload.scale).toBe(2)
+      expect(r.payload.label).toBe('DETAIL A')
+    }
+  })
+})
+
+describe('v15CoerceDetailDrawingResult', () => {
+  it('returns null when svg is missing', () => {
+    expect(
+      v15CoerceDetailDrawingResult({ view: 'front', center: { x: 0, y: 0 }, radiusMm: 5 }),
+    ).toBeNull()
+  })
+
+  it('returns null when view is unknown', () => {
+    expect(
+      v15CoerceDetailDrawingResult({
+        svg: '<svg/>',
+        view: 'fornt',
+        center: { x: 0, y: 0 },
+        radiusMm: 5,
+      }),
+    ).toBeNull()
+  })
+
+  it('returns null when center is malformed', () => {
+    expect(
+      v15CoerceDetailDrawingResult({
+        svg: '<svg/>',
+        view: 'front',
+        center: { x: 0 },
+        radiusMm: 5,
+      }),
+    ).toBeNull()
+  })
+
+  it('coerces a well-formed result and echoes the escaped label', () => {
+    const out = v15CoerceDetailDrawingResult({
+      svg: '<svg/>',
+      view: 'front',
+      bytes: 6,
+      center: { x: 100, y: 80 },
+      radiusMm: 40,
+      scale: 2,
+      label: '&lt;script&gt;',
+    })
+    expect(out).not.toBeNull()
+    expect(out?.svg).toBe('<svg/>')
+    expect(out?.view).toBe('front')
+    expect(out?.center).toEqual({ x: 100, y: 80 })
+    expect(out?.radiusMm).toBe(40)
+    expect(out?.scale).toBe(2)
+    expect(out?.label).toBe('&lt;script&gt;')
+  })
+
+  it('defaults scale to 2, recomputes bytes, and empties a missing label', () => {
+    const out = v15CoerceDetailDrawingResult({
+      svg: '<svg/>',
+      view: 'top',
+      center: { x: 1, y: 2 },
+      radiusMm: 10,
+    })
+    expect(out).not.toBeNull()
+    expect(out?.scale).toBe(2)
+    expect(out?.bytes).toBe(Buffer.byteLength('<svg/>', 'utf8'))
+    expect(out?.label).toBe('')
   })
 })

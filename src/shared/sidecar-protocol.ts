@@ -57,6 +57,11 @@ export type SidecarMethod =
   // stable ids (for snap-point resolution) + a BOM-table SVG stamp.
   | 'cad.extract_drawing_geometry'
   | 'cad.drawing_bom_table'
+  // CAD V1.5 — GD&T feature-control-frame SVG stamp.
+  | 'cad.annotate_gdt'
+  // CAD V1.5 — detail (crop) view: circular crop of a parent projection,
+  // magnified, framed with an escaped detail label.
+  | 'cad.detail_drawing'
   // CAD V1.5 -- 3D viewport true hidden-line-removal section cut.
   | 'cad.hlr_section'
   | 'cam.run_toolpath'
@@ -901,6 +906,13 @@ export type CadSectionDrawingParams = {
   handle: string
   view: CadDrawingView
   plane: CadSectionPlane
+  /**
+   * Optional cutting-plane label ("A-A"). Operator free-text; the sidecar
+   * normalizes (blank → "A-A", caps at 24 chars) AND entity-escapes it before
+   * any `<text>` node (Safety Rule 4). Additive — omitting it preserves the
+   * default "A-A" stamp, so existing callers and saved drawings are unaffected.
+   */
+  label?: string
 }
 
 export type CadSectionDrawingResult = {
@@ -1119,6 +1131,153 @@ export type CadDrawingBomTableResult = {
   bytes: number
   /** Number of BOM rows rendered (== rows.length). */
   rowCount: number
+}
+
+// -- cad.annotate_gdt (CAD V1.5 -- GD&T feature-control-frame SVG stamp) ----
+//
+// Composes one or more GD&T feature control frames (ASME Y14.5 / ISO 1101)
+// onto an existing drawing SVG. Like cad.drawing_bom_table / cad.attach_title_block
+// it operates on the SVG string directly (no body handle) and renders the
+// caller-supplied frames verbatim. Each frame is a row of boxed cells:
+// [ characteristic glyph | tolerance | datum1 | datum2 | datum3 ].
+//
+// Errors mirror cad.drawing_bom_table:
+//   * 'bad_params' — empty SVG, ``frames`` not an array, unknown
+//                     characteristic, negative tolerance, more than 3 datums,
+//                     a non-string datum, or a bad placement.
+//
+// Safety Rule 4 (stored-XSS): the drawing SVG is dropped into the renderer via
+// dangerouslySetInnerHTML, and datums/labels are operator free-text persisted
+// in drawing.json. The sidecar entity-escapes EVERY operator string (each
+// datum reference AND any override label) before injecting it into a <text>
+// node — the characteristic glyph and the tolerance value are safe constants.
+//
+// Safety Rule 1: renderer-only SVG; never touches G-code / STL.
+
+/**
+ * Geometric characteristic symbols (ASME Y14.5 / ISO 1101) addressable in a
+ * feature control frame. Stored as stable string ids; the sidecar maps each to
+ * its drafting glyph. Kept in lock-step with ``gdtCharacteristicSchema`` in
+ * ``src/shared/drawing-annotation-schema.ts`` and ``ALLOWED_GDT_CHARACTERISTICS``
+ * in ``engines/cad/cadquery_drawing.py``.
+ */
+export type CadGdtCharacteristic =
+  | 'straightness'
+  | 'flatness'
+  | 'circularity'
+  | 'cylindricity'
+  | 'profile_of_a_line'
+  | 'profile_of_a_surface'
+  | 'perpendicularity'
+  | 'angularity'
+  | 'parallelism'
+  | 'position'
+  | 'concentricity'
+  | 'symmetry'
+  | 'circular_runout'
+  | 'total_runout'
+
+/**
+ * A single GD&T feature control frame spec. ``toleranceMm`` is the tolerance
+ * zone size in mm; ``datums`` is the ordered datum-reference list (primary
+ * first, at most 3); ``placement`` is the top-left of the frame box in
+ * sheet-space mm; ``label`` is an optional caption rendered above the frame.
+ * ``datums`` and ``label`` are operator free-text — the sidecar XML-escapes
+ * them before injection (Safety Rule 4).
+ */
+export type CadGdtFrameSpec = {
+  characteristic: CadGdtCharacteristic
+  /** Tolerance-zone size in mm (non-negative). */
+  toleranceMm: number
+  /** Ordered datum reference letters, primary first. At most 3. */
+  datums?: string[]
+  /** Top-left of the frame box in sheet-space mm. */
+  placement: CadDimensionPoint2D
+  /** Optional caption rendered above the frame. */
+  label?: string
+}
+
+export type CadAnnotateGdtParams = {
+  /** SVG markup to stamp into. Typically the output of cad.project_drawing /
+   * cad.dimension_drawing / cad.section_drawing / cad.attach_title_block. */
+  svg: string
+  /**
+   * Feature-control-frame specs to overlay. Empty array round-trips back to
+   * the input SVG — convenient for toggling the layer off without two
+   * separate IPC paths.
+   */
+  frames: CadGdtFrameSpec[]
+}
+
+export type CadAnnotateGdtResult = {
+  /** Input SVG + feature-control-frame <g> layer. */
+  svg: string
+  /** Byte length of the SVG after UTF-8 encode. */
+  bytes: number
+  /** Number of frames rendered (== frames.length). */
+  frameCount: number
+}
+
+// -- cad.detail_drawing (CAD V1.5 -- detail / crop view) -------------------
+//
+// A detail view crops a circular region of a parent projection and magnifies
+// it (e.g. 2:1) -- the classic "DETAIL A" callout. Unlike cad.section_drawing
+// (which re-runs the CadQuery cut), the crop is a pure SVG re-frame: the
+// sidecar projects the parent view ONCE, then re-hosts its linework inside a
+// fresh <svg> whose viewBox selects the crop window and whose pixel width /
+// height are scale x that window (so the browser performs the magnification
+// and the output carries a genuinely scaled viewBox).
+//
+// Coordinate space: `center` / `radiusMm` are in the parent SVG's user-space,
+// which equals its pixel space (CadQuery's getSVG root carries no viewBox).
+// That is exactly what the renderer's clientToSvgCoord (getScreenCTM inverse)
+// resolves an operator click to -- so the renderer passes a clicked point and
+// a radius straight through.
+//
+// Safety Rule 4: `label` ("DETAIL A") is operator free-text rendered via
+// dangerouslySetInnerHTML downstream, so the sidecar XML-entity-escapes it
+// before it reaches the <text> node AND in the echoed `label` field.
+//
+// Errors reuse the drawing vocabulary: 'bad_params' (unknown view, malformed
+// center, non-finite / non-positive radius or scale, non-string label),
+// 'invalid_handle', 'drawing_error' / 'cadquery_not_installed'.
+//
+// Safety Rule 1: renderer-only; never touches G-code / STL.
+
+export type CadDetailDrawingParams = {
+  /** Opaque handle from cad.execute_script or cad.import_step. */
+  handle: string
+  /** View direction; see CadDrawingView for the standard names. */
+  view: CadDrawingView
+  /**
+   * Crop-circle centre in the parent SVG's user-space (== pixel space). The
+   * renderer resolves an operator click through clientToSvgCoord and passes
+   * the result here.
+   */
+  center: CadDimensionPoint2D
+  /** Crop-circle radius in the same SVG user-space. Must be > 0. */
+  radiusMm: number
+  /** Magnification factor (e.g. 2 => 2:1). Defaults to 2 in the sidecar. Must be > 0. */
+  scale?: number
+  /** Detail label ("DETAIL A"). Operator free-text; escaped sidecar-side. */
+  label?: string
+}
+
+export type CadDetailDrawingResult = {
+  /** Fresh <svg> framing the magnified crop (viewBox = crop window). */
+  svg: string
+  /** Echoed view name. */
+  view: CadDrawingView
+  /** Byte length of the SVG after UTF-8 encode. */
+  bytes: number
+  /** Echoed crop centre (SVG user-space). */
+  center: CadDimensionPoint2D
+  /** Echoed crop radius. */
+  radiusMm: number
+  /** Echoed magnification factor (defaulted to 2 when omitted on the wire). */
+  scale: number
+  /** Escaped detail label as rendered in the SVG. */
+  label: string
 }
 
 // -- cad.hlr_section (CAD V1.5 -- 3D viewport true HLR section cut) --------

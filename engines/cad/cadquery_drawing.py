@@ -755,20 +755,294 @@ def _validate_section_plane(plane: Any) -> Dict[str, Any]:
     return {"axis": axis, "offset": offset, "keepSide": side_raw}
 
 
+# Default cutting-plane label when the renderer doesn't supply one. Classical
+# drafting convention names the first section "A-A".
+DEFAULT_SECTION_LABEL = "A-A"
+
+# Cutting-plane label cap. The label is operator free-text routed through
+# ``_xml_escape`` before it ever reaches a ``<text>`` node (Safety Rule 4 —
+# the section SVG is rendered via ``dangerouslySetInnerHTML`` in the
+# renderer's DrawingView). Bound the length so a pathological paste can't
+# bloat the markup.
+_SECTION_LABEL_MAX = 24
+
+
+def _validate_section_label(label: Any) -> str:
+    """Validate + normalize the optional cutting-plane label.
+
+    ``None`` falls back to :data:`DEFAULT_SECTION_LABEL` ("A-A"). A supplied
+    value MUST be a string; control characters are stripped and the result is
+    capped at :data:`_SECTION_LABEL_MAX`. The caller is responsible for
+    routing the result through :func:`_xml_escape` before injecting it into
+    ``<text>`` markup — this validator only normalizes, it does NOT escape, so
+    the escape site stays explicit and greppable at each ``<text>`` build.
+    """
+    if label is None:
+        return DEFAULT_SECTION_LABEL
+    if not isinstance(label, str):
+        raise _CadHandlerError(
+            "bad_params", "label must be a string when provided"
+        )
+    cleaned = label.replace("\x00", "").replace("\r", "").replace("\n", " ")
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return DEFAULT_SECTION_LABEL
+    return cleaned[:_SECTION_LABEL_MAX]
+
+
+def _section_line_geometry(
+    axis: str, offset: float, width: float, height: float
+) -> Tuple[float, float, float, float, bool]:
+    """Resolve the cutting-plane line endpoints in SVG-mm space.
+
+    The cutting-plane line is drawn on the PARENT view as a long straight line
+    spanning the drawing, perpendicular to the section-plane normal at the
+    plane's position. Returns ``(x1, y1, x2, y2, is_horizontal)``.
+
+    Mapping (third-angle convention, matching :data:`VIEW_DIRECTIONS`):
+      * ``axis == "z"`` (top-down cut): the plane shows as a HORIZONTAL line.
+      * ``axis == "x"`` / ``axis == "y"``: the plane shows as a VERTICAL line.
+
+    The CadQuery SVG exporter centres the projection in the canvas, so we
+    anchor the line at the canvas mid-line and let it span the full extent.
+    The exact offset-to-pixel mapping is approximate (the exporter's internal
+    scale isn't surfaced) — the line communicates *where and along which axis*
+    the cut runs, which is the drafting intent, not a metrology guarantee.
+    """
+    if axis == "z":
+        # Horizontal cutting-plane line across the full width.
+        y = height * 0.5
+        return (0.0, y, width, y, True)
+    # x / y → vertical cutting-plane line down the full height.
+    x = width * 0.5
+    return (x, 0.0, x, height, False)
+
+
+def _build_section_line_svg(
+    axis: str,
+    offset: float,
+    label: str,
+    width: float,
+    height: float,
+) -> str:
+    """Cutting-plane line (ASME phantom dash-dot) + escaped end labels.
+
+    Emits a ``<g class="section-line">`` containing:
+      * a long dash-dot stroke spanning the drawing along the cut axis,
+      * a bold viewing-direction arrow at each terminator,
+      * the escaped section ``label`` ("A-A") stamped beside each terminator.
+
+    ``label`` is operator free-text and is routed through :func:`_xml_escape`
+    before injection into the two ``<text>`` nodes (Safety Rule 4). The
+    geometry attributes are all numeric and locally derived — no operator
+    string reaches an attribute, only the escaped label reaches ``<text>``.
+    """
+    x1, y1, x2, y2, is_horizontal = _section_line_geometry(
+        axis, offset, width, height
+    )
+    safe_label = _xml_escape(label)
+    # Arrow + label placement differs per orientation so the heads point
+    # toward the retained half and the labels sit clear of the line.
+    if is_horizontal:
+        arrows = (
+            f"<path d=\"M {x1:.3f} {y1:.3f} l 6 -3 l 0 6 z\" "
+            "fill=\"#b00020\" stroke=\"none\" />"
+            f"<path d=\"M {x2:.3f} {y2:.3f} l -6 -3 l 0 6 z\" "
+            "fill=\"#b00020\" stroke=\"none\" />"
+        )
+        label_a = (
+            f"<text x=\"{x1 + 2.0:.3f}\" y=\"{y1 - 4.0:.3f}\" "
+            "font-size=\"5\" font-weight=\"bold\" font-family=\"sans-serif\" "
+            "fill=\"#b00020\" stroke=\"none\">"
+            f"{safe_label}</text>"
+        )
+        label_b = (
+            f"<text x=\"{x2 - 12.0:.3f}\" y=\"{y2 - 4.0:.3f}\" "
+            "font-size=\"5\" font-weight=\"bold\" font-family=\"sans-serif\" "
+            "fill=\"#b00020\" stroke=\"none\">"
+            f"{safe_label}</text>"
+        )
+    else:
+        arrows = (
+            f"<path d=\"M {x1:.3f} {y1:.3f} l -3 6 l 6 0 z\" "
+            "fill=\"#b00020\" stroke=\"none\" />"
+            f"<path d=\"M {x2:.3f} {y2:.3f} l -3 -6 l 6 0 z\" "
+            "fill=\"#b00020\" stroke=\"none\" />"
+        )
+        label_a = (
+            f"<text x=\"{x1 + 3.0:.3f}\" y=\"{y1 + 8.0:.3f}\" "
+            "font-size=\"5\" font-weight=\"bold\" font-family=\"sans-serif\" "
+            "fill=\"#b00020\" stroke=\"none\">"
+            f"{safe_label}</text>"
+        )
+        label_b = (
+            f"<text x=\"{x2 + 3.0:.3f}\" y=\"{y2 - 4.0:.3f}\" "
+            "font-size=\"5\" font-weight=\"bold\" font-family=\"sans-serif\" "
+            "fill=\"#b00020\" stroke=\"none\">"
+            f"{safe_label}</text>"
+        )
+    return (
+        "<g class=\"section-line\" stroke=\"#b00020\" stroke-width=\"0.6\" "
+        "fill=\"none\">"
+        f"<line x1=\"{x1:.3f}\" y1=\"{y1:.3f}\" "
+        f"x2=\"{x2:.3f}\" y2=\"{y2:.3f}\" "
+        "stroke-dasharray=\"12 3 2 3\" />"
+        f"{arrows}{label_a}{label_b}"
+        "</g>"
+    )
+
+
+def _project_ring_to_2d(
+    ring: list, axis: str
+) -> list:
+    """Drop the section-plane normal axis from a 3D ring → 2D ``(u, v)`` ring.
+
+    ``ring`` is a list of ``[x, y, z]`` points (the shape ``capFaceOutline``
+    exposes). For a cut whose normal is ``axis``, the projected drawing plane
+    is spanned by the OTHER two axes — drop ``axis``. The SVG canvas places
+    +v downward, so the v component is negated to match screen space the same
+    way the exporter does.
+    """
+    out: list = []
+    for p in ring:
+        if not isinstance(p, (list, tuple)) or len(p) < 3:
+            continue
+        x, y, z = float(p[0]), float(p[1]), float(p[2])
+        if axis == "z":
+            u, v = x, y
+        elif axis == "x":
+            u, v = y, z
+        else:  # y
+            u, v = x, z
+        out.append((u, -v))
+    return out
+
+
+def _build_section_hatch_svg(
+    rings_2d: list,
+    spacing: float = 3.0,
+    angle_deg: float = 45.0,
+) -> str:
+    """45° equally-spaced hatch fill clipped to the cut-face cap loop(s).
+
+    ``rings_2d`` is a list of ``(u, v)`` polylines — the 2D projection of the
+    HLR ``capFaceOutline`` rings (see :func:`_project_ring_to_2d`). Emits a
+    ``<g class="section-hatch">`` carrying:
+      * a ``<clipPath>`` built from the ring polygons,
+      * a ``<pattern>`` of evenly-spaced 45° lines (ASME section lining),
+      * a ``<path>`` of the ring polygons, clipped to itself and filled with
+        the hatch pattern.
+
+    Returns ``""`` when no usable ring is supplied (graceful no-op: the
+    section line + label still stamp without the hatch). This markup carries
+    NO operator free-text, so no escaping is required here — every value is
+    numeric and locally derived. The unique ``clipPath`` / ``pattern`` ids are
+    fixed constants scoped under the ``section-hatch`` group.
+    """
+    polygons: list = []
+    for ring in rings_2d:
+        pts = [p for p in ring if isinstance(p, (list, tuple)) and len(p) >= 2]
+        if len(pts) >= 3:
+            polygons.append(pts)
+    if not polygons:
+        return ""
+
+    def _poly_d(poly: list) -> str:
+        head = poly[0]
+        body = "".join(f"L {p[0]:.3f} {p[1]:.3f} " for p in poly[1:])
+        return f"M {head[0]:.3f} {head[1]:.3f} {body}Z"
+
+    path_d = " ".join(_poly_d(poly) for poly in polygons)
+    sp = spacing if spacing > 0 else 3.0
+    # A 45° pattern tile: a diagonal line across a ``sp × sp`` cell. Two
+    # segments give an unbroken diagonal field when the tile repeats.
+    pattern = (
+        f"<pattern id=\"section-hatch-pattern\" width=\"{sp:.3f}\" "
+        f"height=\"{sp:.3f}\" patternUnits=\"userSpaceOnUse\" "
+        f"patternTransform=\"rotate({angle_deg:.1f})\">"
+        f"<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"{sp:.3f}\" "
+        "stroke=\"#444\" stroke-width=\"0.3\" />"
+        "</pattern>"
+    )
+    clip = (
+        "<clipPath id=\"section-hatch-clip\">"
+        f"<path d=\"{path_d}\" />"
+        "</clipPath>"
+    )
+    fill = (
+        f"<path d=\"{path_d}\" fill=\"url(#section-hatch-pattern)\" "
+        "stroke=\"none\" clip-path=\"url(#section-hatch-clip)\" />"
+    )
+    outline = (
+        f"<path d=\"{path_d}\" fill=\"none\" stroke=\"#222\" "
+        "stroke-width=\"0.4\" />"
+    )
+    return (
+        "<g class=\"section-hatch\">"
+        f"<defs>{pattern}{clip}</defs>"
+        f"{fill}{outline}"
+        "</g>"
+    )
+
+
+def _compute_section_cap_rings_2d(
+    handle: str, axis: str, offset: float, view: str
+) -> list:
+    """Best-effort: derive the 2D cut-face ring(s) for the hatch via HLR.
+
+    Lazily imports :mod:`cadquery_hlr` and calls its ``hlr_section`` to get
+    ``capFaceOutline`` (3D rings), then projects each ring to 2D by dropping
+    the section-plane normal axis. Returns ``[]`` on ANY failure (HLR bindings
+    missing / cut misses the body / handle not HLR-resolvable) so the caller
+    degrades to a line-only section rather than aborting — this preserves the
+    existing ``ocp_hlr_not_available`` graceful-degradation contract.
+    """
+    try:
+        from . import cadquery_hlr  # noqa: PLC0415 - optional, lazy
+    except Exception:  # noqa: BLE001 - module import may fail in slim envs
+        return []
+    normal = {
+        "x": (1.0, 0.0, 0.0),
+        "y": (0.0, 1.0, 0.0),
+        "z": (0.0, 0.0, 1.0),
+    }[axis]
+    view_dir = VIEW_DIRECTIONS.get(view, (0.0, 1.0, 0.0))
+    try:
+        result = cadquery_hlr.hlr_section(
+            handle, normal, offset, view_dir
+        )
+    except Exception:  # noqa: BLE001 - any HLR failure → skip hatch only
+        return []
+    cap_outline = result.get("capFaceOutline") if isinstance(result, dict) else None
+    if not isinstance(cap_outline, list):
+        return []
+    rings_2d: list = []
+    for ring in cap_outline:
+        if isinstance(ring, list):
+            projected = _project_ring_to_2d(ring, axis)
+            if len(projected) >= 3:
+                rings_2d.append(projected)
+    return rings_2d
+
+
 def section_drawing(
     handle: str,
     view: str,
     plane: Any,
+    label: Optional[str] = None,
+    show_hatch: bool = True,
+    show_section_line: bool = True,
 ) -> Dict[str, Any]:
     """Slice the body behind ``handle`` with a plane and project the result.
 
     Wire result::
 
         {
-          "svg":   str,           # SVG of the sectioned body
+          "svg":   str,           # SVG of the sectioned body + annotations
           "view":  str,           # echoed view name
           "bytes": int,
           "plane": {"axis": str, "offset": float, "keepSide": str},
+          "label": str,           # escaped cutting-plane label ("A-A")
         }
 
     Implementation: clones the workplane, subtracts an infinite half-space
@@ -776,13 +1050,26 @@ def section_drawing(
     pipeline. The handle in the table is NOT mutated — the cloned body is
     tessellated/projected and then discarded.
 
+    Annotations (additive, backward-compatible defaults):
+      * ``label`` — cutting-plane label, defaults to ``"A-A"``. Operator
+        free-text; routed through :func:`_xml_escape` before reaching any
+        ``<text>`` node (Safety Rule 4).
+      * ``show_section_line`` — stamp the ASME dash-dot cutting-plane line +
+        escaped labels on the projected view (default on).
+      * ``show_hatch`` — fill the cut-face cap loop(s) with a 45° hatch,
+        clipped to the cap outline derived from the HLR ``capFaceOutline``
+        (default on). Degrades to a no-op when HLR bindings are unavailable —
+        the section line + label still stamp.
+
     Raises ``_CadHandlerError`` with one of:
-      * ``bad_params``    — bad axis / non-finite offset / unknown view.
+      * ``bad_params``    — bad axis / non-finite offset / unknown view /
+        non-string label.
       * ``invalid_handle`` — handle missing from the table.
       * ``section_error`` — CadQuery raised during the cut.
       * ``drawing_error`` / ``cadquery_not_installed`` — propagated.
     """
     spec = _validate_section_plane(plane)
+    normalized_label = _validate_section_label(label)
     workplane = _resolve_handle(handle)
     _validate_view(view)  # raises if unknown — bail before touching CadQuery
 
@@ -877,11 +1164,260 @@ def section_drawing(
             "CadQuery SVG export returned empty output after section",
         )
 
+    # ── Annotation layers (cutting-plane line + 45° cut-face hatch) ──────
+    # Composed by hand and spliced before ``</svg>`` via the same
+    # ``_inject_layer_into_svg`` the dimension layer uses. The hatch is
+    # best-effort: it needs the HLR cap outline, which may be unavailable in
+    # a slim env — in that case it silently drops and only the line stamps.
+    width, height = _parse_svg_dimensions(svg_text)
+    layer_parts: list[str] = []
+    if show_hatch:
+        rings_2d = _compute_section_cap_rings_2d(
+            handle, spec["axis"], spec["offset"], view
+        )
+        hatch_markup = _build_section_hatch_svg(rings_2d)
+        if hatch_markup:
+            layer_parts.append(hatch_markup)
+    if show_section_line:
+        layer_parts.append(
+            _build_section_line_svg(
+                spec["axis"], spec["offset"], normalized_label, width, height
+            )
+        )
+    if layer_parts:
+        svg_text = _inject_layer_into_svg(svg_text, "".join(layer_parts))
+
     return {
         "svg": svg_text,
         "view": view,
         "bytes": len(svg_text.encode("utf-8")),
         "plane": spec,
+        "label": _xml_escape(normalized_label),
+    }
+
+
+# ── Detail (crop) views ──────────────────────────────────────────────────
+#
+# A detail view crops a circular region of a parent projection and magnifies
+# it (e.g. 2:1) so a small feature reads clearly on the sheet — the classic
+# "DETAIL A" callout in mechanical drafting. Unlike :func:`section_drawing`
+# (which re-runs the CadQuery cut), the crop is a pure SVG re-frame: project
+# the parent view ONCE, then re-host its linework inside a fresh ``<svg>``
+# whose ``viewBox`` selects the crop window and whose pixel ``width`` /
+# ``height`` are ``scale ×`` that window — so the browser does the
+# magnification and the output carries a genuinely scaled ``viewBox``.
+#
+# Coordinate space
+# ----------------
+# The renderer resolves the operator's click through
+# ``clientToSvgCoord(... getScreenCTM().inverse())`` against the parent SVG
+# root, which carries NO ``viewBox`` (CadQuery's ``getSVG`` template emits a
+# bare ``<svg width=.. height=..>``). The SVG user-space therefore equals the
+# root's pixel space, so the ``center`` / ``radiusMm`` this method receives
+# are already in that same pixel/user space as the parent's linework. The
+# crop window and the stamped detail circle live in that one space — no
+# parsing of CadQuery's inner ``<g transform="scale(..)">`` is needed (and
+# none is done, keeping this robust across exporter versions).
+#
+# Safety Rule 4 — the ``label`` ("DETAIL A") is operator free-text rendered
+# via ``dangerouslySetInnerHTML`` downstream, so it is routed through
+# :func:`_xml_escape` before it reaches the ``<text>`` node.
+
+
+# Default detail-view label when the renderer doesn't supply one. Classical
+# drafting convention names the first detail "DETAIL A".
+DEFAULT_DETAIL_LABEL = "DETAIL A"
+
+# Detail-label length cap (mirrors :data:`_SECTION_LABEL_MAX`). The label is
+# operator free-text routed through :func:`_xml_escape` before it ever reaches
+# a ``<text>`` node (Safety Rule 4). Bound the length so a pathological paste
+# can't bloat the SVG.
+_DETAIL_LABEL_MAX = 48
+
+
+def _validate_detail_label(label: Any) -> str:
+    """Validate + normalize the optional detail-view label.
+
+    ``None`` falls back to :data:`DEFAULT_DETAIL_LABEL` ("DETAIL A"). A supplied
+    value MUST be a string; control characters are stripped and the result is
+    capped at :data:`_DETAIL_LABEL_MAX`. The caller is responsible for routing
+    the result through :func:`_xml_escape` before injecting it into ``<text>``
+    markup — this validator only normalizes, it does NOT escape, so the escape
+    site stays explicit and greppable at the ``<text>`` build (Safety Rule 4).
+    """
+    if label is None:
+        return DEFAULT_DETAIL_LABEL
+    if not isinstance(label, str):
+        raise _CadHandlerError(
+            "bad_params", "label must be a string when provided"
+        )
+    cleaned = label.replace("\x00", "").replace("\r", "").replace("\n", " ")
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return DEFAULT_DETAIL_LABEL
+    return cleaned[:_DETAIL_LABEL_MAX]
+
+
+def _require_positive_finite(value: Any, field: str) -> float:
+    """Validate ``value`` is a finite real number STRICTLY greater than zero.
+
+    Mirrors :func:`_require_finite_number` but rejects zero / negative — a
+    crop radius or magnification factor of zero is degenerate, so it fails
+    fast with ``bad_params`` rather than emitting an empty / inverted view.
+    """
+    f = _require_finite_number(value, field)
+    if f <= 0.0:
+        raise _CadHandlerError(
+            "bad_params", f"{field} must be greater than zero, got {value!r}"
+        )
+    return f
+
+
+# Matches CadQuery's ``getSVG`` root open tag so we can split the parent SVG
+# into "everything inside the root" (the linework ``<g>`` + axes) and re-host
+# it inside the detail ``<svg>``. The template emits a multi-line, attribute-
+# rich ``<svg ...>`` open tag, so the match is DOTALL + non-greedy up to the
+# first ``>`` that closes the open tag.
+_SVG_ROOT_OPEN_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_svg_inner(svg_text: str) -> Optional[str]:
+    """Return the markup BETWEEN the root ``<svg ...>`` and ``</svg>``.
+
+    This is the parent's projected linework (CadQuery's ``<g transform=..>``
+    wrapper + any axes indicator) which the detail view re-hosts unchanged
+    inside its own ``<svg>`` + ``<clipPath>``. Returns ``None`` when the SVG
+    is not well-formed enough to split (no root open tag or no ``</svg>``),
+    so the caller can fail with ``drawing_error`` instead of emitting a
+    broken detail SVG.
+    """
+    open_match = _SVG_ROOT_OPEN_RE.search(svg_text)
+    if open_match is None:
+        return None
+    close_idx = svg_text.rfind("</svg>")
+    if close_idx == -1 or close_idx < open_match.end():
+        return None
+    return svg_text[open_match.end():close_idx]
+
+
+def detail_drawing(
+    handle: str,
+    view: str,
+    center: Any,
+    radius_mm: float,
+    scale: float = 2.0,
+    label: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Crop a circular region of a parent projection and magnify it.
+
+    Wire result::
+
+        {
+          "svg":      str,           # fresh <svg> framing the magnified crop
+          "view":     str,           # echoed view name
+          "bytes":    int,           # len(svg) after UTF-8 encode
+          "center":   {"x", "y"},    # echoed crop centre (SVG/user-space)
+          "radiusMm": float,         # echoed crop radius
+          "scale":    float,         # echoed magnification factor
+          "label":    str,           # ESCAPED detail label ("DETAIL A")
+        }
+
+    The parent view is projected ONCE via :func:`project_to_drawing`; the crop
+    is then a pure SVG re-frame (no second CadQuery call). The returned SVG's
+    ``viewBox`` is the crop window ``(cx-r, cy-r, 2r, 2r)`` and its pixel
+    ``width`` / ``height`` are ``2r·scale`` — the browser magnifies by
+    ``scale`` and the ``viewBox`` is genuinely scaled relative to the canvas.
+    The parent's linework is re-hosted inside a circular ``<clipPath>`` so only
+    the cropped region shows; a detail circle + the escaped ``label`` are
+    stamped on top.
+
+    ``center`` / ``radiusMm`` are in the parent SVG's user-space (== its pixel
+    space; the CadQuery root carries no ``viewBox``), which is exactly what the
+    renderer's ``clientToSvgCoord`` resolves a click to.
+
+    Raises ``_CadHandlerError`` with one of:
+      * ``bad_params``    — unknown view, malformed centre, non-finite /
+        non-positive radius or scale, non-string label.
+      * ``invalid_handle`` — handle missing from the table.
+      * ``drawing_error`` / ``cadquery_not_installed`` — propagated from
+        :func:`project_to_drawing` (or a parent SVG too malformed to crop).
+    """
+    # Validate the crop params up front (cheap, no CadQuery import) so a
+    # renderer typo fails fast with the shared vocabulary before we project.
+    cx, cy = _require_point2d(center, "center")
+    radius = _require_positive_finite(radius_mm, "radiusMm")
+    magnification = _require_positive_finite(scale, "scale")
+    normalized_label = _validate_detail_label(label)
+    _validate_view(view)  # raises bad_params on a typo before touching CadQuery
+
+    base = project_to_drawing(handle, view=view)
+    base_svg = base["svg"]
+
+    inner = _extract_svg_inner(base_svg)
+    if inner is None:
+        raise _CadHandlerError(
+            "drawing_error",
+            "parent projection SVG is not well-formed enough to crop "
+            "(missing <svg> root or </svg> close tag)",
+        )
+
+    safe_label = _xml_escape(normalized_label)
+    # A unique-enough clip id so two detail views composited into one document
+    # never collide. Derived from the crop geometry — deterministic for a given
+    # crop (handy for snapshot tests) yet distinct across different crops.
+    clip_id = (
+        "wt-detail-clip-"
+        f"{abs(hash((round(cx, 3), round(cy, 3), round(radius, 3)))) & 0xFFFFFF:06x}"
+    )
+
+    vb_x = cx - radius
+    vb_y = cy - radius
+    vb_size = radius * 2.0
+    px_size = vb_size * magnification
+
+    # Pretty caption: "DETAIL A (2:1)" when scale is an integer ratio, else
+    # "DETAIL A (2.5×)". The base label is already escaped; the magnification
+    # suffix is locally derived from a validated finite number (safe).
+    if abs(magnification - round(magnification)) < 1e-6:
+        caption = f"{safe_label} ({int(round(magnification))}:1)"
+    else:
+        caption = f"{safe_label} ({_format_number(magnification)}×)"
+
+    detail_svg = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+        "xmlns:svg=\"http://www.w3.org/2000/svg\" class=\"detail-view\" "
+        f"width=\"{px_size:.3f}\" height=\"{px_size:.3f}\" "
+        f"viewBox=\"{vb_x:.3f} {vb_y:.3f} {vb_size:.3f} {vb_size:.3f}\">"
+        "<defs>"
+        f"<clipPath id=\"{clip_id}\">"
+        f"<circle cx=\"{cx:.3f}\" cy=\"{cy:.3f}\" r=\"{radius:.3f}\" />"
+        "</clipPath>"
+        "</defs>"
+        # Re-host the parent linework, clipped to the crop circle.
+        f"<g clip-path=\"url(#{clip_id})\">{inner}</g>"
+        # Detail circle outline (drawn on top, unclipped).
+        "<g class=\"detail-circle\" stroke=\"#1a73e8\" stroke-width=\"0.4\" "
+        "fill=\"none\">"
+        f"<circle cx=\"{cx:.3f}\" cy=\"{cy:.3f}\" r=\"{radius:.3f}\" />"
+        "</g>"
+        # Escaped caption stamped just inside the top of the crop circle.
+        "<text class=\"detail-label\" "
+        f"x=\"{cx:.3f}\" y=\"{(cy - radius + radius * 0.18):.3f}\" "
+        "text-anchor=\"middle\" font-size=\"5\" font-weight=\"bold\" "
+        "font-family=\"sans-serif\" fill=\"#1a73e8\" stroke=\"none\">"
+        f"{caption}</text>"
+        "</svg>"
+    )
+
+    return {
+        "svg": detail_svg,
+        "view": view,
+        "bytes": len(detail_svg.encode("utf-8")),
+        "center": {"x": cx, "y": cy},
+        "radiusMm": radius,
+        "scale": magnification,
+        "label": safe_label,
     }
 
 
@@ -1366,19 +1902,315 @@ def drawing_bom_table(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# GD&T — feature control frames (ASME Y14.5 / ISO 1101)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# A feature control frame states a geometric tolerance as a row of boxed cells:
+#
+#     ┌───┬────────┬───┬───┬───┐
+#     │ ⌖ │ ⌀0.1   │ A │ B │ C │
+#     └───┴────────┴───┴───┴───┘
+#       │     │       └───┴───┴── up to 3 datum references (operator free-text)
+#       │     └── tolerance zone: ⌀ + value (numeric, via _format_number)
+#       └── characteristic glyph (a known-safe constant from _GDT_GLYPHS)
+#
+# Like the BOM table and the title block, the frame is composed as pure SVG
+# (no CadQuery) and stamped onto an existing drawing SVG by `annotate_gdt`.
+# It mirrors `drawing_bom_table`'s posture: operate on the SVG string directly
+# (no handle-table lookup) and render the caller's values verbatim.
+#
+# Safety Rule 4 (stored-XSS guard): the drawing SVG is dropped into the
+# renderer via `dangerouslySetInnerHTML`, and datums/labels are operator
+# free-text persisted in drawing.json. The characteristic glyph and the
+# ⌀+value cell are constants / numeric and therefore safe, but EVERY
+# operator-controlled string — each datum reference AND any override label —
+# is run through `_xml_escape` before it reaches a <text> node. A datum like
+# `</text><script>…` must survive only as escaped entities. The pin test is
+# `test_gdt_datum_is_xml_escaped` in
+# `engines/sidecar/__tests__/test_cad_drawing_handlers.py`.
+
+
+# Geometric characteristics addressable in a feature control frame. Kept in
+# lock-step with `gdtCharacteristicSchema` in
+# `src/shared/drawing-annotation-schema.ts` and `CadGdtCharacteristic` in
+# `src/shared/sidecar-protocol.ts`. Narrow on purpose so a renderer typo fails
+# fast with `bad_params` rather than rendering an unknown glyph.
+ALLOWED_GDT_CHARACTERISTICS: Tuple[str, ...] = (
+    "straightness",
+    "flatness",
+    "circularity",
+    "cylindricity",
+    "profile_of_a_line",
+    "profile_of_a_surface",
+    "perpendicularity",
+    "angularity",
+    "parallelism",
+    "position",
+    "concentricity",
+    "symmetry",
+    "circular_runout",
+    "total_runout",
+)
+
+# Characteristic id -> Unicode drafting glyph. These are fixed constants (never
+# operator text) so they are safe to inject without escaping. Where a true
+# Y14.5 symbol has no stable, widely-rendered Unicode code point we fall back
+# to the closest glyph so the cell is never empty.
+_GDT_GLYPHS: Dict[str, str] = {
+    "straightness": "—",          # em dash
+    "flatness": "⏥",              # flatness
+    "circularity": "○",           # circle
+    "cylindricity": "⌭",          # cylindricity
+    "profile_of_a_line": "⌒",     # arc
+    "profile_of_a_surface": "⌓",  # segment
+    "perpendicularity": "⟂",      # perpendicular
+    "angularity": "∠",            # angle
+    "parallelism": "∥",           # parallel
+    "position": "⌖",              # position
+    "concentricity": "◎",         # bullseye
+    "symmetry": "⌯",              # symmetry
+    "circular_runout": "↗",       # single arrow (circular runout)
+    "total_runout": "⇉",          # double arrow (total runout)
+}
+
+
+def _validate_fcf_spec(spec: Any, index: int) -> Dict[str, Any]:
+    """Validate one feature-control-frame spec; return a normalized dict.
+
+    Wire shape (mirrors ``CadGdtFrameSpec`` / ``gdtFeatureControlFrameSchema``)::
+
+        {"characteristic": <one of ALLOWED_GDT_CHARACTERISTICS>,
+         "toleranceMm": number >= 0,
+         "datums"?: [str, ...],          # at most 3 datum references
+         "placement": {"x": float, "y": float},
+         "label"?: str}                  # optional override caption
+
+    Mirrors :func:`_validate_dimension_spec`'s narrow fail-fast posture so a
+    typo at the IPC boundary surfaces as ``bad_params`` instead of silently
+    dropping the frame.
+    """
+    if not isinstance(spec, dict):
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}] must be an object, got {type(spec).__name__}",
+        )
+    characteristic = spec.get("characteristic")
+    if characteristic not in ALLOWED_GDT_CHARACTERISTICS:
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}].characteristic must be one of "
+            f"{sorted(ALLOWED_GDT_CHARACTERISTICS)}, got {characteristic!r}",
+        )
+    tolerance = _require_finite_number(
+        spec.get("toleranceMm"), f"frames[{index}].toleranceMm"
+    )
+    if tolerance < 0:
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}].toleranceMm must be non-negative, "
+            f"got {tolerance!r}",
+        )
+    datums_raw = spec.get("datums", [])
+    if datums_raw is None:
+        datums_raw = []
+    if not isinstance(datums_raw, list):
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}].datums must be an array of strings",
+        )
+    if len(datums_raw) > 3:
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}].datums references at most 3 datums "
+            f"(primary/secondary/tertiary), got {len(datums_raw)}",
+        )
+    datums: list[str] = []
+    for d_index, datum in enumerate(datums_raw):
+        if not isinstance(datum, str) or not datum:
+            raise _CadHandlerError(
+                "bad_params",
+                f"frames[{index}].datums[{d_index}] must be a non-empty string",
+            )
+        datums.append(datum)
+    placement = _require_point2d(
+        spec.get("placement"), f"frames[{index}].placement"
+    )
+    label = spec.get("label")
+    if label is not None and not isinstance(label, str):
+        raise _CadHandlerError(
+            "bad_params",
+            f"frames[{index}].label must be a string when provided",
+        )
+    return {
+        "characteristic": characteristic,
+        "toleranceMm": tolerance,
+        "datums": datums,
+        "placement": placement,
+        "label": label,
+    }
+
+
+def _build_fcf_svg(
+    characteristic: str,
+    tolerance_mm: float,
+    datums: list[str],
+    placement: Tuple[float, float],
+    label: Optional[str] = None,
+) -> str:
+    """Build the SVG markup for one GD&T feature control frame.
+
+    Renders a bordered, multi-cell ``<g>`` at ``placement`` (sheet-space mm)::
+
+        [ glyph | <tol> | datum1 | datum2 | datum3 ]   ( optional label above )
+
+    Pure composition (no CadQuery) — same hand-built style as
+    :func:`_build_bom_table_svg`. Cell widths are fixed so the renderer's CSS
+    gets a stable layout.
+
+    Safety Rule 4: the ``characteristic`` glyph (a constant from
+    :data:`_GDT_GLYPHS`) and the diameter-symbol + ``_format_number(tolerance_mm)``
+    cell (numeric) are known-safe. EVERY operator-controlled string — each
+    ``datum`` cell AND the optional ``label`` caption — is passed through
+    :func:`_xml_escape` before it is injected into a ``<text>`` node. Do NOT
+    interpolate any of these raw.
+    """
+    glyph = _GDT_GLYPHS.get(characteristic, "?")
+    tol_text = "⌀" + _format_number(tolerance_mm)  # diameter symbol + value
+    # Cell text in display order. Glyph + tolerance are constants/numeric; the
+    # datum cells are operator free-text (escaped at injection below).
+    cells = [glyph, tol_text, *datums[:3]]
+    cell_w = [7.0, 12.0]  # glyph, tolerance
+    cell_w += [6.0] * (len(cells) - len(cell_w))
+    frame_h = 6.0
+    frame_w = sum(cell_w)
+    px, py = placement
+
+    parts: list[str] = [
+        f"<g class=\"gdt-fcf\" transform=\"translate({px:.3f},{py:.3f})\" "
+        "stroke=\"#1a1a1a\" stroke-width=\"0.3\" fill=\"none\" "
+        "font-family=\"sans-serif\">",
+        f"<rect width=\"{frame_w:.3f}\" height=\"{frame_h:.3f}\" />",
+    ]
+    cx = 0.0
+    for i, (cell, width) in enumerate(zip(cells, cell_w)):
+        # MANDATORY escape: datum cells are operator-controlled. The glyph and
+        # tolerance are safe constants but escaping them is a harmless no-op,
+        # so route every cell through _xml_escape for a single safe path.
+        safe = _xml_escape(cell)
+        parts.append(
+            f"<text x=\"{cx + width / 2.0:.3f}\" "
+            f"y=\"{frame_h * 0.72:.3f}\" text-anchor=\"middle\" "
+            "font-size=\"3.2\" stroke=\"none\" fill=\"#1a1a1a\">"
+            f"{safe}</text>"
+        )
+        cx += width
+        # Vertical divider between cells (skip the trailing edge — the <rect>
+        # border already closes the frame). Mirrors _build_bom_table_svg.
+        if i < len(cells) - 1:
+            parts.append(
+                f"<line x1=\"{cx:.3f}\" y1=\"0\" "
+                f"x2=\"{cx:.3f}\" y2=\"{frame_h:.3f}\" />"
+            )
+    if label:
+        # Optional caption above the frame (e.g. a tag the operator typed).
+        # Operator-controlled -> MANDATORY escape before injection.
+        parts.append(
+            f"<text x=\"0\" y=\"-1.5\" font-size=\"2.8\" "
+            "stroke=\"none\" fill=\"#666\">"
+            f"{_xml_escape(label)}</text>"
+        )
+    parts.append("</g>")
+    return "".join(parts)
+
+
+def annotate_gdt(svg_text: Any, frames: Any) -> Dict[str, Any]:
+    """Stamp one or more GD&T feature-control-frame ``<g>`` groups into an SVG.
+
+    Composes onto an existing drawing SVG (typically the output of
+    ``cad.project_drawing`` / ``cad.dimension_drawing`` / ``cad.section_drawing``),
+    exactly like :func:`drawing_bom_table` and :func:`attach_title_block` —
+    operates on the SVG string directly (no handle-table lookup) and renders
+    the caller-supplied frames verbatim.
+
+    Wire result (kept in lock-step with ``src/shared/sidecar-protocol.ts``
+    ``CadAnnotateGdtResult``)::
+
+        {
+          "svg":        str,   # input SVG + feature-control-frame layer
+          "bytes":      int,   # len(svg) after UTF-8 encode
+          "frameCount": int,   # number of frames rendered (== len(frames))
+        }
+
+    ``frames`` is the list of per-frame spec dicts (see
+    :func:`_validate_fcf_spec`). An empty list round-trips back to the input
+    SVG unchanged — convenient for the renderer to toggle the layer on/off
+    without two separate IPC paths.
+
+    Raises ``_CadHandlerError`` with ``bad_params`` for an empty SVG, a
+    non-array ``frames``, or a malformed frame (unknown characteristic,
+    negative tolerance, > 3 datums, non-string datum, bad placement).
+    """
+    if not isinstance(svg_text, str) or not svg_text.strip():
+        raise _CadHandlerError(
+            "bad_params", "svg must be a non-empty SVG markup string"
+        )
+    if not isinstance(frames, list):
+        raise _CadHandlerError(
+            "bad_params", "frames must be an array (use [] for no frames)"
+        )
+    specs: list[Dict[str, Any]] = [
+        _validate_fcf_spec(frame, i) for i, frame in enumerate(frames)
+    ]
+    if not specs:
+        return {
+            "svg": svg_text,
+            "bytes": len(svg_text.encode("utf-8")),
+            "frameCount": 0,
+        }
+
+    parts: list[str] = ["<g class=\"gdt-layer\">"]
+    for spec in specs:
+        parts.append(
+            _build_fcf_svg(
+                spec["characteristic"],
+                spec["toleranceMm"],
+                spec["datums"],
+                spec["placement"],
+                spec["label"],
+            )
+        )
+    parts.append("</g>")
+    layer = "".join(parts)
+    out_svg = _inject_layer_into_svg(svg_text, layer)
+    return {
+        "svg": out_svg,
+        "bytes": len(out_svg.encode("utf-8")),
+        "frameCount": len(specs),
+    }
+
+
 __all__ = [
     "ALLOWED_DIMENSION_KINDS",
+    "ALLOWED_GDT_CHARACTERISTICS",
     "ALLOWED_SECTION_AXES",
     "ALLOWED_SNAP_KINDS",
     "ALLOWED_VIEWS",
     "BOM_TABLE_COLUMNS",
     "DEFAULT_BOM_COLUMNS",
+    "DEFAULT_SECTION_LABEL",
+    "DEFAULT_DETAIL_LABEL",
     "TITLE_BLOCK_FIELDS",
     "VIEW_DIRECTIONS",
     "attach_title_block",
+    "annotate_gdt",
     "dimension_drawing",
+    "detail_drawing",
     "drawing_bom_table",
     "export_drawing",
     "project_to_drawing",
     "section_drawing",
+    "_build_section_hatch_svg",
+    "_build_section_line_svg",
+    "_validate_section_label",
 ]

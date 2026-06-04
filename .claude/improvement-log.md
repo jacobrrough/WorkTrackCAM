@@ -17448,3 +17448,18 @@ Back-compat CONFIRMED (v1 sheets parse), associativity CONFIRMED (re-anchor by r
 badged, no silent mis-attach), NO G-code paths touched. tsc clean; TS suite 14,640 pass (+52);
 system pytest 94 pass. CadQuery-gated tests (geometry + escaping pins) skip locally due to a
 PRE-EXISTING venv exec-sandbox issue (confirmed at 08e4ee8; unrelated to this stack -> CI validates).
+
+
+### Stack #7.2 (agent-orchestrated): GD&T frames + section/detail views
+Workflow (Map -> Build -> Renderer -> Verify, 6 agents); main loop verified.
+- `_build_fcf_svg` + `cad.annotate_gdt`: GD&T feature-control frames (characteristic +
+  tolerance + <=3 datums), every cell `_xml_escape`'d.
+- `section_drawing`: cutting-plane line + escaped A-A label + 45deg cut-face hatch (reuses capFaceOutline).
+- `cad.detail_drawing`: scaled circular crop + escaped detail label.
+- DrawingView: GD&T tool (anchored, persisted to sheet.annotations.featureControlFrames),
+  section-label control, detail tool; + pure `drawing-gdt-model.ts`.
+SECURITY (Safety Rule 4): adversarial-verify traced ALL 8 SVG injection sites -> every operator
+free-text is `_xml_escape`'d; pytests pin each (run on system python). Stack-1 XSS NOT reintroduced.
+Additive schema (no version bump). No G-code. tsc clean; TS 14,691 pass (+51); pytest 117 pass (+23).
+Follow-ups (LOW/INFO): refactor Stack-1 escape test off execute_script (avoids #11); GD&T/detail
+not yet wired to drawing.json save; title-block hand-rolled escaping could use _xml_escape.

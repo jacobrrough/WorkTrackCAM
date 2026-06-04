@@ -59,7 +59,10 @@ import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import { DrawingView } from './DrawingView'
-import type { DrawingDimension } from '../../shared/drawing-annotation-schema'
+import type {
+  DrawingDimension,
+  GdtFeatureControlFrame,
+} from '../../shared/drawing-annotation-schema'
 import {
   FeatureTree,
   type FeatureTreeOperation,
@@ -379,6 +382,17 @@ export function DesignWorkspace({
    */
   const [drawingDimensions, setDrawingDimensions] = useState<readonly DrawingDimension[]>([])
 
+  /**
+   * Persisted, associative GD&T feature control frames for the active part's
+   * sheet (`sheet.annotations.featureControlFrames`). Threaded into the
+   * DrawingView in controlled mode so a placed frame records its snapped
+   * feature's `refId` and re-resolves against fresh geometry on every
+   * re-projection. Held here (not inside DrawingView) so it survives view-tab
+   * switches and is the value a future project-save writes into `drawing.json`.
+   * Documentation overlays only — never read by CAM/G-code (Safety Rule 1).
+   */
+  const [drawingGdtFrames, setDrawingGdtFrames] = useState<readonly GdtFeatureControlFrame[]>([])
+
   // Debounce timer for the listOperations refresh; cleared on unmount + on
   // every keystroke so we never call the sidecar mid-typing-burst.
   const listOpsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -638,6 +652,19 @@ export function DesignWorkspace({
     [toast],
   )
 
+  /**
+   * Detail (crop) views are produced by the DrawingView via `cad.detailDrawing`
+   * (the sidecar magnifies the crop + stamps the escaped label). For now the
+   * host just acknowledges the result with a toast; a future cycle hosts the
+   * cropped SVG as its own sheet. Documentation overlay only (Safety Rule 1).
+   */
+  const handleDetailView = useCallback(
+    (result: { readonly label: string }): void => {
+      toast('ok', `${result.label} created.`)
+    },
+    [toast],
+  )
+
   /** Currently-active part handle threaded into the DrawingView. */
   const activePartHandle: string | null = firstMesh?.handle ?? null
 
@@ -837,6 +864,9 @@ export function DesignWorkspace({
             onToast={onToast}
             persistedDimensions={drawingDimensions}
             onPersistDimensions={setDrawingDimensions}
+            persistedGdtFrames={drawingGdtFrames}
+            onPersistGdt={setDrawingGdtFrames}
+            onDetail={handleDetailView}
           />
         </div>
       </div>

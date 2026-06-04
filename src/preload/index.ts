@@ -802,6 +802,33 @@ export type Api = {
       | { ok: true; result: Record<string, unknown> }
       | { ok: false; error: string; hint?: string }
     >
+    /**
+     * CAD V1.5 GD&T (Wave 3): stamp feature-control-frame(s) into an SVG.
+     * Pure SVG composition -- does NOT recompute geometry. Permissive
+     * envelope -- the renderer passes { svg, frames } and reads the
+     * { svg, bytes, frameCount } result. Datums/labels are entity-escaped
+     * in the sidecar (Safety Rule 4). Delegates to `cad.annotate_gdt`.
+     */
+    annotateGdt: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
+    /**
+     * CAD V1.5 Detail view (Wave 3): crop a circular region of a parent
+     * projection and magnify it (e.g. 2:1). Pure projection + SVG re-frame.
+     * Permissive envelope -- the renderer passes { handle, view, center,
+     * radiusMm, scale?, label? } and reads the { svg, view, bytes, center,
+     * radiusMm, scale, label } result. `label` is entity-escaped in the
+     * sidecar (Safety Rule 4). Delegates to `cad.detail_drawing`.
+     */
+    detailDrawing: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
   }
 }
 
@@ -1026,6 +1053,16 @@ const api: Api = {
       >,
     drawingBomTable: (payload) =>
       ipcRenderer.invoke('cad:drawingBomTable', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    annotateGdt: (payload) =>
+      ipcRenderer.invoke('cad:annotateGdt', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    detailDrawing: (payload) =>
+      ipcRenderer.invoke('cad:detailDrawing', payload) as Promise<
         | { ok: true; result: Record<string, unknown> }
         | { ok: false; error: string; hint?: string }
       >

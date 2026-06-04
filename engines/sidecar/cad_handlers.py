@@ -107,11 +107,18 @@ try:
         attach_title_block as _v15_attach_title_block_core,
         dimension_drawing as _v15_dimension_drawing_core,
         section_drawing as _v15_section_drawing_core,
+        detail_drawing as _v15d_detail_drawing_core,
     )
     # CAD V1.5 — BOM-table stamp (associative-dimension BOM surface). Prefixed
     # ``_v15b_`` so this block stays diff-isolated from the BUILD-7 surface above.
     from engines.cad.cadquery_drawing import (
         drawing_bom_table as _v15b_drawing_bom_table_core,
+    )
+    # CAD V1.5 — GD&T feature-control-frame stamp. Prefixed ``_v15g_`` so this
+    # block stays diff-isolated from the BOM surface above. Operates on an
+    # existing SVG (no handle table), like ``drawing_bom_table``.
+    from engines.cad.cadquery_drawing import (
+        annotate_gdt as _v15g_annotate_gdt_core,
     )
     # CAD V2 — projected 2D drawing geometry with quantized-hash stable ids and
     # the SVG from the SAME projection (so geometry + SVG never disagree on
@@ -164,10 +171,15 @@ except ImportError:  # pragma: no cover - frozen-app import path
         attach_title_block as _v15_attach_title_block_core,
         dimension_drawing as _v15_dimension_drawing_core,
         section_drawing as _v15_section_drawing_core,
+        detail_drawing as _v15d_detail_drawing_core,
     )
     # CAD V1.5 — frozen-app fallback for the BOM-table helper.
     from cad.cadquery_drawing import (  # type: ignore[no-redef]
         drawing_bom_table as _v15b_drawing_bom_table_core,
+    )
+    # CAD V1.5 — frozen-app fallback for the GD&T feature-control-frame helper.
+    from cad.cadquery_drawing import (  # type: ignore[no-redef]
+        annotate_gdt as _v15g_annotate_gdt_core,
     )
     # CAD V2 — frozen-app fallback for the projected-geometry module.
     from cad.cadquery_drawing_geometry import (  # type: ignore[no-redef]
@@ -822,6 +834,23 @@ def _require_dict_param(params: dict[str, Any], key: str) -> dict[str, Any]:
     return val
 
 
+def _optional_bool(params: dict[str, Any], key: str, default: bool) -> bool:
+    """Read an optional boolean flag. Absent / ``None`` → ``default``.
+
+    A present value MUST be a real ``bool`` (not a truthy int/str) so a
+    renderer typo (``"true"`` as a string) fails fast with ``bad_params``
+    rather than silently flipping the flag on.
+    """
+    val = params.get(key)
+    if val is None:
+        return default
+    if not isinstance(val, bool):
+        raise _CadHandlerError(
+            "bad_params", f"{key!r} must be a boolean when provided"
+        )
+    return val
+
+
 def _require_v15_view_param(params: dict[str, Any]) -> str:
     """Validate the ``view`` param. Identical to the BUILD-3 version, kept
     local to this section so the V1.5 surface stays diff-isolated.
@@ -855,11 +884,64 @@ def section_drawing(params: dict[str, Any]) -> dict[str, Any]:
 
     The cut is performed on a CLONE of the body — the handle table is not
     mutated, so toggling the section view on and off is non-destructive.
+
+    Optional annotation params (additive — older renderers omit them and get
+    the documented defaults):
+      * ``label``           — cutting-plane label string (defaults to "A-A").
+        Operator free-text; the core escapes it before any ``<text>`` node.
+      * ``showHatch``       — bool, fill the cut face with a 45° hatch.
+      * ``showSectionLine`` — bool, stamp the ASME cutting-plane line.
     """
     handle = _require_str(params, "handle")
     view = _require_v15_view_param(params)
     plane = _require_dict_param(params, "plane")
-    return _v15_section_drawing_core(handle, view, plane)
+    label = params.get("label")
+    if label is not None and not isinstance(label, str):
+        raise _CadHandlerError(
+            "bad_params", "label must be a string when provided"
+        )
+    show_hatch = _optional_bool(params, "showHatch", True)
+    show_section_line = _optional_bool(params, "showSectionLine", True)
+    return _v15_section_drawing_core(
+        handle,
+        view,
+        plane,
+        label=label,
+        show_hatch=show_hatch,
+        show_section_line=show_section_line,
+    )
+
+
+def detail_drawing(params: dict[str, Any]) -> dict[str, Any]:
+    """Crop a circular region of a parent projection and magnify it.
+
+    Thin wrapper over ``cadquery_drawing.detail_drawing``: the renderer passes
+    ``{handle, view, center:{x,y}, radiusMm, scale?, label?}``; the core
+    projects the parent view ONCE then re-frames a circular crop into a fresh
+    ``<svg>`` whose ``viewBox`` is the crop window and whose pixel size is
+    ``scale ×`` that window (the magnification). ``label`` is operator
+    free-text — the core routes it through ``_xml_escape`` before any
+    ``<text>`` node (Safety Rule 4). The envelope is validated here; all the
+    crop geometry / escaping lives in the core.
+
+    ``radiusMm`` and ``scale`` are forwarded raw (``None`` when absent) so the
+    core's positive-finite guard owns the numeric vocabulary and a missing /
+    zero / negative value fails with ``bad_params`` from one place.
+    """
+    handle = _require_str(params, "handle")
+    view = _require_v15_view_param(params)
+    center = _require_dict_param(params, "center")
+    radius_mm = params.get("radiusMm")
+    scale = params.get("scale", 2.0)
+    label = params.get("label")
+    return _v15d_detail_drawing_core(
+        handle,
+        view,
+        center,
+        radius_mm,
+        scale,
+        label,
+    )
 
 
 def attach_title_block(params: dict[str, Any]) -> dict[str, Any]:
@@ -954,6 +1036,50 @@ def drawing_bom_table(params: dict[str, Any]) -> dict[str, Any]:
     columns = params.get("columns")
     title = params.get("title")
     return _v15b_drawing_bom_table_core(svg_text, rows, columns, title)
+
+
+# ── BUILD 10 (GD&T feature control frames — CAD V1.5) ─────────────────────
+#
+# One more thin wrapper. ``annotate_gdt`` exposes the ``cadquery_drawing``
+# GD&T helper. Like ``drawing_bom_table`` / ``attach_title_block`` it operates
+# on the SVG string directly (no handle table) and stamps a
+# feature-control-frame ``<g>`` layer onto an existing drawing:
+#
+#   cad.annotate_gdt — compose GD&T feature-control-frame(s) onto an SVG.
+#
+# Wire result::
+#
+#   cad.annotate_gdt:
+#     {"svg": str, "bytes": int, "frameCount": int}
+#
+# Error vocabulary mirrors the BUILD-7 / BUILD-9 drawing path:
+#   * 'bad_params' — empty SVG, ``frames`` not an array, malformed frame
+#                     (unknown characteristic, negative tolerance, > 3 datums,
+#                     non-string datum, bad placement).
+#
+# Safety Rule 4 (stored-XSS): every operator-controlled string — each datum
+# reference AND any override label — is entity-escaped in the core before it
+# reaches a ``<text>`` node. The renderer drops the SVG into
+# ``dangerouslySetInnerHTML``; unescaped markup here would be stored XSS.
+#
+# Safety Rule 1 reminder: renderer-only SVG; never touches G-code / STL.
+
+
+def annotate_gdt(params: dict[str, Any]) -> dict[str, Any]:
+    """Stamp GD&T feature-control-frame(s) into an SVG from caller-supplied frames.
+
+    The renderer pushes a fresh payload every time the operator adds / edits a
+    feature control frame; the core re-composes the layer and folds it onto
+    the supplied SVG. An empty ``frames`` list round-trips the SVG unchanged.
+
+    The ``frames`` are validated frame-by-frame in the core (unknown
+    characteristic / negative tolerance / > 3 datums / bad placement all fail
+    fast with ``bad_params``). Every operator string is XML-escaped in the
+    core before injection (Safety Rule 4).
+    """
+    svg_text = _require_str(params, "svg")
+    frames = _require_list_param(params, "frames")
+    return _v15g_annotate_gdt_core(svg_text, frames)
 
 
 # -- BUILD 8 (3D viewport true-HLR section cut -- CAD V1.5) ----------------
@@ -1070,10 +1196,13 @@ HANDLERS: dict[str, HandlerFn] = {
     # BUILD 7 — Drawing dimensions / sections / title block (CAD V1.5)
     "dimension_drawing": dimension_drawing,
     "section_drawing": section_drawing,
+    "detail_drawing": detail_drawing,
     "attach_title_block": attach_title_block,
     # BUILD 8 -- 3D viewport true-HLR section cut (CAD V1.5)
     "hlr_section": hlr_section,
     # BUILD 9 — Associative-dimension geometry + BOM-table stamp (CAD V1.5)
     "extract_drawing_geometry": extract_drawing_geometry,
     "drawing_bom_table": drawing_bom_table,
+    # BUILD 10 — GD&T feature control frames (CAD V1.5)
+    "annotate_gdt": annotate_gdt,
 }

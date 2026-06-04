@@ -92,7 +92,16 @@ import {
   type FreshSnapPoint,
   type ResolvedClick,
 } from './drawing-annotation-model'
-import type { DrawingDimension } from '../../shared/drawing-annotation-schema'
+import {
+  buildGdtFrame,
+  gdtFramesToSpecs,
+  reanchorGdtFrames,
+} from './drawing-gdt-model'
+import type {
+  DrawingDimension,
+  GdtCharacteristic,
+  GdtFeatureControlFrame,
+} from '../../shared/drawing-annotation-schema'
 
 /**
  * Standard projection axes exposed in the toolbar. Each maps to the
@@ -211,6 +220,35 @@ export interface DrawingViewProps {
    * Defaults to `['item', 'partName', 'quantity']` in the sidecar.
    */
   readonly bomColumns?: readonly DrawingBomColumn[]
+  /**
+   * CAD V1.5 GD&T -- the persisted, associative feature control frames for this
+   * sheet (`sheet.annotations.featureControlFrames`). When supplied (controlled
+   * mode), the GD&T tool is enabled: a one-click anchored placement mints a
+   * `GdtFeatureControlFrame` pushed up via {@link onPersistGdt}, and the frames
+   * compose onto the projection via `cad.annotateGdt`. Each anchor's `refId` is
+   * re-resolved against fresh geometry on every re-projection (dangling badge).
+   */
+  readonly persistedGdtFrames?: readonly GdtFeatureControlFrame[]
+  /**
+   * CAD V1.5 GD&T -- called whenever the persisted GD&T frame list changes (a
+   * new frame placed, the list cleared, or anchors refreshed / flagged dangling
+   * after a re-projection). The host writes the result into
+   * `sheet.annotations.featureControlFrames`. Optional + readonly (additive):
+   * when omitted the GD&T toolbar still renders but placement is inert.
+   */
+  readonly onPersistGdt?: (next: readonly GdtFeatureControlFrame[]) => void
+  /**
+   * CAD V1.5 Detail -- called when a detail (crop) view is produced. The host
+   * owns what to do with the magnified crop SVG (open in a new sheet, export,
+   * etc.); this component only generates it via `cad.detailDrawing` and signals
+   * the result. When omitted the Detail tool is hidden.
+   */
+  readonly onDetail?: (result: {
+    readonly svg: string
+    readonly center: { readonly x: number; readonly y: number }
+    readonly radiusMm: number
+    readonly label: string
+  }) => void
 }
 
 /**
@@ -243,6 +281,8 @@ type DrawingBridge = {
     readonly handle: string
     readonly view: DrawingViewAxis
     readonly plane: DrawingSectionPlane
+    /** Optional cutting-plane label ("A-A"). Sidecar escapes it (Safety Rule 4). */
+    readonly label?: string
   }) => Promise<
     | { ok: true; result: { svg: string } }
     | { ok: false; error: string; hint?: string }
@@ -275,6 +315,44 @@ type DrawingBridge = {
     | { ok: true; result: Record<string, unknown> }
     | { ok: false; error: string; hint?: string }
   >
+  // CAD V1.5 -- GD&T feature-control-frame stamp. Pure SVG composition; the
+  // sidecar renders the supplied frames verbatim and entity-escapes every datum
+  // cell + the optional label before injection (Safety Rule 4).
+  readonly annotateGdt?: (payload: {
+    readonly svg: string
+    readonly frames: readonly GdtAnnotateFrame[]
+  }) => Promise<
+    | { ok: true; result: { svg: string; frameCount?: number } }
+    | { ok: false; error: string; hint?: string }
+  >
+  // CAD V1.5 -- detail (crop) view. Projects the parent ONCE, then re-frames a
+  // circular crop magnified by `scale`. The sidecar escapes `label` (Safety
+  // Rule 4) before any <text> node.
+  readonly detailDrawing?: (payload: {
+    readonly handle: string
+    readonly view: DrawingViewAxis
+    readonly center: { readonly x: number; readonly y: number }
+    readonly radiusMm: number
+    readonly scale?: number
+    readonly label?: string
+  }) => Promise<
+    | { ok: true; result: { svg: string } }
+    | { ok: false; error: string; hint?: string }
+  >
+}
+
+/**
+ * Wire-spec shape for one feature control frame passed to `cad.annotateGdt`
+ * (mirrors `CadGdtFrameSpec`). Built from a persisted, anchored
+ * {@link GdtFeatureControlFrame} via `gdtFramesToSpecs`. Datums / label are the
+ * operator's verbatim free-text — the sidecar escapes them (Safety Rule 4).
+ */
+type GdtAnnotateFrame = {
+  readonly characteristic: GdtCharacteristic
+  readonly toleranceMm: number
+  readonly placement: { readonly x: number; readonly y: number }
+  readonly datums?: readonly string[]
+  readonly label?: string
 }
 
 function readDrawingBridge(): DrawingBridge {
@@ -286,7 +364,69 @@ function readDrawingBridge(): DrawingBridge {
     attachTitleBlock: cadAny.attachTitleBlock,
     extractDrawingGeometry: cadAny.extractDrawingGeometry,
     drawingBomTable: cadAny.drawingBomTable,
+    annotateGdt: cadAny.annotateGdt,
+    detailDrawing: cadAny.detailDrawing,
   }
+}
+
+/** GD&T characteristic ids in the toolbar dropdown order (ASME Y14.5). Mirrors
+ * `gdtCharacteristicSchema`. Exported for the model-level test pin. */
+export const GDT_CHARACTERISTIC_ORDER: readonly GdtCharacteristic[] = [
+  'straightness',
+  'flatness',
+  'circularity',
+  'cylindricity',
+  'profile_of_a_line',
+  'profile_of_a_surface',
+  'perpendicularity',
+  'angularity',
+  'parallelism',
+  'position',
+  'concentricity',
+  'symmetry',
+  'circular_runout',
+  'total_runout',
+] as const
+
+/** Human labels for the GD&T characteristic dropdown. */
+export const GDT_CHARACTERISTIC_LABELS: Record<GdtCharacteristic, string> = {
+  straightness: 'Straightness',
+  flatness: 'Flatness',
+  circularity: 'Circularity',
+  cylindricity: 'Cylindricity',
+  profile_of_a_line: 'Profile of a Line',
+  profile_of_a_surface: 'Profile of a Surface',
+  perpendicularity: 'Perpendicularity',
+  angularity: 'Angularity',
+  parallelism: 'Parallelism',
+  position: 'Position',
+  concentricity: 'Concentricity',
+  symmetry: 'Symmetry',
+  circular_runout: 'Circular Runout',
+  total_runout: 'Total Runout',
+}
+
+/**
+ * Parse the operator's datum free-text field into an ordered, de-duplicated,
+ * capped (≤3) list of non-empty datum letters. Accepts comma / whitespace
+ * separation ("A, B C" → ["A","B","C"]). The strings are NOT escaped here — the
+ * sidecar is the escaping trust boundary (Safety Rule 4). Pure; exported for the
+ * test pin.
+ */
+export function parseDatumField(raw: string): string[] {
+  const parts = raw
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const p of parts) {
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+    if (out.length === 3) break
+  }
+  return out
 }
 
 // -- CAD V1.5 -- Dimension / Section / Title-block types ----------------
@@ -591,6 +731,24 @@ function buildAnchoredDimension(
 }
 
 /**
+ * GD&T / Detail single-or-two-click tool placement mode. Mutually exclusive
+ * with the dimension placement machine (`DimensionPlacementState`): starting a
+ * tool clears any active dimension placement and vice-versa, so a click is never
+ * ambiguous between the two pipelines.
+ *
+ * `null`                              — no tool active.
+ * `{ tool: 'gdt' }`                   — next click anchors a feature control frame
+ *                                       (one-click placement).
+ * `{ tool: 'detail', step: 0 }`       — next click is the crop centre.
+ * `{ tool: 'detail', step: 1, center}`— next click defines the radius (centre→click).
+ */
+type ToolMode =
+  | null
+  | { readonly tool: 'gdt' }
+  | { readonly tool: 'detail'; readonly step: 0 }
+  | { readonly tool: 'detail'; readonly step: 1; readonly center: { readonly x: number; readonly y: number } }
+
+/**
  * Order of buttons in the toolbar. Front-Top-Right-Iso matches the
  * mechanical-drawing convention engineers expect (three orthographic
  * + one perspective).
@@ -616,6 +774,9 @@ export function DrawingView({
   onPersistDimensions,
   bomRows,
   bomColumns,
+  persistedGdtFrames,
+  onPersistGdt,
+  onDetail,
 }: DrawingViewProps): JSX.Element {
   const [activeView, setActiveView] = useState<DrawingViewAxis>(initialView)
   const [svg, setSvg] = useState<string | null>(previewSvg ?? null)
@@ -640,9 +801,52 @@ export function DrawingView({
   const [sectionPlane, setSectionPlane] = useState<DrawingSectionPlane>(
     initialSectionPlane ?? { axis: 'z', offset: 0, keepSide: 'positive' },
   )
+  /**
+   * Cutting-plane label threaded to the section path (`cad.section_drawing`'s
+   * `label`). Defaults to "A-A". The sidecar normalizes + entity-escapes it
+   * before any `<text>` node (Safety Rule 4) -- the renderer passes the operator
+   * string through verbatim (never escapes here, which would mask a regression).
+   */
+  const [sectionLabel, setSectionLabel] = useState<string>('A-A')
   const [titleBlock, setTitleBlock] = useState<DrawingTitleBlock>(
     initialTitleBlock ?? defaultTitleBlock(),
   )
+
+  // -- CAD V1.5 GD&T form + tool state --------------------------------------
+
+  /** Whether this instance is in CONTROLLED (persisted) GD&T mode. */
+  const gdtControlled = persistedGdtFrames !== undefined
+
+  /** The characteristic the next placed frame will carry. */
+  const [gdtCharacteristic, setGdtCharacteristic] = useState<GdtCharacteristic>('position')
+  /** Tolerance-zone size (mm) for the next placed frame. */
+  const [gdtTolerance, setGdtTolerance] = useState<number>(0.1)
+  /**
+   * Datum free-text field (e.g. "A B C"). Parsed into ≤3 ordered datum letters
+   * at placement time. Operator free-text -- NOT escaped here (the sidecar is the
+   * escaping boundary, Safety Rule 4).
+   */
+  const [gdtDatums, setGdtDatums] = useState<string>('')
+
+  /**
+   * Tool placement mode -- mutually exclusive with the dimension `placementState`.
+   * `null`              -- no GD&T / detail tool active.
+   * `{ tool: 'gdt' }`   -- next click anchors a feature control frame.
+   * detail step 0       -- next click is the crop centre.
+   * detail step 1       -- next click defines the crop radius (centre→click).
+   */
+  const [toolMode, setToolMode] = useState<ToolMode>(null)
+
+  /** Detail-view magnification (e.g. 2 => 2:1). */
+  const [detailScale, setDetailScale] = useState<number>(2)
+  /** Detail-view label ("DETAIL A"). Operator free-text; escaped sidecar-side. */
+  const [detailLabel, setDetailLabel] = useState<string>('DETAIL A')
+
+  /**
+   * Ids of persisted GD&T frames whose anchor link no longer resolves against
+   * the latest fetched geometry (badged `dangling`). Recomputed on every fetch.
+   */
+  const [gdtDanglingIds, setGdtDanglingIds] = useState<ReadonlySet<string>>(new Set())
 
   // -- CAD V2 placement state -----------------------------------------------
 
@@ -788,26 +992,139 @@ export function DrawingView({
     [controlled, onPersistDimensions, persistedDimensions, toast]
   )
 
+  /**
+   * Commit a GD&T frame from a single resolved click. Mints an anchored
+   * {@link GdtFeatureControlFrame} (reusing the same snap machinery dimensions
+   * use) carrying the current characteristic / tolerance / parsed datums, then
+   * pushes it onto the persisted list. Datums flow through verbatim -- the
+   * sidecar escapes them (Safety Rule 4). No-op when GD&T is not controlled.
+   */
+  const commitGdtFrame = useCallback(
+    (click: ResolvedClick): void => {
+      if (!gdtControlled) {
+        toast('warn', 'GD&T placement is unavailable -- no persistence host wired.')
+        return
+      }
+      const frame = buildGdtFrame(click, {
+        characteristic: gdtCharacteristic,
+        toleranceMm: Number.isFinite(gdtTolerance) && gdtTolerance >= 0 ? gdtTolerance : 0,
+        datums: parseDatumField(gdtDatums),
+      })
+      onPersistGdt?.([...(persistedGdtFrames ?? []), frame])
+      toast('ok', `${GDT_CHARACTERISTIC_LABELS[gdtCharacteristic]} frame added.`)
+    },
+    [
+      gdtControlled,
+      gdtCharacteristic,
+      gdtTolerance,
+      gdtDatums,
+      onPersistGdt,
+      persistedGdtFrames,
+      toast,
+    ]
+  )
+
+  /**
+   * Run a detail (crop) view from a centre + radius via `cad.detailDrawing`. The
+   * sidecar projects the parent ONCE, crops the circular window, magnifies it by
+   * `detailScale`, and stamps the escaped `detailLabel`. The resulting SVG is
+   * handed to the host `onDetail` callback (this component does not host the
+   * crop itself -- the host decides where it lands). No-op without a part handle
+   * or the bridge.
+   */
+  const runDetail = useCallback(
+    (center: { readonly x: number; readonly y: number }, radiusMm: number): void => {
+      if (partHandle === null) return
+      if (!(radiusMm > 0)) {
+        toast('warn', 'Detail radius must be greater than zero -- click farther from the centre.')
+        return
+      }
+      const bridge = readDrawingBridge()
+      if (!bridge.detailDrawing) {
+        toast('err', 'Detail-view bridge not available -- sidecar handler pending.')
+        return
+      }
+      const scale = Number.isFinite(detailScale) && detailScale > 0 ? detailScale : 2
+      void (async () => {
+        try {
+          const res = await bridge.detailDrawing!({
+            handle: partHandle,
+            view: activeView,
+            center: { x: center.x, y: center.y },
+            radiusMm,
+            scale,
+            // Operator free-text; escaped sidecar-side (Safety Rule 4).
+            label: detailLabel,
+          })
+          if (!res.ok) {
+            const detail = res.hint ? ` -- ${res.hint}` : ''
+            toast('err', `Detail view failed: ${res.error}${detail}`)
+            return
+          }
+          const nextSvg = res.result.svg
+          if (typeof nextSvg === 'string' && nextSvg.length > 0) {
+            onDetail?.({ svg: nextSvg, center: { x: center.x, y: center.y }, radiusMm, label: detailLabel })
+            toast('ok', `Detail view created (${scale}:1).`)
+          }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          toast('err', `Detail view threw: ${message}`)
+        }
+      })()
+    },
+    [partHandle, activeView, detailScale, detailLabel, onDetail, toast]
+  )
+
   // -- Pointer handlers -----------------------------------------------------
 
   const handlePointerMove = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>): void => {
-      if (placementState === null) {
+      // Hover-snap feedback is active during dimension placement OR a GD&T /
+      // detail tool (all reuse the same anchored-snap machinery).
+      if (placementState === null && toolMode === null) {
         setHoveredSnap(null)
         return
       }
       const { snap } = resolveCursorSvg(e.clientX, e.clientY)
       setHoveredSnap(snap)
     },
-    [placementState, resolveCursorSvg]
+    [placementState, toolMode, resolveCursorSvg]
   )
 
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>): void => {
-      if (placementState === null) return
       if (e.button !== 0) return
       const { svgCoord, snap, sourceId } = resolveCursorSvg(e.clientX, e.clientY)
       const clickSvg = snap ?? svgCoord
+
+      // -- GD&T / detail tool clicks (mutually exclusive with dimension placement).
+      if (toolMode !== null) {
+        if (toolMode.tool === 'gdt') {
+          // One-click anchored placement.
+          const resolvedClick: ResolvedClick = {
+            point: { x: clickSvg.x, y: clickSvg.y },
+            sourceId,
+          }
+          setToolMode(null)
+          setHoveredSnap(null)
+          commitGdtFrame(resolvedClick)
+          return
+        }
+        // detail: two clicks -- centre, then a point defining the radius.
+        if (toolMode.step === 0) {
+          setToolMode({ tool: 'detail', step: 1, center: { x: clickSvg.x, y: clickSvg.y } })
+          return
+        }
+        const center = toolMode.center
+        const radiusMm = Math.hypot(clickSvg.x - center.x, clickSvg.y - center.y)
+        setToolMode(null)
+        setHoveredSnap(null)
+        runDetail(center, radiusMm)
+        return
+      }
+
+      // -- Dimension placement (legacy two-click machine).
+      if (placementState === null) return
       const resolvedClick: ResolvedClick = {
         point: { x: clickSvg.x, y: clickSvg.y },
         sourceId,
@@ -824,16 +1141,40 @@ export function DrawingView({
         commitPlacement(completed.kind, clicks)
       }
     },
-    [placementState, resolveCursorSvg, commitPlacement]
+    [placementState, toolMode, resolveCursorSvg, commitPlacement, commitGdtFrame, runDetail]
   )
 
   /**
-   * Start interactive placement for the given kind.
+   * Start interactive dimension placement for the given kind. Cancels any active
+   * GD&T / detail tool so a click is never ambiguous between the two pipelines.
    */
   const startPlacement = useCallback((kind: DrawingDimensionKind): void => {
+    setToolMode(null)
     setPlacementState(startDimensionPlacement(kind))
     clickHistoryRef.current = []
     setHoveredSnap(null)
+  }, [])
+
+  /**
+   * Start the GD&T one-click anchored placement. Cancels any dimension placement.
+   * Toggling the active GD&T tool off returns to idle.
+   */
+  const startGdt = useCallback((): void => {
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) => (prev !== null && prev.tool === 'gdt' ? null : { tool: 'gdt' }))
+  }, [])
+
+  /**
+   * Start the Detail two-click (centre → radius) tool. Cancels any dimension
+   * placement. Toggling the active Detail tool off returns to idle.
+   */
+  const startDetail = useCallback((): void => {
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) => (prev !== null && prev.tool === 'detail' ? null : { tool: 'detail', step: 0 }))
   }, [])
 
   const clearDimensions = useCallback((): void => {
@@ -846,6 +1187,13 @@ export function DrawingView({
     clickHistoryRef.current = []
     setHoveredSnap(null)
   }, [controlled, onPersistDimensions])
+
+  /** Remove every GD&T frame overlay (controlled mode only). */
+  const clearGdt = useCallback((): void => {
+    onPersistGdt?.([])
+    setToolMode(null)
+    setHoveredSnap(null)
+  }, [onPersistGdt])
 
   const toggleSection = useCallback((): void => {
     setSectionEnabled((prev) => !prev)
@@ -927,6 +1275,18 @@ export function DrawingView({
     return dimensions
   }, [controlled, persistedDimensions, dimensions])
 
+  /**
+   * The GD&T frame specs composed onto the projection through `cad.annotateGdt`.
+   * Derived from the persisted, anchored frames (drawn from each anchor's
+   * refreshed `cachedPoint`). Datums / label flow through verbatim -- the sidecar
+   * escapes them (Safety Rule 4). Memoized so the projection effect doesn't
+   * re-fire on every parent render. Empty when no persisted frames.
+   */
+  const gdtSpecs = useMemo<GdtAnnotateFrame[]>(() => {
+    if (persistedGdtFrames === undefined || persistedGdtFrames.length === 0) return []
+    return gdtFramesToSpecs(persistedGdtFrames)
+  }, [persistedGdtFrames])
+
   // Re-project whenever `partHandle` or the active view changes.
   useEffect(() => {
     if (previewSvg !== undefined) {
@@ -956,6 +1316,9 @@ export function DrawingView({
             handle: partHandle,
             view: activeView,
             plane: sectionPlane,
+            // Pass the operator label through verbatim; the sidecar normalizes +
+            // entity-escapes it (Safety Rule 4). Blank falls back to "A-A".
+            label: sectionLabel,
           })
           if (cancelled) return
           if (!res.ok) {
@@ -1027,6 +1390,23 @@ export function DrawingView({
           }
         }
 
+        // Stage 4: compose GD&T feature control frames. Pure SVG composition --
+        // the sidecar renders the supplied frames verbatim and entity-escapes
+        // every datum cell + the optional label before injection (Safety Rule 4).
+        if (svgText !== null && gdtSpecs.length > 0 && bridge.annotateGdt) {
+          const res = await bridge.annotateGdt({
+            svg: svgText,
+            frames: gdtSpecs,
+          })
+          if (cancelled) return
+          if (res.ok) {
+            svgText = res.result.svg
+          } else {
+            // Non-fatal: keep the (un-annotated) drawing usable, warn the operator.
+            toast('warn', `GD&T overlay failed: ${res.error}`)
+          }
+        }
+
         setSvg(svgText)
       } catch (e) {
         if (cancelled) return
@@ -1047,7 +1427,9 @@ export function DrawingView({
     previewSvg,
     sectionEnabled,
     sectionPlane,
+    sectionLabel,
     dimensionsRef,
+    gdtSpecs,
     titleBlock,
     toast,
   ])
@@ -1150,6 +1532,32 @@ export function DrawingView({
     }
   }, [geometryLoaded, freshSnapPoints, persistedDimensions, onPersistDimensions])
 
+  // -- CAD V1.5 GD&T -- re-anchor persisted frames against fresh geometry ----
+  //
+  // Mirror of the dimension re-anchor pass: whenever a fresh projection lands or
+  // the persisted frame list changes, re-resolve every frame's anchor (refresh
+  // its cachedPoint + placement, badge a vanished anchor `dangling`). Push the
+  // refreshed list up only when a frame actually moved (deep-equality guard) so
+  // a placement→re-render→re-resolve cycle converges instead of looping.
+  useEffect(() => {
+    if (persistedGdtFrames === undefined) return
+    if (!geometryLoaded) {
+      setGdtDanglingIds(new Set())
+      return
+    }
+    const { frames: reanchored, danglingIds: nextDangling } = reanchorGdtFrames(
+      persistedGdtFrames,
+      freshSnapPoints,
+    )
+    setGdtDanglingIds(nextDangling)
+    if (
+      onPersistGdt !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedGdtFrames)
+    ) {
+      onPersistGdt(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedGdtFrames, onPersistGdt])
+
   // -- Empty-state branch ---------------------------------------------------
   if (partHandle === null) {
     return (
@@ -1191,6 +1599,24 @@ export function DrawingView({
 
   /** Whether the BOM-table affordance should render. */
   const showBomTable = bomRows !== undefined && bomRows.length > 0
+
+  /** Persisted GD&T frame count (controlled mode). Drives the count readout + Clear. */
+  const gdtFrameCount = (persistedGdtFrames ?? []).length
+  /** How many GD&T frames are currently dangling. */
+  const gdtDanglingCount = gdtDanglingIds.size
+  /** Whether the GD&T one-click tool is armed. */
+  const gdtPlacing = toolMode !== null && toolMode.tool === 'gdt'
+  /** Whether the Detail tool is armed (either step). */
+  const detailPlacing = toolMode !== null && toolMode.tool === 'detail'
+
+  /** Status line for the GD&T / detail tool area. */
+  const toolStatusLabel: string | null = gdtPlacing
+    ? `Placing ${GDT_CHARACTERISTIC_LABELS[gdtCharacteristic]} frame -- click the feature`
+    : detailPlacing
+      ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
+        ? 'Detail view -- click the crop centre'
+        : 'Detail view -- click to set the crop radius'
+      : null
 
   return (
     <div className="design-drawing" data-testid="design-drawing-view">
@@ -1337,6 +1763,180 @@ export function DrawingView({
         )}
       </div>
 
+      {/* CAD V1.5 -- GD&T feature-control-frame toolbar */}
+      <div
+        className="design-drawing__gdt-toolbar"
+        role="toolbar"
+        aria-label="GD and T feature control frames"
+        data-testid="design-drawing-gdt-toolbar"
+      >
+        <div
+          className="design-drawing__gdt-group"
+          role="group"
+          aria-label="Place a feature control frame"
+        >
+          <label className="design-drawing__gdt-field">
+            Symbol:
+            <select
+              className="design-drawing__gdt-characteristic"
+              data-testid="design-drawing-gdt-characteristic"
+              value={gdtCharacteristic}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                const next = e.target.value as GdtCharacteristic
+                if ((GDT_CHARACTERISTIC_ORDER as readonly string[]).includes(next)) {
+                  setGdtCharacteristic(next)
+                }
+              }}
+            >
+              {GDT_CHARACTERISTIC_ORDER.map((c) => (
+                <option key={c} value={c}>
+                  {GDT_CHARACTERISTIC_LABELS[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="design-drawing__gdt-field">
+            Tol (mm):
+            <input
+              type="number"
+              className="design-drawing__gdt-tolerance"
+              data-testid="design-drawing-gdt-tolerance"
+              value={gdtTolerance}
+              min={0}
+              step={0.01}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const next = parseFloat(e.target.value)
+                if (Number.isFinite(next) && next >= 0) setGdtTolerance(next)
+              }}
+            />
+          </label>
+          <label className="design-drawing__gdt-field">
+            Datums:
+            <input
+              type="text"
+              className="design-drawing__gdt-datums"
+              data-testid="design-drawing-gdt-datums"
+              value={gdtDatums}
+              maxLength={40}
+              placeholder="A B C"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setGdtDatums(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className={
+              gdtPlacing
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-gdt-place"
+            aria-pressed={gdtPlacing}
+            onClick={startGdt}
+            title={
+              gdtControlled
+                ? 'Click, then click a feature to anchor a GD&T frame there'
+                : 'GD&T placement needs a persistence host'
+            }
+          >
+            {gdtPlacing ? 'Click feature...' : 'GD&T frame'}
+          </button>
+          {gdtFrameCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-gdt-clear"
+              onClick={clearGdt}
+              title="Remove every GD&T frame overlay"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div
+          className="design-drawing__gdt-count"
+          data-testid="design-drawing-gdt-count"
+          aria-live="polite"
+        >
+          {toolStatusLabel !== null && gdtPlacing
+            ? toolStatusLabel
+            : gdtFrameCount === 0
+              ? 'No GD&T frames'
+              : `${gdtFrameCount} GD&T frame${gdtFrameCount === 1 ? '' : 's'}`}
+        </div>
+        {gdtDanglingCount > 0 && (
+          <div
+            className="design-drawing__gdt-dangling"
+            data-testid="design-drawing-gdt-dangling"
+            role="status"
+            title="These frames lost their anchored feature on rebuild and are drawn from the last-known position."
+          >
+            {`${gdtDanglingCount} dangling`}
+          </div>
+        )}
+      </div>
+
+      {/* CAD V1.5 -- Detail (crop) view tool */}
+      {onDetail && (
+        <div
+          className="design-drawing__detail-toolbar"
+          role="toolbar"
+          aria-label="Detail view"
+          data-testid="design-drawing-detail-toolbar"
+        >
+          <button
+            type="button"
+            className={
+              detailPlacing
+                ? 'btn btn-primary design-drawing__detail-btn design-drawing__detail-btn--placing'
+                : 'btn btn-secondary design-drawing__detail-btn'
+            }
+            data-testid="design-drawing-detail-place"
+            aria-pressed={detailPlacing}
+            onClick={startDetail}
+            disabled={svg === null}
+            aria-disabled={svg === null}
+            title="Click a centre, then a point to set the crop radius for a magnified detail view"
+          >
+            {detailPlacing ? 'Click crop...' : 'Detail view'}
+          </button>
+          <label className="design-drawing__detail-field">
+            Scale:
+            <input
+              type="number"
+              className="design-drawing__detail-scale"
+              data-testid="design-drawing-detail-scale"
+              value={detailScale}
+              min={0.1}
+              step={0.5}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const next = parseFloat(e.target.value)
+                if (Number.isFinite(next) && next > 0) setDetailScale(next)
+              }}
+            />
+          </label>
+          <label className="design-drawing__detail-field">
+            Label:
+            <input
+              type="text"
+              className="design-drawing__detail-label"
+              data-testid="design-drawing-detail-label"
+              value={detailLabel}
+              maxLength={40}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setDetailLabel(e.target.value)}
+            />
+          </label>
+          {toolStatusLabel !== null && detailPlacing && (
+            <span
+              className="design-drawing__detail-status"
+              data-testid="design-drawing-detail-status"
+              aria-live="polite"
+            >
+              {toolStatusLabel}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* CAD V1.5 -- Sections toggle */}
       <div
         className="design-drawing__section-toolbar"
@@ -1395,6 +1995,19 @@ export function DrawingView({
                 }}
               />
             </label>
+            <label className="design-drawing__section-label">
+              Label:
+              <input
+                type="text"
+                className="design-drawing__section-label-input"
+                data-testid="design-drawing-section-label"
+                value={sectionLabel}
+                maxLength={24}
+                placeholder="A-A"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setSectionLabel(e.target.value)}
+                title="Cutting-plane label (e.g. A-A). Escaped before it reaches the drawing."
+              />
+            </label>
           </div>
         )}
       </div>
@@ -1411,12 +2024,12 @@ export function DrawingView({
           <div
             ref={svgHostRef}
             className={
-              placementState !== null
+              placementState !== null || toolMode !== null
                 ? 'design-drawing__svg-host design-drawing__svg-host--placing'
                 : 'design-drawing__svg-host'
             }
             data-testid="design-drawing-svg"
-            data-placement-active={placementState !== null ? 'true' : undefined}
+            data-placement-active={placementState !== null || toolMode !== null ? 'true' : undefined}
             // eslint-disable-next-line react/no-danger -- sidecar-trusted SVG; see file-header rationale
             dangerouslySetInnerHTML={{ __html: svg }}
             onPointerMove={handlePointerMove}
