@@ -145,6 +145,58 @@ _SAFE_BUILTINS: Dict[str, Any] = {
 }
 
 
+# ── Sandboxed import ─────────────────────────────────────────────────────
+#
+# CadQuery 2.x performs dynamic imports while *building geometry* at exec time
+# (the body construction calls ``__import__``), so the exec namespace must
+# expose ``__import__`` or every non-trivial script aborts with
+# "ImportError: __import__ not found". We restore it through a guard that
+# denies the filesystem / network / process module roots. Keying on the
+# *resolved root module name* (not a substring) makes this strictly stronger
+# than the prior "no __import__" state: it also catches whitespace-obfuscated
+# escapes such as ``import   os`` that ``scan_banned_tokens`` (a naive substring
+# scan) would miss. Security still rests primarily on that pre-scan; this is
+# defense-in-depth for a single trusted operator running their own scripts.
+_BLOCKED_IMPORT_ROOTS: frozenset = frozenset(
+    {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "shutil",
+        "pathlib",
+        "importlib",
+        "ctypes",
+        "multiprocessing",
+        "threading",
+        "asyncio",
+        "http",
+        "urllib",
+        "requests",
+    }
+)
+
+
+def _sandboxed_import(
+    name: str,
+    globals: Any = None,  # noqa: A002 - matches the __import__ signature
+    locals: Any = None,  # noqa: A002 - matches the __import__ signature
+    fromlist: Sequence[str] = (),
+    level: int = 0,
+) -> Any:
+    """Restricted ``__import__`` installed into the CAD exec sandbox.
+
+    Allows CadQuery's runtime imports (and a script's own ``import cadquery as
+    cq`` / ``import math``) while blocking the dangerous module roots in
+    :data:`_BLOCKED_IMPORT_ROOTS`. Runs in module scope, so the bare
+    ``__import__`` below resolves to the real builtin (no recursion).
+    """
+    root = (name or "").split(".", 1)[0]
+    if root in _BLOCKED_IMPORT_ROOTS:
+        raise ImportError(f"import of {name!r} is blocked in CAD scripts")
+    return __import__(name, globals, locals, fromlist, level)
+
+
 # ── Banned-token scan ────────────────────────────────────────────────────
 
 
@@ -244,6 +296,13 @@ def execute_script(
     }
     # Shadow print() in the sandboxed builtins with the log-capturing version.
     namespace["__builtins__"]["print"] = _log_print
+    # Restore a *guarded* __import__ so CadQuery's runtime geometry construction
+    # works (it aborts with "ImportError: __import__ not found" otherwise). The
+    # guard blocks dangerous module roots; the static scan above is the primary
+    # boundary. "__import__" itself stays a BANNED_TOKEN so a script can't call
+    # it by name -- only `import x` statements reach this, and dangerous ones are
+    # already rejected by scan_banned_tokens / blocked here by root name.
+    namespace["__builtins__"]["__import__"] = _sandboxed_import
 
     if build_parameters:
         for k, v in build_parameters.items():

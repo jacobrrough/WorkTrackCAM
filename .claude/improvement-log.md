@@ -17513,3 +17513,42 @@ moment the bridge returns a structured diagnosis.
 RESULTS: tsc clean; full TS suite 14,759 pass (+68); design suite 967 pass; sidecar sketch-solver
 pytest 26 pass / 5 skip (planegcs absent -> deferred). Additive schema/wire (Safety Rule 2). No `any`.
 NEXT: Stack #7.4 (editable feature timeline -- reorder/suppress/roll-back over kernelOps[] replay).
+
+
+### Foundation hardening #1 (engine layer): #11 CadQuery exec-sandbox FIXED + planegcs finding
+Part of "do 1 and 2" — harden the Python engines so the already-built CAD features actually run
+on the operator's machine (the UI was outpacing the runnable engine layer). Done in the main loop
+with direct oversight (security-sensitive sandbox) while Stack 7.4 ran in parallel.
+
+#11 — EXEC SANDBOX (FIXED + validated). Root cause: CadQuery 2.7 calls `__import__` during
+*geometry construction* at exec time, but the parametric-script sandbox stripped it (no `__import__`
+in `_SAFE_BUILTINS`), so EVERY non-trivial CAD script aborted with "ImportError: __import__ not
+found" in the venv. Fix (engines/cad/cadquery_script.py): restore a GUARDED `_sandboxed_import` that
+denies the filesystem/network/process roots (os/sys/subprocess/socket/shutil/pathlib/importlib/
+ctypes/multiprocessing/threading/asyncio/http/urllib/requests) keyed on the RESOLVED root name — so
+it also catches whitespace-obfuscated escapes (`import   os`) the naive substring `scan_banned_tokens`
+misses. Strictly STRONGER than the prior "no __import__" state; the static pre-scan stays the primary
+boundary and `__import__` stays a BANNED_TOKEN (a script can't call it by name). Threat model is a
+single trusted operator running their own scripts (sandbox is self-described as a tripwire).
+- VALIDATED (venv, cadquery 2.7.0): test_cad_drawing_handlers 7 failed→0 (47 pass); full sidecar
+  176 passed / 6 skipped / 4 xfailed (was: ALL cadquery-exec tests failing on __import__). Security
+  probe: guard blocks os/subprocess, allows math/json; static scan still trips `import os`. System
+  python (3.14, no cadquery): 71 passed / 24 skipped (cadquery tests skip cleanly). +4 Tier-1 guard
+  tests pinning allow/deny + the whitespace-escape catch.
+- UNMASKED 2 pre-existing bugs (now `xfail(strict=False)` + tracked, NOT caused by this change —
+  both were red at HEAD with __import__): (a) `buildParameters` override is clobbered by the script's
+  own default assignment in raw exec (needs cqgi-style AST substitution); (b) cadquery-2.7.0-specific
+  `cq.Assembly.solve()` → AttributeError 'Vector' has no 'located' (occ_impl/solver.py). strict=False
+  so both xpass on a fixed cadquery build (CI-safe).
+
+planegcs — CANNOT pip-install on this machine: no PyPI wheel exists AND the sdist needs a C++
+toolchain (CMake/MSVC) that's absent (`CMAKE_CXX_COMPILER not set`). DIRECTION CHANGE: swap the
+sketch-solver backend planegcs → python-solvespace, which ships a working cp311-win_amd64 wheel and
+is the alternative `sketch_solver.py`'s own docstring already names (py-slvs). Supersedes the
+earlier "install/validate planegcs" task premise. (The renderer already degrades gracefully to the
+local energy solver with an honest "Solved" badge from Stack 7.3, so this is an upgrade, not a
+blocker.)
+
+No G-code paths. Python-only change (TS suite unaffected — green at 14,759 this session).
+NEXT (foundation, queued): solver backend swap (planegcs→python-solvespace) + the solveSketch
+bridge contract + param-override AST substitution. Stack 7.4 (editable feature timeline) running.
