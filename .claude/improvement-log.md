@@ -17630,3 +17630,34 @@ solver contract; a lenient older build merely hid it. The Shape-based code is co
 No G-code paths. Python-only (TS suite unaffected). Both fixes pin via the now-passing happy-path /
 round-trip tests. NEXT: resume parity stacks (each builds + wires its tool); Stack 5 (assembly mates)
 is now unblocked. (Stack 7.4-W — wiring the feature timeline into the shell — running in parallel.)
+
+
+### Stack #7.4-W (agent-orchestrated): WIRE the feature timeline into the running shell
+First application of the user's new rule — "after a tool is made it gets wired." Stack 7.4 built the
+editable kernel-op timeline but it was UNREACHABLE (DesignSessionProvider mounted nowhere). This stack
+makes it live. Workflow (Map -> Wire -> Verify, 3 agents); main loop re-verified.
+
+- `src/renderer/app/WorkspaceHost.tsx`: mount DesignSessionProvider around the design/assemble/drawings
+  routes (the new-shell forward path, __APP_SHELL__='next'), fed by useProjectSession().projectDir.
+  INERT on CAD-first boot: projectDir==null -> the provider's load effect early-returns with ZERO IPC,
+  features stays null, timeline doesn't render (no boot regression).
+- NEW `src/renderer/app/DesignWorkspaceHost.tsx`: the only new-shell code that reads useDesignSession();
+  maps session -> DesignWorkspace props 1:1 (kernelOps/rolledBackTo + move/reorder/suppress/setRollback/
+  clearRollback). Kept in app/ so the provider's three/STLLoader import graph stays out of DesignWorkspace.
+- `src/renderer/design/DesignSessionContext.tsx`: additive `export const DesignSessionContext` (raw
+  context) so node-env render-pins can inject a session value (the real provider derives it async from fab).
+- NEW render-pin test: KernelTimeline RENDERS when the session has kernel ops (reachable), ABSENT with no
+  session (CAD-first boot) and with empty kernelOps.
+
+VERIFY (adversarial): reachability CONFIRMED by tracing the LIVE path (WorkspaceHost -> DesignWorkspaceHost
+-> DesignWorkspace -> FeatureTree -> KernelTimeline), not just the test; no boot regression; legacy ShopApp
++ all pins intact; backward-compatible (no required new props); typecheck clean. B1 (flagged an "engine
+change") was the concurrent cadquery fix bleeding into the shared working tree — already committed
+separately (e639484); FALSE POSITIVE for this review. R2 (LOW): the render-pin proves prop threading, not
+the real provider's async featuresLoad -> kernelOps population (verified by code-reading; full end-to-end
+needs an Electron smoke). DesignWorkspace stays pure/prop-driven, so the legacy path is untouched.
+
+RESULTS: tsc clean; app+design suites 1041 pass; full TS suite 14,840 pass; renderer-only (no engine/
+schema/G-code). The Stack-7.4 feature timeline + the older kernel-op editors are now REACHABLE in the
+running Design workspace. NEXT: Parity Stack 5 (assembly mates — unblocked by the cadquery assembly-solve
+fix), built AND wired in one stack.

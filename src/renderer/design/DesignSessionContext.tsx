@@ -142,6 +142,15 @@ export type DesignSessionValue = {
 
 const Ctx = createContext<DesignSessionValue | null>(null)
 
+/**
+ * Raw context object. Exported ONLY so render-pin tests can mount a host that
+ * calls `useDesignSession()` with a hand-built session value (the real
+ * `DesignSessionProvider` derives its value asynchronously from `fab`, which a
+ * synchronous `renderToStaticMarkup` cannot flush). Production code must use
+ * `DesignSessionProvider` — never wrap `Ctx.Provider` directly.
+ */
+export const DesignSessionContext = Ctx
+
 export function useDesignSession(): DesignSessionValue {
   const v = useContext(Ctx)
   if (!v) throw new Error('useDesignSession outside provider')
