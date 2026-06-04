@@ -53,6 +53,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type JSX,
 } from 'react'
@@ -135,6 +136,23 @@ export interface AssemblyViewProps {
    * `initialSelection` pattern from DesignWorkspace.
    */
   readonly initialSelectedPartId?: string | null
+  /**
+   * CAD V1 mate-wiring: report the opaque assembly handle produced by the
+   * most recent `cad.createAssembly` round-trip back up to the host. Fires
+   * with the new handle string on a successful build, and with `null` when
+   * the assembly is emptied or the build fails (so a stale handle never
+   * survives a part removal). Optional — when omitted the AssemblyView's
+   * build effect is unchanged (every existing pin holds); when wired, the
+   * host (DesignWorkspace) can thread the handle into the
+   * {@link AssemblyMatePanel} so the operator can actually solve a mate.
+   *
+   * Why surface it here instead of having the host call createAssembly
+   * itself? The build effect already runs inside this component (keyed on
+   * the parts hash so it stays idle between unrelated renders); duplicating
+   * that round-trip in the host would double the sidecar calls. Reporting
+   * the handle keeps a single build path.
+   */
+  readonly onAssemblyHandle?: (handle: string | null) => void
   // ── CAD V1.5 mate constraints (additive surface) ─────────────────────
   /**
    * Source-of-truth mate list. Owned by the host (typically
@@ -353,6 +371,7 @@ export function AssemblyView({
   onRemovePart,
   onToast,
   initialSelectedPartId = null,
+  onAssemblyHandle,
   mates,
   onAddMate,
   onRemoveMate,
@@ -399,6 +418,16 @@ export function AssemblyView({
     [onToast],
   )
 
+  // Stable ref to the handle-report callback so the build effect can notify the
+  // host WITHOUT adding `onAssemblyHandle` to the effect deps (callbacks are not
+  // referentially stable, and re-running the build on every render would thrash
+  // the sidecar). The ref is refreshed each render; the effect reads `.current`.
+  const onAssemblyHandleRef = useRef(onAssemblyHandle)
+  onAssemblyHandleRef.current = onAssemblyHandle
+  const reportAssemblyHandle = useCallback((handle: string | null): void => {
+    onAssemblyHandleRef.current?.(handle)
+  }, [])
+
   // Rebuild assembly handle + tessellation whenever the parts list changes.
   // Effect keyed by the stable hash (not the array reference) so a render
   // that re-creates the parts array without changing membership does not
@@ -408,6 +437,8 @@ export function AssemblyView({
     if (parts.length === 0) {
       setTessellation(null)
       setError(null)
+      // No parts → no assembly → drop any stale handle the host was holding.
+      reportAssemblyHandle(null)
       return undefined
     }
     let cancelled = false
@@ -416,6 +447,7 @@ export function AssemblyView({
       // Sibling agents own these bridges. Render-correct fallback so the
       // empty-state path still ships even when the wire isn't there yet.
       setError('Assembly bridge not available — sidecar handlers pending.')
+      reportAssemblyHandle(null)
       return undefined
     }
     setBusy(true)
@@ -425,6 +457,12 @@ export function AssemblyView({
         const createRes = await bridges.createAssembly!({
           parts: parts.map((p) => ({
             handle: p.handle,
+            // Send the renderer part id as the assembly child name so a mate's
+            // part1Id/part2Id (which the panel emits as AssemblyPart.id) match
+            // the sidecar child names (else _apply_mate_constraint rejects the
+            // mate as "not a child of this assembly"). build_assembly_from_parts
+            // honours ``name`` and only falls back to ``part_<index>`` when absent.
+            name: p.id,
             transform: p.transform,
           })),
         })
@@ -434,8 +472,14 @@ export function AssemblyView({
           setError(`Assembly build failed: ${createRes.error}${detail}`)
           toast('err', `Assembly build failed: ${createRes.error}`)
           setTessellation(null)
+          reportAssemblyHandle(null)
           return
         }
+        // Surface the freshly-built handle to the host as soon as the
+        // assembly exists — even before tessellation — so the mate panel
+        // can enable Solve. Tessellation is only the preview; the handle is
+        // what `cad.add_assembly_mate` operates on.
+        reportAssemblyHandle(createRes.result.handle)
         const tessRes = await bridges.tessellateAssembly!({
           handle: createRes.result.handle,
         })
@@ -454,6 +498,9 @@ export function AssemblyView({
         setError(`Assembly build threw: ${message}`)
         toast('err', `Assembly build threw: ${message}`)
         setTessellation(null)
+        // Build threw — the assembly state is indeterminate, so the host
+        // must not keep a handle it can no longer trust.
+        reportAssemblyHandle(null)
       } finally {
         if (!cancelled) setBusy(false)
       }
@@ -463,9 +510,10 @@ export function AssemblyView({
     }
     // key is the load-bearing dependency — the parts array reference can
     // change between renders without member changes, but the stable hash
-    // only changes when add / remove fires.
+    // only changes when add / remove fires. reportAssemblyHandle is stable
+    // (a useCallback over a ref) so it never re-triggers the build.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, toast])
+  }, [key, toast, reportAssemblyHandle])
 
   // ── Selection plumbing (toolbar Remove button) ────────────────────────────
   const handleRowClick = useCallback((id: string): void => {

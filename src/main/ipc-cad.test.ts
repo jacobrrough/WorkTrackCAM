@@ -1045,25 +1045,25 @@ describe('validateCreateAssemblyPayload', () => {
     if (!r.ok) expect(r.error).toBe('invalid_payload')
   })
 
-  it('rejects missing assembly', () => {
+  it('rejects missing parts', () => {
     const r = validateCreateAssemblyPayload({}) as CadCreateAssemblyResponse
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toBe('missing_assembly')
+    if (!r.ok) expect(r.error).toBe('missing_parts')
   })
 
-  it('rejects an array assembly (must be an object)', () => {
-    const r = validateCreateAssemblyPayload({ assembly: [] }) as CadCreateAssemblyResponse
+  it('rejects an empty parts array', () => {
+    const r = validateCreateAssemblyPayload({ parts: [] }) as CadCreateAssemblyResponse
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toBe('missing_assembly')
+    if (!r.ok) expect(r.error).toBe('missing_parts')
   })
 
-  it('accepts a minimal valid payload', () => {
+  it('accepts a minimal valid payload (parts list)', () => {
     const r = validateCreateAssemblyPayload({
-      assembly: { rootName: 'Assembly', instances: [], parts: [] }
+      parts: [{ handle: 'script:abc', name: 'p0', transform: 'identity' }]
     })
     expect('payload' in r).toBe(true)
     if ('payload' in r) {
-      expect(r.payload.assembly.rootName).toBe('Assembly')
+      expect(r.payload.parts.length).toBe(1)
     }
   })
 })
@@ -1318,12 +1318,12 @@ describe('coerceProjectDrawingResult', () => {
 // ── End-to-end handler behavior for the 5 new channels ─────────────────────
 
 describe('cad:createAssembly handler', () => {
-  it('short-circuits on missing assembly BEFORE spawning the bridge', async () => {
+  it('short-circuits on missing parts BEFORE spawning the bridge', async () => {
     registerCadIpc(createMockContext())
     const handler = handlers.get('cad:createAssembly')!
     const r = (await handler({}, {})) as CadCreateAssemblyResponse
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toBe('missing_assembly')
+    if (!r.ok) expect(r.error).toBe('missing_parts')
     expect(bridgeStartMock).not.toHaveBeenCalled()
   })
 
@@ -1335,8 +1335,8 @@ describe('cad:createAssembly handler', () => {
     })
     registerCadIpc(createMockContext())
     const handler = handlers.get('cad:createAssembly')!
-    const assembly = { rootName: 'Robot', instances: [], parts: [] }
-    const r = (await handler({}, { assembly })) as CadCreateAssemblyResponse
+    const parts = [{ handle: 'script:a', name: 'p0', transform: 'identity' }]
+    const r = (await handler({}, { parts })) as CadCreateAssemblyResponse
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(r.result.handle).toBe('asm-1')
@@ -1344,7 +1344,7 @@ describe('cad:createAssembly handler', () => {
     }
     const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
     expect(methodArg).toBe('cad.create_assembly')
-    expect(paramsArg).toEqual({ assembly })
+    expect(paramsArg).toEqual({ parts })
   })
 
   it('translates sidecar invalid_assembly error envelopes', async () => {
@@ -1355,7 +1355,10 @@ describe('cad:createAssembly handler', () => {
     })
     registerCadIpc(createMockContext())
     const handler = handlers.get('cad:createAssembly')!
-    const r = (await handler({}, { assembly: {} })) as CadCreateAssemblyResponse
+    const r = (await handler(
+      {},
+      { parts: [{ handle: 'script:a', transform: 'identity' }] }
+    )) as CadCreateAssemblyResponse
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toBe('invalid_assembly')
     expect(bridgeStopMock).toHaveBeenCalled()
@@ -1365,7 +1368,10 @@ describe('cad:createAssembly handler', () => {
     bridgeCallMock.mockResolvedValueOnce({ bbox: { min: [0, 0, 0], max: [1, 1, 1] } }) // no handle
     registerCadIpc(createMockContext())
     const handler = handlers.get('cad:createAssembly')!
-    const r = (await handler({}, { assembly: {} })) as CadCreateAssemblyResponse
+    const r = (await handler(
+      {},
+      { parts: [{ handle: 'script:a', transform: 'identity' }] }
+    )) as CadCreateAssemblyResponse
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toBe('sidecar_protocol_error')
   })

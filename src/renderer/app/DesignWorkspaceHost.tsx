@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
-import DesignWorkspace from '../design/DesignWorkspace'
+import DesignWorkspace, { type DesignViewMode } from '../design/DesignWorkspace'
+import type { SolvedMate } from '../design/AssemblyMatePanel'
 import { useDesignSession } from '../design/DesignSessionContext'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 
@@ -26,12 +27,30 @@ export function DesignWorkspaceHost({
   initialScript,
   onSave,
   onSendToCam,
-  onToast
+  onToast,
+  initialViewMode,
+  onMateAdded
 }: {
   readonly initialScript: string
   readonly onSave: (script: string) => void
   readonly onSendToCam: (payload: { readonly stlPath: string; readonly mesh: CadExecuteScriptMesh }) => void
   readonly onToast: (kind: 'ok' | 'err' | 'warn', message: string) => void
+  /**
+   * Which CAD view-mode tab the workspace should open on. The `WorkspaceHost`
+   * maps the active route here (`assemble` → `'assembly'`, `drawings` →
+   * `'drawing'`, `design` → `'part'`) so the operator lands on the right tab
+   * instead of always seeing the Part editor. Optional — when omitted
+   * DesignWorkspace falls back to its own `'part'` default (preserves the
+   * legacy ShopApp path + every existing render-pin).
+   */
+  readonly initialViewMode?: DesignViewMode
+  /**
+   * Forwarded to DesignWorkspace's {@link AssemblyMatePanel}. Fires after a
+   * mate solves. Optional — the new shell currently wires this to a toast
+   * acknowledgment; durable Model-C persistence into `assembly.json` is a
+   * follow-up.
+   */
+  readonly onMateAdded?: (mate: SolvedMate) => void
 }): ReactElement {
   const session = useDesignSession()
 
@@ -41,6 +60,8 @@ export function DesignWorkspaceHost({
       onSave={onSave}
       onSendToCam={onSendToCam}
       onToast={onToast}
+      initialViewMode={initialViewMode}
+      onMateAdded={onMateAdded}
       kernelOps={session.features?.kernelOps}
       rolledBackTo={session.features?.rolledBackTo}
       onKernelMove={(index, delta) => {

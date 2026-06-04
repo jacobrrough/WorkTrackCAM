@@ -351,8 +351,13 @@ export type CadSolveSketchPayload = {
  * ``CadSolveSketchPayload`` comment.
  */
 export type CadCreateAssemblyPayload = {
-  /** Full assembly tree -- typically the persisted ``AssemblyFile`` blob. */
-  assembly: Record<string, unknown>
+  /**
+   * Parts to wrap into an assembly -- each entry a body handle + optional
+   * ``name`` + 4x4 ``transform`` (matches the renderer's ``AssemblyView`` call
+   * and the sidecar's ``build_assembly_from_parts``). Permissive at the IPC
+   * boundary; the sidecar owns deep validation.
+   */
+  parts: ReadonlyArray<Record<string, unknown>>
 }
 
 /**
@@ -680,20 +685,20 @@ export function validateCreateAssemblyPayload(
     return {
       ok: false,
       error: 'invalid_payload',
-      hint: 'cad:createAssembly requires { assembly }',
+      hint: 'cad:createAssembly requires { parts }',
     }
   }
-  const p = raw as { assembly?: unknown }
-  if (!p.assembly || typeof p.assembly !== 'object' || Array.isArray(p.assembly)) {
+  const p = raw as { parts?: unknown }
+  if (!Array.isArray(p.parts) || p.parts.length === 0) {
     return {
       ok: false,
-      error: 'missing_assembly',
-      hint: 'assembly must be an object describing the assembly tree (instances / parts / rootName)',
+      error: 'missing_parts',
+      hint: 'parts must be a non-empty array of { handle, transform?, name? } entries',
     }
   }
   return {
     ok: true,
-    payload: { assembly: p.assembly as Record<string, unknown> },
+    payload: { parts: p.parts as ReadonlyArray<Record<string, unknown>> },
   }
 }
 
@@ -2878,7 +2883,7 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
       // can stomach in the BUILD 2 UI.
       const r = await callSidecar<Record<string, unknown>>(
         'cad.create_assembly',
-        { assembly: v.payload.assembly },
+        { parts: v.payload.parts },
         pyCtx,
         120_000,
       )

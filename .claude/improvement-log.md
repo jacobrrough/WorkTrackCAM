@@ -17661,3 +17661,37 @@ RESULTS: tsc clean; app+design suites 1041 pass; full TS suite 14,840 pass; rend
 schema/G-code). The Stack-7.4 feature timeline + the older kernel-op editors are now REACHABLE in the
 running Design workspace. NEXT: Parity Stack 5 (assembly mates — unblocked by the cadquery assembly-solve
 fix), built AND wired in one stack.
+
+
+### Stack #5 (agent-orchestrated): Assembly mates — built, WIRED, and made FUNCTIONAL
+Workflow (Map -> Build -> Wire -> Verify, 4 agents); main loop fixed the two blockers Verify caught.
+First stack to bake wiring in from the start (per the build+wire rule). Unblocked by the cadquery
+assembly-solve fix (e639484).
+
+BUILT (additive, no existing files reshaped):
+- NEW `src/renderer/design/AssemblyMatePanel.tsx`: V1 mate-creation surface — pick 2 part instances +
+  kind (point/axis/plane) + the per-kind 3-vector feature inputs, "Solve mate" calls
+  window.fab.cad.addAssemblyMate, renders solved/over-constrained/error in the existing solver-badge.
+- NEW pure `src/renderer/design/assembly-mate-form.ts`: buildAddMateRequest (form -> wire, validates
+  distinct parts / finite tuples / non-zero axis+normal), mateOutcomeToBadge, narrowAddMateResponse.
+- The cad.add_assembly_mate IPC chain was ALREADY fully wired (preload->ipc->sidecar) — no gaps.
+WIRED (reachable on the live 'assemble' route): AssemblyView reports its createAssembly handle up;
+DesignWorkspace renders AssemblyMatePanel in the assembly tab when parts exist; DesignWorkspaceHost
+threads it. Inert with no assembly (Solve disabled while handle null -> no spurious IPC).
+
+VERIFY caught TWO BLOCKERS that made the feature dead end-to-end (same class as the dead solveSketch
+bridge) — main loop FIXED both:
+- BLOCKER 1 (createAssembly contract split): renderer sent {parts}, but ipc-cad's validator required
+  {assembly} (rejected it) and the handler forwarded {assembly} while the sidecar reads {parts}. The
+  {assembly} rich-tree design was half-built + unused. FIXED: aligned the validator + CadCreateAssembly
+  Payload type + handler to {parts} (matching the renderer + sidecar). Updated the 5 pinning tests.
+- BLOCKER 2 (part-id <-> child-name mismatch): the mate form emits part1Id = AssemblyPart.id, but
+  AssemblyView passed NO name to createAssembly, so the sidecar defaulted child names to part_0/1 and
+  every mate was rejected. FIXED: AssemblyView now sends name: p.id (build_assembly_from_parts honours
+  it). Validated end-to-end by the sidecar test that does create_assembly(custom names) -> add_mate
+  (matching ids) -> solve (passes).
+
+RESULTS: tsc clean; full TS suite 14,904 pass (+64); venv sidecar mate tests pass (point/axis/plane
+solve); no G-code; no engine change in THIS commit (the cadquery Shape fix shipped in e639484);
+additive; no `any`. Assembly mates are now reachable AND functional. NEXT: continue parity stacks
+(each built + wired); next per plan order is Stack 6 (rest machining — CAM, gcode-safety gated).

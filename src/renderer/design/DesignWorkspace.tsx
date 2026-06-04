@@ -58,6 +58,7 @@ import {
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
+import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import { DrawingView } from './DrawingView'
 import type {
   DrawingDimension,
@@ -278,6 +279,24 @@ export interface DesignWorkspaceProps {
    */
   readonly initialAssemblyParts?: readonly AssemblyPart[]
   /**
+   * CAD V1 mate-wiring — render-pin escape hatch that seeds the assembly
+   * handle the {@link AssemblyMatePanel} threads into
+   * `cad.add_assembly_mate`. In the running shell this is `null` on mount
+   * and gets populated when `AssemblyView`'s build effect reports a freshly
+   * built handle (via `onAssemblyHandle`). Tests seed it directly so a
+   * static render can assert the Solve button enables without flushing the
+   * async build effect.
+   */
+  readonly initialAssemblyHandle?: string | null
+  /**
+   * CAD V1 mate-wiring — fired after a mate solves successfully in the
+   * {@link AssemblyMatePanel}. The host (the new-shell `DesignWorkspaceHost`)
+   * persists the solved mate into the assembly's durable `mateConstraints`
+   * (Model C). Optional — when omitted the panel still solves and paints its
+   * badge, just without host-side persistence.
+   */
+  readonly onMateAdded?: (mate: SolvedMate) => void
+  /**
    * The editable kernel-op timeline for the active part
    * (`part/features.json` `kernelOps[]`). Optional pass-through: a host that
    * owns the DesignSessionContext threads the live array + edit callbacks here
@@ -331,6 +350,8 @@ export function DesignWorkspace({
   initialSelection = null,
   initialViewMode = 'part',
   initialAssemblyParts = [],
+  initialAssemblyHandle = null,
+  onMateAdded,
   kernelOps,
   rolledBackTo,
   onKernelMove,
@@ -357,6 +378,16 @@ export function DesignWorkspace({
    * `cad.tessellateAssembly` on every change.
    */
   const [assemblyParts, setAssemblyParts] = useState<readonly AssemblyPart[]>(initialAssemblyParts)
+  /**
+   * CAD V1 mate-wiring — the opaque assembly handle from the most recent
+   * `cad.createAssembly` round-trip. Lifted out of {@link AssemblyView}'s
+   * build effect (which reports it via `onAssemblyHandle`) so the
+   * {@link AssemblyMatePanel} can pass it to `cad.add_assembly_mate`. `null`
+   * until the first successful build, and reset to `null` when the assembly
+   * is emptied or a build fails — the panel's Solve button stays disabled
+   * with a hint while it is null.
+   */
+  const [assemblyHandle, setAssemblyHandle] = useState<string | null>(initialAssemblyHandle)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastTessellation, setLastTessellation] = useState<CadExecuteScriptResult | null>(null)
@@ -861,7 +892,7 @@ export function DesignWorkspace({
       <div className="design-workspace" data-testid="design-workspace">
         {renderViewTabBar()}
         <div
-          className="design-workspace__view-panel"
+          className="design-workspace__view-panel design-workspace__view-panel--assembly"
           role="tabpanel"
           id="design-workspace-panel-assembly"
           aria-labelledby={DESIGN_VIEW_TAB_TESTIDS.assembly}
@@ -870,8 +901,27 @@ export function DesignWorkspace({
             parts={assemblyParts}
             onAddPart={handleAddPartToAssembly}
             onRemovePart={handleRemoveAssemblyPart}
+            onAssemblyHandle={setAssemblyHandle}
             onToast={onToast}
           />
+          {/*
+            CAD V1 mate-creation surface. Only renders once the assembly has
+            at least one part (an empty assembly has nothing to mate, and the
+            AssemblyView itself shows its own empty-state in that case). The
+            panel's Solve button stays disabled until `assemblyHandle` is
+            non-null — i.e. until AssemblyView's build effect has produced a
+            real handle — so mounting it is inert (no spurious IPC) when the
+            assembly hasn't been built yet. This is the mount that makes the
+            mate surface REACHABLE on the live `assemble` route.
+          */}
+          {assemblyParts.length > 0 && (
+            <AssemblyMatePanel
+              parts={assemblyParts}
+              assemblyHandle={assemblyHandle}
+              onMateAdded={onMateAdded}
+              onToast={onToast}
+            />
+          )}
         </div>
       </div>
     )
