@@ -100,6 +100,7 @@ def _load_ocp() -> Dict[str, Any]:
         from OCP.BRepMesh import BRepMesh_IncrementalMesh  # noqa: PLC0415
         from OCP.BRepAdaptor import BRepAdaptor_Curve  # noqa: PLC0415
         from OCP.GCPnts import GCPnts_QuasiUniformDeflection  # noqa: PLC0415
+        from OCP.GeomAbs import GeomAbs_CurveType  # noqa: PLC0415
         from OCP.BRep import BRep_Tool  # noqa: PLC0415
         from OCP.TopLoc import TopLoc_Location  # noqa: PLC0415
         from OCP.TopExp import TopExp_Explorer  # noqa: PLC0415
@@ -128,6 +129,7 @@ def _load_ocp() -> Dict[str, Any]:
         "BRepMesh_IncrementalMesh": BRepMesh_IncrementalMesh,
         "BRepAdaptor_Curve": BRepAdaptor_Curve,
         "GCPnts_QuasiUniformDeflection": GCPnts_QuasiUniformDeflection,
+        "GeomAbs_CurveType": GeomAbs_CurveType,
         "BRep_Tool": BRep_Tool,
         "TopLoc_Location": TopLoc_Location,
         "TopExp_Explorer": TopExp_Explorer,

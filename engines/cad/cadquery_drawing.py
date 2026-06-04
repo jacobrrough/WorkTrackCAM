@@ -461,7 +461,7 @@ def _build_distance_dimension_svg(
         f"<text x=\"{mid[0]:.3f}\" y=\"{mid[1]:.3f}\" "
         "text-anchor=\"middle\" font-size=\"3.5\" "
         "stroke=\"none\" font-family=\"sans-serif\">"
-        f"{text}</text>"
+        f"{_xml_escape(text)}</text>"
         "</g>"
     )
 
@@ -497,7 +497,7 @@ def _build_radius_dimension_svg(
         f"<text x=\"{edge[0]:.3f}\" y=\"{edge[1]:.3f}\" "
         "text-anchor=\"start\" font-size=\"3.5\" "
         "stroke=\"none\" font-family=\"sans-serif\">"
-        f"{text}</text>"
+        f"{_xml_escape(text)}</text>"
         "</g>"
     )
 
@@ -557,7 +557,7 @@ def _build_angle_dimension_svg(
         f"<text x=\"{text_pos[0]:.3f}\" y=\"{text_pos[1]:.3f}\" "
         "text-anchor=\"middle\" font-size=\"3.5\" "
         "stroke=\"none\" fill=\"#1a73e8\" font-family=\"sans-serif\">"
-        f"{text}</text>"
+        f"{_xml_escape(text)}</text>"
         "</g>"
     )
 
@@ -1047,14 +1047,337 @@ def attach_title_block(svg_text: Any, metadata: Any) -> Dict[str, Any]:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# CAD V1.5 — BOM-table stamp (associative-dimension BOM surface).
+# ─────────────────────────────────────────────────────────────────────────
+#
+# :func:`drawing_bom_table` stamps a bill-of-materials table ``<g>`` into an
+# SVG. Pure SVG composition, exactly like :func:`attach_title_block`: the
+# caller passes the BOM rows the assembly model already computed; this helper
+# only formats them. It does NOT walk an assembly or recompute quantities.
+#
+# The projected-2D-geometry method (``cad.extract_drawing_geometry``) that used
+# to live here moved to its own module ``engines/cad/cadquery_drawing_geometry``
+# so it can run the real OCCT HLR projection (the same one ``getSVG`` uses) and
+# emit quantized-hash stable ids — a naive axis-drop projection here disagreed
+# with the SVG coordinate frame. ``ALLOWED_SNAP_KINDS`` stays as the shared
+# snap-kind vocabulary constant.
+#
+# Safety Rule 1 reminder: this helper is renderer-only. It does not emit G-code
+# or STL; no downstream CAM logic reads its output.
+
+
+# Snap-point kinds the renderer's drawing-snap resolver understands. Kept in
+# lock-step with ``CadDrawingSnapKind`` in ``src/shared/sidecar-protocol.ts``
+# and ``SnapPointKind`` in ``src/renderer/design/drawing-snap.ts``.
+ALLOWED_SNAP_KINDS: Tuple[str, ...] = (
+    "vertex",
+    "endpoint",
+    "midpoint",
+    "center",
+)
+
+
+# Columns the BOM table can render. ``item`` / ``partName`` / ``quantity`` are
+# always available; the rest render only when supplied on a row. The default
+# column set keeps the table compact for a typical drawing. Kept in lock-step
+# with ``V15_BOM_COLUMNS`` in ``src/main/ipc-cad.ts``.
+BOM_TABLE_COLUMNS: Tuple[str, ...] = (
+    "item",
+    "partName",
+    "quantity",
+    "partNumber",
+    "material",
+    "vendor",
+    "notes",
+)
+DEFAULT_BOM_COLUMNS: Tuple[str, ...] = ("item", "partName", "quantity")
+
+# Human-readable header per column key.
+_BOM_COLUMN_HEADERS: Dict[str, str] = {
+    "item": "#",
+    "partName": "Part",
+    "quantity": "Qty",
+    "partNumber": "Part No.",
+    "material": "Material",
+    "vendor": "Vendor",
+    "notes": "Notes",
+}
+
+
+def _xml_escape(value: str) -> str:
+    """Escape XML special chars so a cell value can't break the SVG markup."""
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def _validate_bom_columns(columns: Any) -> Tuple[str, ...]:
+    """Validate the optional ``columns`` list; default when absent."""
+    if columns is None:
+        return DEFAULT_BOM_COLUMNS
+    if not isinstance(columns, list):
+        raise _CadHandlerError(
+            "bad_params", "columns must be an array of column keys"
+        )
+    out: list[str] = []
+    for col in columns:
+        if col not in BOM_TABLE_COLUMNS:
+            raise _CadHandlerError(
+                "bad_params",
+                f"columns entries must be one of {sorted(BOM_TABLE_COLUMNS)}, "
+                f"got {col!r}",
+            )
+        if col not in out:
+            out.append(col)
+    if not out:
+        return DEFAULT_BOM_COLUMNS
+    return tuple(out)
+
+
+def _validate_bom_row(row: Any, index: int) -> Dict[str, Any]:
+    """Validate one BOM row dict; return a normalized copy.
+
+    Mirrors :func:`_validate_dimension_spec`'s posture — narrow, fail-fast on a
+    malformed cell so a typo at the IPC boundary surfaces as ``bad_params``.
+    The handler does NOT recompute quantities; it trusts the caller's values.
+    """
+    if not isinstance(row, dict):
+        raise _CadHandlerError(
+            "bad_params",
+            f"rows[{index}] must be an object, got {type(row).__name__}",
+        )
+    out: Dict[str, Any] = {}
+    # item — caller-assigned display index (string).
+    item = row.get("item", "")
+    if item is None:
+        item = ""
+    if not isinstance(item, (str, int)):
+        raise _CadHandlerError(
+            "bad_params", f"rows[{index}].item must be a string"
+        )
+    out["item"] = str(item)
+    # partName — required-ish (defaults to empty so a partial row still renders).
+    part_name = row.get("partName", "")
+    if part_name is None:
+        part_name = ""
+    if not isinstance(part_name, str):
+        raise _CadHandlerError(
+            "bad_params", f"rows[{index}].partName must be a string"
+        )
+    out["partName"] = part_name
+    # quantity — numeric; format as an integer when integer-valued.
+    qty_raw = row.get("quantity", 1)
+    if isinstance(qty_raw, bool) or not isinstance(qty_raw, (int, float)):
+        raise _CadHandlerError(
+            "bad_params", f"rows[{index}].quantity must be a number"
+        )
+    qty = float(qty_raw)
+    if not math.isfinite(qty):
+        raise _CadHandlerError(
+            "bad_params", f"rows[{index}].quantity must be finite"
+        )
+    out["quantity"] = qty
+    # Optional string columns.
+    for field in ("partNumber", "material", "vendor", "notes"):
+        raw = row.get(field)
+        if raw is None:
+            continue
+        if not isinstance(raw, str):
+            raise _CadHandlerError(
+                "bad_params",
+                f"rows[{index}].{field} must be a string when provided",
+            )
+        out[field] = raw
+    return out
+
+
+def _bom_cell_text(row: Dict[str, Any], column: str) -> str:
+    """Render one cell's text from a normalized BOM row."""
+    if column == "quantity":
+        return _format_number(row.get("quantity", 0.0))
+    value = row.get(column, "")
+    if not isinstance(value, str):
+        value = str(value)
+    # Cap long free-text so the cell stays inside the table column.
+    return value[:48]
+
+
+def _build_bom_table_svg(
+    rows: list[Dict[str, Any]],
+    columns: Tuple[str, ...],
+    title: str,
+    width: float,
+    height: float,
+) -> str:
+    """Build the SVG markup for a BOM table stamped at the bottom-left.
+
+    Pure composition (no CadQuery) — same approach as
+    :func:`_build_title_block_svg`. The table is anchored bottom-left so it
+    does not collide with the bottom-right title block; column widths are
+    fixed per-column so the renderer's CSS gets a stable layout.
+    """
+    # Fixed per-column widths (mm). Unknown columns fall back to 24 mm.
+    col_w = {
+        "item": 8.0,
+        "partName": 40.0,
+        "quantity": 10.0,
+        "partNumber": 24.0,
+        "material": 24.0,
+        "vendor": 24.0,
+        "notes": 40.0,
+    }
+    widths = [col_w.get(c, 24.0) for c in columns]
+    table_w = sum(widths)
+    row_h = 5.0
+    header_h = 5.0
+    title_h = 5.0 if title else 0.0
+    table_h = title_h + header_h + row_h * len(rows)
+    x = 5.0
+    y = height - table_h - 5.0
+
+    parts: list[str] = [
+        f"<g class=\"bom-table\" transform=\"translate({x:.3f},{y:.3f})\" "
+        "stroke=\"#1a1a1a\" stroke-width=\"0.3\" fill=\"none\" "
+        "font-family=\"sans-serif\">",
+        f"<rect width=\"{table_w:.3f}\" height=\"{table_h:.3f}\" />",
+    ]
+    cursor_y = 0.0
+    # Title row.
+    if title:
+        parts.append(
+            f"<text x=\"2\" y=\"{title_h * 0.7:.3f}\" font-size=\"3.2\" "
+            "stroke=\"none\" fill=\"#1a1a1a\" font-weight=\"bold\">"
+            f"{_xml_escape(title[:48])}</text>"
+        )
+        cursor_y += title_h
+        parts.append(
+            f"<line x1=\"0\" y1=\"{cursor_y:.3f}\" "
+            f"x2=\"{table_w:.3f}\" y2=\"{cursor_y:.3f}\" />"
+        )
+    # Header row.
+    cx = 0.0
+    for col, w in zip(columns, widths):
+        header = _BOM_COLUMN_HEADERS.get(col, col)
+        parts.append(
+            f"<text x=\"{cx + 1.5:.3f}\" y=\"{cursor_y + header_h * 0.7:.3f}\" "
+            "font-size=\"2.8\" stroke=\"none\" fill=\"#666\">"
+            f"{_xml_escape(header)}</text>"
+        )
+        cx += w
+        if cx < table_w - 1e-6:
+            parts.append(
+                f"<line x1=\"{cx:.3f}\" y1=\"{cursor_y:.3f}\" "
+                f"x2=\"{cx:.3f}\" y2=\"{table_h:.3f}\" />"
+            )
+    cursor_y += header_h
+    parts.append(
+        f"<line x1=\"0\" y1=\"{cursor_y:.3f}\" "
+        f"x2=\"{table_w:.3f}\" y2=\"{cursor_y:.3f}\" />"
+    )
+    # Data rows.
+    for row in rows:
+        cx = 0.0
+        for col, w in zip(columns, widths):
+            text = _bom_cell_text(row, col)
+            parts.append(
+                f"<text x=\"{cx + 1.5:.3f}\" "
+                f"y=\"{cursor_y + row_h * 0.7:.3f}\" font-size=\"3.0\" "
+                "stroke=\"none\" fill=\"#1a1a1a\">"
+                f"{_xml_escape(text)}</text>"
+            )
+            cx += w
+        cursor_y += row_h
+        if cursor_y < table_h - 1e-6:
+            parts.append(
+                f"<line x1=\"0\" y1=\"{cursor_y:.3f}\" "
+                f"x2=\"{table_w:.3f}\" y2=\"{cursor_y:.3f}\" />"
+            )
+    parts.append("</g>")
+    return "".join(parts)
+
+
+def drawing_bom_table(
+    svg_text: Any,
+    rows: Any,
+    columns: Any = None,
+    title: Any = None,
+) -> Dict[str, Any]:
+    """Stamp a BOM-table ``<g>`` into the bottom-left corner of an SVG.
+
+    Wire result (kept in lock-step with ``src/shared/sidecar-protocol.ts``
+    ``CadDrawingBomTableResult``)::
+
+        {
+          "svg":      str,   # input SVG + BOM-table layer
+          "bytes":    int,   # len(svg) after UTF-8 encode
+          "rowCount": int,   # number of rows rendered (== len(rows))
+        }
+
+    Pure SVG composition (like :func:`attach_title_block`): the ``rows`` are the
+    BOM lines the assembly model already provides — this helper formats them
+    verbatim and does NOT recompute quantities or roll up the tree. Idempotent
+    against an already-stamped SVG: when a ``class="bom-table"`` marker is
+    already present the function returns the SVG unchanged (the operator can
+    re-export without doubling the table).
+
+    Raises ``_CadHandlerError`` with ``bad_params`` for an empty SVG, a
+    non-array ``rows``, a malformed row, an unknown column key, or a
+    non-string title.
+    """
+    if not isinstance(svg_text, str) or not svg_text.strip():
+        raise _CadHandlerError(
+            "bad_params", "svg must be a non-empty SVG markup string"
+        )
+    if not isinstance(rows, list):
+        raise _CadHandlerError(
+            "bad_params", "rows must be an array (use [] for an empty table)"
+        )
+    cols = _validate_bom_columns(columns)
+    if title is None:
+        table_title = "BOM"
+    elif isinstance(title, str):
+        table_title = title.replace("\x00", "").replace("\r", "").replace("\n", " ")[:48]
+    else:
+        raise _CadHandlerError(
+            "bad_params", "title must be a string when provided"
+        )
+    normalized_rows: list[Dict[str, Any]] = [
+        _validate_bom_row(row, i) for i, row in enumerate(rows)
+    ]
+
+    if "class=\"bom-table\"" in svg_text:
+        # Already stamped — return unchanged so a re-export doesn't double it.
+        return {
+            "svg": svg_text,
+            "bytes": len(svg_text.encode("utf-8")),
+            "rowCount": len(normalized_rows),
+        }
+
+    width, height = _parse_svg_dimensions(svg_text)
+    table_markup = _build_bom_table_svg(
+        normalized_rows, cols, table_title, width, height
+    )
+    out_svg = _inject_layer_into_svg(svg_text, table_markup)
+    return {
+        "svg": out_svg,
+        "bytes": len(out_svg.encode("utf-8")),
+        "rowCount": len(normalized_rows),
+    }
+
+
 __all__ = [
     "ALLOWED_DIMENSION_KINDS",
     "ALLOWED_SECTION_AXES",
+    "ALLOWED_SNAP_KINDS",
     "ALLOWED_VIEWS",
+    "BOM_TABLE_COLUMNS",
+    "DEFAULT_BOM_COLUMNS",
     "TITLE_BLOCK_FIELDS",
     "VIEW_DIRECTIONS",
     "attach_title_block",
     "dimension_drawing",
+    "drawing_bom_table",
     "export_drawing",
     "project_to_drawing",
     "section_drawing",

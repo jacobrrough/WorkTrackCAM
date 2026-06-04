@@ -108,6 +108,18 @@ try:
         dimension_drawing as _v15_dimension_drawing_core,
         section_drawing as _v15_section_drawing_core,
     )
+    # CAD V1.5 — BOM-table stamp (associative-dimension BOM surface). Prefixed
+    # ``_v15b_`` so this block stays diff-isolated from the BUILD-7 surface above.
+    from engines.cad.cadquery_drawing import (
+        drawing_bom_table as _v15b_drawing_bom_table_core,
+    )
+    # CAD V2 — projected 2D drawing geometry with quantized-hash stable ids and
+    # the SVG from the SAME projection (so geometry + SVG never disagree on
+    # origin / scale). Lives in its own module ``cadquery_drawing_geometry`` and
+    # supersedes the earlier naive-projection helper.
+    from engines.cad.cadquery_drawing_geometry import (
+        extract_drawing_geometry as _extract_drawing_geometry_core,
+    )
     from engines.cad.cadquery_assembly import (
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
         ALLOWED_MATE_KINDS as _ALLOWED_MATE_KINDS,
@@ -152,6 +164,14 @@ except ImportError:  # pragma: no cover - frozen-app import path
         attach_title_block as _v15_attach_title_block_core,
         dimension_drawing as _v15_dimension_drawing_core,
         section_drawing as _v15_section_drawing_core,
+    )
+    # CAD V1.5 — frozen-app fallback for the BOM-table helper.
+    from cad.cadquery_drawing import (  # type: ignore[no-redef]
+        drawing_bom_table as _v15b_drawing_bom_table_core,
+    )
+    # CAD V2 — frozen-app fallback for the projected-geometry module.
+    from cad.cadquery_drawing_geometry import (  # type: ignore[no-redef]
+        extract_drawing_geometry as _extract_drawing_geometry_core,
     )
     from cad.cadquery_assembly import (  # type: ignore[no-redef]
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
@@ -854,6 +874,88 @@ def attach_title_block(params: dict[str, Any]) -> dict[str, Any]:
     return _v15_attach_title_block_core(svg_text, metadata)
 
 
+# ── BUILD 9 (Associative-dimension geometry + BOM-table stamp — CAD V1.5) ──
+#
+# Two more thin wrappers. ``drawing_bom_table`` exposes the ``cadquery_drawing``
+# BOM helper; ``extract_drawing_geometry`` exposes the dedicated projected-
+# geometry module ``cadquery_drawing_geometry``. Both operate alongside the
+# BUILD-7 drawing surface:
+#
+#   cad.extract_drawing_geometry — project a body handle for a view (via the
+#                                   SAME OCCT HLR projection ``getSVG`` uses) and
+#                                   return projected vertices / edges / snap
+#                                   points WITH quantized-hash STABLE ids, PLUS
+#                                   the matching ``svg`` so geometry + SVG never
+#                                   disagree on origin / scale. Operates on an
+#                                   existing body handle, like ``project_drawing``.
+#   cad.drawing_bom_table        — stamp a BOM-table ``<g>`` into an SVG. Like
+#                                   ``attach_title_block``, it operates on the
+#                                   SVG string directly (no handle table) and
+#                                   renders the caller-supplied rows verbatim —
+#                                   it does NOT recompute the BOM.
+#
+# Wire results::
+#
+#   cad.extract_drawing_geometry (superset — back-compat ``id`` / ``points`` /
+#   ``sourceId`` fields are included alongside the canonical names so the
+#   existing ipc-cad.ts coercer keeps working):
+#     {"view": str,
+#      "viewBox": {"x": float, "y": float, "w": float, "h": float},
+#      "vertices":   [{"vertexId": str, "id": str, "x": float, "y": float}, ...],
+#      "edges":      [{"edgeId": str, "id": str, "kind": "line"|"circle"|"arc",
+#                      "p1": [x,y], "p2": [x,y], "center": [x,y]|null,
+#                      "radius": float|null, "v1": str, "v2": str,
+#                      "points": [[x,y], ...]}, ...],
+#      "snapPoints": [{"kind": "endpoint"|"midpoint"|"center"|"quadrant",
+#                      "x": float, "y": float, "ownerId": str,
+#                      "id": str, "sourceId": str}, ...],
+#      "svg": str}
+#
+#   cad.drawing_bom_table:
+#     {"svg": str, "bytes": int, "rowCount": int}
+#
+# Error vocabulary mirrors the BUILD-3 / BUILD-7 drawing path, plus the HLR
+# binding code from cadquery_drawing_geometry:
+#   * 'bad_params'      — unknown view, empty SVG, malformed BOM row / column.
+#   * 'invalid_handle'  — handle missing (extract_drawing_geometry only;
+#                          drawing_bom_table doesn't read the table).
+#   * 'ocp_hlr_not_available' — OCP HLR / projection binding missing
+#                                (extract_drawing_geometry only).
+#   * 'drawing_error' / 'cadquery_not_installed' — propagated.
+#
+# Safety Rule 1 reminder: these methods DO NOT touch G-code / STL. The
+# geometry + SVG are renderer-only; no downstream CAM logic reads them.
+
+
+def extract_drawing_geometry(params: dict[str, Any]) -> dict[str, Any]:
+    """Project a body handle and return id-tagged 2D vertices / edges / snaps.
+
+    The renderer's DrawingView calls this once per (handle, view) and feeds the
+    ``snapPoints`` into its two-click dimension placement so a placed dimension
+    records the snapped feature's ``sourceId`` (associative anchor).
+    """
+    handle = _require_str(params, "handle")
+    view = _require_v15_view_param(params)
+    return _extract_drawing_geometry_core(handle, view=view)
+
+
+def drawing_bom_table(params: dict[str, Any]) -> dict[str, Any]:
+    """Stamp a BOM-table ``<g>`` into an SVG from caller-supplied rows.
+
+    Idempotent against an already-stamped SVG: the wrapper passes the call
+    straight through to the core, which detects the ``class="bom-table"``
+    marker and skips re-stamping. The ``rows`` are the BOM lines the assembly
+    model already computed — the core renders them verbatim and does NOT
+    recompute quantities.
+    """
+    svg_text = _require_str(params, "svg")
+    rows = _require_list_param(params, "rows")
+    # ``columns`` / ``title`` are optional; the core validates + defaults them.
+    columns = params.get("columns")
+    title = params.get("title")
+    return _v15b_drawing_bom_table_core(svg_text, rows, columns, title)
+
+
 # -- BUILD 8 (3D viewport true-HLR section cut -- CAD V1.5) ----------------
 #
 # ``cad.hlr_section`` powers the Design workspace's engineering section view in
@@ -971,4 +1073,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "attach_title_block": attach_title_block,
     # BUILD 8 -- 3D viewport true-HLR section cut (CAD V1.5)
     "hlr_section": hlr_section,
+    # BUILD 9 — Associative-dimension geometry + BOM-table stamp (CAD V1.5)
+    "extract_drawing_geometry": extract_drawing_geometry,
+    "drawing_bom_table": drawing_bom_table,
 }

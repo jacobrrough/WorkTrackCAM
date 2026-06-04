@@ -53,6 +53,10 @@ export type SidecarMethod =
   | 'cad.dimension_drawing'
   | 'cad.section_drawing'
   | 'cad.attach_title_block'
+  // CAD V1.5 — associative-dimension foundation: projected 2D geometry with
+  // stable ids (for snap-point resolution) + a BOM-table SVG stamp.
+  | 'cad.extract_drawing_geometry'
+  | 'cad.drawing_bom_table'
   // CAD V1.5 -- 3D viewport true hidden-line-removal section cut.
   | 'cad.hlr_section'
   | 'cam.run_toolpath'
@@ -950,6 +954,171 @@ export type CadAttachTitleBlockResult = {
     date: string
     sheet: string
   }
+}
+
+// ── cad.extract_drawing_geometry (CAD V1.5 — associative-dimension foundation) ─
+//
+// Distinct from cad.project_drawing (which returns an opaque CadQuery getSVG
+// blob with NO element ids). This method projects the body behind ``handle``
+// for a given ``view`` and returns the projected 2D geometry *tagged with
+// stable ids* — vertices, edges, and derived snap points (vertex / endpoint /
+// midpoint / center). The renderer's DrawingView feeds the ``snapPoints`` into
+// its two-click dimension placement machine so a placed dimension can record
+// *which model feature* it anchored to (the snap point's ``sourceId``), which
+// is what makes the dimension associative (re-resolvable after a rebuild).
+//
+// Coordinate space: the projected x/y MUST match the SVG-mm space that
+// ``cad.project_drawing`` (getSVG at width=800,height=600) produces for the
+// same view, so the renderer's snap math lines up with the rendered linework.
+//
+// Stable-id contract: ids are deterministic for a given construction history
+// (keyed on the projected topology ordinal, optionally salted with an OCCT
+// hash like ``_safe_face_hash``) so a persisted dimension's ``sourceId`` can be
+// re-resolved against a fresh projection after the part regenerates.
+//
+// Errors mirror the BUILD-3 drawing path:
+//   * 'bad_params'             — empty handle / unknown view.
+//   * 'invalid_handle'         — handle missing from the table.
+//   * 'cadquery_not_installed' — pip dep missing.
+//   * 'drawing_error'          — CadQuery / OCCT raised during projection.
+//
+// Safety Rule 1: renderer-only; never touches G-code / STL.
+
+/** Snap-point kinds the renderer's drawing-snap resolver understands. Mirrors
+ * ``SnapPointKind`` in ``src/renderer/design/drawing-snap.ts``. */
+export type CadDrawingSnapKind = 'vertex' | 'endpoint' | 'midpoint' | 'center'
+
+/** Projected-edge kinds. ``line`` is a straight segment; ``arc`` / ``circle``
+ * are curved (the renderer may sample ``points`` for either). Kept open with a
+ * string fallback so an OCCT curve type the renderer does not special-case
+ * still round-trips. */
+export type CadDrawingEdgeKind = 'line' | 'arc' | 'circle' | 'curve'
+
+/**
+ * A single projected vertex with a stable id. Coordinates are in the same
+ * SVG-mm space as ``cad.project_drawing`` for the matching view.
+ */
+export type CadDrawingVertex = {
+  /** Stable id (deterministic across rebuilds of the same construction). */
+  id: string
+  x: number
+  y: number
+}
+
+/**
+ * A single projected edge polyline with a stable id. ``points`` is an ordered
+ * list of ``[x, y]`` pairs (>= 2) — a straight ``line`` carries exactly two
+ * endpoints; an ``arc`` / ``circle`` is discretized into a short polyline.
+ */
+export type CadDrawingProjectedEdge = {
+  /** Stable id (deterministic across rebuilds of the same construction). */
+  id: string
+  kind: CadDrawingEdgeKind
+  /** Ordered ``[x, y]`` points in SVG-mm space; length >= 2. */
+  points: Array<[number, number]>
+}
+
+/**
+ * A derived snap point with a stable id and a back-reference to the source
+ * geometry (``sourceId`` points at the vertex or edge it came from). The
+ * renderer records ``sourceId`` on a placed dimension so the dimension stays
+ * associative across rebuilds.
+ */
+export type CadDrawingSnapPoint = {
+  /** Stable id for this snap point. */
+  id: string
+  x: number
+  y: number
+  kind: CadDrawingSnapKind
+  /** Id of the source vertex / edge this snap point was derived from. */
+  sourceId: string
+}
+
+export type CadExtractDrawingGeometryParams = {
+  /** Opaque handle from cad.execute_script or cad.import_step. */
+  handle: string
+  /** View direction; see CadDrawingView for the standard names. */
+  view: CadDrawingView
+}
+
+export type CadExtractDrawingGeometryResult = {
+  /** Echoed view name for round-trip diagnostics. */
+  view: CadDrawingView
+  /** Projected vertices with stable ids (SVG-mm space). */
+  vertices: CadDrawingVertex[]
+  /** Projected edges with stable ids (SVG-mm space). */
+  edges: CadDrawingProjectedEdge[]
+  /** Derived snap points (vertex / endpoint / midpoint / center) with sourceIds. */
+  snapPoints: CadDrawingSnapPoint[]
+}
+
+// ── cad.drawing_bom_table (CAD V1.5 — assembly BOM stamp) ─────────────────
+//
+// Pure SVG composition, exactly like cad.attach_title_block: stamps a
+// bill-of-materials table ``<g>`` into an SVG. It does NOT walk an assembly or
+// recompute quantities — the caller (renderer) passes the BOM rows the
+// assembly model already provides (item number / part name / quantity, plus
+// optional part-number / material / vendor / notes columns). The handler only
+// formats the supplied rows into table markup, so the BOM stays authoritative
+// on the renderer side and this method has no assembly-schema dependency.
+//
+// Errors mirror cad.attach_title_block:
+//   * 'bad_params' — empty SVG, ``rows`` not an array, malformed row, a
+//                     non-string cell value.
+//
+// Safety Rule 1: renderer-only SVG; never touches G-code / STL.
+
+/**
+ * One bill-of-materials row, already computed by the assembly model. Every
+ * field except ``quantity`` is a string the renderer prepared; the handler
+ * formats them verbatim (XML-escaped) into the table. ``item`` is the row's
+ * display index ("1", "2", …) — supplied by the caller so re-ordering is the
+ * renderer's concern, not the sidecar's.
+ */
+export type CadDrawingBomRow = {
+  /** Display item number (e.g. "1"). Caller-assigned; not recomputed. */
+  item: string
+  /** Part name / description (left-most data cell). */
+  partName: string
+  /** Quantity for this line (instances in the assembly). */
+  quantity: number
+  /** Optional part / stock number column. */
+  partNumber?: string
+  /** Optional material column. */
+  material?: string
+  /** Optional vendor / supplier column. */
+  vendor?: string
+  /** Optional free-text notes column. */
+  notes?: string
+}
+
+export type CadDrawingBomTableParams = {
+  /** SVG markup to stamp into. Typically the output of cad.project_drawing /
+   * cad.dimension_drawing / cad.section_drawing / cad.attach_title_block. */
+  svg: string
+  /**
+   * BOM rows the assembly already provides. The handler renders these
+   * verbatim — it does NOT recompute quantities or roll up the tree.
+   */
+  rows: CadDrawingBomRow[]
+  /**
+   * Optional column set controlling which optional columns render (in order).
+   * Defaults to ``['item', 'partName', 'quantity']`` when omitted. ``item`` /
+   * ``partName`` / ``quantity`` are always available; the rest render only
+   * when present in the row.
+   */
+  columns?: Array<'item' | 'partName' | 'quantity' | 'partNumber' | 'material' | 'vendor' | 'notes'>
+  /** Optional table title (rendered above the header row). Defaults to "BOM". */
+  title?: string
+}
+
+export type CadDrawingBomTableResult = {
+  /** Input SVG + BOM-table <g> layer (idempotent when already stamped). */
+  svg: string
+  /** Byte length of the SVG after UTF-8 encode. */
+  bytes: number
+  /** Number of BOM rows rendered (== rows.length). */
+  rowCount: number
 }
 
 // -- cad.hlr_section (CAD V1.5 -- 3D viewport true HLR section cut) --------

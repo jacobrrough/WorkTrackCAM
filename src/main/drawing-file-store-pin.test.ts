@@ -47,6 +47,13 @@ import * as moduleNs from './drawing-file-store'
 import { loadDrawingFile, saveDrawingFile } from './drawing-file-store'
 import { emptyDrawingFile, type DrawingFile } from '../shared/drawing-sheet-schema'
 
+// [annotations additive] `drawingSheetSchema` gained an additive, fully-
+// OPTIONAL `annotations` field (no Zod `.default`, so save/load stays
+// byte-faithful: a sheet authored without annotations round-trips without
+// them). These round-trip pins therefore continue to assert exact equality
+// against their bare fixtures with NO normalization — the additive field is
+// invisible until a caller writes annotations.
+
 const SRC_PATH = 'src/main/drawing-file-store.ts'
 let SRC: string | null = null
 async function readSrc(): Promise<string> {

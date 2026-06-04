@@ -59,6 +59,7 @@ import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import { DrawingView } from './DrawingView'
+import type { DrawingDimension } from '../../shared/drawing-annotation-schema'
 import {
   FeatureTree,
   type FeatureTreeOperation,
@@ -366,6 +367,17 @@ export function DesignWorkspace({
    */
   const [selectionTessellation, setSelectionTessellation] =
     useState<CadTessellateWithIdsResult | null>(null)
+
+  /**
+   * Persisted, associative 2D-drawing dimensions for the active part's sheet
+   * (`sheet.annotations.dimensions`). Threaded into the DrawingView in
+   * controlled mode so a placed dimension records its snapped feature's `refId`
+   * and re-resolves against fresh geometry on every re-projection. Held here
+   * (not inside DrawingView) so it survives view-tab switches and is the value
+   * a future project-save writes into `drawing.json`. Documentation overlays
+   * only — never read by CAM/G-code (Safety Rule 1).
+   */
+  const [drawingDimensions, setDrawingDimensions] = useState<readonly DrawingDimension[]>([])
 
   // Debounce timer for the listOperations refresh; cleared on unmount + on
   // every keystroke so we never call the sidecar mid-typing-burst.
@@ -823,6 +835,8 @@ export function DesignWorkspace({
             partHandle={activePartHandle}
             onExport={handleExportDrawing}
             onToast={onToast}
+            persistedDimensions={drawingDimensions}
+            onPersistDimensions={setDrawingDimensions}
           />
         </div>
       </div>

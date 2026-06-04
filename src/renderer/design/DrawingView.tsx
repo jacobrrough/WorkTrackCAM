@@ -80,8 +80,19 @@ import {
   resolveSnap,
   DEFAULT_SNAP_TOLERANCE_PX,
   type SnapPoint,
+  type SnapPointKind,
   type SnapResult,
 } from './drawing-snap'
+import {
+  buildAngularDimension,
+  buildDiameterDimension,
+  buildLinearDimension,
+  buildRadialDimension,
+  reanchorDimensions,
+  type FreshSnapPoint,
+  type ResolvedClick,
+} from './drawing-annotation-model'
+import type { DrawingDimension } from '../../shared/drawing-annotation-schema'
 
 /**
  * Standard projection axes exposed in the toolbar. Each maps to the
@@ -171,6 +182,35 @@ export interface DrawingViewProps {
    * snap resolution without needing to mock large coordinate spreads.
    */
   readonly snapTolerance?: number
+  /**
+   * CAD V2 persistence -- the persisted, associative dimensions for this sheet
+   * (`sheet.annotations.dimensions`). When supplied, the component renders
+   * THESE through the `cad.dimension_drawing` SVG path and re-resolves every
+   * anchor's `refId` against fresh geometry on each projection (badging any
+   * dimension whose anchor link is gone as `dangling`). When omitted the
+   * component falls back to ephemeral, in-state placement (legacy behaviour).
+   */
+  readonly persistedDimensions?: readonly DrawingDimension[]
+  /**
+   * CAD V2 persistence -- called whenever the persisted dimension list changes
+   * (a new dimension placed, or anchors refreshed / flagged dangling after a
+   * geometry re-projection). The host writes the result into
+   * `sheet.annotations.dimensions`. Only fired when `persistedDimensions` is
+   * supplied (controlled mode).
+   */
+  readonly onPersistDimensions?: (next: readonly DrawingDimension[]) => void
+  /**
+   * CAD V2 BOM -- rows the assembly model provides for the "BOM table"
+   * affordance. When non-empty, a "BOM table" button appears that stamps these
+   * rows into the current SVG via `cad.drawing_bom_table`. The handler renders
+   * them verbatim (it does NOT recompute the BOM).
+   */
+  readonly bomRows?: readonly DrawingBomTableRow[]
+  /**
+   * CAD V2 BOM -- optional column set for the BOM table (render order).
+   * Defaults to `['item', 'partName', 'quantity']` in the sidecar.
+   */
+  readonly bomColumns?: readonly DrawingBomColumn[]
 }
 
 /**
@@ -214,6 +254,27 @@ type DrawingBridge = {
     | { ok: true; result: { svg: string } }
     | { ok: false; error: string; hint?: string }
   >
+  // CAD V2 -- associative-dimension geometry fetch. Returns projected
+  // vertices / edges / snap points WITH stable ids so a placed dimension can
+  // record the snapped feature's `sourceId` (the anchor `refId`).
+  readonly extractDrawingGeometry?: (payload: {
+    readonly handle: string
+    readonly view: DrawingViewAxis
+  }) => Promise<
+    | { ok: true; result: Record<string, unknown> }
+    | { ok: false; error: string; hint?: string }
+  >
+  // CAD V1.5 -- BOM table stamp. Pure SVG composition; renders the rows the
+  // assembly already provides (does NOT recompute).
+  readonly drawingBomTable?: (payload: {
+    readonly svg: string
+    readonly rows: readonly DrawingBomTableRow[]
+    readonly columns?: readonly DrawingBomColumn[]
+    readonly title?: string
+  }) => Promise<
+    | { ok: true; result: Record<string, unknown> }
+    | { ok: false; error: string; hint?: string }
+  >
 }
 
 function readDrawingBridge(): DrawingBridge {
@@ -223,6 +284,8 @@ function readDrawingBridge(): DrawingBridge {
     dimensionDrawing: cadAny.dimensionDrawing,
     sectionDrawing: cadAny.sectionDrawing,
     attachTitleBlock: cadAny.attachTitleBlock,
+    extractDrawingGeometry: cadAny.extractDrawingGeometry,
+    drawingBomTable: cadAny.drawingBomTable,
   }
 }
 
@@ -368,6 +431,165 @@ function makePlacedDimensionSpec(
   }
 }
 
+// -- CAD V2 -- BOM table column / row wire shapes (mirror the frozen
+// `cad.drawing_bom_table` contract). -------------------------------------------
+
+/** BOM column keys the table affordance can request, in render order. */
+export type DrawingBomColumn =
+  | 'item'
+  | 'partName'
+  | 'quantity'
+  | 'partNumber'
+  | 'material'
+  | 'vendor'
+  | 'notes'
+
+/** One BOM row passed to `cad.drawing_bom_table` (rendered verbatim). */
+export type DrawingBomTableRow = {
+  readonly item: string
+  readonly partName: string
+  readonly quantity: number
+  readonly partNumber?: string
+  readonly material?: string
+  readonly vendor?: string
+  readonly notes?: string
+}
+
+/**
+ * Coerce one raw snap point from the `cad.extract_drawing_geometry` result
+ * into the renderer's typed FreshSnapPoint. The IPC coercer already guarantees
+ * the wire shape (`{ id, x, y, kind, sourceId }`), but the bridge envelope is
+ * permissive (`Record<string, unknown>`), so this re-checks defensively.
+ * Returns null on a malformed entry (it drops, never throws).
+ */
+function coerceFreshSnapPoint(value: unknown): (FreshSnapPoint & { kind: SnapPointKind }) | null {
+  if (!value || typeof value !== 'object') return null
+  const s = value as Record<string, unknown>
+  if (typeof s.id !== 'string' || s.id.length === 0) return null
+  if (typeof s.x !== 'number' || !Number.isFinite(s.x)) return null
+  if (typeof s.y !== 'number' || !Number.isFinite(s.y)) return null
+  const kind = s.kind
+  if (kind !== 'vertex' && kind !== 'endpoint' && kind !== 'midpoint' && kind !== 'center') {
+    return null
+  }
+  // `sourceId` is the live anchor link. Fall back to the snap point's own id
+  // when the sidecar omitted it (older payloads), so the anchor still resolves.
+  const sourceId =
+    typeof s.sourceId === 'string' && s.sourceId.length > 0 ? s.sourceId : s.id
+  return { id: s.id, x: s.x, y: s.y, sourceId, kind }
+}
+
+/**
+ * Pull the `snapPoints` array out of a raw `cad.extract_drawing_geometry`
+ * result envelope, coercing each entry. Malformed entries drop. Returns [] when
+ * the field is missing or not an array.
+ */
+function readSnapPointsFromGeometry(
+  result: Record<string, unknown>
+): Array<FreshSnapPoint & { kind: SnapPointKind }> {
+  const raw = result.snapPoints
+  if (!Array.isArray(raw)) return []
+  const out: Array<FreshSnapPoint & { kind: SnapPointKind }> = []
+  for (const entry of raw) {
+    const c = coerceFreshSnapPoint(entry)
+    if (c) out.push(c)
+  }
+  return out
+}
+
+/**
+ * Map a persisted (associative) {@link DrawingDimension} back into the
+ * `DrawingDimensionSpec` shape the existing `cad.dimension_drawing` SVG path
+ * consumes. The dimension-drawing handler is coordinate-driven (it does NOT
+ * understand anchors), so we feed it each anchor's `cachedPoint` -- which is
+ * always present and was refreshed by the re-anchor pass on the last geometry
+ * fetch. Ordinate / baseline / chain dimensions render as their underlying
+ * point-to-point measurement (the handler has no ordinate primitive yet), so
+ * they degrade to a `distance` overlay using their two governing anchors.
+ */
+function persistedDimensionToSpec(dim: DrawingDimension): DrawingDimensionSpec {
+  switch (dim.kind) {
+    case 'linear':
+      return {
+        kind: 'distance',
+        p1: { x: dim.start.cachedPoint.x, y: dim.start.cachedPoint.y },
+        p2: { x: dim.end.cachedPoint.x, y: dim.end.cachedPoint.y },
+        offset: 8,
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+    case 'radial':
+      return {
+        kind: 'radius',
+        center: { x: dim.center.cachedPoint.x, y: dim.center.cachedPoint.y },
+        edge: { x: dim.on.cachedPoint.x, y: dim.on.cachedPoint.y },
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+    case 'diameter':
+      return {
+        kind: 'diameter',
+        center: { x: dim.center.cachedPoint.x, y: dim.center.cachedPoint.y },
+        edge: { x: dim.on.cachedPoint.x, y: dim.on.cachedPoint.y },
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+    case 'angular':
+      return {
+        kind: 'angle',
+        vertex: { x: dim.vertex.cachedPoint.x, y: dim.vertex.cachedPoint.y },
+        arm1: { x: dim.arm1.cachedPoint.x, y: dim.arm1.cachedPoint.y },
+        arm2: { x: dim.arm2.cachedPoint.x, y: dim.arm2.cachedPoint.y },
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+    case 'ordinate':
+    case 'baseline':
+      // origin → feature read-out renders as a distance overlay.
+      return {
+        kind: 'distance',
+        p1: { x: dim.origin.cachedPoint.x, y: dim.origin.cachedPoint.y },
+        p2: { x: dim.feature.cachedPoint.x, y: dim.feature.cachedPoint.y },
+        offset: 8,
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+    case 'chain':
+      return {
+        kind: 'distance',
+        p1: { x: dim.start.cachedPoint.x, y: dim.start.cachedPoint.y },
+        p2: { x: dim.end.cachedPoint.x, y: dim.end.cachedPoint.y },
+        offset: 8,
+        ...(dim.label !== undefined ? { label: dim.label } : {}),
+      }
+  }
+}
+
+/**
+ * Build an anchored {@link DrawingDimension} from the placement-machine's two
+ * captured clicks. The toolbar kinds are the legacy
+ * `distance|radius|diameter|angle` union; they map onto the schema kinds
+ * `linear|radial|diameter|angular`. `angle` only captures two clicks, so the
+ * first arm is synthesized along +x from the vertex (mirroring the legacy
+ * `makePlacedDimensionSpec` behaviour), as a FREE (non-associative) anchor.
+ */
+function buildAnchoredDimension(
+  kind: DrawingDimensionKind,
+  click1: ResolvedClick,
+  click2: ResolvedClick
+): DrawingDimension {
+  if (kind === 'distance') {
+    return buildLinearDimension(click1, click2)
+  }
+  if (kind === 'radius') {
+    return buildRadialDimension(click1, click2)
+  }
+  if (kind === 'diameter') {
+    return buildDiameterDimension(click1, click2)
+  }
+  // angle: vertex = click1, arm1 = free point +x from the vertex, arm2 = click2.
+  const syntheticArm1: ResolvedClick = {
+    point: { x: click1.point.x + 10, y: click1.point.y },
+    sourceId: null,
+  }
+  return buildAngularDimension(click1, syntheticArm1, click2)
+}
+
 /**
  * Order of buttons in the toolbar. Front-Top-Right-Iso matches the
  * mechanical-drawing convention engineers expect (three orthographic
@@ -390,11 +612,23 @@ export function DrawingView({
   initialSectionPlane,
   initialTitleBlock,
   snapTolerance = DEFAULT_SNAP_TOLERANCE_PX,
+  persistedDimensions,
+  onPersistDimensions,
+  bomRows,
+  bomColumns,
 }: DrawingViewProps): JSX.Element {
   const [activeView, setActiveView] = useState<DrawingViewAxis>(initialView)
   const [svg, setSvg] = useState<string | null>(previewSvg ?? null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  /**
+   * Whether this instance is in CONTROLLED (persisted) dimension mode. When the
+   * host threads `persistedDimensions`, every placed dimension is an anchored
+   * `DrawingDimension` pushed up via `onPersistDimensions`; the legacy ephemeral
+   * `dimensions` state is bypassed. When omitted, the legacy in-state flow runs.
+   */
+  const controlled = persistedDimensions !== undefined
 
   // V1.5 state: dimensions, section toggle, and title-block metadata.
   const [dimensions, setDimensions] = useState<DrawingDimensionSpec[]>(
@@ -419,14 +653,52 @@ export function DrawingView({
   const [placementState, setPlacementState] = useState<DimensionPlacementState>(null)
 
   /**
-   * Snap points list.
-   *
-   * DEFERRED HOOK: currently always []. A future PR will wire
-   * `fab.cad.extractSnapPoints({ handle, view })` here via a useEffect.
-   * When populated, resolveSnap snaps to the nearest projected geometry
-   * within `snapTolerance` SVG units. For now, free-cursor placement.
+   * Per-click history for the IN-PROGRESS placement. Parallel to the placement
+   * machine's step count: each entry is a {@link ResolvedClick} carrying the
+   * resolved SVG-mm coordinate AND the `sourceId` of the snap target it landed
+   * on (`null` for a free click). On completion these become the dimension's
+   * associative anchors. A ref (not state) because it is mutable accumulation
+   * that never drives a render -- the placement machine owns the visible step
+   * count -- and so committing from it stays out of a state updater (no impure
+   * side effect during render). Reset whenever placement starts/ends.
    */
-  const [snapPoints] = useState<readonly SnapPoint[]>([])
+  const clickHistoryRef = useRef<ResolvedClick[]>([])
+
+  /**
+   * Snap points list (resolver shape). Populated by the geometry-fetch effect
+   * from `cad.extract_drawing_geometry`. `resolveSnap` snaps the cursor to the
+   * nearest projected vertex / edge endpoint / midpoint / arc-center within
+   * `snapTolerance` SVG units. Empty until the first successful fetch (then
+   * free-cursor placement).
+   */
+  const [snapPoints, setSnapPoints] = useState<readonly SnapPoint[]>([])
+
+  /**
+   * Parallel snap-point list carrying the stable wire ids (`id` + `sourceId`).
+   * `snapPoints` (above) drops the ids for the resolver; this list keeps them so
+   * (a) a snapped click can record the right anchor `refId`, and (b) the
+   * re-anchor pass can refresh / dangle-flag persisted dimensions. Same length
+   * and order as `snapPoints`.
+   */
+  const [freshSnapPoints, setFreshSnapPoints] = useState<readonly FreshSnapPoint[]>([])
+
+  /**
+   * Ids of persisted dimensions whose anchor link no longer resolves against
+   * the latest fetched geometry (badged `dangling` in the UI). Recomputed by
+   * the re-anchor pass on every geometry fetch.
+   */
+  const [danglingIds, setDanglingIds] = useState<ReadonlySet<string>>(new Set())
+
+  /**
+   * Whether a geometry projection has actually completed for the current
+   * handle/view. Gates the dangling computation: before the first fetch lands
+   * (or while a re-fetch is in flight after a handle/view change) we must NOT
+   * flag every associative dimension dangling just because `freshSnapPoints`
+   * is still empty -- that would be a false-positive flash. Reset to false on
+   * each handle/view change, set true once a fetch resolves (even with zero
+   * points, which is a legitimate "nothing projected" answer).
+   */
+  const [geometryLoaded, setGeometryLoaded] = useState(false)
 
   /** Whether Alt is held (disables snap). */
   const [altHeld, setAltHeld] = useState(false)
@@ -454,26 +726,66 @@ export function DrawingView({
     }
   }, [])
 
+  // -- Existing callbacks ---------------------------------------------------
+
+  const toast = useCallback(
+    (kind: 'ok' | 'err' | 'warn', message: string): void => {
+      onToast?.(kind, message)
+    },
+    [onToast],
+  )
+
   // -- Snap helpers ---------------------------------------------------------
 
   /**
    * Resolve pointer client coords to SVG space and run snap resolution.
+   * Returns the free SVG coordinate, the snap result (or null), and the
+   * `sourceId` of the snapped geometry (or null when free) -- the latter is the
+   * associative anchor `refId` recorded on a placed dimension.
    */
   const resolveCursorSvg = useCallback(
     (
       clientX: number,
       clientY: number
-    ): { svgCoord: { x: number; y: number }; snap: SnapResult | null } => {
+    ): {
+      svgCoord: { x: number; y: number }
+      snap: SnapResult | null
+      sourceId: string | null
+    } => {
       const host = svgHostRef.current
       const svgEl = host ? host.querySelector('svg') : null
       if (svgEl === null) {
-        return { svgCoord: { x: clientX, y: clientY }, snap: null }
+        return { svgCoord: { x: clientX, y: clientY }, snap: null, sourceId: null }
       }
       const svgCoord = clientToSvgCoord(clientX, clientY, svgEl as SVGSVGElement)
       const snap = resolveSnap(svgCoord, snapPoints, snapTolerance, altHeld)
-      return { svgCoord, snap }
+      const sourceId = snap?.sourceId ?? null
+      return { svgCoord, snap, sourceId }
     },
     [snapPoints, snapTolerance, altHeld]
+  )
+
+  /**
+   * Commit a completed two-click placement. In controlled (persisted) mode this
+   * mints an anchored {@link DrawingDimension} from the captured clicks and
+   * pushes it up via `onPersistDimensions`; otherwise it appends the legacy
+   * ephemeral {@link DrawingDimensionSpec}.
+   */
+  const commitPlacement = useCallback(
+    (kind: DrawingDimensionKind, clicks: readonly ResolvedClick[]): void => {
+      const click1 = clicks[0]
+      const click2 = clicks[1]
+      if (click1 === undefined || click2 === undefined) return
+      if (controlled) {
+        const dim = buildAnchoredDimension(kind, click1, click2)
+        onPersistDimensions?.([...(persistedDimensions ?? []), dim])
+        toast('ok', `${DIMENSION_LABELS[kind]} dimension added.`)
+        return
+      }
+      const spec = makePlacedDimensionSpec(kind, click1.point, click2.point)
+      setDimensions((prev) => [...prev, spec])
+    },
+    [controlled, onPersistDimensions, persistedDimensions, toast]
   )
 
   // -- Pointer handlers -----------------------------------------------------
@@ -494,26 +806,25 @@ export function DrawingView({
     (e: ReactPointerEvent<HTMLDivElement>): void => {
       if (placementState === null) return
       if (e.button !== 0) return
-      const { svgCoord, snap } = resolveCursorSvg(e.clientX, e.clientY)
+      const { svgCoord, snap, sourceId } = resolveCursorSvg(e.clientX, e.clientY)
       const clickSvg = snap ?? svgCoord
+      const resolvedClick: ResolvedClick = {
+        point: { x: clickSvg.x, y: clickSvg.y },
+        sourceId,
+      }
       const { next, completed } = advanceDimensionPlacement(placementState, clickSvg)
+      // Accumulate this click before committing/continuing.
+      clickHistoryRef.current = [...clickHistoryRef.current, resolvedClick]
       setPlacementState(next)
       if (completed !== undefined) {
+        // Final click: commit from the accumulated history, then reset it.
         setHoveredSnap(null)
-        const spec = makePlacedDimensionSpec(completed.kind, completed.p1, completed.p2)
-        setDimensions((prev) => [...prev, spec])
+        const clicks = clickHistoryRef.current
+        clickHistoryRef.current = []
+        commitPlacement(completed.kind, clicks)
       }
     },
-    [placementState, resolveCursorSvg]
-  )
-
-  // -- Existing callbacks ---------------------------------------------------
-
-  const toast = useCallback(
-    (kind: 'ok' | 'err' | 'warn', message: string): void => {
-      onToast?.(kind, message)
-    },
-    [onToast],
+    [placementState, resolveCursorSvg, commitPlacement]
   )
 
   /**
@@ -521,14 +832,20 @@ export function DrawingView({
    */
   const startPlacement = useCallback((kind: DrawingDimensionKind): void => {
     setPlacementState(startDimensionPlacement(kind))
+    clickHistoryRef.current = []
     setHoveredSnap(null)
   }, [])
 
   const clearDimensions = useCallback((): void => {
-    setDimensions([])
+    if (controlled) {
+      onPersistDimensions?.([])
+    } else {
+      setDimensions([])
+    }
     setPlacementState(null)
+    clickHistoryRef.current = []
     setHoveredSnap(null)
-  }, [])
+  }, [controlled, onPersistDimensions])
 
   const toggleSection = useCallback((): void => {
     setSectionEnabled((prev) => !prev)
@@ -550,9 +867,65 @@ export function DrawingView({
     [],
   )
 
-  // Memoize the dimensions array so the effect below doesn't re-fire on
-  // every render of the parent.
-  const dimensionsRef = useMemo(() => dimensions, [dimensions])
+  /**
+   * Stamp the supplied BOM rows into the current SVG via
+   * `cad.drawing_bom_table`. Pure SVG composition on the sidecar side -- it
+   * renders the rows verbatim (no recompute) and is idempotent (re-stamping
+   * replaces the existing table layer). No-op when there is no SVG yet or no
+   * rows to render.
+   */
+  const handleBomTable = useCallback((): void => {
+    if (svg === null) {
+      toast('warn', 'Generate a drawing view before stamping the BOM table.')
+      return
+    }
+    if (bomRows === undefined || bomRows.length === 0) {
+      toast('warn', 'No BOM rows to stamp.')
+      return
+    }
+    const bridge = readDrawingBridge()
+    if (!bridge.drawingBomTable) {
+      toast('err', 'BOM-table bridge not available -- sidecar handler pending.')
+      return
+    }
+    void (async () => {
+      try {
+        const res = await bridge.drawingBomTable!({
+          svg,
+          rows: bomRows,
+          ...(bomColumns !== undefined ? { columns: bomColumns } : {}),
+        })
+        if (!res.ok) {
+          const detail = res.hint ? ` -- ${res.hint}` : ''
+          toast('err', `BOM table failed: ${res.error}${detail}`)
+          return
+        }
+        const nextSvg = res.result.svg
+        if (typeof nextSvg === 'string' && nextSvg.length > 0) {
+          setSvg(nextSvg)
+          toast('ok', `BOM table stamped (${bomRows.length} rows).`)
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        toast('err', `BOM table threw: ${message}`)
+      }
+    })()
+  }, [svg, bomRows, bomColumns, toast])
+
+  /**
+   * The dimension specs that actually get drawn through the
+   * `cad.dimension_drawing` SVG path. In controlled mode these are the
+   * persisted, associative dimensions mapped back to the handler's coordinate
+   * shape (drawn from each anchor's refreshed `cachedPoint`); otherwise the
+   * legacy ephemeral in-state specs. Memoized so the projection effect below
+   * doesn't re-fire on every render of the parent.
+   */
+  const dimensionsRef = useMemo<DrawingDimensionSpec[]>(() => {
+    if (controlled) {
+      return (persistedDimensions ?? []).map(persistedDimensionToSpec)
+    }
+    return dimensions
+  }, [controlled, persistedDimensions, dimensions])
 
   // Re-project whenever `partHandle` or the active view changes.
   useEffect(() => {
@@ -679,6 +1052,104 @@ export function DrawingView({
     toast,
   ])
 
+  // -- CAD V2 -- geometry fetch --------------------------------------------
+  //
+  // Fetch the projected vertices / edges / snap points for the active view so
+  // two-click placement can snap to real geometry AND persisted dimensions can
+  // re-resolve their anchors. Runs ONLY when the part handle or the active view
+  // changes (NOT when the dimension list changes -- that would re-fetch on
+  // every placement). The re-anchor pass below consumes `freshSnapPoints`.
+  // Decoupled from the SVG-projection effect so a snap-fetch failure never
+  // blanks the drawing.
+  useEffect(() => {
+    // A handle/view change invalidates the previous projection: reset the
+    // loaded flag so the re-anchor pass holds off dangling judgement until the
+    // fresh fetch lands.
+    setGeometryLoaded(false)
+    if (partHandle === null) {
+      setSnapPoints([])
+      setFreshSnapPoints([])
+      return undefined
+    }
+    const bridge = readDrawingBridge()
+    if (!bridge.extractDrawingGeometry) {
+      // Geometry bridge not present (older build): fall back to free-cursor
+      // placement; persisted dimensions still render from their cachedPoints
+      // but are never flagged dangling (we never learned the real geometry).
+      setSnapPoints([])
+      setFreshSnapPoints([])
+      return undefined
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await bridge.extractDrawingGeometry!({
+          handle: partHandle,
+          view: activeView,
+        })
+        if (cancelled) return
+        if (!res.ok) {
+          // Snap fetch failed -- keep the drawing usable with free placement.
+          // Do NOT mark geometry loaded: a failed fetch is not evidence a
+          // feature is gone, so we must not dangle-flag on it.
+          setSnapPoints([])
+          setFreshSnapPoints([])
+          return
+        }
+        const fresh = readSnapPointsFromGeometry(res.result)
+        // Resolver shape: drop the ids but KEEP sourceId so a snapped click
+        // records the right anchor refId.
+        const resolverPoints: SnapPoint[] = fresh.map((sp) => ({
+          x: sp.x,
+          y: sp.y,
+          kind: sp.kind,
+          sourceId: sp.sourceId,
+        }))
+        setSnapPoints(resolverPoints)
+        setFreshSnapPoints(fresh)
+        // A successful projection (even an empty one) is authoritative: now the
+        // re-anchor pass may judge which anchors are gone.
+        setGeometryLoaded(true)
+      } catch {
+        if (cancelled) return
+        setSnapPoints([])
+        setFreshSnapPoints([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [partHandle, activeView])
+
+  // -- CAD V2 -- re-anchor persisted dimensions against fresh geometry ------
+  //
+  // Whenever a fresh projection lands (`freshSnapPoints`) or the persisted list
+  // changes, re-resolve every anchor: refresh resolved cachedPoints and badge
+  // dimensions whose anchor link is gone as `dangling`. Pushes the refreshed
+  // list back up ONLY when a cachedPoint actually moved (guarded by a deep
+  // equality check) so a placement→re-render→re-resolve cycle converges instead
+  // of looping.
+  useEffect(() => {
+    if (persistedDimensions === undefined) return
+    // Hold off until a real projection has landed -- otherwise an empty
+    // `freshSnapPoints` (pre-fetch / failed fetch) would dangle-flag everything.
+    if (!geometryLoaded) {
+      setDanglingIds(new Set())
+      return
+    }
+    const { dimensions: reanchored, danglingIds: nextDangling } = reanchorDimensions(
+      persistedDimensions,
+      freshSnapPoints
+    )
+    setDanglingIds(nextDangling)
+    if (
+      onPersistDimensions !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedDimensions)
+    ) {
+      onPersistDimensions(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedDimensions, onPersistDimensions])
+
   // -- Empty-state branch ---------------------------------------------------
   if (partHandle === null) {
     return (
@@ -705,6 +1176,21 @@ export function DrawingView({
         ? `Placing ${DIMENSION_LABELS[placementState.kind]} -- click p1`
         : `Placing ${DIMENSION_LABELS[placementState.kind]} -- click p2`
       : null
+
+  /**
+   * Effective placed-dimension count -- the persisted list in controlled mode,
+   * otherwise the legacy ephemeral list. Drives the Clear button + the count
+   * readout.
+   */
+  const effectiveDimCount = controlled
+    ? (persistedDimensions ?? []).length
+    : dimensions.length
+
+  /** How many persisted dimensions are currently dangling (lost their anchor). */
+  const danglingCount = danglingIds.size
+
+  /** Whether the BOM-table affordance should render. */
+  const showBomTable = bomRows !== undefined && bomRows.length > 0
 
   return (
     <div className="design-drawing" data-testid="design-drawing-view">
@@ -803,7 +1289,7 @@ export function DrawingView({
               </button>
             )
           })}
-          {dimensions.length > 0 && (
+          {effectiveDimCount > 0 && (
             <button
               type="button"
               className="btn btn-ghost design-drawing__dim-clear"
@@ -814,6 +1300,19 @@ export function DrawingView({
               Clear
             </button>
           )}
+          {showBomTable && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__bom-btn"
+              data-testid="design-drawing-bom-table"
+              onClick={handleBomTable}
+              disabled={svg === null}
+              aria-disabled={svg === null}
+              title="Stamp the assembly bill-of-materials table onto the drawing"
+            >
+              BOM table
+            </button>
+          )}
         </div>
         <div
           className="design-drawing__dim-count"
@@ -822,10 +1321,20 @@ export function DrawingView({
         >
           {placementLabel !== null
             ? placementLabel
-            : dimensions.length === 0
+            : effectiveDimCount === 0
               ? 'No dimensions added'
-              : `${dimensions.length} dimension${dimensions.length === 1 ? '' : 's'}`}
+              : `${effectiveDimCount} dimension${effectiveDimCount === 1 ? '' : 's'}`}
         </div>
+        {danglingCount > 0 && (
+          <div
+            className="design-drawing__dim-dangling"
+            data-testid="design-drawing-dim-dangling"
+            role="status"
+            title="These dimensions lost their anchored feature on rebuild and are drawn from the last-known position."
+          >
+            {`${danglingCount} dangling`}
+          </div>
+        )}
       </div>
 
       {/* CAD V1.5 -- Sections toggle */}

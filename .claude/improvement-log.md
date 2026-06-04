@@ -17423,3 +17423,28 @@ emits dangerous CNC G-code; engine fail-loud guards hold. Known fidelity gaps
 advisory + no-auto-send and are the CUTOVER-GATING hardening (separate task) before the
 new-shell CAM can REPLACE the proven classic-shell CAM.
 Flag-gated; default build unchanged. tsc + electron-vite build + 14,588 tests green.
+
+
+### Stack #7.1 (agent-orchestrated): Associative Drawing Dimensions + BOM
+Ran as a Workflow (Map -> Build -> Renderer -> Verify, 7 agents); main loop ran the
+security/back-compat gate + the fix below.
+- NEW `engines/cad/cadquery_drawing_geometry.py`: `cad.extract_drawing_geometry` returns
+  projected 2D edges/vertices/snapPoints with STABLE quantized-hash ids + the matching SVG
+  (one projection, two serializations -- avoids the exporter-vs-HLR frame mismatch).
+- NEW `src/shared/drawing-annotation-schema.ts` (linear/radial/diameter/angular/ordinate/
+  baseline/chain dims + GD&T frame + revisions + BOM rows), attached ADDITIVELY to
+  drawing-sheet-schema (`.optional()`, NO version bump; v1 sheets parse unchanged --
+  load-bearing back-compat test added).
+- sidecar-protocol + preload + ipc-cad wire types/bridges (extractDrawingGeometry +
+  drawingBomTable); `_build_bom_table_svg` renders the EXISTING assembly BOM onto the sheet.
+- DrawingView: real snapPoints; two-click placement builds ANCHORED dims (refId) persisted to
+  sheet.annotations; reload re-anchors + badges dangling; BOM-table affordance. + pure
+  `drawing-annotation-model.ts` (anchored-spec builders + re-anchor resolver).
+SECURITY (Safety Rule 4): adversarial-verify agent caught a STORED XSS -- dimension `label`
+(operator free-text persisted in drawing.json) was injected into SVG <text> UNescaped then
+rendered via dangerouslySetInnerHTML. FIXED at source: `_xml_escape` the label in the 3
+`_build_*_dimension_svg` builders (same helper the BOM/title paths use) + a pinning test.
+Back-compat CONFIRMED (v1 sheets parse), associativity CONFIRMED (re-anchor by refId; dangling
+badged, no silent mis-attach), NO G-code paths touched. tsc clean; TS suite 14,640 pass (+52);
+system pytest 94 pass. CadQuery-gated tests (geometry + escaping pins) skip locally due to a
+PRE-EXISTING venv exec-sandbox issue (confirmed at 08e4ee8; unrelated to this stack -> CI validates).

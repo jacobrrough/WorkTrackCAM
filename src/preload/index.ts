@@ -773,6 +773,35 @@ export type Api = {
       | { ok: true; result: Record<string, unknown> }
       | { ok: false; error: string; hint?: string }
     >
+    /**
+     * CAD V1.5 Associative-dimension geometry (Wave 3): project a body handle
+     * for a view and return the projected vertices / edges / snap points WITH
+     * stable ids. The renderer's DrawingView feeds the snapPoints into its
+     * two-click dimension placement so a placed dimension records the snapped
+     * feature's `sourceId` (associative anchor). Permissive envelope --
+     * the renderer builds the typed { handle, view } payload and reads the
+     * { view, vertices, edges, snapPoints } result. Delegates to
+     * `cad.extract_drawing_geometry`. No G-code involved.
+     */
+    extractDrawingGeometry: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
+    /**
+     * CAD V1.5 BOM table (Wave 3): stamp a bill-of-materials table `<g>` into
+     * an SVG from the rows the assembly already provides. Pure SVG
+     * composition -- does NOT recompute the BOM. Permissive envelope -- the
+     * renderer passes { svg, rows, columns?, title? } and reads the
+     * { svg, bytes, rowCount } result. Delegates to `cad.drawing_bom_table`.
+     */
+    drawingBomTable: (
+      payload: Record<string, unknown>
+    ) => Promise<
+      | { ok: true; result: Record<string, unknown> }
+      | { ok: false; error: string; hint?: string }
+    >
   }
 }
 
@@ -984,6 +1013,19 @@ const api: Api = {
       >,
     attachTitleBlock: (payload) =>
       ipcRenderer.invoke('cad:attachTitleBlock', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    // CAD V1.5 (Wave 3) -- associative-dimension geometry + BOM-table stamp.
+    // Permissive payload/result envelopes; the renderer builds the typed
+    // { handle, view } / { svg, rows, columns?, title? } payloads.
+    extractDrawingGeometry: (payload) =>
+      ipcRenderer.invoke('cad:extractDrawingGeometry', payload) as Promise<
+        | { ok: true; result: Record<string, unknown> }
+        | { ok: false; error: string; hint?: string }
+      >,
+    drawingBomTable: (payload) =>
+      ipcRenderer.invoke('cad:drawingBomTable', payload) as Promise<
         | { ok: true; result: Record<string, unknown> }
         | { ok: false; error: string; hint?: string }
       >

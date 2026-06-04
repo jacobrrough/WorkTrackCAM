@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { drawingSheetAnnotationsSchema } from './drawing-annotation-schema'
 
 /** Orthographic “view from” / projection direction (documentation metadata; no real 2D projection yet). */
 export const viewFromAxisSchema = z.enum(['front', 'top', 'right', 'back', 'left', 'bottom', 'iso'])
@@ -58,7 +59,32 @@ export const drawingSheetSchema = z.object({
    */
   meshProjectionTier: z.enum(['A', 'B', 'C']).optional(),
   /** Listed on PDF/DXF title-block shell as planned view regions. */
-  viewPlaceholders: z.array(drawingViewPlaceholderSchema).optional()
+  viewPlaceholders: z.array(drawingViewPlaceholderSchema).optional(),
+  /**
+   * 2D drawing annotations — dimensions, GD&T feature control frames, notes,
+   * revisions, and a BOM table (see `drawing-annotation-schema.ts`).
+   *
+   * Additive + `.optional()` so every existing `drawing.json` (saved before
+   * annotations existed) parses unchanged. Safety Rule 2: no version bump, no
+   * migration, existing saved sheets never break.
+   *
+   * Same additive intent as `project-schema.ts`
+   * `designModels: z.array(...).default([])`, BUT deliberately WITHOUT
+   * `.default(...)`: a Zod `.default(...)` would mark `annotations` REQUIRED on
+   * the inferred output type, forcing the field onto every `DrawingSheet`
+   * object literal across the codebase (the exact regression the
+   * `project-schema.ts` `lagunaActiveZones` comment documents at Cycle 349,
+   * and the sibling `viewPlaceholders` field above sidesteps the same way).
+   * Keeping it `.optional()` lets consumers read-time-default via
+   * `emptyDrawingSheetAnnotations()` and keeps save/load byte-faithful
+   * (absent in → absent out), so the drawing-file-store round-trip pin holds.
+   *
+   * Dimensions here are associative: each endpoint carries a
+   * `{ refId, cachedPoint }` anchor so it re-resolves to fresh geometry on
+   * rebuild while keeping a durable fallback coordinate. Safety Rule 1: these
+   * are documentation overlays only — nothing in CAM/G-code ever reads them.
+   */
+  annotations: drawingSheetAnnotationsSchema.optional()
 })
 
 export const drawingFileSchema = z.object({

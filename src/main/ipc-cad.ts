@@ -1520,6 +1520,16 @@ import type {
   CadHlrSectionParams as V15CadHlrSectionParams,
   CadHlrSectionResult as V15CadHlrSectionResult,
   CadHlrEdgePolyline as V15CadHlrEdgePolyline,
+  CadExtractDrawingGeometryParams as V15CadExtractDrawingGeometryParams,
+  CadExtractDrawingGeometryResult as V15CadExtractDrawingGeometryResult,
+  CadDrawingVertex as V15CadDrawingVertex,
+  CadDrawingProjectedEdge as V15CadDrawingProjectedEdge,
+  CadDrawingSnapPoint as V15CadDrawingSnapPoint,
+  CadDrawingSnapKind as V15CadDrawingSnapKind,
+  CadDrawingEdgeKind as V15CadDrawingEdgeKind,
+  CadDrawingBomTableParams as V15CadDrawingBomTableParams,
+  CadDrawingBomTableResult as V15CadDrawingBomTableResult,
+  CadDrawingBomRow as V15CadDrawingBomRow,
 } from '../shared/sidecar-protocol'
 
 /** Allowed dimension kinds (V1.5). Mirrors the sidecar's vocabulary. */
@@ -2073,6 +2083,328 @@ export function v15CoerceHlrSectionResult(
   }
 }
 
+// ----------------------------------------------------------------------------
+// CAD V1.5 -- Associative-dimension geometry + BOM-table stamp IPC layer
+// (BUILD 9). Two additive channels:
+//   * cad:extractDrawingGeometry -- projected 2D geometry with stable ids
+//     (vertices / edges / snapPoints) so the renderer's DrawingView can place
+//     associative dimensions. Channel for the deferred-hook ``extractSnapPoints``
+//     the renderer's DrawingView comment already names.
+//   * cad:drawingBomTable -- stamp a BOM-table <g> into an SVG from the rows
+//     the assembly already provides (pure composition; no recompute).
+// Types / validators / coercers are prefixed ``V15Geom`` / ``V15Bom`` so they
+// stay easy to spot in a diff. Mirrors the BUILD-7 drawing handler shape.
+// ----------------------------------------------------------------------------
+
+/** Allowed snap-point kinds (V1.5). Mirrors the sidecar's ``ALLOWED_SNAP_KINDS``. */
+export const V15_SNAP_KINDS: readonly V15CadDrawingSnapKind[] = [
+  'vertex',
+  'endpoint',
+  'midpoint',
+  'center',
+] as const
+
+/** Allowed BOM column keys (V1.5). Mirrors the sidecar's ``BOM_TABLE_COLUMNS``. */
+export const V15_BOM_COLUMNS = [
+  'item',
+  'partName',
+  'quantity',
+  'partNumber',
+  'material',
+  'vendor',
+  'notes',
+] as const
+export type V15CadBomColumn = (typeof V15_BOM_COLUMNS)[number]
+
+export type V15CadExtractDrawingGeometryPayload = V15CadExtractDrawingGeometryParams
+export type V15CadDrawingBomTablePayload = V15CadDrawingBomTableParams
+
+export type V15CadExtractDrawingGeometryResponse =
+  | { ok: true; result: V15CadExtractDrawingGeometryResult }
+  | { ok: false; error: string; hint?: string }
+
+export type V15CadDrawingBomTableResponse =
+  | { ok: true; result: V15CadDrawingBomTableResult }
+  | { ok: false; error: string; hint?: string }
+
+/**
+ * Validate the ``cad:extractDrawingGeometry`` IPC payload. Pure -- no FS /
+ * spawn / electron globals. Same envelope as the BUILD-7 drawing validators:
+ * ``handle`` non-empty, ``view`` in the whitelist.
+ */
+export function v15ValidateExtractDrawingGeometryPayload(
+  raw: unknown,
+):
+  | { ok: true; payload: V15CadExtractDrawingGeometryPayload }
+  | V15CadExtractDrawingGeometryResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:extractDrawingGeometry requires { handle, view }',
+    }
+  }
+  const p = raw as { handle?: unknown; view?: unknown }
+  if (typeof p.handle !== 'string' || p.handle.length === 0) {
+    return { ok: false, error: 'missing_handle' }
+  }
+  if (typeof p.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(p.view)) {
+    return {
+      ok: false,
+      error: 'invalid_view',
+      hint: `view must be one of: ${V15_DRAWING_VIEWS.join(', ')}`,
+    }
+  }
+  return {
+    ok: true,
+    payload: {
+      handle: p.handle,
+      view: p.view as V15CadDrawingView,
+    },
+  }
+}
+
+/**
+ * Validate a single BOM row. Returns the normalized row or an error envelope.
+ * The handler does NOT recompute quantities -- it trusts the caller's values;
+ * this validator only enforces the wire shape so a typo fails fast.
+ */
+export function v15ValidateBomRow(
+  raw: unknown,
+  index: number,
+): { ok: true; value: V15CadDrawingBomRow } | { ok: false; error: string; hint: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      ok: false,
+      error: 'invalid_bom_row',
+      hint: `rows[${index}] must be an object`,
+    }
+  }
+  const r = raw as {
+    item?: unknown
+    partName?: unknown
+    quantity?: unknown
+    partNumber?: unknown
+    material?: unknown
+    vendor?: unknown
+    notes?: unknown
+  }
+  // item -- accept string or number (the caller assigns the display index).
+  let item = ''
+  if (r.item !== undefined && r.item !== null) {
+    if (typeof r.item === 'string') item = r.item
+    else if (typeof r.item === 'number' && Number.isFinite(r.item)) item = String(r.item)
+    else {
+      return { ok: false, error: 'invalid_bom_row', hint: `rows[${index}].item must be a string or number` }
+    }
+  }
+  let partName = ''
+  if (r.partName !== undefined && r.partName !== null) {
+    if (typeof r.partName !== 'string') {
+      return { ok: false, error: 'invalid_bom_row', hint: `rows[${index}].partName must be a string` }
+    }
+    partName = r.partName
+  }
+  let quantity = 1
+  if (r.quantity !== undefined && r.quantity !== null) {
+    if (typeof r.quantity !== 'number' || !Number.isFinite(r.quantity)) {
+      return { ok: false, error: 'invalid_bom_row', hint: `rows[${index}].quantity must be a finite number` }
+    }
+    quantity = r.quantity
+  }
+  const out: V15CadDrawingBomRow = { item, partName, quantity }
+  for (const field of ['partNumber', 'material', 'vendor', 'notes'] as const) {
+    const v = r[field]
+    if (v === undefined || v === null) continue
+    if (typeof v !== 'string') {
+      return { ok: false, error: 'invalid_bom_row', hint: `rows[${index}].${field} must be a string when provided` }
+    }
+    out[field] = v
+  }
+  return { ok: true, value: out }
+}
+
+/**
+ * Validate the ``cad:drawingBomTable`` IPC payload. Combines the SVG check
+ * from ``v15ValidateAttachTitleBlockPayload`` with per-row validation. The
+ * optional ``columns`` / ``title`` are checked but default in the sidecar.
+ */
+export function v15ValidateDrawingBomTablePayload(
+  raw: unknown,
+): { ok: true; payload: V15CadDrawingBomTablePayload } | V15CadDrawingBomTableResponse {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'invalid_payload',
+      hint: 'cad:drawingBomTable requires { svg, rows, columns?, title? }',
+    }
+  }
+  const p = raw as { svg?: unknown; rows?: unknown; columns?: unknown; title?: unknown }
+  if (typeof p.svg !== 'string' || p.svg.length === 0) {
+    return { ok: false, error: 'missing_svg', hint: 'svg must be a non-empty SVG markup string' }
+  }
+  if (!Array.isArray(p.rows)) {
+    return { ok: false, error: 'invalid_rows', hint: 'rows must be an array (use [] for an empty table)' }
+  }
+  const rows: V15CadDrawingBomRow[] = []
+  for (let i = 0; i < p.rows.length; i++) {
+    const v = v15ValidateBomRow(p.rows[i], i)
+    if (!v.ok) return v
+    rows.push(v.value)
+  }
+  let columns: V15CadBomColumn[] | undefined
+  if (p.columns !== undefined) {
+    if (!Array.isArray(p.columns)) {
+      return { ok: false, error: 'invalid_columns', hint: 'columns must be an array of column keys' }
+    }
+    const out: V15CadBomColumn[] = []
+    for (const c of p.columns) {
+      if (typeof c !== 'string' || !(V15_BOM_COLUMNS as readonly string[]).includes(c)) {
+        return { ok: false, error: 'invalid_columns', hint: `columns entries must be one of: ${V15_BOM_COLUMNS.join(', ')}` }
+      }
+      if (!out.includes(c as V15CadBomColumn)) out.push(c as V15CadBomColumn)
+    }
+    columns = out
+  }
+  let title: string | undefined
+  if (p.title !== undefined) {
+    if (typeof p.title !== 'string') {
+      return { ok: false, error: 'invalid_title', hint: 'title must be a string when provided' }
+    }
+    title = p.title
+  }
+  return {
+    ok: true,
+    payload: {
+      svg: p.svg,
+      rows,
+      ...(columns !== undefined ? { columns } : {}),
+      ...(title !== undefined ? { title } : {}),
+    },
+  }
+}
+
+/** Shape guard for one projected ``[x, y]`` point. */
+function looks2dPoint(value: unknown): value is [number, number] {
+  if (!Array.isArray(value) || value.length !== 2) return false
+  return (
+    typeof value[0] === 'number' &&
+    Number.isFinite(value[0]) &&
+    typeof value[1] === 'number' &&
+    Number.isFinite(value[1])
+  )
+}
+
+/** Coerce one projected vertex; returns ``null`` on a malformed entry. */
+function coerceDrawingVertex(value: unknown): V15CadDrawingVertex | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  if (typeof v.id !== 'string' || v.id.length === 0) return null
+  if (typeof v.x !== 'number' || !Number.isFinite(v.x)) return null
+  if (typeof v.y !== 'number' || !Number.isFinite(v.y)) return null
+  return { id: v.id, x: v.x, y: v.y }
+}
+
+/** Coerce one projected edge; returns ``null`` on a malformed entry. */
+function coerceDrawingEdge(value: unknown): V15CadDrawingProjectedEdge | null {
+  if (!value || typeof value !== 'object') return null
+  const e = value as Record<string, unknown>
+  if (typeof e.id !== 'string' || e.id.length === 0) return null
+  const kindRaw = e.kind
+  const kind: V15CadDrawingEdgeKind =
+    kindRaw === 'line' || kindRaw === 'arc' || kindRaw === 'circle' || kindRaw === 'curve'
+      ? kindRaw
+      : 'curve'
+  if (!Array.isArray(e.points)) return null
+  const points = e.points.filter(looks2dPoint)
+  if (points.length < 2) return null
+  return { id: e.id, kind, points }
+}
+
+/** Coerce one snap point; returns ``null`` on a malformed entry. */
+function coerceDrawingSnapPoint(value: unknown): V15CadDrawingSnapPoint | null {
+  if (!value || typeof value !== 'object') return null
+  const s = value as Record<string, unknown>
+  if (typeof s.id !== 'string' || s.id.length === 0) return null
+  if (typeof s.x !== 'number' || !Number.isFinite(s.x)) return null
+  if (typeof s.y !== 'number' || !Number.isFinite(s.y)) return null
+  if (typeof s.kind !== 'string' || !(V15_SNAP_KINDS as readonly string[]).includes(s.kind)) return null
+  if (typeof s.sourceId !== 'string' || s.sourceId.length === 0) return null
+  return {
+    id: s.id,
+    x: s.x,
+    y: s.y,
+    kind: s.kind as V15CadDrawingSnapKind,
+    sourceId: s.sourceId,
+  }
+}
+
+/**
+ * Coerce the raw ``cad.extract_drawing_geometry`` payload into the typed
+ * result. Returns ``null`` when the response is structurally unusable
+ * (missing arrays / view) so the handler folds to ``sidecar_protocol_error``.
+ * Malformed individual vertices / edges / snap points drop silently
+ * (defense-in-depth) so one bad entry never poisons the whole projection.
+ */
+export function v15CoerceExtractDrawingGeometryResult(
+  raw: Record<string, unknown>,
+): V15CadExtractDrawingGeometryResult | null {
+  if (typeof raw.view !== 'string' || !(V15_DRAWING_VIEWS as readonly string[]).includes(raw.view)) {
+    return null
+  }
+  if (!Array.isArray(raw.vertices)) return null
+  if (!Array.isArray(raw.edges)) return null
+  if (!Array.isArray(raw.snapPoints)) return null
+  const vertices: V15CadDrawingVertex[] = []
+  for (const v of raw.vertices) {
+    const c = coerceDrawingVertex(v)
+    if (c) vertices.push(c)
+  }
+  const edges: V15CadDrawingProjectedEdge[] = []
+  for (const e of raw.edges) {
+    const c = coerceDrawingEdge(e)
+    if (c) edges.push(c)
+  }
+  const snapPoints: V15CadDrawingSnapPoint[] = []
+  for (const s of raw.snapPoints) {
+    const c = coerceDrawingSnapPoint(s)
+    if (c) snapPoints.push(c)
+  }
+  return {
+    view: raw.view as V15CadDrawingView,
+    vertices,
+    edges,
+    snapPoints,
+  }
+}
+
+/**
+ * Coerce the raw ``cad.drawing_bom_table`` payload into the typed result.
+ * Returns ``null`` when the response is structurally unusable (missing svg)
+ * so the handler folds to ``sidecar_protocol_error``.
+ */
+export function v15CoerceDrawingBomTableResult(
+  raw: Record<string, unknown>,
+): V15CadDrawingBomTableResult | null {
+  if (typeof raw.svg !== 'string') return null
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes)
+      ? raw.bytes
+      : Buffer.byteLength(raw.svg, 'utf8')
+  const rowCount =
+    typeof raw.rowCount === 'number' &&
+    Number.isFinite(raw.rowCount) &&
+    Number.isInteger(raw.rowCount) &&
+    raw.rowCount >= 0
+      ? raw.rowCount
+      : 0
+  return {
+    svg: raw.svg,
+    bytes,
+    rowCount,
+  }
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerCadIpc(_ctx: MainIpcWindowContext): void {
@@ -2569,6 +2901,85 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
           ok: false,
           error: 'sidecar_protocol_error',
           hint: 'cad.attach_title_block returned a malformed svg/metadata envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // ── CAD V1.5 (Associative-dimension geometry + BOM-table) handlers ───────
+  //
+  // Two additive IPC channels exposing the BUILD-9 sidecar surface. Same
+  // pattern as the BUILD-7 drawing handlers — envelope validation at the
+  // boundary, the sidecar owns the deep geometry / row formatting. Budgets:
+  //   * extractDrawingGeometry — 60 s (re-projects the body, then walks the
+  //                              topology; matches the dimension-drawing
+  //                              ceiling since both re-project).
+  //   * drawingBomTable        — 15 s (pure SVG string manipulation; no
+  //                              CadQuery call required, like attachTitleBlock).
+
+  // cad:extractDrawingGeometry -- projected 2D geometry with stable ids so the
+  // renderer's DrawingView can resolve snap points and place associative
+  // dimensions. Renderer-only; no G-code involved.
+  ipcMain.handle(
+    'cad:extractDrawingGeometry',
+    async (_e, raw: unknown): Promise<V15CadExtractDrawingGeometryResponse> => {
+      const v = v15ValidateExtractDrawingGeometryPayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.extract_drawing_geometry',
+        {
+          handle: v.payload.handle,
+          view: v.payload.view,
+        },
+        pyCtx,
+        60_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceExtractDrawingGeometryResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.extract_drawing_geometry returned a malformed vertices/edges/snapPoints envelope',
+        }
+      }
+      return { ok: true, result: coerced }
+    },
+  )
+
+  // cad:drawingBomTable -- stamp a BOM-table <g> into an SVG from the rows the
+  // assembly already provides. Pure SVG composition; the sidecar does NOT
+  // recompute the BOM. Renderer-only; no G-code involved.
+  ipcMain.handle(
+    'cad:drawingBomTable',
+    async (_e, raw: unknown): Promise<V15CadDrawingBomTableResponse> => {
+      const v = v15ValidateDrawingBomTablePayload(raw)
+      if (!('payload' in v)) return v
+      const pyCtx = await resolvePythonContext()
+      if (!pyCtx.ok) return { ok: false, error: pyCtx.error, hint: pyCtx.hint }
+      const r = await callSidecar<Record<string, unknown>>(
+        'cad.drawing_bom_table',
+        {
+          svg: v.payload.svg,
+          // Re-serialize through the typed surface so an upstream renderer
+          // that smuggled extras doesn't leak them through the wire.
+          rows: v.payload.rows as unknown as Record<string, unknown>[],
+          ...(v.payload.columns !== undefined ? { columns: v.payload.columns } : {}),
+          ...(v.payload.title !== undefined ? { title: v.payload.title } : {}),
+        },
+        pyCtx,
+        15_000,
+      )
+      if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      const coerced = v15CoerceDrawingBomTableResult(r.result)
+      if (!coerced) {
+        return {
+          ok: false,
+          error: 'sidecar_protocol_error',
+          hint: 'cad.drawing_bom_table returned a malformed svg/rowCount envelope',
         }
       }
       return { ok: true, result: coerced }

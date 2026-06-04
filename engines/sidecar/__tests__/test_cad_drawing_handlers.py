@@ -457,6 +457,40 @@ result = cq.Workplane('XY').box(30, 30, 30)
 
 
 @requires_cadquery
+def test_v15_dimension_label_is_xml_escaped() -> None:
+    """A dimension label carrying XML metacharacters MUST be entity-escaped in
+    the emitted SVG. The drawing SVG is rendered in the renderer via
+    `dangerouslySetInnerHTML`, and labels are operator free-text persisted in
+    drawing.json — escaping at the sidecar is the stored-XSS guard (Safety
+    Rule 4). A normal label (no specials) is unaffected (escape is a no-op),
+    so the verbatim-label pin above still holds."""
+    script = """
+import cadquery as cq
+result = cq.Workplane('XY').box(30, 30, 30)
+"""
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    r = cad_handlers.dimension_drawing({
+        "handle": handle,
+        "view": "front",
+        "dimensions": [
+            {"kind": "distance",
+             "p1": {"x": 0, "y": 0},
+             "p2": {"x": 30, "y": 0},
+             "label": '</text><script>alert(1)</script> & done'},
+        ],
+    })
+    svg = r["svg"]
+    # No raw markup from the label may survive into the SVG.
+    assert "<script>" not in svg
+    assert "</text><script>" not in svg
+    # The metacharacters are entity-escaped; the inner text is preserved.
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in svg
+    assert "&amp; done" in svg
+
+
+@requires_cadquery
 def test_v15_dimension_drawing_empty_list_round_trips() -> None:
     """An empty dimension list MUST round-trip back to the bare
     projection (zero `<g class="dim` markers) so the renderer can toggle
