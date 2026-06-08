@@ -1,0 +1,42 @@
+/* ============================================================
+   WorkTrack3D — Design cockpit chrome (10-mockup fidelity).
+   Layers the mockup's viewport depth + CAD grid onto the Design
+   workspace center pane. All colors come from the themed tokens
+   (themes.css) so it reskins with every theme. Kept as its own
+   file so the 2.6k-line manufacture.css stays untouched
+   (docs/EDIT-WORKFLOW.md), and imported LAST in index.css so
+   these rules win the cascade over the interim placeholder styles.
+   Reference: docs/ui-mockups/index.html  .wt-viewport / .vp-grid
+   ============================================================ */
+
+/* Center pane = the 3D stage. Radial-gradient depth like the mockup
+   .wt-viewport (mockup used --viewport-1/-2; we map to the real
+   --bg2 / --bg0 surface tokens so it tracks the active theme). */
+.design-workspace__viewport-col {
+  position: relative;
+  background: radial-gradient(120% 120% at 50% 35%, var(--bg2), var(--bg0));
+}
+
+/* Subtle CAD grid, radially masked so it fades toward the edges
+   (mockup .vp-grid). Painted behind the viewport content via ::before,
+   so no JSX change is needed in the 1.1k-line DesignWorkspace.tsx. */
+.design-workspace__viewport-col::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.45;
+  -webkit-mask-image: radial-gradient(110% 90% at 50% 45%, #000 55%, transparent);
+  mask-image: radial-gradient(110% 90% at 50% 45%, #000 55%, transparent);
+}
+
+/* Keep real viewport content (build summary, empty-state, selection
+   chip) above the grid overlay. */
+.design-workspace__viewport-summary,
+.design-workspace__selection-chip {
+  position: relative;
+}
