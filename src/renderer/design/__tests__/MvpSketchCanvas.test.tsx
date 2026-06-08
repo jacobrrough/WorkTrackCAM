@@ -108,3 +108,41 @@ describe('MvpSketchCanvas — render contract', () => {
     expect(html).not.toContain('data-testid="sketch-mvp-canvas"')
   })
 })
+
+describe('MvpSketchCanvas — snap toggle + cursor read-out chrome', () => {
+  // `renderToStaticMarkup` skips effects + canvas 2D context, so a non-headless
+  // static render exercises the new chrome markup without needing jsdom.
+  it('renders the snap-to-grid toggle (default ON, labelled with the grid step)', () => {
+    const html = renderToStaticMarkup(
+      createElement(MvpSketchCanvas, { width: 800, height: 600, gridMm: 5 })
+    )
+    expect(html).toContain('data-testid="sketch-mvp-snap-toggle"')
+    expect(html).toContain('data-snap="on"')
+    // Default-on label shows the active grid step so the operator knows what snaps.
+    expect(html).toContain('Snap 5 mm')
+  })
+
+  it('renders the live cursor world read-out (placeholder before the pointer moves)', () => {
+    const html = renderToStaticMarkup(
+      createElement(MvpSketchCanvas, { width: 800, height: 600 })
+    )
+    expect(html).toContain('data-testid="sketch-mvp-cursor-readout"')
+    expect(html).toContain('X --  Y -- mm')
+  })
+
+  it('mounts the canvas inside a measurable host wrapper (ResizeObserver target)', () => {
+    const html = renderToStaticMarkup(
+      createElement(MvpSketchCanvas, { width: 800, height: 600 })
+    )
+    expect(html).toContain('class="sketch-mvp-canvas-host"')
+    expect(html).toContain('data-testid="sketch-mvp-canvas"')
+  })
+
+  it('does NOT show the draw-dimension Apply button before a start pick exists', () => {
+    // Default tool is `select` with an empty draft, so no numeric draw affordance.
+    const html = renderToStaticMarkup(
+      createElement(MvpSketchCanvas, { width: 800, height: 600 })
+    )
+    expect(html).not.toContain('data-testid="sketch-mvp-apply-dim"')
+  })
+})

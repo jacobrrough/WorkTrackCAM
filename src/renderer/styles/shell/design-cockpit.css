@@ -34,6 +34,16 @@
   mask-image: radial-gradient(110% 90% at 50% 45%, #000 55%, transparent);
 }
 
+/* De-conflict the two grids: when the 2D sketcher is mounted in this pane it
+   paints its OWN mm-accurate grid (in `MvpSketchCanvas`). The decorative 32px
+   ::before lattice above would otherwise show through behind it at a DIFFERENT
+   spacing — two misaligned grids that make "what you see is what you snap to"
+   a lie. Scope the decorative grid OFF whenever the sketch host is present so
+   only the snap-accurate canvas grid is visible while sketching. */
+.design-workspace__viewport-col:has(.design-workspace__sketch-host)::before {
+  display: none;
+}
+
 /* Keep real viewport content (build summary, empty-state, selection
    chip) above the grid overlay. */
 .design-workspace__viewport-summary,
@@ -413,6 +423,29 @@
   display: flex;
   justify-content: flex-end;
   padding-top: var(--sp-2);
+}
+
+/* The mounted sketcher fills the host so its ResizeObserver measures a real box
+   (not a content-collapsed 0px). Flex-grow between the armed pill and the
+   Finish-sketch row. The component also sets an inline height fallback. */
+.design-workspace__sketch-host > .sketch-mvp-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Snap-toggle + live cursor read-out row (under the sketcher ribbon). The
+   component supplies inline token-fallback styles; these class hooks let a
+   theme pass refine them without touching the >800-line component file. */
+.sketch-mvp-status {
+  flex: none;
+}
+.sketch-mvp-cursor {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--txt1, #c4ccd6);
+}
+.sketch-mvp-canvas-host {
+  min-height: 0;
 }
 
 /* ============================================================

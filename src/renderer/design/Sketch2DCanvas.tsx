@@ -631,9 +631,14 @@ export function Sketch2DCanvas({
       return
     }
     if (ev.button !== 0) return
+    // `clientToCanvasLocal` now returns BITMAP-space px (it rescales by
+    // canvas.width/rect.width when the canvas is CSS-stretched). Map from that
+    // same bitmap space: feed the bitmap dimensions and a DPR-scaled px/mm. The
+    // DPR factor cancels against the bitmap/CSS ratio, so the world result is
+    // identical to the CSS-space mapping at dpr=1 and stays correct at dpr>1.
     const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
-    const view = viewportSize()
-    const raw = screenToWorld(lx, ly, view.w, view.h, scale, ox, oy)
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
     const w: [number, number] = [snap(raw[0], gridMm), snap(raw[1], gridMm)]
 
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
@@ -902,8 +907,8 @@ export function Sketch2DCanvas({
       return
     }
     const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
-    const view = viewportSize()
-    const raw = screenToWorld(lx, ly, view.w, view.h, scale, ox, oy)
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
     const p: [number, number] = [snap(raw[0], gridMm), snap(raw[1], gridMm)]
 
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
@@ -1670,6 +1675,47 @@ export function MvpSketchCanvas({
   const oy = 0
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ── Responsive sizing ──────────────────────────────────────────────────────
+  // The canvas used to be a FIXED ``width``x``height`` bitmap that the cockpit
+  // CSS then stretched to fill the pane, so ``rect.width !== width`` and every
+  // pointer→world map landed offset (the "mouse doesn't line up with the grid"
+  // bug). We now measure the host element and size the bitmap to its displayed
+  // CSS box (×devicePixelRatio for crispness). The pointer path reads the SAME
+  // measured size, so a click on a rendered grid intersection lands on the exact
+  // world mm of that intersection. ``viewport`` falls back to the ``width`` /
+  // ``height`` props until the first ResizeObserver callback (and in headless /
+  // SSR where there is no layout engine).
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: width, h: height })
+  /** Snap pointer placements to the ``gridMm`` lattice. Toggleable (Fusion-style). */
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  /** Live cursor position in world mm (for the read-out + numeric-draw direction). */
+  const [cursorWorld, setCursorWorld] = useState<[number, number] | null>(null)
+
+  useEffect(() => {
+    if (headless) return
+    const host = hostRef.current
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const r = host.getBoundingClientRect()
+      const w = Math.max(1, Math.floor(r.width))
+      const h = Math.max(1, Math.floor(r.height))
+      setViewport((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [headless])
+
+  /**
+   * The drawable CSS size in px. When the host has been measured it is the live
+   * box; before that (and in headless/SSR) it falls back to the props so the
+   * world math + grid stay self-consistent.
+   */
+  const viewW = headless ? width : viewport.w
+  const viewH = headless ? height : viewport.h
+
   const tool = useMemo(() => SKETCH_TOOLS.find((t) => t.id === activeToolId)!, [activeToolId])
 
   /**
@@ -1865,33 +1911,67 @@ export function MvpSketchCanvas({
     if (!c) return
     const ctx = c.getContext('2d')
     if (!ctx) return
+    // Size the bitmap to the measured CSS box × devicePixelRatio so the drawn
+    // grid fills the pane crisply AND lines up 1:1 with the pointer math (which
+    // reads the same bitmap dimensions). All drawing below is in CSS-pixel space
+    // because we scale the context by ``dpr``.
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const vw = Math.max(1, Math.floor(viewW))
+    const vh = Math.max(1, Math.floor(viewH))
+    const bitmapW = Math.max(1, Math.round(vw * dpr))
+    const bitmapH = Math.max(1, Math.round(vh * dpr))
+    if (c.width !== bitmapW || c.height !== bitmapH) {
+      c.width = bitmapW
+      c.height = bitmapH
+    }
+    c.style.width = `${vw}px`
+    c.style.height = `${vh}px`
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.fillStyle = 'rgba(20, 24, 32, 1)' // matches var(--bg2) approx
-    ctx.fillRect(0, 0, width, height)
-    // Grid -- light vertical/horizontal lines every gridMm.
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-    ctx.lineWidth = 1
-    const cx = width / 2
-    const cy = height / 2
+    ctx.fillRect(0, 0, vw, vh)
+    const cx = vw / 2
+    const cy = vh / 2
+    // Grid -- light lines at EXACTLY ``gridMm`` spacing, anchored to the world
+    // origin so what the operator sees is exactly the lattice that ``snap``
+    // lands on. We iterate world coordinates and project, rather than walking
+    // ``cx % gridPx``, so the lines stay locked to integer-mm multiples.
     const gridPx = gridMm * scale
-    for (let x = cx % gridPx; x < width; x += gridPx) {
-      ctx.beginPath()
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, height)
-      ctx.stroke()
+    if (gridPx >= 4) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+      ctx.lineWidth = 1
+      // Left/right world bounds at the current view.
+      const wxMin = (0 - cx) / scale + ox
+      const wxMax = (vw - cx) / scale + ox
+      const wyMin = oy - (vh - cy) / scale
+      const wyMax = oy - (0 - cy) / scale
+      const gx0 = Math.ceil(wxMin / gridMm) * gridMm
+      const gx1 = Math.floor(wxMax / gridMm) * gridMm
+      for (let gx = gx0; gx <= gx1 + gridMm * 0.5; gx += gridMm) {
+        const sx = Math.round(cx + (gx - ox) * scale) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(sx, 0)
+        ctx.lineTo(sx, vh)
+        ctx.stroke()
+      }
+      const gy0 = Math.ceil(wyMin / gridMm) * gridMm
+      const gy1 = Math.floor(wyMax / gridMm) * gridMm
+      for (let gy = gy0; gy <= gy1 + gridMm * 0.5; gy += gridMm) {
+        const sy = Math.round(cy - (gy - oy) * scale) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(0, sy)
+        ctx.lineTo(vw, sy)
+        ctx.stroke()
+      }
     }
-    for (let y = cy % gridPx; y < height; y += gridPx) {
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(width, y)
-      ctx.stroke()
-    }
-    // Axes
+    // Axes (world X/Y through the origin).
     ctx.strokeStyle = 'rgba(160,160,160,0.25)'
+    const axX = Math.round(cx + (0 - ox) * scale) + 0.5
+    const axY = Math.round(cy - (0 - oy) * scale) + 0.5
     ctx.beginPath()
-    ctx.moveTo(cx, 0)
-    ctx.lineTo(cx, height)
-    ctx.moveTo(0, cy)
-    ctx.lineTo(width, cy)
+    ctx.moveTo(axX, 0)
+    ctx.lineTo(axX, vh)
+    ctx.moveTo(0, axY)
+    ctx.lineTo(vw, axY)
     ctx.stroke()
     // Entities
     const wp = (wx: number, wy: number): [number, number] => [
@@ -2005,8 +2085,40 @@ export function MvpSketchCanvas({
         ctx.arc(px, py, 4, 0, Math.PI * 2)
         ctx.fill()
       }
+      // Rubber-band from the last pick to the live (snapped) cursor so a draw
+      // tool reads like Fusion: you see the segment / radius before committing.
+      if (cursorWorld && tool.kind === 'draw') {
+        const last = draft.picks[draft.picks.length - 1]!
+        const [lpx, lpy] = wp(last.x, last.y)
+        const [cpx, cpy] = wp(cursorWorld[0], cursorWorld[1])
+        ctx.strokeStyle = 'rgba(255,180,80,0.6)'
+        ctx.setLineDash([4, 4])
+        ctx.beginPath()
+        ctx.moveTo(lpx, lpy)
+        ctx.lineTo(cpx, cpy)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
     }
-  }, [headless, state.sketch, draft, width, height, gridMm, statusMap])
+    // Snapped-cursor crosshair: a small marker at the exact lattice point the
+    // next click will land on, so "what you see is what you snap to" is literal.
+    if (cursorWorld && tool.kind !== 'select') {
+      const [hx, hy] = wp(cursorWorld[0], cursorWorld[1])
+      ctx.strokeStyle = snapEnabled ? 'rgba(120,220,160,0.95)' : 'rgba(255,180,80,0.9)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(hx - 7, hy)
+      ctx.lineTo(hx + 7, hy)
+      ctx.moveTo(hx, hy - 7)
+      ctx.lineTo(hx, hy + 7)
+      ctx.stroke()
+      if (snapEnabled) {
+        ctx.beginPath()
+        ctx.arc(hx, hy, 3.5, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+    }
+  }, [headless, state.sketch, draft, viewW, viewH, gridMm, statusMap, cursorWorld, snapEnabled, tool])
 
   useEffect(() => {
     draw()
@@ -2055,48 +2167,167 @@ export function MvpSketchCanvas({
     return best?.id ?? null
   }
 
+  /**
+   * Map a DOM pointer event to a world-space point in the SAME bitmap space the
+   * grid is drawn in. ``clientToCanvasLocal`` returns bitmap px (rescaled for any
+   * CSS stretch); we feed the bitmap dimensions + a DPR-scaled px/mm to
+   * ``screenToWorld`` so the DPR factor cancels and the returned mm is exact.
+   */
+  const pointerToWorld = useCallback(
+    (ev: { clientX: number; clientY: number }): [number, number] | null => {
+      const c = canvasRef.current
+      if (!c) return null
+      const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
+      const dpr = Math.max(1, window.devicePixelRatio || 1)
+      return screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
+    },
+    []
+  )
+
+  /**
+   * Resolve the placement coordinates for a raw world point: snap to an existing
+   * point if the cursor is within tolerance (always -- endpoint snapping is
+   * unconditionally helpful), else snap to the ``gridMm`` lattice when snapping
+   * is enabled, else use the raw world point. Returns the resolved pick.
+   */
+  const resolvePick = useCallback(
+    (rawX: number, rawY: number): SketchPick => {
+      const pointId = probePointId(rawX, rawY) ?? undefined
+      const entityId = probeEntityId(rawX, rawY) ?? undefined
+      if (pointId) {
+        const pt = state.sketch.points[pointId]!
+        return { x: pt.x, y: pt.y, pointId, entityId }
+      }
+      const x = snapEnabled ? snap(rawX, gridMm) : rawX
+      const y = snapEnabled ? snap(rawY, gridMm) : rawY
+      return { x, y, pointId, entityId }
+    },
+    [state.sketch.points, state.sketch.entities, snapEnabled, gridMm]
+  )
+
+  /** Route a resolved pick through the pure tool router + apply the result. */
+  const routePick = useCallback(
+    (pick: SketchPick, value?: number) => {
+      const draftWithValue: SketchToolDraft = { ...draft, numericValue: value }
+      const result = handleSketchToolClick(activeToolId, draftWithValue, pick, {
+        entities: state.sketch.entities,
+        nextId: idFactory
+      })
+      if (result.kind === 'updateDraft') {
+        setDraft(result.draft)
+        setHint(`${tool.label}: ${draft.picks.length + 1}/${tool.requiredPicks} picks.`)
+        return
+      }
+      if (result.kind === 'commit') {
+        dispatch(result.action)
+        setDraft(emptyDraft)
+        setNumericInput('')
+        if (result.hint) setHint(result.hint)
+        return
+      }
+      if (result.kind === 'commitMany') {
+        for (const a of result.actions) dispatch(a)
+        setDraft(emptyDraft)
+        setNumericInput('')
+        if (result.hint) setHint(result.hint)
+        return
+      }
+      if (result.kind === 'error') {
+        setHint(`Error: ${result.message}`)
+        return
+      }
+      setHint(null)
+    },
+    [draft, activeToolId, state.sketch.entities, idFactory, tool]
+  )
+
   function onCanvasClick(ev: React.MouseEvent<HTMLCanvasElement>) {
-    const c = canvasRef.current
-    if (!c) return
-    const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
-    const [rawX, rawY] = screenToWorld(lx, ly, width, height, scale, ox, oy)
-    const snapped: [number, number] = [snap(rawX, gridMm), snap(rawY, gridMm)]
-    const pointId = probePointId(rawX, rawY) ?? undefined
-    const entityId = probeEntityId(rawX, rawY) ?? undefined
-    const pick: SketchPick = {
-      x: pointId ? state.sketch.points[pointId]!.x : snapped[0],
-      y: pointId ? state.sketch.points[pointId]!.y : snapped[1],
-      pointId,
-      entityId
-    }
+    const w = pointerToWorld(ev)
+    if (!w) return
+    const pick = resolvePick(w[0], w[1])
     const numericValue = numericInput.trim().length > 0 ? Number.parseFloat(numericInput) : undefined
-    const draftWithValue: SketchToolDraft = { ...draft, numericValue }
-    const result = handleSketchToolClick(activeToolId, draftWithValue, pick, {
-      entities: state.sketch.entities,
-      nextId: idFactory
-    })
-    if (result.kind === 'updateDraft') {
-      setDraft(result.draft)
-      setHint(`${tool.label}: ${draft.picks.length + 1}/${tool.requiredPicks} picks.`)
+    routePick(pick, numericValue)
+  }
+
+  function onCanvasMove(ev: React.MouseEvent<HTMLCanvasElement>) {
+    const w = pointerToWorld(ev)
+    if (!w) {
+      setCursorWorld(null)
       return
     }
-    if (result.kind === 'commit') {
-      dispatch(result.action)
-      setDraft(emptyDraft)
-      if (result.hint) setHint(result.hint)
+    // Mirror the placement resolution so the read-out + crosshair show exactly
+    // where a click would land (point-snap wins, else grid snap when enabled).
+    const pick = resolvePick(w[0], w[1])
+    setCursorWorld([pick.x, pick.y])
+  }
+
+  function onCanvasLeave() {
+    setCursorWorld(null)
+  }
+
+  /**
+   * Fusion-style typed dimension: with a draw tool's FIRST pick already placed,
+   * a typed value (+ Enter / Apply) synthesises the remaining pick along the
+   * current cursor direction and commits the entity. Wires
+   * ``numericInput -> active tool draft -> committed entity`` through the same
+   * pure router a click uses.
+   *   - line:      value = segment length along the cursor direction.
+   *   - circle:    value = radius (direction irrelevant).
+   *   - rectangle: ``W`` (square) or ``WxH`` -- sign follows the cursor quadrant.
+   */
+  function applyNumericDraw(): void {
+    const start = draft.picks[0]
+    if (!start) {
+      setHint('Place a start point first, then type a dimension.')
       return
     }
-    if (result.kind === 'commitMany') {
-      for (const a of result.actions) dispatch(a)
-      setDraft(emptyDraft)
-      if (result.hint) setHint(result.hint)
+    const raw = numericInput.trim()
+    if (raw.length === 0) {
+      setHint('Type a dimension value first.')
       return
     }
-    if (result.kind === 'error') {
-      setHint(`Error: ${result.message}`)
+    // Cursor direction relative to the start pick (defaults if no movement yet).
+    const dirX = cursorWorld ? cursorWorld[0] - start.x : 0
+    const dirY = cursorWorld ? cursorWorld[1] - start.y : 0
+
+    if (activeToolId === 'line') {
+      const len = Number.parseFloat(raw)
+      if (!Number.isFinite(len) || len <= 0) {
+        setHint('Line length must be a positive number (mm).')
+        return
+      }
+      const mag = Math.hypot(dirX, dirY)
+      const ux = mag > 1e-9 ? dirX / mag : 1
+      const uy = mag > 1e-9 ? dirY / mag : 0
+      routePick({ x: start.x + ux * len, y: start.y + uy * len })
       return
     }
-    setHint(null)
+    if (activeToolId === 'circle') {
+      const r = Number.parseFloat(raw)
+      if (!Number.isFinite(r) || r <= 0) {
+        setHint('Circle radius must be a positive number (mm).')
+        return
+      }
+      const mag = Math.hypot(dirX, dirY)
+      const ux = mag > 1e-9 ? dirX / mag : 1
+      const uy = mag > 1e-9 ? dirY / mag : 0
+      routePick({ x: start.x + ux * r, y: start.y + uy * r })
+      return
+    }
+    if (activeToolId === 'rectangle') {
+      const parts = raw.split(/[x*×]/i).map((s) => Number.parseFloat(s.trim()))
+      const wv = parts[0]
+      const hv = parts.length > 1 ? parts[1] : parts[0]
+      if (!Number.isFinite(wv) || !Number.isFinite(hv) || (wv ?? 0) <= 0 || (hv ?? 0) <= 0) {
+        setHint('Rectangle size must be `W` or `WxH` (positive mm).')
+        return
+      }
+      const sgnX = dirX >= 0 ? 1 : -1
+      const sgnY = dirY >= 0 ? 1 : -1
+      routePick({ x: start.x + sgnX * (wv as number), y: start.y + sgnY * (hv as number) })
+      return
+    }
+    setHint('Type-a-dimension works with the Line, Circle, and Rectangle tools.')
   }
 
   // ── Tokenised inline styles (no Tailwind). ────────────────────────────────
@@ -2108,7 +2339,12 @@ export function MvpSketchCanvas({
     background: 'var(--bg1, #0e1117)',
     color: 'var(--fg, #e6e6e6)',
     border: '1px solid var(--border, #2a2f37)',
-    borderRadius: '6px'
+    borderRadius: '6px',
+    // Fill the mounted sketch host so the canvas column has a real height to
+    // measure (otherwise the ResizeObserver sees a content-collapsed 0px box).
+    height: '100%',
+    minHeight: '420px',
+    boxSizing: 'border-box'
   }
   const paletteStyle: React.CSSProperties = {
     display: 'flex',
@@ -2139,7 +2375,8 @@ export function MvpSketchCanvas({
   const canvasColStyle: React.CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px'
+    gap: '6px',
+    minHeight: 0
   }
   const ribbonStyle: React.CSSProperties = {
     display: 'flex',
@@ -2177,7 +2414,30 @@ export function MvpSketchCanvas({
     cursor: tool.kind === 'select' ? 'default' : 'crosshair',
     background: 'var(--bg2, #151a22)',
     border: '1px solid var(--border, #2a2f37)',
-    borderRadius: '4px'
+    borderRadius: '4px',
+    width: '100%',
+    height: '100%'
+  }
+  // The flex-growing host whose CSS box the canvas bitmap matches 1:1.
+  const canvasHostStyle: React.CSSProperties = {
+    position: 'relative',
+    flex: '1 1 auto',
+    minHeight: '320px',
+    display: 'flex'
+  }
+  // Snap-toggle + live cursor read-out row under the ribbon.
+  const statusRowStyle: React.CSSProperties = {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+    fontSize: '11px',
+    color: 'var(--muted, #9aa4b2)'
+  }
+  const snapToggleStyle: React.CSSProperties = {
+    ...btnStyle,
+    padding: '3px 8px',
+    borderColor: snapEnabled ? 'var(--accent, #5b9aff)' : 'var(--border, #2a2f37)',
+    color: snapEnabled ? 'var(--accent, #5b9aff)' : 'var(--fg, #e6e6e6)'
   }
   const bannerStyle = (kind: 'ok' | 'err'): React.CSSProperties => ({
     padding: '6px 10px',
@@ -2219,10 +2479,30 @@ export function MvpSketchCanvas({
     }
   }
 
+  // The numeric ribbon field serves two audiences:
+  //   • constraint tools (distance / radius / angle) — the value is consumed by
+  //     the NEXT pick that completes the constraint (existing behaviour).
+  //   • draw tools (line / circle / rectangle) once a start pick exists — typing
+  //     a value + Enter/Apply commits the dimension along the cursor direction
+  //     (Fusion-style). Hidden again until the first pick lands so it never
+  //     competes with the very first click.
+  const drawDimActive =
+    draft.picks.length >= 1 &&
+    (activeToolId === 'line' || activeToolId === 'circle' || activeToolId === 'rectangle')
   const showNumericInput =
     activeToolId === 'distanceConstraint' ||
     activeToolId === 'radiusConstraint' ||
-    activeToolId === 'angleConstraint'
+    activeToolId === 'angleConstraint' ||
+    drawDimActive
+  const numericFieldLabel = drawDimActive
+    ? activeToolId === 'line'
+      ? 'Length (mm)'
+      : activeToolId === 'circle'
+        ? 'Radius (mm)'
+        : 'W or WxH (mm)'
+    : activeToolId === 'angleConstraint'
+      ? 'Angle (deg)'
+      : 'Value (mm)'
 
   return (
     <div
@@ -2258,16 +2538,36 @@ export function MvpSketchCanvas({
           </span>
           {showNumericInput && (
             <label className="sketch-mvp-ribbon__numeric" style={ribbonLabelStyle}>
-              Value (mm)
+              {numericFieldLabel}
               <input
                 type="text"
                 inputMode="decimal"
                 value={numericInput}
                 onChange={(e) => setNumericInput(e.target.value)}
+                onKeyDown={(e) => {
+                  // Fusion-style: Enter/Tab commits a typed draw dimension. For
+                  // constraint tools the value is consumed by the next pick, so
+                  // Enter is a no-op there (avoids a confusing empty commit).
+                  if ((e.key === 'Enter' || e.key === 'Tab') && drawDimActive) {
+                    if (e.key === 'Enter') e.preventDefault()
+                    applyNumericDraw()
+                  }
+                }}
                 style={{ ...inputStyle, marginLeft: '4px' }}
                 data-testid="sketch-mvp-numeric-input"
               />
             </label>
+          )}
+          {drawDimActive && (
+            <button
+              type="button"
+              onClick={applyNumericDraw}
+              style={btnStyle}
+              data-testid="sketch-mvp-apply-dim"
+              title="Commit the typed dimension along the current cursor direction"
+            >
+              Apply
+            </button>
           )}
           <button
             type="button"
@@ -2345,15 +2645,39 @@ export function MvpSketchCanvas({
           </span>
         </div>
         {!headless && (
-          <canvas
-            ref={canvasRef}
-            width={width}
-            height={height}
-            data-testid="sketch-mvp-canvas"
-            className="sketch-mvp-canvas"
-            style={canvasStyle}
-            onClick={onCanvasClick}
-          />
+          <div className="sketch-mvp-status" data-testid="sketch-mvp-status" style={statusRowStyle}>
+            <button
+              type="button"
+              onClick={() => setSnapEnabled((s) => !s)}
+              style={snapToggleStyle}
+              data-testid="sketch-mvp-snap-toggle"
+              data-snap={snapEnabled ? 'on' : 'off'}
+              aria-pressed={snapEnabled}
+              title="Toggle snap-to-grid (placements lock to the grid lattice)"
+            >
+              {snapEnabled ? `Snap ${gridMm} mm` : 'Snap off'}
+            </button>
+            <span data-testid="sketch-mvp-cursor-readout" className="sketch-mvp-cursor">
+              {cursorWorld
+                ? `X ${cursorWorld[0].toFixed(2)}  Y ${cursorWorld[1].toFixed(2)} mm`
+                : 'X --  Y -- mm'}
+            </span>
+          </div>
+        )}
+        {!headless && (
+          <div ref={hostRef} className="sketch-mvp-canvas-host" style={canvasHostStyle}>
+            <canvas
+              ref={canvasRef}
+              width={width}
+              height={height}
+              data-testid="sketch-mvp-canvas"
+              className="sketch-mvp-canvas"
+              style={canvasStyle}
+              onClick={onCanvasClick}
+              onMouseMove={onCanvasMove}
+              onMouseLeave={onCanvasLeave}
+            />
+          </div>
         )}
         {solverError && (
           <div

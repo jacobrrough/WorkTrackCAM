@@ -122,6 +122,108 @@ describe('[ID-0186] sketch2d-canvas-coords -- clientToCanvasLocal', () => {
   })
 })
 
+describe('sketch2d-canvas-coords -- clientToCanvasLocal stretched-bitmap mapping (the MvpSketchCanvas cursor↔grid bug)', () => {
+  /**
+   * A canvas whose BITMAP (canvas.width/height) differs from its DISPLAYED CSS
+   * box (rect.width/height) — the exact condition the mounted sketcher hit when
+   * an 800×600 bitmap was CSS-stretched to fill the cockpit pane. Without the
+   * scale-to-bitmap fix, `clientX - rect.left` is in CSS px and lands offset.
+   */
+  function stretchedCanvas(opts: {
+    left: number
+    top: number
+    cssW: number
+    cssH: number
+    bitmapW: number
+    bitmapH: number
+  }): HTMLCanvasElement {
+    return {
+      width: opts.bitmapW,
+      height: opts.bitmapH,
+      getBoundingClientRect: () => ({
+        left: opts.left,
+        top: opts.top,
+        right: opts.left + opts.cssW,
+        bottom: opts.top + opts.cssH,
+        width: opts.cssW,
+        height: opts.cssH,
+        x: opts.left,
+        y: opts.top,
+        toJSON: () => ({})
+      })
+    } as unknown as HTMLCanvasElement
+  }
+
+  it('rescales the CSS-pixel offset into bitmap pixels by canvas.width/rect.width', () => {
+    // Bitmap is 2× the CSS box (e.g. dpr=2, or an 800px bitmap stretched to 400).
+    const c = stretchedCanvas({ left: 0, top: 0, cssW: 400, cssH: 300, bitmapW: 800, bitmapH: 600 })
+    // A click at the CSS-box center (200, 150) must map to the BITMAP center.
+    const [x, y] = clientToCanvasLocal(200, 150, c)
+    expect(x).toBe(400)
+    expect(y).toBe(300)
+  })
+
+  it('accounts for rect.left/top BEFORE applying the bitmap scale', () => {
+    const c = stretchedCanvas({ left: 100, top: 50, cssW: 400, cssH: 300, bitmapW: 800, bitmapH: 600 })
+    // CSS offset = (300-100, 200-50) = (200, 150); ×2 → (400, 300).
+    const [x, y] = clientToCanvasLocal(300, 200, c)
+    expect(x).toBe(400)
+    expect(y).toBe(300)
+  })
+
+  it('is a no-op (pure subtraction) when bitmap == CSS box', () => {
+    const c = stretchedCanvas({ left: 10, top: 20, cssW: 800, cssH: 600, bitmapW: 800, bitmapH: 600 })
+    const [x, y] = clientToCanvasLocal(110, 120, c)
+    expect(x).toBe(100)
+    expect(y).toBe(100)
+  })
+
+  it('END-TO-END: clicking a rendered grid intersection maps to its exact world mm on a STRETCHED canvas', () => {
+    // The mounted sketcher draws its grid in BITMAP space and feeds screenToWorld
+    // the BITMAP dimensions + a DPR-scaled px/mm. Reproduce that pipeline and
+    // prove a click on the 5 mm grid line lands on exactly 5 mm (not an offset).
+    const gridMm = 5
+    const scale = 4 // px/mm (logical)
+    const dpr = 2
+    // Bitmap = CSS × dpr. CSS box 400×300 stretched from a 800×600 bitmap.
+    const cssW = 400
+    const cssH = 300
+    const bitmapW = cssW * dpr // 800
+    const bitmapH = cssH * dpr // 600
+    const c = stretchedCanvas({ left: 0, top: 0, cssW, cssH, bitmapW, bitmapH })
+    // World origin is the bitmap center: cx = bitmapW/2 = 400, scaleBitmap = scale*dpr = 8 px/mm.
+    // The world x=5 mm grid line is drawn at sxBitmap = cx + 5*8 = 440 (bitmap px) =
+    // 220 CSS px. A pointer there (clientX=220) must resolve to world x = 5 mm.
+    const clientX = 220
+    const clientY = cssH / 2 // 150 → world y = 0
+    const [lx, ly] = clientToCanvasLocal(clientX, clientY, c)
+    expect(lx).toBe(440) // bitmap px
+    expect(ly).toBe(300)
+    const [wx, wy] = screenToWorld(lx, ly, bitmapW, bitmapH, scale * dpr, 0, 0)
+    expect(wx).toBeCloseTo(5, 9)
+    expect(wy).toBeCloseTo(0, 9)
+    // And the snap step confirms it sits exactly on the lattice.
+    expect(snap(wx, gridMm)).toBeCloseTo(5, 9)
+  })
+
+  it('END-TO-END: an off-grid click snaps to the nearest 5 mm lattice point under stretch', () => {
+    const gridMm = 5
+    const scale = 4
+    const dpr = 2
+    const cssW = 400
+    const cssH = 300
+    const bitmapW = cssW * dpr
+    const bitmapH = cssH * dpr
+    const c = stretchedCanvas({ left: 0, top: 0, cssW, cssH, bitmapW, bitmapH })
+    // Aim near world x≈6.1 mm: sxBitmap = 400 + 6.1*8 = 448.8 → CSS 224.4.
+    const [lx, ly] = clientToCanvasLocal(224.4, 150, c)
+    const [wx] = screenToWorld(lx, ly, bitmapW, bitmapH, scale * dpr, 0, 0)
+    expect(wx).toBeCloseTo(6.1, 6)
+    // Snapped to the grid lands on 5 mm (nearest multiple of 5).
+    expect(snap(wx, gridMm)).toBeCloseTo(5, 9)
+  })
+})
+
 describe('[ID-0186] sketch2d-canvas-coords -- snap', () => {
   it('rounds to the nearest step', () => {
     expect(snap(7, 5)).toBe(5)

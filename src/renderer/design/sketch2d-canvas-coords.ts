@@ -22,12 +22,28 @@ export function screenToWorld(
 /**
  * Map viewport coordinates to canvas bitmap space. Required when CSS layout size ≠ canvas.width/height
  * (flex stretch, high-DPR, or toolbars shrinking the drawable area vs parent-measured dimensions).
+ *
+ * Defense-in-depth: when the canvas's bitmap size (`canvas.width`/`canvas.height`) differs from its
+ * displayed CSS size (`rect.width`/`rect.height`) — the exact case that made the cursor stop lining up
+ * with the grid when an 800×600 bitmap was CSS-stretched to fill the cockpit pane — the raw
+ * `clientX - rect.left` offset is in CSS pixels and must be rescaled into bitmap pixels by
+ * `canvas.width / rect.width` (and likewise for Y). The scale is only applied when both dimensions are
+ * finite, positive, and actually differ, so a 1:1 canvas (and the unit-test fakes that expose no
+ * `.width`/`.height`) pass straight through unchanged.
  */
 export function clientToCanvasLocal(clientX: number, clientY: number, canvas: HTMLCanvasElement): [number, number] {
   const rect = canvas.getBoundingClientRect()
-  const x = clientX - rect.left
-  const y = clientY - rect.top
-  return [x, y]
+  const offX = clientX - rect.left
+  const offY = clientY - rect.top
+  const bw = canvas.width
+  const bh = canvas.height
+  const rw = rect.width
+  const rh = rect.height
+  const sx =
+    Number.isFinite(bw) && bw > 0 && Number.isFinite(rw) && rw > 0 && bw !== rw ? bw / rw : 1
+  const sy =
+    Number.isFinite(bh) && bh > 0 && Number.isFinite(rh) && rh > 0 && bh !== rh ? bh / rh : 1
+  return [offX * sx, offY * sy]
 }
 
 export function snap(v: number, step: number): number {
