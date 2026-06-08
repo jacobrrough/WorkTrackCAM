@@ -128,12 +128,13 @@ describe('DesignWorkspaceHost — initialViewMode threading', () => {
     expect(html).not.toContain('data-testid="design-assembly-view"')
   })
 
-  it('marks the Assembly tab active in the tab bar when on the assemble route', () => {
+  it('mounts the Assembly branch on the assemble route WITHOUT an in-workspace tab bar (FG-6)', () => {
+    // FG-6 removed the in-workspace Part/Assembly/Drawing tab strip — the shell
+    // WorkspaceNav + ribbon own view switching now. The route still lands on the
+    // Assembly branch via initialViewMode, but no tab bar paints.
     const html = renderHost('assembly')
-    const assemblyTab = html.match(
-      /<button[^>]*data-testid="design-workspace-tab-assembly"[^>]*>/,
-    )
-    expect(assemblyTab).not.toBeNull()
-    expect(assemblyTab?.[0].includes('aria-selected="true"')).toBe(true)
+    expect(html).toContain('data-testid="design-assembly-view"')
+    expect(html).not.toContain('data-testid="design-workspace-tabbar"')
+    expect(html).not.toContain('data-testid="design-workspace-tab-assembly"')
   })
 })

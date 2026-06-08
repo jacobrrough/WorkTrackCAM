@@ -27,7 +27,10 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
   buildFaceHighlightSegments,
+  readGeometryEdgeIds,
   readGeometryFaceIds,
+  readGeometryVertexIds,
+  resolveSelectionFromPick,
 } from './Viewport3D'
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -127,5 +130,81 @@ describe('buildFaceHighlightSegments — wire-outline overlay', () => {
     expect(seg.length).toBe(18)
     // edge 0 → 1: (0,0,0) -> (2,0,0)
     expect(Array.from(seg.slice(0, 6))).toEqual([0, 0, 0, 2, 0, 0])
+  })
+})
+
+// ── readGeometryEdgeIds / readGeometryVertexIds (honest seam) ──────────────
+
+describe('readGeometryEdgeIds / readGeometryVertexIds — honest seam', () => {
+  it('returns null for a geometry the sidecar produces today (no edgeIds stash)', () => {
+    // The running kernel emits ONLY faceIds; edge/vertex stashes never
+    // exist, so the readers must report null (no fabricated ids).
+    const g = makeTwoTriangleGeometry([0, 1])
+    expect(readGeometryEdgeIds(g)).toBeNull()
+    expect(readGeometryVertexIds(g)).toBeNull()
+  })
+
+  it('returns null for a null/undefined geometry', () => {
+    expect(readGeometryEdgeIds(null)).toBeNull()
+    expect(readGeometryVertexIds(undefined)).toBeNull()
+  })
+
+  it('reads an edgeIds stash when a future surface provides one', () => {
+    // Forward-compat: prove the seam lights up the moment the data lands.
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).edgeIds = [7, 7]
+    expect(readGeometryEdgeIds(g)).toEqual([7, 7])
+  })
+
+  it('reads a vertexIds stash when provided', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).vertexIds = [3, 4]
+    expect(readGeometryVertexIds(g)).toEqual([3, 4])
+  })
+})
+
+// ── resolveSelectionFromPick (mode branching + honesty boundary) ──────
+
+describe('resolveSelectionFromPick — pick mode branching', () => {
+  it('face mode resolves the clicked triangle to a face Selection', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    expect(resolveSelectionFromPick('face', g, 0)).toEqual({ kind: 'face', faceId: 0 })
+    expect(resolveSelectionFromPick('face', g, 1)).toEqual({ kind: 'face', faceId: 1 })
+  })
+
+  it('face mode returns null when the triangle index is out of range', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    expect(resolveSelectionFromPick('face', g, 99)).toBeNull()
+    expect(resolveSelectionFromPick('face', g, undefined)).toBeNull()
+  })
+
+  it('face mode returns null on a legacy geometry with no faceIds stash', () => {
+    const g = new THREE.BufferGeometry()
+    expect(resolveSelectionFromPick('face', g, 0)).toBeNull()
+  })
+
+  it('edge mode returns null today (sidecar emits no edge ids — no fabrication)', () => {
+    // THE honesty boundary: a face-tagged mesh must NOT yield an edge
+    // selection just because the triangle resolves to a face.
+    const g = makeTwoTriangleGeometry([0, 1])
+    expect(resolveSelectionFromPick('edge', g, 0)).toBeNull()
+  })
+
+  it('vertex mode returns null today (no kernel vertex ids)', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    expect(resolveSelectionFromPick('vertex', g, 0)).toBeNull()
+  })
+
+  it('edge mode resolves an EdgeSelection once an edgeIds stash exists', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).edgeIds = [5, 9]
+    expect(resolveSelectionFromPick('edge', g, 0)).toEqual({ kind: 'edge', faceId: 5 })
+    expect(resolveSelectionFromPick('edge', g, 1)).toEqual({ kind: 'edge', faceId: 9 })
+  })
+
+  it('vertex mode resolves a VertexSelection once a vertexIds stash exists', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).vertexIds = [2, 6]
+    expect(resolveSelectionFromPick('vertex', g, 1)).toEqual({ kind: 'vertex', faceId: 6 })
   })
 })

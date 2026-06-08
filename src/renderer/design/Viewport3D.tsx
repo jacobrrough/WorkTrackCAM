@@ -23,8 +23,11 @@ import {
   type StandardView
 } from './viewport3d-camera-animate'
 import {
+  makeEdgeSelection,
   makeFaceSelection,
-  type Selection
+  makeVertexSelection,
+  type Selection,
+  type SelectionKind
 } from './selection-state'
 import {
   triangleToFaceId,
@@ -74,6 +77,22 @@ type Props = {
   onCenterOnBed?: () => void
   onSnapToBed?: () => void
   /**
+   * Which entity kind a plain (no-modifier) click should pick.
+   *
+   * - `'face'` (default) — resolves the clicked triangle to a CadQuery
+   *   face id via the geometry's `userData.faceIds` parallel array. This
+   *   is the only kernel-backed pick today (`cad.tessellate_with_ids`).
+   * - `'edge'` / `'vertex'` — reserved for the edge-fillet / chamfer
+   *   flows. HONEST LIMITATION: the sidecar emits NO per-triangle edge or
+   *   vertex id mapping (only `faceIds` + `faceMap`), so the raycast
+   *   cannot originate one yet. In these modes the click looks for an
+   *   `edgeIds` / `vertexIds` stash on the geometry and no-ops cleanly
+   *   when absent (today's reality) — it never fabricates an id. The prop
+   *   + plumbing exist so a future `tessellate_with_edge_ids` surface
+   *   lights up edge picking without a viewport change.
+   */
+  selectionMode?: SelectionKind
+  /**
    * CAD V1 Workflow H — entity-selection callback. Fires when the
    * operator left-clicks the solid in plain (no-modifier) mode AND the
    * hit triangle resolves to a face id via the geometry's
@@ -120,6 +139,90 @@ export function readGeometryFaceIds(
   // Trust the stash — DesignWorkspace already validated each entry is a
   // finite integer before writing. Cast to readonly for downstream safety.
   return candidate as readonly number[]
+}
+
+/**
+ * Read an arbitrary parallel-id stash off the geometry's `userData`.
+ * Internal helper behind the per-kind readers — defensive (returns `null`
+ * on a missing/malformed stash) so callers short-circuit cleanly.
+ */
+function readGeometryIdStash(
+  geometry: THREE.BufferGeometry | null | undefined,
+  key: 'edgeIds' | 'vertexIds'
+): readonly number[] | null {
+  if (!geometry || !geometry.userData) return null
+  const candidate = (geometry.userData as Record<string, unknown>)[key]
+  if (!Array.isArray(candidate)) return null
+  return candidate as readonly number[]
+}
+
+/**
+ * Read the per-triangle `edgeIds` parallel array, if the geometry carries
+ * one. HONEST SEAM: the sidecar's `cad.tessellate_with_ids` does NOT emit
+ * edge ids today (only `faceIds` + `faceMap` — see
+ * `engines/cad/cadquery_script.py::tessellate_with_face_ids`), so this
+ * returns `null` for every geometry the running shell produces. It exists
+ * so a future `tessellate_with_edge_ids` surface enables edge picking
+ * without touching the viewport's click handler. Exported for tests; pure.
+ */
+export function readGeometryEdgeIds(
+  geometry: THREE.BufferGeometry | null | undefined
+): readonly number[] | null {
+  return readGeometryIdStash(geometry, 'edgeIds')
+}
+
+/**
+ * Read the per-triangle `vertexIds` parallel array, if present. Same honest
+ * seam as {@link readGeometryEdgeIds} — no kernel vertex-id mapping exists
+ * yet, so this returns `null` for every geometry the shell produces today.
+ * Exported for tests; pure.
+ */
+export function readGeometryVertexIds(
+  geometry: THREE.BufferGeometry | null | undefined
+): readonly number[] | null {
+  return readGeometryIdStash(geometry, 'vertexIds')
+}
+
+/**
+ * Decide which {@link Selection} a plain-click pick should produce, given
+ * the active {@link SelectionKind} mode, the geometry, and the resolved
+ * triangle index (Three.js `Intersection.faceIndex`). Returns `null` when
+ * the click cannot resolve a stable entity id — the click handler then
+ * leaves the current selection untouched and does NOT call `onSelect`.
+ *
+ * Pure (no Three.js event, no React) so the branching is unit-testable in
+ * the `node` vitest pool without the R3F reconciler.
+ *
+ * Honesty contract by mode:
+ *   - `'face'`   → maps the triangle to a CadQuery face id via `faceIds`
+ *                  (kernel-backed; the real capability today).
+ *   - `'edge'`   → maps via an `edgeIds` stash IF present; today the
+ *                  sidecar emits none, so this returns `null` (no
+ *                  fabricated edge id).
+ *   - `'vertex'` → maps via a `vertexIds` stash IF present; same as edge.
+ */
+export function resolveSelectionFromPick(
+  selectionMode: SelectionKind,
+  geometry: THREE.BufferGeometry,
+  triangleIndex: number | undefined | null
+): Selection | null {
+  if (selectionMode === 'edge') {
+    const edgeIds = readGeometryEdgeIds(geometry)
+    if (!edgeIds) return null
+    const edgeId = triangleToFaceId(triangleIndex, edgeIds)
+    return edgeId === null ? null : makeEdgeSelection(edgeId)
+  }
+  if (selectionMode === 'vertex') {
+    const vertexIds = readGeometryVertexIds(geometry)
+    if (!vertexIds) return null
+    const vertexId = triangleToFaceId(triangleIndex, vertexIds)
+    return vertexId === null ? null : makeVertexSelection(vertexId)
+  }
+  // Default + 'face': the kernel-backed face pick.
+  const faceIds = readGeometryFaceIds(geometry)
+  if (!faceIds) return null
+  const faceId = triangleToFaceId(triangleIndex, faceIds)
+  return faceId === null ? null : makeFaceSelection(faceId)
 }
 
 /**
@@ -186,6 +289,7 @@ const Solid = memo(function Solid({
   layOnFaceMode,
   onLayOnFace,
   onSelect,
+  selectionMode,
   highlightedFaceId,
   clipPlane
 }: {
@@ -199,6 +303,7 @@ const Solid = memo(function Solid({
   layOnFaceMode?: boolean
   onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
   onSelect?: (selection: Selection) => void
+  selectionMode?: SelectionKind
   highlightedFaceId?: number | null
   clipPlane?: THREE.Plane | null
 }) {
@@ -288,20 +393,22 @@ const Solid = memo(function Solid({
             })
             return
           }
-          // CAD V1 Workflow H — plain-click entity selection. Falls
-          // through only when no other pick mode owns the click, so the
-          // existing measurement / sketch flows keep priority.
+          // CAD V1 Workflow H / FG-5a — plain-click entity selection.
+          // Falls through only when no other pick mode owns the click, so
+          // the existing measurement / sketch flows keep priority. The
+          // selection KIND is driven by `selectionMode` (default 'face');
+          // `resolveSelectionFromPick` decides which Selection (if any) to
+          // fire. It returns null — leaving the current selection untouched
+          // and skipping onSelect — when the click can't resolve a stable
+          // id (e.g. edge/vertex mode before the kernel emits those ids).
           if (onSelect) {
-            const faceIds = readGeometryFaceIds(geometry)
-            if (!faceIds) return
             // Three.js event uses `faceIndex` (triangle index) when the
             // geometry has an index attribute, which is what the sidecar
             // emits for tessellate_with_ids.
-            const triIdx = e.faceIndex
-            const faceId = triangleToFaceId(triIdx, faceIds)
-            if (faceId === null) return
+            const next = resolveSelectionFromPick(selectionMode ?? 'face', geometry, e.faceIndex)
+            if (next === null) return
             e.stopPropagation()
-            onSelect(makeFaceSelection(faceId))
+            onSelect(next)
           }
         }}
       >
@@ -654,6 +761,7 @@ export function Viewport3D({
   onCenterOnBed,
   onSnapToBed,
   onSelect,
+  selectionMode = 'face',
   highlightedFaceId = null
 }: Props) {
   const disposed = useRef<THREE.BufferGeometry | null>(null)
@@ -740,6 +848,7 @@ export function Viewport3D({
               layOnFaceMode={layOnFaceActive}
               onLayOnFace={onLayOnFace ? (n) => { setLayOnFaceInternal(false); onLayOnFace(n) } : undefined}
               onSelect={onSelect}
+              selectionMode={selectionMode}
               highlightedFaceId={highlightedFaceId}
               clipPlane={clipPlane}
             />

@@ -211,6 +211,30 @@ export function useCommandSurface(): (next: CommandSurfaceState) => void {
 }
 
 /**
+ * A provider-tolerant variant of {@link useCommandSurface}. Returns the live
+ * surface setter when a {@link CommandContextProvider} is an ancestor, or a
+ * stable no-op when it is not.
+ *
+ * Why: the Design host (`DesignWorkspaceHost`) pushes the combined
+ * selection ∪ sketch-mode surface up, but it is also rendered in isolation by
+ * node-env `renderToStaticMarkup` pins that deliberately do NOT mount the full
+ * provider chain (which needs `MachineSessionContext` etc.). The strict
+ * {@link useCommandSurface} throws without a provider — correct for surfaces that
+ * REQUIRE the engine, but the host's surface-push is a progressive enhancement
+ * that must degrade cleanly under a provider-less SSR render. This hook gives the
+ * host that resilience without weakening the strict hook other callers rely on.
+ */
+export function useOptionalCommandSurface(): (next: CommandSurfaceState) => void {
+  const ctx = useContext(Ctx)
+  return ctx ? ctx.setSurface : NOOP_SURFACE_SETTER
+}
+
+/** Stable no-op surface setter for the provider-less branch (no identity churn). */
+const NOOP_SURFACE_SETTER = (_next: CommandSurfaceState): void => {
+  void _next
+}
+
+/**
  * The ribbon/palette join: catalog × registered handlers × computed enablement,
  * filtered to a context and grouped by ribbon group.
  *

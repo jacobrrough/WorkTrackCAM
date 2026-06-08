@@ -65,6 +65,13 @@ export interface VertexSelection {
 
 export type Selection = FaceSelection | EdgeSelection | VertexSelection
 
+/**
+ * The discriminator string of a {@link Selection}. Exported so consumers
+ * (the command-surface bridge, per-feature dialogs, the status chip) can
+ * narrow on `selectionKind` without re-spelling the literal union.
+ */
+export type SelectionKind = Selection['kind']
+
 // ── Constructors ────────────────────────────────────────────────────────────
 
 /**
@@ -76,6 +83,35 @@ export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelect
   return occtHash !== undefined
     ? { kind: 'face', faceId, occtHash }
     : { kind: 'face', faceId }
+}
+
+/**
+ * Build an `EdgeSelection`. Mirrors {@link makeFaceSelection} so the edge
+ * branch has a single construction site once an edge-granular pick lands.
+ *
+ * IMPORTANT (honesty boundary): the running viewport CANNOT yet produce an
+ * edge id from a raycast — the sidecar's `cad.tessellate_with_ids` emits a
+ * per-triangle `faceIds` array and a `faceMap` but NO edge-id mapping (see
+ * `engines/cad/cadquery_script.py::tessellate_with_face_ids`). This
+ * constructor exists so a surface that already HAS an edge id from another
+ * source (e.g. a future `tessellate_with_edge_ids`, or a feature dialog
+ * that names an edge by index) can build the value. The viewport does not
+ * fabricate edge ids.
+ */
+export function makeEdgeSelection(edgeId: number, occtHash?: string): EdgeSelection {
+  return occtHash !== undefined
+    ? { kind: 'edge', faceId: edgeId, occtHash }
+    : { kind: 'edge', faceId: edgeId }
+}
+
+/**
+ * Build a `VertexSelection`. Reserved for V1.5 — same honesty boundary as
+ * {@link makeEdgeSelection} (no kernel vertex-id mapping exists yet).
+ */
+export function makeVertexSelection(vertexId: number, occtHash?: string): VertexSelection {
+  return occtHash !== undefined
+    ? { kind: 'vertex', faceId: vertexId, occtHash }
+    : { kind: 'vertex', faceId: vertexId }
 }
 
 // ── Transitions ─────────────────────────────────────────────────────────────
@@ -130,4 +166,45 @@ export function clearSelection(): null {
 export function isSameEntity(a: Selection, b: Selection): boolean {
   if (a.kind !== b.kind) return false
   return a.faceId === b.faceId
+}
+
+// ── Command-surface bridge (pure) ──────────────────────────────────
+
+/**
+ * The shape the Context Engine's `useCommandSurface` consumes
+ * (`commands/CommandContextProvider.tsx::CommandSurfaceState`). Declared
+ * structurally here so this module stays framework-agnostic and does NOT
+ * import the React command layer (keeps the dependency edge pointing
+ * design → commands, never the reverse). The two shapes are duck-typed: a
+ * `SelectionSurface` is assignable to `CommandSurfaceState`.
+ */
+export interface SelectionSurface {
+  /** True when any entity is selected. Drives ribbon-command enablement. */
+  readonly hasSelection: boolean
+  /** Discriminator of the active selection, or `undefined` when none. */
+  readonly selectionKind?: SelectionKind
+}
+
+/**
+ * The canonical "nothing selected" surface. Frozen + module-level so
+ * {@link selectionToSurface} returns one stable reference for every cleared
+ * state (the provider's setter de-dupes on field equality, but a stable
+ * reference keeps effect-dependency churn to a minimum).
+ */
+export const EMPTY_SELECTION_SURFACE: SelectionSurface = Object.freeze({ hasSelection: false })
+
+/**
+ * Project a `Selection | null` onto the {@link SelectionSurface} the command
+ * engine reads. Pure: no React, no DOM. The `useDesignSelection` hook calls
+ * this to push selection state up through `useCommandSurface` so
+ * `hasSelection` / `selectionKind` gate Design-ribbon commands
+ * (e.g. "sketch on face", "fillet edge") that require a live pick.
+ *
+ * Returns the stable {@link EMPTY_SELECTION_SURFACE} for `null` so the
+ * consumer's identity comparison stays cheap; otherwise carries the
+ * selection's `kind`.
+ */
+export function selectionToSurface(selection: Selection | null): SelectionSurface {
+  if (selection === null) return EMPTY_SELECTION_SURFACE
+  return { hasSelection: true, selectionKind: selection.kind }
 }

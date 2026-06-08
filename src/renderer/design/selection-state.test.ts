@@ -28,9 +28,13 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  EMPTY_SELECTION_SURFACE,
   clearSelection,
   isSameEntity,
+  makeEdgeSelection,
   makeFaceSelection,
+  makeVertexSelection,
+  selectionToSurface,
   setSelection,
   toggleSelection,
   type Selection,
@@ -138,5 +142,60 @@ describe('isSameEntity — toggle equality axioms', () => {
     const a = makeFaceSelection(1)
     const b = makeFaceSelection(2)
     expect(isSameEntity(a, b)).toBe(false)
+  })
+})
+
+describe('makeEdgeSelection / makeVertexSelection — FG-5a edge/vertex constructors', () => {
+  it('makeEdgeSelection emits a canonical {kind:edge, faceId} shape, no stray keys', () => {
+    const sel = makeEdgeSelection(11)
+    expect(sel).toEqual({ kind: 'edge', faceId: 11 })
+    expect(Object.keys(sel).sort()).toEqual(['faceId', 'kind'])
+  })
+
+  it('makeEdgeSelection carries occtHash only when provided', () => {
+    expect(makeEdgeSelection(2, 'h')).toEqual({ kind: 'edge', faceId: 2, occtHash: 'h' })
+    expect(makeEdgeSelection(2)).not.toHaveProperty('occtHash')
+  })
+
+  it('makeVertexSelection emits a canonical {kind:vertex, faceId} shape', () => {
+    const sel = makeVertexSelection(5)
+    expect(sel).toEqual({ kind: 'vertex', faceId: 5 })
+    expect(Object.keys(sel).sort()).toEqual(['faceId', 'kind'])
+  })
+
+  it('edge and face at the same id are NOT the same entity (kind discriminates)', () => {
+    expect(isSameEntity(makeFaceSelection(3), makeEdgeSelection(3))).toBe(false)
+  })
+})
+
+describe('selectionToSurface — command-surface bridge', () => {
+  it('maps null to the empty surface (stable reference)', () => {
+    expect(selectionToSurface(null)).toBe(EMPTY_SELECTION_SURFACE)
+    expect(EMPTY_SELECTION_SURFACE).toEqual({ hasSelection: false })
+  })
+
+  it('maps a face selection to { hasSelection: true, selectionKind: face }', () => {
+    expect(selectionToSurface(makeFaceSelection(4))).toEqual({
+      hasSelection: true,
+      selectionKind: 'face',
+    })
+  })
+
+  it('carries the discriminator for edge + vertex selections', () => {
+    expect(selectionToSurface(makeEdgeSelection(1)).selectionKind).toBe('edge')
+    expect(selectionToSurface(makeVertexSelection(1)).selectionKind).toBe('vertex')
+  })
+
+  it('the empty surface is frozen so callers cannot mutate the shared ref', () => {
+    expect(Object.isFrozen(EMPTY_SELECTION_SURFACE)).toBe(true)
+  })
+
+  it('returns hasSelection:false ONLY for null (never drops a real pick)', () => {
+    const kinds: Selection[] = [
+      makeFaceSelection(0),
+      makeEdgeSelection(0),
+      makeVertexSelection(0),
+    ]
+    for (const sel of kinds) expect(selectionToSurface(sel).hasSelection).toBe(true)
   })
 })

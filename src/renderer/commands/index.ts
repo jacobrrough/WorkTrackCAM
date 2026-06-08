@@ -41,6 +41,7 @@ export {
   useCommandContext,
   useCommandEngine,
   useCommandSurface,
+  useOptionalCommandSurface,
   useResolvedCommands
 } from './CommandContextProvider'
 
@@ -67,3 +68,15 @@ export {
   catalogRow,
   ribbonGroupLabel
 } from './command-palette-rows'
+
+// Design ribbon handlers — host-action contract + register wiring (FG-3/FG-5).
+export {
+  type DesignCommandActions,
+  type DesignCommandKind,
+  SKETCH_PLANE_COMMAND_ID,
+  classifyDesignCommand,
+  designCommandEnabled,
+  designCommandIds,
+  buildDesignCommands,
+  registerDesignCommands
+} from './design-commands'
