@@ -7,12 +7,18 @@
  * in the Laguna Swift 5x10 full-sheet routing remaining-stock visualization
  * + the K2 Plus build-volume heightmap previews.
  *
- * The module exposes 2 exported runtime functions:
+ * The module exposes 4 exported runtime functions:
  *   - `buildHeightFieldFromCuttingSegments(segments, opts): HeightField2d5 | null`
  *   - `sampleHeightFieldZ(hf, x, y): number` (bilinear interpolation)
+ *   - `stampDisk(field, cx, cy, cutZ, radiusMm, toolShape?): void`
+ *   - `stampSegment(field, x0, y0, x1, y1, z0, z1, radiusMm, toolShape?): void`
  * plus 3 type-only exports (`HeightField2d5`, `HeightFieldToolShape`,
- * `BuildHeightFieldOptions`) and 3 internal helpers (`clamp`, `stampDisk`,
- * `stampSegment`).
+ * `BuildHeightFieldOptions`) and 1 internal helper (`clamp`).
+ *
+ * `stampDisk` / `stampSegment` were promoted from internal to exported (Stack A
+ * — in-process stock model) so `src/shared/cam-stock-model.ts` carves into a
+ * grid with the *identical* disk-stamp / sweep math instead of duplicating it.
+ * Their behaviour is unchanged; only their visibility widened.
  *
  * The existing behavioural test `src/shared/cam-heightfield-2d5.test.ts`
  * (339 lines) covers happy-path stamping and bilinear lookup; this paired-
@@ -22,7 +28,7 @@
  * fallback for OOB samples, or the default opts surface here.
  *
  * Pinned in this file:
- *   (A) Module shape (2 runtime exports + 0 default + 0 class)
+ *   (A) Module shape (4 runtime exports + 0 default + 0 class)
  *   (B) Function signatures (names, arity, native Function, return types)
  *   (C) buildHeightFieldFromCuttingSegments default options
  *       (maxCols=96, maxRows=96, stockTopZ=0, cuttingZThreshold=0.05,
@@ -82,9 +88,14 @@ const baseOpts: BuildHeightFieldOptions = { toolRadiusMm: 3 }
 // (A) Module shape
 // --------------------------------------------------------------------------
 describe('[ID-0260] (A) module shape', () => {
-  it('exports exactly the 2 expected runtime symbols', () => {
+  it('exports exactly the 4 expected runtime symbols', () => {
     const keys = Object.keys(moduleNs).sort()
-    expect(keys).toEqual(['buildHeightFieldFromCuttingSegments', 'sampleHeightFieldZ'])
+    expect(keys).toEqual([
+      'buildHeightFieldFromCuttingSegments',
+      'sampleHeightFieldZ',
+      'stampDisk',
+      'stampSegment'
+    ])
   })
 
   it('namespace Symbol.toStringTag is Module', () => {
@@ -97,11 +108,15 @@ describe('[ID-0260] (A) module shape', () => {
     expect((moduleNs as unknown as { default?: unknown }).default).toBeUndefined()
   })
 
-  it('does not leak the 3 internal helpers (clamp, stampDisk, stampSegment)', () => {
+  it('does not leak the internal `clamp` helper', () => {
     const ns = moduleNs as unknown as Record<string, unknown>
     expect(ns.clamp).toBeUndefined()
-    expect(ns.stampDisk).toBeUndefined()
-    expect(ns.stampSegment).toBeUndefined()
+  })
+
+  it('exposes stampDisk + stampSegment as exported functions (Stack A IPW reuse)', () => {
+    const ns = moduleNs as unknown as Record<string, unknown>
+    expect(typeof ns.stampDisk).toBe('function')
+    expect(typeof ns.stampSegment).toBe('function')
   })
 
   it('every export is a native Function (not a class)', () => {
@@ -893,9 +908,9 @@ describe('[ID-0260] (L) pure-function invariants', () => {
 // (M) Source-text whitelist
 // --------------------------------------------------------------------------
 describe('[ID-0260] (M) source-text whitelist', () => {
-  it('source file is <= 240 lines (compact 2.5D module)', async () => {
+  it('source file is <= 250 lines (compact 2.5D module + stamp-helper exports)', async () => {
     const src = await readSrc()
-    expect(src.split('\n').length).toBeLessThanOrEqual(240)
+    expect(src.split('\n').length).toBeLessThanOrEqual(250)
   })
 
   it('source file is <= 9000 bytes', async () => {
@@ -903,10 +918,10 @@ describe('[ID-0260] (M) source-text whitelist', () => {
     expect(Buffer.byteLength(src, 'utf-8')).toBeLessThanOrEqual(9000)
   })
 
-  it('exports exactly 2 runtime functions', async () => {
+  it('exports exactly 4 runtime functions (incl. stampDisk + stampSegment)', async () => {
     const src = await readSrc()
     const matches = src.match(/^export\s+function\s+\w+/gm) ?? []
-    expect(matches.length).toBe(2)
+    expect(matches.length).toBe(4)
   })
 
   it('exports exactly 3 type aliases', async () => {

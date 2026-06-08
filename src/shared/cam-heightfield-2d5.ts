@@ -41,7 +41,13 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n))
 }
 
-function stampDisk(
+/**
+ * Stamp one tool footprint (disk) into a height field, lowering `topZ` under
+ * the tool to `cutZ` (flat) or the hemisphere profile (ball) — min-semantics,
+ * a cell is only lowered. Exported so the in-process stock model
+ * (`cam-stock-model`) can carve with the identical math, not a duplicate.
+ */
+export function stampDisk(
   field: { originX: number; originY: number; cellMm: number; cols: number; rows: number; topZ: Float32Array; stockTopZ: number },
   cx: number,
   cy: number,
@@ -80,7 +86,13 @@ function stampDisk(
   }
 }
 
-function stampSegment(
+/**
+ * Stamp a swept tool footprint along a straight segment by sampling
+ * {@link stampDisk} at sub-step intervals (min-semantics). Exported so the
+ * in-process stock model (`cam-stock-model`) can carve segments with the
+ * identical sweep math, not a duplicate.
+ */
+export function stampSegment(
   field: Parameters<typeof stampDisk>[0],
   x0: number,
   y0: number,
