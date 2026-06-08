@@ -57,6 +57,7 @@ import {
 } from 'react'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
+import { ViewportChrome } from './ViewportChrome'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import { DrawingView } from './DrawingView'
@@ -623,6 +624,13 @@ export function DesignWorkspace({
   // disable the Send-to-CAM button and prevent duplicate exports if
   // the operator double-clicks.
   const [sending, setSending] = useState(false)
+  // ── UI-3 cockpit chrome state ─────────────────────────────────────────────
+  // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the
+  // Part view reads as a no-code cockpit); designStage tracks the Model /
+  // Sketch / Inspect stage-tabs in the viewport chrome. Both are local UI
+  // state with no sidecar side-effects.
+  const [codeOpen, setCodeOpen] = useState(false)
+  const [designStage, setDesignStage] = useState<'model' | 'sketch' | 'inspect'>('model')
 
   const firstMesh: CadExecuteScriptMesh | null =
     lastTessellation?.meshes[0] ?? null
@@ -953,170 +961,227 @@ export function DesignWorkspace({
     )
   }
 
-  // ── Part view — three-pane layout (unchanged from BUILD 5 + CAD V1) ──────
+  // ── Part view — UI-3 "Fusion cockpit" (browser · viewport · props) ───────
+  //
+  // Three-pane no-code cockpit ported from docs/ui-mockups/index.html:
+  //   • LEFT   (.dc-browser): the feature-tree browser — panel header
+  //     "Feature Tree" over the existing ops <FeatureTree> (with the
+  //     kernel timeline when a host threads it in).
+  //   • CENTER (.design-workspace__viewport-col): the viewport placeholder
+  //     (build summary / empty-state — there is NO live 3D yet) wrapped in
+  //     the <ViewportChrome> overlays (toolbar, stage-tabs, viewcube, triad)
+  //     plus the selection chip (still owned here, gated on selectionLabel).
+  //   • RIGHT  (.dc-props): the Properties panel — editable parameters as
+  //     prop-cards + the Save / Send-to-CAM actions.
+  // The CadQuery code editor moves OUT of the primary layout into a
+  // slide-over drawer toggled by the toolbar's Code </> button (default
+  // closed). The editor stays mounted at all times so the Run path and the
+  // historical render-pins (`design-workspace__editor-col`) hold.
   return (
-    <div className="design-workspace" data-testid="design-workspace">
+    <div
+      className="design-workspace design-workspace--cockpit"
+      data-testid="design-workspace"
+    >
       {renderViewTabBar()}
-      {/* LEFT — CadQuery editor + run/save/load controls */}
-      <section
-        className="design-workspace__editor-col"
-        aria-label="CadQuery script editor"
-      >
-        {error !== null && (
-          <div
-            className="design-workspace__error"
-            role="alert"
-            data-testid="design-workspace-error"
-          >
-            {error}
-          </div>
-        )}
-        <CadQueryEditor
-          value={scriptText}
-          onChange={setScriptText}
-          onRun={() => {
-            void handleRun()
-          }}
-          busy={busy}
-        />
-        {onSave && (
-          <div
-            className="cad-editor__actions"
-            role="toolbar"
-            aria-label="Design actions"
-          >
-            <button
-              type="button"
-              className="btn btn-ghost"
-              data-testid="design-workspace-save"
-              onClick={handleSave}
-            >
-              Save
-            </button>
-          </div>
-        )}
-      </section>
-
-      {/* CENTER — 3D viewport / preview placeholder */}
-      <section
-        className="design-workspace__viewport-col"
-        aria-label="3D preview"
-        data-testid="design-workspace-viewport"
-      >
-        {firstMesh ? (
-          <div
-            className="design-workspace__viewport-summary"
-            data-testid="design-workspace-mesh-summary"
-          >
-            <div className="design-workspace__viewport-title">
-              {'▢'} Build result
-            </div>
-            <div className="design-workspace__viewport-meta">
-              {triangleSummary}
-            </div>
-            <div className="design-workspace__viewport-path" title={firstMesh.stlPath}>
-              {firstMesh.stlPath}
-            </div>
-          </div>
-        ) : (
-          <EmptyState
-            testId="design-workspace-viewport-empty"
-            title="Click Run to see your design"
-            body="Your built model will appear here after the CadQuery script executes."
-          />
-        )}
-        {/*
-          CAD V1 Workflow H — selection status chip. Anchored at the
-          bottom of the viewport column (outside the build-summary /
-          empty-state branch) so the operator's eye lands on it after
-          a pick regardless of whether a mesh was rendered. ESC clears
-          (see the keydown effect above); the chip vanishes the moment
-          `selection` returns to null.
-        */}
-        {selectionLabel !== null && (
-          <div
-            className="design-workspace__selection-chip"
-            role="status"
-            data-testid="design-workspace-selection-chip"
-            aria-live="polite"
-          >
-            {selectionLabel}
-          </div>
-        )}
-      </section>
-
-      {/* RIGHT — FeatureTree + Send to CAM */}
-      <aside
-        className="design-workspace__tree-col"
-        aria-label="Parameters and operations"
-      >
-        <div className="design-workspace__feature-section">
-          <h3 className="design-workspace__feature-title">Parameters</h3>
-          {featureParameters.length === 0 ? (
-            <div className="design-workspace__feature-empty">
-              No parameters declared.
-            </div>
-          ) : (
-            <div data-testid="design-workspace-parameters">
-              {/*
-                FeatureTree's params section owns the editable inputs
-                and the Apply / Reset wiring (BUILD 6). We feed it an
-                empty operations array so the operations rendering
-                path is suppressed inside this instance — the ops
-                FeatureTree below renders those separately under its
-                own "Operations" header.
-              */}
+      <div className="dc-cockpit">
+        {/* LEFT — Feature-tree browser */}
+        <aside className="dc-browser" aria-label="Feature tree">
+          <div className="dc-panel-head">Feature Tree</div>
+          <div className="dc-browser-body">
+            {parseError !== null ? (
+              <div
+                className="design-workspace__feature-error"
+                role="alert"
+                data-testid="design-workspace-parse-error"
+              >
+                Line {parseError.line}: {parseError.message}
+              </div>
+            ) : (
               <FeatureTree
-                operations={[]}
-                parameters={featureParameters}
-                paramOverrides={paramOverrides ?? undefined}
-                onParamsChange={handleParamsChange}
+                operations={featureRows}
+                kernelOps={kernelOps}
+                rolledBackTo={rolledBackTo}
+                onKernelMove={onKernelMove}
+                onKernelReorder={onKernelReorder}
+                onKernelSuppressToggle={onKernelSuppressToggle}
+                onKernelSetRollback={onKernelSetRollback}
+                onKernelClearRollback={onKernelClearRollback}
               />
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </aside>
 
-        <div className="design-workspace__feature-section">
-          <h3 className="design-workspace__feature-title">Operations</h3>
-          {parseError !== null ? (
+        {/* CENTER — chromed viewport (placeholder body + overlay chrome) */}
+        <section
+          className="design-workspace__viewport-col"
+          aria-label="3D preview"
+          data-testid="design-workspace-viewport"
+        >
+          <ViewportChrome
+            stage={designStage}
+            onStageChange={setDesignStage}
+            selectionLabel={selectionLabel}
+            codeOpen={codeOpen}
+            onToggleCode={() => setCodeOpen((open) => !open)}
+          />
+          {firstMesh ? (
             <div
-              className="design-workspace__feature-error"
-              role="alert"
-              data-testid="design-workspace-parse-error"
+              className="design-workspace__viewport-summary"
+              data-testid="design-workspace-mesh-summary"
             >
-              Line {parseError.line}: {parseError.message}
+              <div className="design-workspace__viewport-title">
+                {'▢'} Build result
+              </div>
+              <div className="design-workspace__viewport-meta">
+                {triangleSummary}
+              </div>
+              <div className="design-workspace__viewport-path" title={firstMesh.stlPath}>
+                {firstMesh.stlPath}
+              </div>
             </div>
           ) : (
-            <FeatureTree
-              operations={featureRows}
-              kernelOps={kernelOps}
-              rolledBackTo={rolledBackTo}
-              onKernelMove={onKernelMove}
-              onKernelReorder={onKernelReorder}
-              onKernelSuppressToggle={onKernelSuppressToggle}
-              onKernelSetRollback={onKernelSetRollback}
-              onKernelClearRollback={onKernelClearRollback}
+            <EmptyState
+              testId="design-workspace-viewport-empty"
+              title="Click Run to see your design"
+              body="Open the code drawer, write a CadQuery script and run it — your built model will appear here."
             />
           )}
-        </div>
-
-        {onSendToCam && (
-          <div className="design-workspace__feature-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              data-testid="design-workspace-send-to-cam"
-              disabled={!firstMesh || sending}
-              aria-busy={sending}
-              onClick={() => {
-                void handleSendToCam()
-              }}
+          {/*
+            CAD V1 Workflow H — selection status chip. Still owned by
+            DesignWorkspace (pinned by DesignWorkspace.selection.test.tsx),
+            anchored at the bottom-center of the viewport. ESC clears (see the
+            keydown effect above); the chip vanishes the moment `selection`
+            returns to null.
+          */}
+          {selectionLabel !== null && (
+            <div
+              className="design-workspace__selection-chip"
+              role="status"
+              data-testid="design-workspace-selection-chip"
+              aria-live="polite"
             >
-              {sending ? 'Exporting…' : `${'→'} Send to CAM`}
-            </button>
+              {selectionLabel}
+            </div>
+          )}
+
+          {/*
+            CadQuery code drawer — slide-over over the left browser, toggled by
+            the viewport toolbar's Code </> button. Rendered ALWAYS-MOUNTED
+            (only translated off-screen when closed) so the editor + Run path
+            stay live and the `design-workspace__editor-col` render-pin holds
+            regardless of the drawer's open state.
+          */}
+          <div
+            className={
+              codeOpen
+                ? 'dc-code-drawer dc-code-drawer--open'
+                : 'dc-code-drawer'
+            }
+            data-testid="design-workspace-code-drawer"
+            aria-hidden={codeOpen ? undefined : true}
+          >
+            <div className="dc-code-drawer-head">
+              CadQuery Code
+              <button
+                type="button"
+                className="dc-code-drawer-close"
+                aria-label="Close code drawer"
+                data-testid="design-workspace-code-close"
+                onClick={() => setCodeOpen(false)}
+              >
+                {'✕'}
+              </button>
+            </div>
+            <div className="dc-code-drawer-body">
+              <section
+                className="design-workspace__editor-col"
+                aria-label="CadQuery script editor"
+              >
+                {error !== null && (
+                  <div
+                    className="design-workspace__error"
+                    role="alert"
+                    data-testid="design-workspace-error"
+                  >
+                    {error}
+                  </div>
+                )}
+                <CadQueryEditor
+                  value={scriptText}
+                  onChange={setScriptText}
+                  onRun={() => {
+                    void handleRun()
+                  }}
+                  busy={busy}
+                />
+              </section>
+            </div>
           </div>
-        )}
-      </aside>
+        </section>
+
+        {/* RIGHT — Properties panel (params + Save / Send-to-CAM) */}
+        <aside
+          className="design-workspace__tree-col dc-props"
+          aria-label="Properties"
+        >
+          <div className="dc-panel-head">Properties</div>
+          <div className="dc-props-body">
+            <div className="dc-prop-card design-workspace__feature-section">
+              <h3 className="dc-prop-card-title design-workspace__feature-title">
+                Parameters
+              </h3>
+              {featureParameters.length === 0 ? (
+                <div className="design-workspace__feature-empty">
+                  No parameters declared.
+                </div>
+              ) : (
+                <div data-testid="design-workspace-parameters">
+                  {/*
+                    FeatureTree's params section owns the editable inputs and
+                    the Apply / Reset wiring (BUILD 6). We feed it an empty
+                    operations array so the operations rendering path is
+                    suppressed inside this instance — the ops FeatureTree in the
+                    left browser renders those separately.
+                  */}
+                  <FeatureTree
+                    operations={[]}
+                    parameters={featureParameters}
+                    paramOverrides={paramOverrides ?? undefined}
+                    onParamsChange={handleParamsChange}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="dc-props-actions design-workspace__feature-actions">
+              {onSave && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  data-testid="design-workspace-save"
+                  onClick={handleSave}
+                >
+                  Save
+                </button>
+              )}
+              {onSendToCam && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  data-testid="design-workspace-send-to-cam"
+                  disabled={!firstMesh || sending}
+                  aria-busy={sending}
+                  onClick={() => {
+                    void handleSendToCam()
+                  }}
+                >
+                  {sending ? 'Exporting…' : `${'→'} Send to CAM`}
+                </button>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   )
 }

@@ -40,3 +40,341 @@
 .design-workspace__selection-chip {
   position: relative;
 }
+
+/* ============================================================
+   UI-3 — Part-view "Fusion cockpit" restructure.
+   Overrides ONLY the Part-view branch (`.design-workspace--cockpit`)
+   into the 10-mockup's three-pane cockpit: feature-tree browser ·
+   chromed viewport · Properties panel, with the CadQuery editor
+   demoted to a slide-over drawer. Ports the mockup's
+   .wt-browser / .panel-head / .wt-viewport / .vp-toolbar /
+   .stage-tabs / .viewcube / .triad / .wt-props / .prop-card looks
+   onto real theme tokens (--bg*, --txt*, --accent, --border,
+   --radius, --elevation-*). All classes are `dc-` prefixed.
+   The non-cockpit Design branches (Assembly / Drawing / empty)
+   keep the legacy `.design-workspace` grid untouched.
+   Reference: docs/ui-mockups/index.html
+   ============================================================ */
+
+/* The cockpit re-grids the workspace: a top auto-height row for the
+   existing view tab bar, then a fluid body row that hosts the
+   three-pane cockpit. Columns collapse to a single track because the
+   three panes live inside `.dc-cockpit` (its own nested grid). */
+.design-workspace--cockpit {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+}
+
+/* The view tab bar (Part / Assembly / Drawing) stays the first child
+   and spans the full width at the top of the cockpit. */
+.design-workspace--cockpit > .design-workspace__tabbar {
+  grid-row: 1;
+}
+
+/* ── Cockpit body: the three-pane grid (browser · viewport · props) ── */
+.dc-cockpit {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Side panels (mockup .wt-browser / .wt-props) ──────────────────── */
+.dc-browser,
+.dc-props {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg1);
+  overflow: hidden;
+}
+.dc-browser {
+  border-right: 1px solid var(--border);
+}
+.dc-props {
+  border-left: 1px solid var(--border);
+}
+
+/* Panel header (mockup .panel-head): uppercase 11px label, muted,
+   bottom rule. */
+.dc-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: 1px solid var(--border);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--txt1);
+  flex: none;
+}
+
+/* Browser body: the FeatureTree's own ops list scrolls inside. */
+.dc-browser-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+/* Properties body: scrollable stack of prop cards + actions. */
+.dc-props-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+/* Property card (mockup .prop-card): sunken surface, border, radius. */
+.dc-prop-card {
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+}
+.dc-prop-card-title {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--text-sm);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--txt1);
+}
+
+/* Properties action row (Send to CAM) pinned at the bottom of the
+   scroll body via margin-top:auto so it tracks the mockup's sticky CTA. */
+.dc-props-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-4);
+}
+
+/* ── Viewport pane (mockup .wt-viewport) ───────────────────────────── */
+/* The center pane keeps its legacy `.design-workspace__viewport-col`
+   class (radial-gradient depth + masked CAD grid already defined
+   above), so the cockpit only needs to make it the positioning
+   context for the absolutely-positioned chrome overlays. */
+.dc-cockpit .design-workspace__viewport-col {
+  position: relative;
+}
+
+/* Viewport toolbar (mockup .vp-toolbar): floating pill, top-left. */
+.dc-vp-toolbar {
+  position: absolute;
+  top: var(--sp-6);
+  left: var(--sp-6);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-1);
+}
+.dc-vp-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
+}
+
+/* Icon buttons inside the cockpit overlays (mockup .iconbtn). */
+.dc-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--txt1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.dc-iconbtn:hover {
+  background: var(--bg2);
+  color: var(--txt0);
+  border-color: var(--border);
+}
+.dc-iconbtn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.dc-iconbtn svg {
+  width: 17px;
+  height: 17px;
+}
+/* The Code </> toggle widens to fit its label + paints a pressed
+   state from the accent when the drawer is open. */
+.dc-iconbtn--code {
+  width: auto;
+  padding: 0 var(--sp-4);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.dc-iconbtn-label {
+  line-height: 1;
+}
+.dc-iconbtn--on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.dc-iconbtn--on:hover {
+  background: var(--accent-hi);
+  color: #fff;
+  border-color: var(--accent-hi);
+}
+
+/* Stage tabs (mockup .stage-tabs): centered pill, top-middle. */
+.dc-stage-tabs {
+  position: absolute;
+  top: var(--sp-6);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--elevation-1);
+}
+.dc-stage-tab {
+  border: none;
+  background: transparent;
+  color: var(--txt2);
+  font: var(--weight-semibold) var(--text-sm) / 1 var(--font);
+  padding: var(--sp-3) var(--sp-8);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.dc-stage-tab:hover {
+  color: var(--txt1);
+}
+.dc-stage-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.dc-stage-tab--on {
+  background: var(--accent);
+  color: #fff;
+}
+.dc-stage-tab--on:hover {
+  color: #fff;
+}
+
+/* Viewcube (mockup .viewcube): top-right. */
+.dc-viewcube {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 3;
+  width: 74px;
+  height: 74px;
+  pointer-events: none;
+}
+
+/* Axis triad (mockup .triad): bottom-left. */
+.dc-triad {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  z-index: 3;
+  width: 78px;
+  height: 78px;
+  pointer-events: none;
+}
+
+/* ── Code drawer (slide-over over the left browser) ────────────────── */
+/* Absolutely positioned over the browser column; slides in from the
+   left. Default (closed) is translated fully off-screen + non-
+   interactive so the cockpit reads as no-code until the operator
+   opens it via the toolbar's Code </> button. */
+.dc-code-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 8;
+  width: 420px;
+  max-width: 80%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--elevation-3);
+  transform: translateX(-100%);
+  transition: transform var(--duration-normal) var(--ease-out-expo);
+}
+.dc-code-drawer--open {
+  transform: translateX(0);
+}
+.dc-code-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: 1px solid var(--border);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--txt1);
+  flex: none;
+}
+.dc-code-drawer-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--txt1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+.dc-code-drawer-close:hover {
+  background: var(--bg2);
+  color: var(--txt0);
+  border-color: var(--border);
+}
+.dc-code-drawer-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.dc-code-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The cockpit body must clip the off-screen drawer so it doesn't paint
+   over the rest of the shell when closed. */
+.dc-cockpit {
+  position: relative;
+}
