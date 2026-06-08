@@ -25,6 +25,7 @@ import type { MachineProfile } from '../../shared/machine-schema'
 import type { FilamentRecord } from '../../shared/filament-schema'
 import { THEMES, type ThemeId } from '../theme/theme-registry'
 import { resolveTheme, applyTheme } from '../theme/useTheme'
+import { normalizeMoonrakerUrl } from '../../shared/moonraker-url'
 
 export interface SettingsViewProps {
   onToast: (k: Toast['kind'], m: string) => void
@@ -119,7 +120,7 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
         theme,
         units,
         defaultMachineId: defaultMachineId || undefined,
-        moonrakerUrl: moonrakerUrl || undefined,
+        moonrakerUrl: normalizeMoonrakerUrl(moonrakerUrl) || undefined,
         moonrakerApiKey: moonrakerApiKey || undefined,
         pythonPath: pythonPath || undefined,
         carveraCliPath: carveraCliPath || undefined,
@@ -149,7 +150,7 @@ export function SettingsView({ onToast }: SettingsViewProps): React.ReactElement
    * just a red dot, so the operator can diagnose timeout vs 4xx vs network.
    */
   const handleTestMoonraker = async (): Promise<void> => {
-    const trimmed = moonrakerUrl.trim()
+    const trimmed = normalizeMoonrakerUrl(moonrakerUrl)
     if (!trimmed) {
       setMoonrakerProbe({ kind: 'err', message: 'Enter a Moonraker URL first.' })
       return

@@ -20,6 +20,7 @@ import { URL } from 'node:url'
 
 import type { FdmCapabilityFields } from '../shared/gcode-temp-validator'
 import { readGcodeHeaderText } from './gcode-header-read'
+import { normalizeMoonrakerUrl } from '../shared/moonraker-url'
 import { checkGcodeHeaderHealth, hasThumbnailBlock, type GcodeHeaderHealth } from '../shared/gcode-header-health'
 import {
   summarizeTempViolations,
@@ -134,7 +135,10 @@ function makeRequest(
   } = {}
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const u = new URL(rawUrl)
+    // Default a scheme-less host (e.g. "192.168.1.50" / "k2plus.local:7125") to
+    // http:// so a bare printer address from Settings doesn't throw "Invalid URL"
+    // here (the reported "3D printer URL is invalid" bug). See normalizeMoonrakerUrl.
+    const u = new URL(normalizeMoonrakerUrl(rawUrl))
     const isHttps = u.protocol === 'https:'
     const lib = isHttps ? https : http
     const reqHeaders: Record<string, string | number> = {}
