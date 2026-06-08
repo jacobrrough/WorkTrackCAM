@@ -34,7 +34,7 @@
  * with the theme picker exactly like the rest of the `.wt-*` shell.
  */
 
-import { useCallback, type ReactElement } from 'react'
+import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { WorkspaceId } from './useWorkspaceRouter'
 import {
   type CommandContext,
@@ -361,10 +361,10 @@ export function RibbonView({ ctx, groups, activeTabId, onSelectTab, onRun }: Rib
 /**
  * The connected ribbon AppShell mounts below the TopBar. Pulls the live context
  * + resolved groups + dispatcher from the Context Engine and feeds them to
- * {@link RibbonView}. The active-tab selection is intentionally derived (not
- * stored) this cycle: the view defaults to the first available tab, so the
- * ribbon always shows a populated tab for the current context without extra
- * state. A persisted per-workspace active-tab is a follow-up.
+ * {@link RibbonView}, holding the active-tab selection in local state so the
+ * operator can switch tabs. The active tab resets when the workspace or active
+ * machine changes (so the ribbon opens on that context's first tab); a stale id
+ * also falls back to the first available tab inside {@link RibbonView}.
  *
  * Requires a {@link CommandContextProvider} ancestor (AppShell already wraps the
  * shell in one); see `RibbonView` for a provider-free, directly-testable view.
@@ -374,9 +374,14 @@ export function Ribbon(): ReactElement {
   const groups = useResolvedCommands(ctx)
   const { run } = useCommandEngine()
   const onRun = useCallback((id: string) => void run(id), [run])
-  // Active tab is derived in the view (first available). `onSelectTab` is a
-  // no-op placeholder until the persisted-tab follow-up; passing it keeps the
-  // view contract stable and the tabs keyboard-focusable.
-  const noop = useCallback(() => {}, [])
-  return <RibbonView ctx={ctx} groups={groups} activeTabId={null} onSelectTab={noop} onRun={onRun} />
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  // Reset to the context's first tab when the workspace or active machine
+  // changes, so a tab that no longer exists in the new context isn't left
+  // "selected" (RibbonView also falls back to the first tab for a stale id).
+  useEffect(() => {
+    setActiveTabId(null)
+  }, [ctx.workspace, ctx.machineKind])
+  return (
+    <RibbonView ctx={ctx} groups={groups} activeTabId={activeTabId} onSelectTab={setActiveTabId} onRun={onRun} />
+  )
 }
