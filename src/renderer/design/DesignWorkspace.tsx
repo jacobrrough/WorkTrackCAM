@@ -58,6 +58,8 @@ import {
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { ViewportChrome } from './ViewportChrome'
+import { Viewport3D } from './Viewport3D'
+import { buildViewportGeometry } from './viewport3d-geometry'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import { DrawingView } from './DrawingView'
@@ -793,6 +795,22 @@ export function DesignWorkspace({
     return `Vertex ${selection.faceId}`
   }, [selection, selectionTessellation])
 
+  /**
+   * FG-2 — the live `THREE.BufferGeometry` handed to the mounted
+   * `Viewport3D`. Built from the selection-grade tessellation
+   * (`cad.tessellate_with_ids`, held in `selectionTessellation`) so the
+   * viewport's face-pick can resolve a triangle to a face id via the
+   * `userData.faceIds` parallel array. `null` until the first successful
+   * Run — the center pane then shows the empty-state instead of mounting
+   * an empty WebGL canvas. Disposal is owned by `Viewport3D` (its internal
+   * `stable` memo disposes the previous geometry when this value changes),
+   * so the workspace must NOT also dispose it here (double-free).
+   */
+  const viewportGeometry = useMemo(
+    () => buildViewportGeometry(selectionTessellation),
+    [selectionTessellation],
+  )
+
   // ── Derived feature rows for the right panel ──────────────────────────────
   const featureRows: readonly FeatureTreeOperation[] = useMemo(
     () => operations.map(toFeatureRow),
@@ -816,15 +834,6 @@ export function DesignWorkspace({
       })),
     [parameters]
   )
-
-  const triangleSummary: string | null = useMemo(() => {
-    if (!lastTessellation || lastTessellation.meshes.length === 0) return null
-    const triCount = lastTessellation.meshes.reduce(
-      (sum, mesh) => sum + mesh.triangleCount,
-      0
-    )
-    return `${lastTessellation.meshes.length} body, ${triCount.toLocaleString()} triangles`
-  }, [lastTessellation])
 
   // ── CAD V2 — view-mode tab bar ────────────────────────────────────────────
   /**
@@ -1020,25 +1029,28 @@ export function DesignWorkspace({
           <ViewportChrome
             stage={designStage}
             onStageChange={setDesignStage}
-            selectionLabel={selectionLabel}
             codeOpen={codeOpen}
             onToggleCode={() => setCodeOpen((open) => !open)}
           />
-          {firstMesh ? (
-            <div
-              className="design-workspace__viewport-summary"
-              data-testid="design-workspace-mesh-summary"
-            >
-              <div className="design-workspace__viewport-title">
-                {'▢'} Build result
-              </div>
-              <div className="design-workspace__viewport-meta">
-                {triangleSummary}
-              </div>
-              <div className="design-workspace__viewport-path" title={firstMesh.stlPath}>
-                {firstMesh.stlPath}
-              </div>
-            </div>
+          {/*
+            FG-2 — the real Three.js viewport. `Viewport3D` brings its own
+            orbit/pan/zoom + viewcube + triad + standard-view HUD + measure
+            tool, so the decorative chrome that used to live in `ViewportChrome`
+            was trimmed to avoid duplicating any of those. We mount it ONLY
+            once a geometry exists (after a successful Run) so a cold/SSR render
+            never instantiates an empty WebGL canvas; the empty-state surface
+            covers the no-model case. `firstMesh` gates the build summary that
+            previously rendered here — now it just guards the same "have a
+            model?" question that `viewportGeometry` answers.
+          */}
+          {viewportGeometry ? (
+            <Viewport3D
+              geometry={viewportGeometry}
+              onSelect={handleViewportSelect}
+              highlightedFaceId={
+                selection?.kind === 'face' ? selection.faceId : null
+              }
+            />
           ) : (
             <EmptyState
               testId="design-workspace-viewport-empty"

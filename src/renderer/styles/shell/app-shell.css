@@ -11,9 +11,13 @@
   inset: 0;
   display: grid;
   grid-template-columns: 76px 1fr;
-  grid-template-rows: 52px 1fr 28px;
+  /* row 2 = the FG-4a ribbon: `auto` so it sizes to the ribbon's content and
+     collapses to the thin `.wt-ribbon__empty` seam on routes with no command
+     ribbon (Workshop, Manufacture before a machine is chosen). */
+  grid-template-rows: 52px auto 1fr 28px;
   grid-template-areas:
     'top    top'
+    'ribbon ribbon'
     'nav    main'
     'status status';
   background: var(--bg1);
@@ -21,6 +25,15 @@
   font-family: var(--font);
   font-size: var(--text-base);
   -webkit-font-smoothing: antialiased;
+}
+
+/* The ribbon spans both columns between the TopBar and the nav/main band. Its
+   internal layout (tabs + panels) lives in shell/ribbon.css; here we only place
+   it on the grid. `min-width: 0` lets its panel row scroll instead of forcing
+   the whole shell wider. */
+.wt-ribbon {
+  grid-area: ribbon;
+  min-width: 0;
 }
 
 /* ── TopBar ── */

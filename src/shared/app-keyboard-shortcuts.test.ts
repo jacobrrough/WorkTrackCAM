@@ -164,6 +164,20 @@ describe('app-keyboard-shortcuts', () => {
     expect(redoRow!.keysWin).toContain('Ctrl+Shift+Z')
   })
 
+  it('navrail group lists the LIVE WorkspaceNav rail (FG-7), not the retired ShopApp labels', () => {
+    const navrail = APP_KEYBOARD_SHORTCUT_GROUPS.find(g => g.id === 'navrail')
+    expect(navrail).toBeDefined()
+    const actions = navrail!.rows.map(r => r.action)
+    // Live rail labels, in nav order (1–6), matching WorkspaceNav / the FG-1 engine.
+    expect(actions.slice(0, 6)).toEqual(['Design', 'Assemble', 'Make', 'Drawings', 'Workshop', 'Utilities'])
+    // 1–6 are bound to those six rows.
+    expect(navrail!.rows.slice(0, 6).map(r => r.keysWin)).toEqual(['1', '2', '3', '4', '5', '6'])
+    // Retired ShopApp labels must be gone.
+    for (const stale of ['Jobs', 'Tools', 'My Shop', 'Library', 'Settings']) {
+      expect(actions).not.toContain(stale)
+    }
+  })
+
   it('isTypableKeyboardTarget rejects non-elements', () => {
     expect(isTypableKeyboardTarget(null)).toBe(false)
     expect(isTypableKeyboardTarget({} as EventTarget)).toBe(false)

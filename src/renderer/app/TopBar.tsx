@@ -3,7 +3,9 @@ import type { ReactElement } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import { fab } from '../src/shop-types'
 import { useToast } from '../contexts/ToastContext'
+import { useUI } from '../contexts/UIContext'
 import { EnvSwitcher } from './EnvSwitcher'
+import { useProjectSession } from './useProjectSession'
 
 /** Narrow view of the preload bridge's machine.estop channel (see shop-types). */
 interface EstopBridge {
@@ -20,12 +22,34 @@ export function TopBar({
   onOpenHelp
 }: {
   machine: MachineProfile | null
+  /**
+   * Fallback project name from the shell. Used only until a real project is
+   * open — the live name comes from {@link useProjectSession}. Kept so the
+   * shell's prop contract is unchanged.
+   */
   projectName: string
   onOpenCommand: () => void
   onOpenSettings: () => void
   onOpenHelp: () => void
 }): ReactElement {
   const { pushToast } = useToast()
+
+  // Live project title + dirty marker.
+  //   name : `useProjectSession` owns the open `project.json`; `project.name` is
+  //          the real title, falling back to the shell-supplied `projectName`
+  //          prop until a project is open.
+  //   *    : binds to the app's saved-indicator flag (`UIContext.savedIndicator`)
+  //          — the only session-level save signal that exists. The marker is
+  //          clean when nothing is open and tracks the flag once a project is
+  //          loaded, so it becomes fully correct the moment the save flow starts
+  //          toggling `savedIndicator`. We deliberately do NOT fabricate a dirty
+  //          state when no project is open.
+  const { projectDir, project } = useProjectSession()
+  const { savedIndicator } = useUI()
+  const liveName = (project?.name ?? '').trim()
+  const displayName = liveName.length > 0 ? liveName : projectName
+  const isDirty = projectDir !== null && !savedIndicator
+  const titleName = `${displayName}${isDirty ? ' • unsaved changes' : ''}`
 
   const handleEstop = useCallback((): void => {
     const machineId = machine?.id ?? null
@@ -67,8 +91,9 @@ export function TopBar({
         WorkTrack<b>3D</b>
       </div>
 
-      <span className="wt-project" title={projectName}>
-        {projectName}
+      <span className="wt-project" title={titleName}>
+        {displayName}
+        {isDirty ? <span className="wt-project__dirty" aria-label="unsaved changes"> *</span> : null}
       </span>
 
       <EnvSwitcher />

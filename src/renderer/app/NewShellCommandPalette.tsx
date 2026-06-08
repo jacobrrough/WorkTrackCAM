@@ -1,122 +1,196 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { useUI } from '../contexts/UIContext'
-import { applyTheme } from '../theme/useTheme'
-import { THEMES } from '../theme/theme-registry'
-import type { WorkspaceId } from './useWorkspaceRouter'
+import {
+  SHELL_COMMANDS,
+  SHELL_COMMAND_IDS,
+  buildPaletteRows,
+  groupPaletteRows,
+  useCommandEngine,
+  type PaletteRow
+} from '../commands'
+import { pushRecentCommandId, readRecentCommandIds } from '../commands/command-palette-memory'
 
 /**
  * Command-palette wrapper for the new WorkTrack3D shell.
  *
- * ## Why this file inlines `CommandPalette`
- * The shell pivot has TWO components named `CommandPalette`:
+ * ## FG-4b — palette reconciliation
+ * This palette previously hand-listed ~17 rows (6 nav + Settings + Help + theme
+ * rows) and searched only those. It now renders the **entire command surface**:
+ * the synthetic shell commands ({@link SHELL_COMMANDS}, registered as handlers by
+ * `registerStarterCommands` in `AppShell`) **plus** every entry in
+ * `FUSION_STYLE_COMMAND_CATALOG`, joined to its handler + computed enablement by
+ * the Context Engine (`useCommandEngine().resolve`). Picking a row dispatches the
+ * one true `runCommand(id, ctx)` path (`engine.run(id)`), so the palette, the
+ * (forthcoming) ribbon, and any menu run the same `command.id`.
  *
- *  1. `src/renderer/commands/CommandPalette.tsx` — the *exported* one. Its real
- *     props are `{ open, onClose, onPick }` and it renders over the static
- *     `FUSION_STYLE_COMMAND_CATALOG`; it does **not** accept a caller-supplied
- *     `commands` array. So it cannot be driven by a hand-built command list.
- *  2. A module-private `CommandPalette` inside `ShopApp.tsx` (~line 625) whose
- *     props are exactly `{ commands: Command[]; onClose: () => void }` with
- *     element shape `{ id, group, label, icon, action }`. That is the contract
- *     this new shell wants — but it is not exported and cannot be imported.
+ * The rich `src/renderer/commands/CommandPalette.tsx` had these capabilities but
+ * `onPick` had no production caller and it renders against unstyled
+ * `.command-palette-*` classes. Rather than ship that unstyled modal, its
+ * capabilities are ported here onto the already-themed `.cmd-*` styling:
+ *   - status badges on catalog rows (`implemented` / `partial` / `planned`),
+ *   - **greyed / disabled rows** for ids with no registered handler (or whose
+ *     `enabled(ctx)` is false) — the engine's honest "shows but not wired yet",
+ *   - recency-first ordering on an empty query (shared `command-palette-memory`),
+ *   - the full keyboard model (↑↓ · Home/End · PgUp/PgDn · Enter · Esc),
+ *   - an "Implemented only" toggle (default off, so the full catalog + the
+ *     honest greying are visible by default),
+ *   - matched-substring highlight.
  *
- * The agreed contract for this file is to render
- * `<CommandPalette commands={...} onClose={() => setCmdOpen(false)} />` against
- * the `{ id, group, label, icon?, action }` element shape. To honor that exactly
- * without editing any other file, the matching presentational palette is inlined
- * below — a faithful copy of the ShopApp private component's prop contract and
- * keyboard/grouping behavior. When the legacy `ShopApp` palette is eventually
- * extracted into a shared export, swap the local definition for that import; the
- * `ShellCommand` shape and the JSX usage are already identical.
+ * The "Open Command palette" shell row is filtered out (opening the palette from
+ * inside it is redundant) but stays registered for the ribbon/menus.
  */
 
-/** Element shape consumed by the palette (mirrors ShopApp's private `Command`). */
-export interface ShellCommand {
-  id: string
-  group: string
-  label: string
-  /** Optional leading glyph (emoji / symbol). Defaults to a neutral dot. */
-  icon?: string
-  action: () => void
+/** Rows skipped per PageUp / PageDown (approx. one viewport chunk). */
+const PALETTE_PAGE_STEP = 8
+
+/** Highlight the matched substring of `text` for the current query. */
+function highlight(text: string, q: string): ReactNode {
+  const query = q.trim()
+  if (!query) return text
+  const idx = text.toLowerCase().indexOf(query.toLowerCase())
+  if (idx < 0) return text
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="cmd-highlight">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  )
 }
 
 /**
- * Presentational command palette. Self-contained copy of the legacy ShopApp
- * palette's contract: `{ commands, onClose }`, fuzzy filter over label+group,
- * grouped listbox, arrow-key navigation, Enter to run, Esc to close.
+ * New-shell command palette. Renders nothing unless `useUI().cmdOpen` is true.
+ *
+ * Rows are the full command surface (shell commands + resolved catalog),
+ * filtered by the live search + the Implemented-only toggle and ordered
+ * recent-first on an empty query. Selecting a row dispatches `engine.run(id)`
+ * against the live command context; disabled rows (no handler / not applicable)
+ * are inert.
  */
-function CommandPalette({
-  commands,
-  onClose
-}: {
-  commands: ShellCommand[]
-  onClose: () => void
-}): ReactElement {
+export function NewShellCommandPalette(): ReactElement | null {
+  const { cmdOpen, setCmdOpen } = useUI()
+  const engine = useCommandEngine()
+
   const [query, setQuery] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
+  const [implementedOnly, setImplementedOnly] = useState(false)
+  const [recentIds, setRecentIds] = useState<string[]>(() => readRecentCommandIds())
   const inputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
 
-  const filtered = useMemo(() => {
-    if (!query.trim()) return commands
-    const q = query.toLowerCase()
-    return commands.filter(
-      (c) => c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q)
-    )
-  }, [query, commands])
+  const close = (): void => setCmdOpen(false)
+
+  // Reset transient state + refresh recency each time the palette opens.
   useEffect(() => {
+    if (!cmdOpen) return
+    setQuery('')
     setActiveIdx(0)
-  }, [filtered.length])
+    setRecentIds(readRecentCommandIds())
+    queueMicrotask(() => inputRef.current?.focus())
+  }, [cmdOpen])
 
-  const groups = useMemo(() => {
-    const map = new Map<string, ShellCommand[]>()
-    for (const c of filtered) {
-      const a = map.get(c.group) ?? []
-      a.push(c)
-      map.set(c.group, a)
+  // The shell rows minus the redundant "open palette" entry.
+  const shell = useMemo(
+    () => SHELL_COMMANDS.filter((c) => c.id !== SHELL_COMMAND_IDS.openCommandPalette),
+    []
+  )
+
+  // The whole catalog joined with handlers + enablement for the live context.
+  // `filterByWorkspace: false` ⇒ the palette searches every command, not just
+  // the active workspace's. `engine` re-memoizes when the context changes, so
+  // enablement (e.g. selection-gated rows) stays current.
+  const resolvedCatalog = useMemo(() => engine.resolve({ filterByWorkspace: false }), [engine])
+
+  const rows = useMemo<PaletteRow[]>(
+    () =>
+      buildPaletteRows({
+        shell,
+        catalog: resolvedCatalog,
+        query,
+        recentIds,
+        implementedOnly
+      }),
+    [shell, resolvedCatalog, query, recentIds, implementedOnly]
+  )
+
+  // Keep the active index in range as the row set changes.
+  useEffect(() => {
+    setActiveIdx((i) => (rows.length === 0 ? 0 : Math.min(i, rows.length - 1)))
+  }, [rows.length])
+
+  // Scroll the active row into view.
+  useEffect(() => {
+    if (!cmdOpen || rows.length === 0) return
+    const id = rows[activeIdx]?.id
+    if (!id) return
+    document.getElementById(`cmd-row-${id}`)?.scrollIntoView({ block: 'nearest' })
+  }, [activeIdx, cmdOpen, rows])
+
+  const groups = useMemo(() => groupPaletteRows(rows), [rows])
+
+  if (!cmdOpen) return null
+
+  const pick = (row: PaletteRow | undefined): void => {
+    if (!row || !row.enabled) return
+    const ran = engine.run(row.id)
+    if (ran) {
+      pushRecentCommandId(row.id)
+      setRecentIds(readRecentCommandIds())
     }
-    return map
-  }, [filtered])
+    close()
+  }
 
   const handleKey = (e: React.KeyboardEvent): void => {
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'Escape') {
       e.preventDefault()
-      setActiveIdx((i) => Math.min(i + 1, filtered.length - 1))
+      close()
+      return
     }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setActiveIdx((i) => Math.max(i - 1, 0))
+    if (rows.length === 0) return
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setActiveIdx((i) => Math.min(i + 1, rows.length - 1))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setActiveIdx((i) => Math.max(i - 1, 0))
+        break
+      case 'Home':
+        e.preventDefault()
+        setActiveIdx(0)
+        break
+      case 'End':
+        e.preventDefault()
+        setActiveIdx(rows.length - 1)
+        break
+      case 'PageDown':
+        e.preventDefault()
+        setActiveIdx((i) => Math.min(i + PALETTE_PAGE_STEP, rows.length - 1))
+        break
+      case 'PageUp':
+        e.preventDefault()
+        setActiveIdx((i) => Math.max(i - PALETTE_PAGE_STEP, 0))
+        break
+      case 'Enter':
+        e.preventDefault()
+        pick(rows[activeIdx])
+        break
+      default:
+        break
     }
-    if (e.key === 'Enter') {
-      filtered[activeIdx]?.action()
-      onClose()
-    }
-    if (e.key === 'Escape') onClose()
   }
 
-  const hl = (text: string, q: string): React.ReactNode => {
-    if (!q.trim()) return text
-    const idx = text.toLowerCase().indexOf(q.toLowerCase())
-    if (idx < 0) return text
-    return (
-      <>
-        {text.slice(0, idx)}
-        <mark className="cmd-highlight">{text.slice(idx, idx + q.length)}</mark>
-        {text.slice(idx + q.length)}
-      </>
-    )
-  }
+  const activeRowId = rows[activeIdx]?.id
+  let flatIdx = 0
 
-  let gi = 0
   return (
     <div
       className="cmd-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Command palette"
-      onClick={onClose}
+      onClick={close}
     >
       <div className="cmd-box" onClick={(e) => e.stopPropagation()}>
         <div className="cmd-input-row">
@@ -127,152 +201,81 @@ function CommandPalette({
             type="text"
             ref={inputRef}
             className="cmd-input"
-            placeholder={'Type a command…'}
+            placeholder={'Search commands…'}
             aria-label="Search commands"
             role="combobox"
-            aria-expanded={filtered.length > 0}
+            aria-expanded={rows.length > 0}
             aria-autocomplete="list"
             aria-controls="cmd-results-list"
+            aria-activedescendant={activeRowId ? `cmd-row-${activeRowId}` : undefined}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActiveIdx(0)
+            }}
             onKeyDown={handleKey}
           />
+          <label className="cmd-implemented-toggle">
+            <input
+              type="checkbox"
+              checked={implementedOnly}
+              onChange={(e) => {
+                setImplementedOnly(e.target.checked)
+                setActiveIdx(0)
+              }}
+            />
+            Implemented only
+          </label>
           <kbd className="cmd-esc-hint" aria-hidden="true">
             Esc
           </kbd>
         </div>
         <div className="cmd-results" id="cmd-results-list" role="listbox">
-          {filtered.length === 0 && <div className="text-muted cmd-empty">No commands match</div>}
-          {Array.from(groups.entries()).map(([group, cmds]) => (
-            <Fragment key={group}>
+          {rows.length === 0 && <div className="text-muted cmd-empty">No commands match</div>}
+          {groups.map((g) => (
+            <Fragment key={g.group}>
               <div className="cmd-group-label" role="presentation">
-                {group}
+                {g.group}
               </div>
-              {cmds.map((cmd) => {
-                const myIdx = gi++
+              {g.rows.map((row) => {
+                const myIdx = flatIdx++
+                const isActive = myIdx === activeIdx
                 return (
                   <div
-                    key={cmd.id}
+                    key={row.id}
+                    id={`cmd-row-${row.id}`}
                     role="option"
-                    aria-selected={myIdx === activeIdx}
-                    className={`cmd-item${myIdx === activeIdx ? ' cmd-item--active' : ''}`}
+                    aria-selected={isActive}
+                    aria-disabled={!row.enabled}
+                    className={[
+                      'cmd-item',
+                      isActive ? 'cmd-item--active' : '',
+                      row.enabled ? '' : 'cmd-item--disabled'
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                     onMouseEnter={() => setActiveIdx(myIdx)}
-                    onClick={() => {
-                      cmd.action()
-                      onClose()
-                    }}
+                    onClick={() => pick(row)}
                   >
                     <span className="cmd-item-icon" aria-hidden="true">
-                      {cmd.icon ?? '•'}
+                      {row.icon ?? '•'}
                     </span>
-                    <span className="cmd-item-label">{hl(cmd.label, query)}</span>
+                    <span className="cmd-item-label">{highlight(row.label, query)}</span>
+                    {row.meta ? <span className="cmd-item-meta">{row.meta}</span> : null}
+                    {row.status ? (
+                      <span className={`cmd-status cmd-status--${row.status}`}>{row.status}</span>
+                    ) : null}
+                    {row.keybinding ? <kbd className="cmd-item-kbd">{row.keybinding}</kbd> : null}
                   </div>
                 )
               })}
             </Fragment>
           ))}
         </div>
+        <div className="cmd-footer" role="presentation">
+          ↑↓ navigate · PgUp/PgDn page · Home/End first/last · Enter run · Esc close
+        </div>
       </div>
     </div>
   )
-}
-
-/** Human-readable label per workspace (mirrors `WorkspaceNav` labels). */
-const WORKSPACE_LABELS: Readonly<Record<WorkspaceId, string>> = {
-  design: 'Design',
-  assemble: 'Assemble',
-  manufacture: 'Make',
-  drawings: 'Drawings',
-  workshop: 'Workshop',
-  utilities: 'Utilities'
-}
-
-/** Stable iteration order for the "Go to <Workspace>" rows. */
-const WORKSPACE_ORDER: readonly WorkspaceId[] = [
-  'design',
-  'assemble',
-  'manufacture',
-  'drawings',
-  'workshop',
-  'utilities'
-]
-
-/**
- * New-shell command palette. Renders nothing unless `useUI().cmdOpen` is true.
- * Builds the command list (navigation, settings, help, theme switching) and
- * feeds it to the presentational {@link CommandPalette}. Every action also
- * closes the palette via `setCmdOpen(false)`.
- */
-export function NewShellCommandPalette({
-  onNavigate,
-  onOpenSettings,
-  onOpenHelp
-}: {
-  onNavigate: (w: WorkspaceId) => void
-  onOpenSettings: () => void
-  onOpenHelp: () => void
-}): ReactElement | null {
-  const { cmdOpen, setCmdOpen } = useUI()
-
-  const close = (): void => setCmdOpen(false)
-
-  const commands = useMemo<ShellCommand[]>(() => {
-    const c: ShellCommand[] = []
-
-    // Navigation — one "Go to <Workspace>" per WorkspaceId.
-    for (const id of WORKSPACE_ORDER) {
-      c.push({
-        id: `goto_${id}`,
-        group: 'Navigate',
-        label: `Go to ${WORKSPACE_LABELS[id]}`,
-        icon: '\u{1F9ED}', // compass
-        action: () => {
-          onNavigate(id)
-          setCmdOpen(false)
-        }
-      })
-    }
-
-    // App-level overlays.
-    c.push({
-      id: 'open_settings',
-      group: 'App',
-      label: 'Open Settings',
-      icon: '⚙', // gear
-      action: () => {
-        onOpenSettings()
-        setCmdOpen(false)
-      }
-    })
-    c.push({
-      id: 'open_help',
-      group: 'App',
-      label: 'Open Help',
-      icon: '❓', // question mark
-      action: () => {
-        onOpenHelp()
-        setCmdOpen(false)
-      }
-    })
-
-    // Theme switching — one row per registered theme.
-    for (const theme of THEMES) {
-      c.push({
-        id: `theme_${theme.id}`,
-        group: 'Theme',
-        label: `Switch theme: ${theme.label}`,
-        icon: '\u{1F3A8}', // palette
-        action: () => {
-          applyTheme(theme.id)
-          setCmdOpen(false)
-        }
-      })
-    }
-
-    return c
-  }, [onNavigate, onOpenSettings, onOpenHelp, setCmdOpen])
-
-  if (!cmdOpen) return null
-
-  return <CommandPalette commands={commands} onClose={close} />
 }

@@ -6,6 +6,7 @@ import { useUI } from '../contexts/UIContext'
 import { getEnvironmentForMachine } from '../src/environments/env-routing'
 import { useWorkspaceRouter } from './useWorkspaceRouter'
 import { TopBar } from './TopBar'
+import { Ribbon } from './Ribbon'
 import { WorkspaceNav } from './WorkspaceNav'
 import { WorkspaceHost } from './WorkspaceHost'
 import { StatusBar } from './StatusBar'
@@ -13,6 +14,9 @@ import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { HelpPanel } from '../src/HelpPanel'
 import { NewShellCommandPalette } from './NewShellCommandPalette'
 import { KeyboardShortcutsDialog } from '../src/KeyboardShortcutsDialog'
+import { CommandContextProvider, registerStarterCommands } from '../commands'
+import { applyTheme } from '../theme/useTheme'
+import type { ThemeId } from '../theme/theme-registry'
 import {
   isTypableKeyboardTarget,
   matchesCommandPaletteToggle,
@@ -75,34 +79,62 @@ export function AppShell(): ReactElement {
     }
   }, [sessionMachine, machines, lastMachineId, setSessionMachine, loadToolsForMachine])
 
+  // FG-1 · register the shell-level starter commands (workspace navigation,
+  // Settings/Help/Palette, theme switching) on the shared command registry so
+  // the engine is live: the palette (and the forthcoming ribbon/menus) all
+  // dispatch these by `command.id`. The disposer unregisters on unmount so a
+  // shell remount never double-registers. The host actions are stable
+  // (setActiveWorkspace is memoized; the open* setters come from context), so a
+  // single registration covers the app lifetime.
+  useEffect(() => {
+    return registerStarterCommands({
+      navigate: setActiveWorkspace,
+      openSettings: () => setSettingsOpen(true),
+      openHelp: () => setHelpOpen(true),
+      openCommandPalette: () => setCmdOpen(true),
+      applyTheme: (theme: ThemeId) => {
+        applyTheme(theme)
+      }
+    })
+  }, [setActiveWorkspace, setHelpOpen, setCmdOpen])
+
   // Layer the active machine's environment accent over the theme (themes.css
   // [data-environment] overrides). Null while no machine is selected → the
   // theme's own accent (Titanium steel-blue by default) is used.
   const env = getEnvironmentForMachine(sessionMachine?.id ?? null)
 
   return (
-    <div className="wt-shell" data-environment={env?.id}>
-      <TopBar
-        machine={sessionMachine}
-        projectName="Untitled project"
-        onOpenCommand={() => setCmdOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenHelp={() => setHelpOpen((x) => !x)}
-      />
-      <WorkspaceNav active={activeWorkspace} onSelect={setActiveWorkspace} />
-      <main className="wt-main">
-        <WorkspaceHost active={activeWorkspace} onNavigate={setActiveWorkspace} />
-      </main>
-      <StatusBar machineName={sessionMachine?.name ?? null} units="mm" activeWorkspace={activeWorkspace} />
+    <CommandContextProvider workspace={activeWorkspace} onNavigate={setActiveWorkspace}>
+      <div className="wt-shell" data-environment={env?.id}>
+        <TopBar
+          machine={sessionMachine}
+          projectName="Untitled project"
+          onOpenCommand={() => setCmdOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenHelp={() => setHelpOpen((x) => !x)}
+        />
+        {/*
+          FG-4a · the contextual command ribbon, directly below the TopBar and
+          above the nav rail / workspace body. It reads the live FG-1 context
+          (this `CommandContextProvider` is its ancestor: workspace from the
+          AppShell-owned router, machineKind derived inside the provider from the
+          active machine, selection/sketch from the pushed-up surface) and renders
+          the tabs/panels for the active (workspace × machineKind), dispatching
+          every button through the one shared command registry. It spans both grid
+          columns (`grid-area: ribbon`) so the nav rail starts beneath it.
+        */}
+        <Ribbon />
+        <WorkspaceNav active={activeWorkspace} onSelect={setActiveWorkspace} />
+        <main className="wt-main">
+          <WorkspaceHost active={activeWorkspace} onNavigate={setActiveWorkspace} />
+        </main>
+        <StatusBar machineName={sessionMachine?.name ?? null} units="mm" activeWorkspace={activeWorkspace} />
 
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onToast={pushToast} />
-      {helpOpen ? <HelpPanel onClose={() => setHelpOpen(false)} /> : null}
-      {showShortcuts ? <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /> : null}
-      <NewShellCommandPalette
-        onNavigate={setActiveWorkspace}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenHelp={() => setHelpOpen(true)}
-      />
-    </div>
+        <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onToast={pushToast} />
+        {helpOpen ? <HelpPanel onClose={() => setHelpOpen(false)} /> : null}
+        {showShortcuts ? <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /> : null}
+        <NewShellCommandPalette />
+      </div>
+    </CommandContextProvider>
   )
 }
