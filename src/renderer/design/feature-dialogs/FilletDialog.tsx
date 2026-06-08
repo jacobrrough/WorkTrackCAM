@@ -1,28 +1,31 @@
 /**
  * FG-5b · Fillet property dialog.
  *
- * Honest capability boundary (the headline of the FG-5 audit): the CadQuery
- * kernel's fillet is **axis-bucket**, not picked-edge. `kernelPostSolidOpSchema`
- * offers exactly two fillet ops:
+ * The CadQuery kernel's fillet has three real paths, all exposed here:
  *   - `fillet_all`    — round EVERY edge by `radiusMm`.
- *   - `fillet_select` — round the edges whose direction falls in an axis bucket
- *     (`edgeDirection: '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z'`) by `radiusMm`.
+ *   - `fillet_select` by **axis bucket** (`edgeDirection: ±X/±Y/±Z`) — round the
+ *     edges whose tangent is parallel to that world axis.
+ *   - `fillet_select` by **picked edge** (FG-5b) — when the operator has an edge
+ *     picked in the viewport AND it carries a STABLE `"e:<hex>"` id
+ *     (`selection.occtHash`), the dialog emits `pickedEdgeIds: [id]` and the
+ *     kernel rounds exactly that edge (resolving the id against the rebuilt
+ *     solid; falls back to the axis bucket if it no longer resolves —
+ *     topological-naming limit).
  *
- * There is no way to pass a picked face/edge **id** to the kernel today. So this
- * dialog:
- *   1. Lets the operator round **all edges** or a **single axis bucket** — the
- *      two modes that genuinely work — and emits the matching `KernelPostSolidOp`
- *      through the EXISTING `appendKernelOp` path.
- *   2. Reads the operator's live pick (`selectionInfo`) and shows it as context,
- *      so picked-edge is *visible* in the UI as the intended future workflow.
- *   3. **Clearly flags** (in a persistent note, and in the parent's gap report)
- *      that driving the fillet from that picked edge needs new sidecar/kernel
- *      support — it does NOT silently fall back and pretend the pick mattered.
+ * So this dialog:
+ *   1. Lets the operator round **all edges** or a **single axis bucket**, and
+ *      emits the matching `KernelPostSolidOp` through the EXISTING
+ *      `appendKernelOp` path.
+ *   2. When a picked edge carries a stable id, layers `pickedEdgeIds` onto the
+ *      `fillet_select` op so the pick drives the kernel for real.
+ *   3. Reads the operator's live pick (`selectionInfo`) and shows it as context.
  *
- * This satisfies the brief: "expose picked-edge in the UI where the kernel
- * supports it and CLEARLY flag where picked-edge needs new sidecar/kernel
- * support rather than faking it." The kernel does not support picked-edge, so we
- * expose the working axis-bucket path and flag the gap.
+ * Honest boundary: the viewport's face-tessellated raycast cannot yet originate
+ * a single edge id from a triangle hit (the sidecar emits no per-triangle edge
+ * array — see `Viewport3D.resolveSelectionFromPick`), so in practice an
+ * EdgeSelection with a stable id arrives only from a surface that already holds
+ * one. When no stable edge id is present the dialog uses the axis bucket and
+ * never fakes a picked id reaching the kernel.
  */
 
 import { useState, type JSX } from 'react'
@@ -36,6 +39,7 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
+  pickedOcctIdFor,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
@@ -61,14 +65,23 @@ export interface FilletDialogProps extends FeatureDialogBaseProps {
  * Build the `KernelPostSolidOp` for the current dialog state. Exported pure so
  * the test can assert the emitted shape against `kernelPostSolidOpSchema`
  * without rendering.
+ *
+ * `mode: 'all'` always emits `fillet_all` (a picked id is meaningless there).
+ * `mode: 'select'` emits `fillet_select` carrying the axis bucket; when
+ * `pickedEdgeId` is a non-empty stable `"e:<hex>"` id it ALSO carries
+ * `pickedEdgeIds: [pickedEdgeId]` (the kernel prefers it, with the bucket as the
+ * documented fallback). An empty / null id omits the field (the schema rejects
+ * an empty `pickedEdgeIds` array — absence means "use the axis bucket").
  */
 export function buildFilletOp(
   radiusMm: number,
   mode: FilletMode,
-  edgeDirection: EdgeDirection
+  edgeDirection: EdgeDirection,
+  pickedEdgeId?: string | null
 ): KernelPostSolidOp {
-  return mode === 'all'
-    ? { kind: 'fillet_all', radiusMm }
+  if (mode === 'all') return { kind: 'fillet_all', radiusMm }
+  return pickedEdgeId
+    ? { kind: 'fillet_select', radiusMm, edgeDirection, pickedEdgeIds: [pickedEdgeId] }
     : { kind: 'fillet_select', radiusMm, edgeDirection }
 }
 
@@ -88,25 +101,39 @@ export function FilletDialog({
   const radius = parsePositiveMm(radiusRaw)
   const canApply = radius !== null && disabled !== true
 
+  // FG-5b: an edge pick carrying a stable "e:<hex>" id drives fillet_select by
+  // id. Only meaningful in 'select' mode ('all' rounds every edge regardless).
+  const pickedEdgeId = pickedOcctIdFor(selectionInfo.selection, 'edge')
+
   const handleApply = (): void => {
     if (radius === null) return
-    onApply({ target: 'kernelOp', op: buildFilletOp(radius, mode, edgeDirection) })
+    onApply({
+      target: 'kernelOp',
+      op: buildFilletOp(radius, mode, edgeDirection, mode === 'select' ? pickedEdgeId : null)
+    })
   }
 
-  // Honest picked-edge flag: only show the "needs kernel support" note when the
-  // operator actually has an edge/face picked, so it reads as a direct response
-  // to their action rather than generic boilerplate.
-  const pickedEdgeNote =
-    selectionInfo.selection !== null
-      ? 'Picked-edge fillet is not supported by the kernel yet — applying by axis bucket below. (Gap: needs new sidecar edge-id targeting.)'
-      : undefined
+  // Honest read-out tied to the operator's action:
+  //   - an edge pick with a stable id WILL drive the fillet (in select mode);
+  //   - a pick without a stable id is context only (axis bucket applies);
+  //   - a non-edge pick (e.g. a face) is context only — fillet targets edges.
+  const selectionNote =
+    selectionInfo.selection === null
+      ? undefined
+      : pickedEdgeId !== null
+        ? mode === 'select'
+          ? 'Filleting the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+          : 'Switch Edges to “By axis bucket” to fillet the picked edge by id; “All edges” rounds everything.'
+        : selectionInfo.selection.kind === 'edge'
+          ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
+          : 'Pick an edge to fillet it by id; this selection drives the axis bucket below instead.'
 
   return (
     <FeatureDialogCard title="Fillet" testId="fd-fillet">
       <SelectionContextBanner
         selectionInfo={selectionInfo}
         emptyPrompt="Pick an edge to fillet, or round all edges / an axis bucket below."
-        note={pickedEdgeNote}
+        note={selectionNote}
         testId="fd-fillet-selection"
       />
       <DialogNumberField

@@ -28,11 +28,17 @@
  * dispatch).
  *
  * Honesty note (CLAUDE.md "do not fake capability"): the kernel's fillet /
- * chamfer selection is **axis-bucket** (`edgeDirection: ±X/±Y/±Z`), not
- * picked-edge. These types expose the axis-bucket mode as the working path and
- * carry the operator's picked-edge {@link Selection} only as *context* (so the
- * dialog can show "you picked edge N" and pre-hint a bucket). They never pretend
- * a faceId/edgeId reaches the kernel. See {@link FeatureDialogSelectionInfo}.
+ * chamfer / shell selection has TWO real paths. (1) The axis bucket
+ * (`edgeDirection` / `openDirection`: ±X/±Y/±Z) — the always-available default.
+ * (2) FG-5b picked-id targeting — when the operator's live {@link Selection}
+ * carries a STABLE OCCT id (`occtHash` = `"e:<hex>"` for an edge, `"f:<hex>"`
+ * for a face), the dialog emits it as `fillet_select.pickedEdgeIds` /
+ * `chamfer_select.pickedEdgeIds` / `shell_inward.pickedFaceIds`, and the kernel
+ * resolves it back to the exact topology at build (falling back to the axis
+ * bucket if it no longer resolves — topological-naming limit). A picked
+ * Selection WITHOUT a stable `occtHash` (e.g. a legacy face id with no
+ * `faceOcctIds` stash) carries only as context — it never fakes an id reaching
+ * the kernel. See {@link FeatureDialogSelectionInfo} + {@link pickedOcctIdFor}.
  */
 
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
@@ -162,4 +168,23 @@ export function parseClampedInt(raw: string, min: number, max: number): number |
   const n = Number.parseInt(raw, 10)
   if (!Number.isFinite(n)) return null
   return Math.max(min, Math.min(max, n))
+}
+
+/**
+ * FG-5b · Extract the STABLE picked-OCCT id (`"e:<hex>"` / `"f:<hex>"`) from a
+ * selection when it is BOTH the requested `kind` AND carries a non-empty
+ * `occtHash`. Returns `null` otherwise — which is the dialog's signal to fall
+ * back to the axis bucket. This is the one gate that decides "does this pick
+ * drive the kernel by id, or only by axis bucket?", so it is intentionally
+ * strict: a selection of the wrong kind (e.g. a face pick handed to a fillet,
+ * which wants an edge), or one with no stable id, NEVER produces a picked id.
+ * Pure; exported for the op-builder test.
+ */
+export function pickedOcctIdFor(
+  selection: Selection | null,
+  kind: Selection['kind']
+): string | null {
+  if (selection === null || selection.kind !== kind) return null
+  const id = selection.occtHash
+  return typeof id === 'string' && id.length > 0 ? id : null
 }

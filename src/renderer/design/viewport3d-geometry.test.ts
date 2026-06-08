@@ -7,9 +7,20 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { buildViewportGeometry, sanitizeFaceIds } from './viewport3d-geometry'
-import { readGeometryFaceIds } from './Viewport3D'
+import { buildFaceOcctIds, buildViewportGeometry, sanitizeFaceIds } from './viewport3d-geometry'
+import { readGeometryFaceIds, readGeometryFaceOcctIds } from './Viewport3D'
 import type { CadTessellateWithIdsResult } from '../../shared/sidecar-protocol'
+
+/** Build a minimal faceMap whose entries carry a stable `"f:<hex>"` occtId. */
+function faceMapWithOcctIds(
+  ids: Record<string, string>,
+): CadTessellateWithIdsResult['faceMap'] {
+  const out: CadTessellateWithIdsResult['faceMap'] = {}
+  for (const [faceId, occtId] of Object.entries(ids)) {
+    out[faceId] = { kind: 'face', occtHash: 0, occtId, area: 1 }
+  }
+  return out
+}
 
 function oneTriangle(
   over: Partial<CadTessellateWithIdsResult> = {},
@@ -21,6 +32,7 @@ function oneTriangle(
     triangleCount: 1,
     bbox: { min: [0, 0, 0], max: [10, 10, 0] },
     faceMap: {},
+    edgeMap: {},
     ...over,
   }
 }
@@ -114,5 +126,46 @@ describe('buildViewportGeometry', () => {
     const g = buildViewportGeometry(oneTriangle({ faceIds: [Number.NaN] }))
     expect(g).not.toBeNull()
     expect(readGeometryFaceIds(g)).toBeNull()
+  })
+
+  it('FG-5b: stashes parallel faceOcctIds when every face id has an occtId', () => {
+    const g = buildViewportGeometry(
+      oneTriangle({
+        vertices: [0, 0, 0, 10, 0, 0, 0, 10, 0, 10, 10, 0],
+        indices: [0, 1, 2, 1, 3, 2],
+        faceIds: [0, 1],
+        triangleCount: 2,
+        faceMap: faceMapWithOcctIds({ '0': 'f:top', '1': 'f:side' }),
+      }),
+    )
+    expect(readGeometryFaceIds(g)).toEqual([0, 1])
+    expect(readGeometryFaceOcctIds(g)).toEqual(['f:top', 'f:side'])
+  })
+
+  it('FG-5b: omits faceOcctIds when the faceMap is empty (legacy / id-only)', () => {
+    const g = buildViewportGeometry(oneTriangle()) // faceMap: {} by default
+    expect(readGeometryFaceIds(g)).toEqual([0])
+    expect(readGeometryFaceOcctIds(g)).toBeNull()
+  })
+})
+
+describe('buildFaceOcctIds', () => {
+  it('maps each triangle face id to its stable occtId', () => {
+    const map = faceMapWithOcctIds({ '0': 'f:a', '1': 'f:b' })
+    expect(buildFaceOcctIds([0, 1, 1, 0], map)).toEqual(['f:a', 'f:b', 'f:b', 'f:a'])
+  })
+
+  it('returns null (all-or-nothing) when a face id has no occtId entry', () => {
+    const map = faceMapWithOcctIds({ '0': 'f:a' }) // face 1 missing
+    expect(buildFaceOcctIds([0, 1], map)).toBeNull()
+  })
+
+  it('returns null when the faceMap is absent', () => {
+    expect(buildFaceOcctIds([0], undefined)).toBeNull()
+  })
+
+  it('returns null when an entry occtId is empty', () => {
+    const map = faceMapWithOcctIds({ '0': '' })
+    expect(buildFaceOcctIds([0], map)).toBeNull()
   })
 })

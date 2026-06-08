@@ -50,6 +50,7 @@ import type {
   CadExecuteScriptResult,
   CadExportFormat,
   CadExportResult,
+  CadEdgeMapEntry,
   CadFaceMapEntry,
   CadListOperationsResult,
   CadOperationSummary,
@@ -1208,6 +1209,21 @@ function looksLikeFaceMapEntry(value: unknown): value is CadFaceMapEntry {
   return true
 }
 
+/**
+ * FG-5b · Result shape guard for a single `edgeMap` entry. Same defensive
+ * posture as {@link looksLikeFaceMapEntry}: the sidecar may bin a malformed
+ * edge (length read failure → 0), so we validate the minimum shape and let the
+ * coercer re-pick the documented fields.
+ */
+function looksLikeEdgeMapEntry(value: unknown): value is CadEdgeMapEntry {
+  if (!value || typeof value !== 'object') return false
+  const e = value as Record<string, unknown>
+  if (e.kind !== 'edge') return false
+  if (typeof e.occtId !== 'string' || e.occtId.length === 0) return false
+  if (typeof e.occtHash !== 'number' || !Number.isFinite(e.occtHash)) return false
+  return true
+}
+
 function looksLikeBbox(value: unknown): value is {
   min: [number, number, number]
   max: [number, number, number]
@@ -1276,9 +1292,31 @@ export function coerceTessellateWithIdsResult(
       // Re-pick just the documented fields so an upstream sidecar that
       // adds extras doesn't leak them through to the renderer.
       const out: CadFaceMapEntry = { kind: 'face', occtHash: entry.occtHash }
+      // FG-5b: carry the stable face handle when the sidecar emitted it
+      // (single-body path always does; assembly path does not yet).
+      if (typeof entry.occtId === 'string' && entry.occtId.length > 0) out.occtId = entry.occtId
       if (typeof entry.area === 'number' && Number.isFinite(entry.area)) out.area = entry.area
       if (typeof entry.error === 'string') out.error = entry.error
       faceMap[id] = out
+    }
+  }
+
+  // FG-5b: coerce the edgeMap dict (keyed by stable edge id). Absent / malformed
+  // entries are dropped silently — the renderer falls back to face-only picking.
+  const rawEdgeMap = raw.edgeMap && typeof raw.edgeMap === 'object' && !Array.isArray(raw.edgeMap)
+    ? (raw.edgeMap as Record<string, unknown>)
+    : {}
+  const edgeMap: Record<string, CadEdgeMapEntry> = {}
+  for (const [id, entry] of Object.entries(rawEdgeMap)) {
+    if (looksLikeEdgeMapEntry(entry)) {
+      const out: CadEdgeMapEntry = {
+        kind: 'edge',
+        occtId: entry.occtId,
+        occtHash: entry.occtHash,
+        length:
+          typeof entry.length === 'number' && Number.isFinite(entry.length) ? entry.length : 0,
+      }
+      edgeMap[id] = out
     }
   }
 
@@ -1289,6 +1327,7 @@ export function coerceTessellateWithIdsResult(
     triangleCount,
     bbox: raw.bbox,
     faceMap,
+    edgeMap,
   }
 }
 

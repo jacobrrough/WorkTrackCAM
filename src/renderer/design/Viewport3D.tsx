@@ -81,15 +81,20 @@ type Props = {
    *
    * - `'face'` (default) — resolves the clicked triangle to a CadQuery
    *   face id via the geometry's `userData.faceIds` parallel array. This
-   *   is the only kernel-backed pick today (`cad.tessellate_with_ids`).
-   * - `'edge'` / `'vertex'` — reserved for the edge-fillet / chamfer
-   *   flows. HONEST LIMITATION: the sidecar emits NO per-triangle edge or
-   *   vertex id mapping (only `faceIds` + `faceMap`), so the raycast
-   *   cannot originate one yet. In these modes the click looks for an
-   *   `edgeIds` / `vertexIds` stash on the geometry and no-ops cleanly
+   *   is the kernel-backed pick (`cad.tessellate_with_ids`). FG-5b: when
+   *   the geometry also carries the parallel `userData.faceOcctIds` stash,
+   *   the `FaceSelection.occtHash` carries the STABLE `"f:<hex>"` handle
+   *   the Shell dialog emits as `shell_inward.pickedFaceIds`.
+   * - `'edge'` / `'vertex'` — the edge-fillet / chamfer flows. HONEST
+   *   LIMITATION: the mesh is face-tessellated, so the sidecar emits NO
+   *   per-triangle edge / vertex id mapping (only `faceIds` + `faceMap`
+   *   + a flat, position-less `edgeMap`) — the raycast cannot originate a
+   *   single edge id from a triangle hit yet. In these modes the click
+   *   looks for an `edgeIds` / `vertexIds` stash (plus the parallel stable
+   *   `edgeOcctIds` / `vertexOcctIds`) on the geometry and no-ops cleanly
    *   when absent (today's reality) — it never fabricates an id. The prop
-   *   + plumbing exist so a future `tessellate_with_edge_ids` surface
-   *   lights up edge picking without a viewport change.
+   *   + plumbing exist so a future per-triangle edge surface lights up
+   *   edge picking (and its `pickedEdgeIds` emit) without a viewport change.
    */
   selectionMode?: SelectionKind
   /**
@@ -102,9 +107,10 @@ type Props = {
    * `facePickMode`, and `layOnFaceMode` — the parent's viewport
    * reducer ensures only one pick mode is active at a time.
    *
-   * Receives a `Selection` value (currently always `{ kind: 'face' }`
-   * in V1; the wider union is in place so the upcoming edge / vertex
-   * picks can extend the callback without breaking consumers).
+   * Receives a `Selection` value. A face pick is `{ kind: 'face', faceId,
+   * occtHash? }` — `occtHash` carries the stable `"f:<hex>"` handle when the
+   * geometry has the `faceOcctIds` stash (FG-5b). The wider union is in place
+   * so the edge / vertex picks extend the callback without breaking consumers.
    */
   onSelect?: (selection: Selection) => void
   /**
@@ -142,7 +148,7 @@ export function readGeometryFaceIds(
 }
 
 /**
- * Read an arbitrary parallel-id stash off the geometry's `userData`.
+ * Read an arbitrary parallel numeric-id stash off the geometry's `userData`.
  * Internal helper behind the per-kind readers — defensive (returns `null`
  * on a missing/malformed stash) so callers short-circuit cleanly.
  */
@@ -154,6 +160,57 @@ function readGeometryIdStash(
   const candidate = (geometry.userData as Record<string, unknown>)[key]
   if (!Array.isArray(candidate)) return null
   return candidate as readonly number[]
+}
+
+/**
+ * FG-5b · Read a parallel STABLE-string id stash off the geometry's
+ * `userData` (`"f:<hex>"` / `"e:<hex>"` per triangle). Mirrors
+ * {@link readGeometryIdStash} but for the string-keyed handles
+ * `DesignWorkspace` stashes via `buildViewportGeometry`. Defensive — a
+ * missing/malformed stash returns `null` so the pick degrades to id-only.
+ */
+function readGeometryOcctIdStash(
+  geometry: THREE.BufferGeometry | null | undefined,
+  key: 'faceOcctIds' | 'edgeOcctIds' | 'vertexOcctIds'
+): readonly string[] | null {
+  if (!geometry || !geometry.userData) return null
+  const candidate = (geometry.userData as Record<string, unknown>)[key]
+  if (!Array.isArray(candidate)) return null
+  return candidate as readonly string[]
+}
+
+/**
+ * FG-5b · Read the per-triangle STABLE face-id (`"f:<hex>"`) stash, if the
+ * geometry carries one. This is the value `DesignWorkspace` derives from the
+ * sidecar's `faceMap` and stashes parallel to the numeric `faceIds`; a face
+ * pick carries it up as `FaceSelection.occtHash` so the Shell dialog can emit
+ * `shell_inward.pickedFaceIds`. Returns `null` when absent (legacy / assembly
+ * tessellation) — the pick still resolves the numeric face id. Exported for
+ * tests; pure.
+ */
+export function readGeometryFaceOcctIds(
+  geometry: THREE.BufferGeometry | null | undefined
+): readonly string[] | null {
+  return readGeometryOcctIdStash(geometry, 'faceOcctIds')
+}
+
+/**
+ * FG-5b · Resolve a triangle index to a STABLE string id from a parallel
+ * occt-id stash. Mirrors {@link triangleToFaceId} (the numeric resolver) but
+ * for the `"f:<hex>"` / `"e:<hex>"` handles. Returns `undefined` when the
+ * stash is absent or the index is out of range, so the caller can build a
+ * Selection with the numeric id only (no fabricated stable id).
+ */
+function triangleToOcctId(
+  triangleIndex: number | undefined | null,
+  occtIds: readonly string[] | null
+): string | undefined {
+  if (occtIds === null) return undefined
+  if (triangleIndex === undefined || triangleIndex === null) return undefined
+  if (!Number.isInteger(triangleIndex) || triangleIndex < 0) return undefined
+  if (triangleIndex >= occtIds.length) return undefined
+  const id = occtIds[triangleIndex]
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
 /**
@@ -195,11 +252,19 @@ export function readGeometryVertexIds(
  *
  * Honesty contract by mode:
  *   - `'face'`   → maps the triangle to a CadQuery face id via `faceIds`
- *                  (kernel-backed; the real capability today).
- *   - `'edge'`   → maps via an `edgeIds` stash IF present; today the
- *                  sidecar emits none, so this returns `null` (no
- *                  fabricated edge id).
- *   - `'vertex'` → maps via a `vertexIds` stash IF present; same as edge.
+ *                  (kernel-backed; the real capability today). FG-5b: when
+ *                  the geometry ALSO carries the parallel `faceOcctIds`
+ *                  stash, the returned `FaceSelection.occtHash` carries the
+ *                  STABLE `"f:<hex>"` handle the Shell dialog emits as
+ *                  `shell_inward.pickedFaceIds`.
+ *   - `'edge'`   → maps via an `edgeIds` stash IF present; the mesh is
+ *                  face-tessellated so the sidecar emits NO per-triangle
+ *                  edge array today, so this returns `null` (no fabricated
+ *                  edge id). FG-5b: when a future per-triangle `edgeIds` +
+ *                  parallel `edgeOcctIds` stash lands, the resulting
+ *                  `EdgeSelection.occtHash` carries the stable `"e:<hex>"`
+ *                  handle Fillet/Chamfer emit as `pickedEdgeIds`.
+ *   - `'vertex'` → maps via a `vertexIds` stash IF present; same seam.
  */
 export function resolveSelectionFromPick(
   selectionMode: SelectionKind,
@@ -210,19 +275,25 @@ export function resolveSelectionFromPick(
     const edgeIds = readGeometryEdgeIds(geometry)
     if (!edgeIds) return null
     const edgeId = triangleToFaceId(triangleIndex, edgeIds)
-    return edgeId === null ? null : makeEdgeSelection(edgeId)
+    if (edgeId === null) return null
+    const occtId = triangleToOcctId(triangleIndex, readGeometryOcctIdStash(geometry, 'edgeOcctIds'))
+    return makeEdgeSelection(edgeId, occtId)
   }
   if (selectionMode === 'vertex') {
     const vertexIds = readGeometryVertexIds(geometry)
     if (!vertexIds) return null
     const vertexId = triangleToFaceId(triangleIndex, vertexIds)
-    return vertexId === null ? null : makeVertexSelection(vertexId)
+    if (vertexId === null) return null
+    const occtId = triangleToOcctId(triangleIndex, readGeometryOcctIdStash(geometry, 'vertexOcctIds'))
+    return makeVertexSelection(vertexId, occtId)
   }
   // Default + 'face': the kernel-backed face pick.
   const faceIds = readGeometryFaceIds(geometry)
   if (!faceIds) return null
   const faceId = triangleToFaceId(triangleIndex, faceIds)
-  return faceId === null ? null : makeFaceSelection(faceId)
+  if (faceId === null) return null
+  const occtId = triangleToOcctId(triangleIndex, readGeometryFaceOcctIds(geometry))
+  return makeFaceSelection(faceId, occtId)
 }
 
 /**

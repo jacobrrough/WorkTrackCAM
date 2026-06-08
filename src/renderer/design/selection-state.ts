@@ -41,22 +41,29 @@ export interface FaceSelection {
   /** 0-based index into the mesh's `userData.faceIds` parallel array. */
   readonly faceId: number
   /**
-   * Stable OCCT topology hash returned by the sidecar's
-   * `cad.tessellate_with_ids` handler. Absent in V1 — once the sidecar
-   * surface lands, selections that have a hash will survive re-runs of
-   * the script when the topology is unchanged.
+   * FG-5b · STABLE geometry-derived OCCT handle (`"f:<hex>"`) from the
+   * sidecar's `cad.tessellate_with_ids` `faceMap[faceId].occtId`, carried up
+   * by `Viewport3D` when the geometry has the parallel `userData.faceOcctIds`
+   * stash. This is the value the Shell dialog emits as
+   * `shell_inward.pickedFaceIds`; the kernel resolves it back to the exact face
+   * at build (and it survives a rebuild that reproduces the same geometry).
+   * Absent on legacy / assembly tessellations that don't carry the stash —
+   * then only `faceId` is known and the dialogs fall back to the axis bucket.
    */
   readonly occtHash?: string
 }
 
-/** A picked edge between two faces. Reserved for V1.5. */
+/**
+ * A picked edge between two faces. `occtHash` (when present) is the STABLE
+ * `"e:<hex>"` handle the Fillet / Chamfer dialogs emit as `pickedEdgeIds`.
+ */
 export interface EdgeSelection {
   readonly kind: 'edge'
   readonly faceId: number
   readonly occtHash?: string
 }
 
-/** A picked vertex (corner). Reserved for V1.5. */
+/** A picked vertex (corner). `occtHash` carries the stable handle when present. */
 export interface VertexSelection {
   readonly kind: 'vertex'
   readonly faceId: number
@@ -87,16 +94,18 @@ export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelect
 
 /**
  * Build an `EdgeSelection`. Mirrors {@link makeFaceSelection} so the edge
- * branch has a single construction site once an edge-granular pick lands.
+ * branch has a single construction site.
  *
  * IMPORTANT (honesty boundary): the running viewport CANNOT yet produce an
- * edge id from a raycast — the sidecar's `cad.tessellate_with_ids` emits a
- * per-triangle `faceIds` array and a `faceMap` but NO edge-id mapping (see
+ * edge id from a raycast — the mesh is face-tessellated, so
+ * `cad.tessellate_with_ids` emits a per-triangle `faceIds` array + `faceMap`
+ * and a flat, position-less `edgeMap`, but NO per-triangle edge mapping (see
  * `engines/cad/cadquery_script.py::tessellate_with_face_ids`). This
  * constructor exists so a surface that already HAS an edge id from another
- * source (e.g. a future `tessellate_with_edge_ids`, or a feature dialog
- * that names an edge by index) can build the value. The viewport does not
- * fabricate edge ids.
+ * source (e.g. a future per-triangle edge stash, or a feature dialog that
+ * names an edge) can build the value. When `occtHash` carries the stable
+ * `"e:<hex>"` handle, the Fillet / Chamfer dialogs forward it to the kernel as
+ * `pickedEdgeIds`. The viewport does not fabricate edge ids.
  */
 export function makeEdgeSelection(edgeId: number, occtHash?: string): EdgeSelection {
   return occtHash !== undefined
@@ -195,10 +204,11 @@ export const EMPTY_SELECTION_SURFACE: SelectionSurface = Object.freeze({ hasSele
 
 /**
  * Project a `Selection | null` onto the {@link SelectionSurface} the command
- * engine reads. Pure: no React, no DOM. The `useDesignSelection` hook calls
- * this to push selection state up through `useCommandSurface` so
- * `hasSelection` / `selectionKind` gate Design-ribbon commands
- * (e.g. "sketch on face", "fillet edge") that require a live pick.
+ * engine reads. Pure: no React, no DOM. `DesignWorkspace` calls this (alongside
+ * its `sketchMode` flag) to push selection state up through its
+ * `onCommandSurface` callback so `hasSelection` / `selectionKind` gate
+ * Design-ribbon commands (e.g. "sketch on face", "fillet edge") that require a
+ * live pick.
  *
  * Returns the stable {@link EMPTY_SELECTION_SURFACE} for `null` so the
  * consumer's identity comparison stays cheap; otherwise carries the

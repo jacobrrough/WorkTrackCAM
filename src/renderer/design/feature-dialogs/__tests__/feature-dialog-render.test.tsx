@@ -20,12 +20,23 @@ import { ChamferDialog } from '../ChamferDialog'
 import { ShellDialog } from '../ShellDialog'
 import { HoleDialog } from '../HoleDialog'
 import type { FeatureDialogSelectionInfo } from '../feature-dialog-types'
-import { makeFaceSelection } from '../../selection-state'
+import { makeEdgeSelection, makeFaceSelection } from '../../selection-state'
 
 const NO_SELECTION: FeatureDialogSelectionInfo = { selection: null, label: null }
+/** A face pick WITHOUT a stable occtHash (legacy / id-only). */
 const FACE_SELECTION: FeatureDialogSelectionInfo = {
   selection: makeFaceSelection(4),
   label: 'Face 4 · 25.0 mm²'
+}
+/** FG-5b: a face pick WITH a stable "f:<hex>" id — drives shell by id. */
+const FACE_SELECTION_STABLE: FeatureDialogSelectionInfo = {
+  selection: makeFaceSelection(4, 'f:cap42'),
+  label: 'Face 4 · 25.0 mm²'
+}
+/** FG-5b: an edge pick WITH a stable "e:<hex>" id — drives fillet/chamfer by id. */
+const EDGE_SELECTION_STABLE: FeatureDialogSelectionInfo = {
+  selection: makeEdgeSelection(7, 'e:rail7'),
+  label: 'Edge 7'
 }
 const noop = (): void => undefined
 
@@ -155,7 +166,9 @@ describe('FG-5b — FilletDialog render contract', () => {
     expect(html).not.toContain('data-testid="fd-fillet-dir-+Z"')
   })
 
-  it('HONESTLY flags the picked-edge gap ONLY when an edge/face is selected', () => {
+  it('shows a context note when a (non-edge) face is selected, and the empty prompt when nothing is', () => {
+    // A face pick can't drive a fillet (fillet targets edges), so the note
+    // says so honestly and routes the operator to pick an edge / use the bucket.
     const withSel = render(
       createElement(FilletDialog, {
         params: { radiusMm: 2 },
@@ -164,8 +177,10 @@ describe('FG-5b — FilletDialog render contract', () => {
       })
     )
     expect(withSel).toContain('data-testid="fd-fillet-selection-note"')
-    expect(withSel).toContain('not supported by the kernel yet')
+    expect(withSel).toContain('Pick an edge to fillet it by id')
     expect(withSel).toContain('Face 4 · 25.0 mm²')
+    // The retired honesty-gap copy must be gone (the kernel DOES support it now).
+    expect(withSel).not.toContain('not supported by the kernel yet')
 
     const withoutSel = render(
       createElement(FilletDialog, {
@@ -176,6 +191,18 @@ describe('FG-5b — FilletDialog render contract', () => {
     )
     expect(withoutSel).not.toContain('data-testid="fd-fillet-selection-note"')
     expect(withoutSel).toContain('data-testid="fd-fillet-selection-empty"')
+  })
+
+  it('FG-5b: a picked edge with a stable id drives the kernel (note says so) in select mode', () => {
+    const html = render(
+      createElement(FilletDialog, {
+        params: { radiusMm: 2, mode: 'select', edgeDirection: '+Z' },
+        selectionInfo: EDGE_SELECTION_STABLE,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('Filleting the picked edge')
+    expect(html).not.toContain('not supported by the kernel yet')
   })
 })
 
@@ -196,7 +223,7 @@ describe('FG-5b — ChamferDialog render contract', () => {
     expectAllButtonsTyped(html)
   })
 
-  it('flags the picked-edge gap when a selection exists', () => {
+  it('shows a context note for a non-edge selection (no retired honesty-gap copy)', () => {
     const html = render(
       createElement(ChamferDialog, {
         params: { lengthMm: 1 },
@@ -204,7 +231,19 @@ describe('FG-5b — ChamferDialog render contract', () => {
         onApply: noop
       })
     )
-    expect(html).toContain('not supported by the kernel yet')
+    expect(html).toContain('Pick an edge to chamfer it by id')
+    expect(html).not.toContain('not supported by the kernel yet')
+  })
+
+  it('FG-5b: a picked edge with a stable id drives the kernel in select mode', () => {
+    const html = render(
+      createElement(ChamferDialog, {
+        params: { lengthMm: 1, mode: 'select', edgeDirection: '-X' },
+        selectionInfo: EDGE_SELECTION_STABLE,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('Chamfering the picked edge')
   })
 })
 
@@ -223,7 +262,7 @@ describe('FG-5b — ShellDialog render contract', () => {
     expectAllButtonsTyped(html)
   })
 
-  it('flags the picked-face gap when a face is selected', () => {
+  it('a face pick WITHOUT a stable id falls back to the axis bucket (no retired gap copy)', () => {
     const html = render(
       createElement(ShellDialog, {
         params: { thicknessMm: 2 },
@@ -231,7 +270,20 @@ describe('FG-5b — ShellDialog render contract', () => {
         onApply: noop
       })
     )
-    expect(html).toContain('not supported by the kernel yet')
+    expect(html).toContain('no stable id yet')
+    expect(html).not.toContain('not supported by the kernel yet')
+  })
+
+  it('FG-5b: a face pick WITH a stable id drives the open cap by id', () => {
+    const html = render(
+      createElement(ShellDialog, {
+        params: { thicknessMm: 2 },
+        selectionInfo: FACE_SELECTION_STABLE,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('Opening the picked face')
+    expect(html).not.toContain('not supported by the kernel yet')
   })
 })
 

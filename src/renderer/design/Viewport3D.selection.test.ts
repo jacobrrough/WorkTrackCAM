@@ -29,6 +29,7 @@ import {
   buildFaceHighlightSegments,
   readGeometryEdgeIds,
   readGeometryFaceIds,
+  readGeometryFaceOcctIds,
   readGeometryVertexIds,
   resolveSelectionFromPick,
 } from './Viewport3D'
@@ -206,5 +207,63 @@ describe('resolveSelectionFromPick — pick mode branching', () => {
     const g = makeTwoTriangleGeometry([0, 1])
     ;(g.userData as Record<string, unknown>).vertexIds = [2, 6]
     expect(resolveSelectionFromPick('vertex', g, 1)).toEqual({ kind: 'vertex', faceId: 6 })
+  })
+})
+
+// ── FG-5b: stable occt-id stash (faceOcctIds) + pass-through ────────────────
+
+describe('readGeometryFaceOcctIds — stable face-id stash accessor', () => {
+  it('returns the stashed faceOcctIds string array when present', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).faceOcctIds = ['f:aaa', 'f:bbb']
+    expect(readGeometryFaceOcctIds(g)).toEqual(['f:aaa', 'f:bbb'])
+  })
+
+  it('returns null when the stash is absent or null geometry', () => {
+    expect(readGeometryFaceOcctIds(makeTwoTriangleGeometry([0, 1]))).toBeNull()
+    expect(readGeometryFaceOcctIds(null)).toBeNull()
+    expect(readGeometryFaceOcctIds(undefined)).toBeNull()
+  })
+})
+
+describe('resolveSelectionFromPick — FG-5b stable occtId pass-through', () => {
+  it('face pick carries the stable "f:<hex>" id as occtHash when faceOcctIds is stashed', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).faceOcctIds = ['f:top', 'f:side']
+    expect(resolveSelectionFromPick('face', g, 0)).toEqual({
+      kind: 'face',
+      faceId: 0,
+      occtHash: 'f:top',
+    })
+    expect(resolveSelectionFromPick('face', g, 1)).toEqual({
+      kind: 'face',
+      faceId: 1,
+      occtHash: 'f:side',
+    })
+  })
+
+  it('face pick omits occtHash when there is no faceOcctIds stash (degrades to id-only)', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    const sel = resolveSelectionFromPick('face', g, 0)
+    expect(sel).toEqual({ kind: 'face', faceId: 0 })
+    expect(sel).not.toHaveProperty('occtHash')
+  })
+
+  it('edge pick carries the stable "e:<hex>" id when both edgeIds + edgeOcctIds are stashed', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    ;(g.userData as Record<string, unknown>).edgeIds = [5, 9]
+    ;(g.userData as Record<string, unknown>).edgeOcctIds = ['e:five', 'e:nine']
+    expect(resolveSelectionFromPick('edge', g, 0)).toEqual({
+      kind: 'edge',
+      faceId: 5,
+      occtHash: 'e:five',
+    })
+  })
+
+  it('out-of-range / short occtId stash never fabricates an id (omits occtHash)', () => {
+    const g = makeTwoTriangleGeometry([0, 1])
+    // faceOcctIds shorter than the triangle index → no stable id for triangle 1.
+    ;(g.userData as Record<string, unknown>).faceOcctIds = ['f:only']
+    expect(resolveSelectionFromPick('face', g, 1)).toEqual({ kind: 'face', faceId: 1 })
   })
 })

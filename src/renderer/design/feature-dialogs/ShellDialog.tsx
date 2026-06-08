@@ -1,17 +1,18 @@
 /**
  * FG-5b · Shell property dialog.
  *
- * The kernel op is `shell_inward { thicknessMm, openDirection? }`. It hollows
- * the body to a wall thickness after removing ONE planar cap, where the cap is
- * chosen by an axis bucket (`openDirection: '+X' | '-X' | … | '-Z'`, default
- * `+Z`); the kernel tries the opposite cap if OCC rejects the first. As with
- * fillet/chamfer there is **no picked-face** targeting — you cannot hand the
- * kernel an arbitrary open face id.
+ * The kernel op is `shell_inward { thicknessMm, openDirection?, pickedFaceIds? }`.
+ * It hollows the body to a wall thickness after removing ONE planar cap. The cap
+ * is chosen one of two ways:
+ *   1. **Picked face** (FG-5b) — when the operator has a face picked in the
+ *      viewport AND it carries a STABLE `"f:<hex>"` id (`selection.occtHash`),
+ *      the dialog emits `pickedFaceIds: [id]` and the kernel opens exactly that
+ *      cap (resolving the id against the rebuilt solid; falls back to the axis
+ *      bucket if it no longer resolves — topological-naming limit).
+ *   2. **Axis bucket** — the always-available default (`openDirection`, default
+ *      `+Z`); the kernel tries the opposite cap if OCC rejects the first.
  *
- * So the dialog exposes thickness + the axis-bucket open face (the working
- * path), reads the operator's live face pick as context, and flags that
- * picking the open face directly needs new kernel support. Emits `shell_inward`
- * through the existing `appendKernelOp` path.
+ * Emits `shell_inward` through the existing `appendKernelOp` path.
  */
 
 import { useState, type JSX } from 'react'
@@ -24,6 +25,7 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
+  pickedOcctIdFor,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
@@ -40,12 +42,23 @@ export interface ShellDialogProps extends FeatureDialogBaseProps {
   readonly params: ShellDialogParams
 }
 
-/** Build the emitted `shell_inward` op (pure, testable against the schema). */
+/**
+ * Build the emitted `shell_inward` op (pure, testable against the schema).
+ *
+ * When `pickedFaceId` is a non-empty stable `"f:<hex>"` id, the op carries
+ * `pickedFaceIds: [pickedFaceId]` so the kernel opens that exact cap; the
+ * `openDirection` axis bucket is always present as the documented fallback.
+ * A `null` / empty `pickedFaceId` omits the field entirely (the schema rejects
+ * an empty `pickedFaceIds` array — absence means "use the axis bucket").
+ */
 export function buildShellOp(
   thicknessMm: number,
-  openDirection: EdgeDirection
+  openDirection: EdgeDirection,
+  pickedFaceId?: string | null
 ): KernelPostSolidOp {
-  return { kind: 'shell_inward', thicknessMm, openDirection }
+  return pickedFaceId
+    ? { kind: 'shell_inward', thicknessMm, openDirection, pickedFaceIds: [pickedFaceId] }
+    : { kind: 'shell_inward', thicknessMm, openDirection }
 }
 
 export function ShellDialog({
@@ -63,14 +76,22 @@ export function ShellDialog({
   const thickness = parsePositiveMm(thicknessRaw)
   const canApply = thickness !== null && disabled !== true
 
+  // FG-5b: a face pick carrying a stable "f:<hex>" id drives the open cap by id.
+  const pickedFaceId = pickedOcctIdFor(selectionInfo.selection, 'face')
+
   const handleApply = (): void => {
     if (thickness === null) return
-    onApply({ target: 'kernelOp', op: buildShellOp(thickness, openDirection) })
+    onApply({ target: 'kernelOp', op: buildShellOp(thickness, openDirection, pickedFaceId) })
   }
 
-  const pickedFaceNote =
+  // Honest read-out: the picked face DRIVES the open cap when it carries a
+  // stable id; otherwise the axis bucket is used (and a picked-but-unstable
+  // face is context only).
+  const selectionNote =
     selectionInfo.selection !== null
-      ? 'Picking the open face directly is not supported by the kernel yet — the cap is chosen by axis bucket below. (Gap: needs new sidecar face-id targeting.)'
+      ? pickedFaceId !== null
+        ? 'Opening the picked face — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+        : 'This pick has no stable id yet (re-run the build to refresh), so the cap is chosen by the axis bucket below.'
       : undefined
 
   return (
@@ -78,7 +99,7 @@ export function ShellDialog({
       <SelectionContextBanner
         selectionInfo={selectionInfo}
         emptyPrompt="Pick the face to leave open, or choose an axis bucket below."
-        note={pickedFaceNote}
+        note={selectionNote}
         testId="fd-shell-selection"
       />
       <DialogNumberField
@@ -97,8 +118,9 @@ export function ShellDialog({
         disabled={disabled}
       />
       <p className="fd-note" data-testid="fd-shell-note">
-        Hollows the body to the wall thickness and opens the cap on the chosen
-        axis. The kernel tries the opposite cap if the first is rejected.
+        {pickedFaceId !== null
+          ? 'Hollows the body to the wall thickness, opening the picked face. The axis bucket below is the fallback if the picked face cannot be resolved.'
+          : 'Hollows the body to the wall thickness and opens the cap on the chosen axis. The kernel tries the opposite cap if the first is rejected.'}
       </p>
       <DialogApplyRow
         label="Add shell"

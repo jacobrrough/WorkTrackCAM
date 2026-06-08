@@ -46,6 +46,76 @@ describe('part-features-schema', () => {
     expect(parsed.kernelOps?.[1]?.kind).toBe('chamfer_select')
   })
 
+  // --- FG-5b: picked-edge / picked-face OCCT-id targeting (additive) ---
+
+  it('FG-5b back-compat: directional fillet/chamfer/shell WITHOUT picked ids still parse', () => {
+    // Exactly the pre-FG-5b shape: axis-bucket only, no pickedEdgeIds / pickedFaceIds.
+    const legacy = partFeaturesFileSchema.parse({
+      version: 1,
+      items: [],
+      kernelOps: [
+        { kind: 'fillet_select', radiusMm: 0.8, edgeDirection: '+Z' },
+        { kind: 'chamfer_select', lengthMm: 0.6, edgeDirection: '-X' },
+        { kind: 'shell_inward', thicknessMm: 2, openDirection: '+Z' }
+      ]
+    })
+    const fillet = legacy.kernelOps?.[0]
+    const chamfer = legacy.kernelOps?.[1]
+    const shell = legacy.kernelOps?.[2]
+    expect(fillet && fillet.kind === 'fillet_select' && fillet.pickedEdgeIds).toBeUndefined()
+    expect(chamfer && chamfer.kind === 'chamfer_select' && chamfer.pickedEdgeIds).toBeUndefined()
+    expect(shell && shell.kind === 'shell_inward' && shell.pickedFaceIds).toBeUndefined()
+  })
+
+  it('FG-5b parses fillet_select / chamfer_select with pickedEdgeIds (occt hash strings)', () => {
+    const parsed = partFeaturesFileSchema.parse({
+      version: 1,
+      items: [],
+      kernelOps: [
+        { kind: 'fillet_select', radiusMm: 1.2, edgeDirection: '+Z', pickedEdgeIds: ['2147480001', '99887766'] },
+        { kind: 'chamfer_select', lengthMm: 0.5, edgeDirection: '-X', pickedEdgeIds: ['123456789'] }
+      ]
+    })
+    const fillet = parsed.kernelOps?.[0]
+    const chamfer = parsed.kernelOps?.[1]
+    expect(fillet && fillet.kind === 'fillet_select' && fillet.pickedEdgeIds).toEqual(['2147480001', '99887766'])
+    expect(chamfer && chamfer.kind === 'chamfer_select' && chamfer.pickedEdgeIds).toEqual(['123456789'])
+    // edgeDirection is retained as the fallback alongside the picked ids.
+    expect(fillet && fillet.kind === 'fillet_select' && fillet.edgeDirection).toBe('+Z')
+  })
+
+  it('FG-5b parses shell_inward with pickedFaceIds', () => {
+    const parsed = partFeaturesFileSchema.parse({
+      version: 1,
+      items: [],
+      kernelOps: [
+        { kind: 'shell_inward', thicknessMm: 1.5, openDirection: '+Z', pickedFaceIds: ['555000111'] }
+      ]
+    })
+    const shell = parsed.kernelOps?.[0]
+    expect(shell && shell.kind === 'shell_inward' && shell.pickedFaceIds).toEqual(['555000111'])
+  })
+
+  it('FG-5b rejects an empty pickedEdgeIds array (omit the field to mean "axis bucket")', () => {
+    expect(() =>
+      partFeaturesFileSchema.parse({
+        version: 1,
+        items: [],
+        kernelOps: [{ kind: 'fillet_select', radiusMm: 1, edgeDirection: '+Z', pickedEdgeIds: [] }]
+      })
+    ).toThrow()
+  })
+
+  it('FG-5b rejects an empty-string id inside pickedFaceIds', () => {
+    expect(() =>
+      partFeaturesFileSchema.parse({
+        version: 1,
+        items: [],
+        kernelOps: [{ kind: 'shell_inward', thicknessMm: 2, pickedFaceIds: [''] }]
+      })
+    ).toThrow()
+  })
+
   it('parses shell_inward with openDirection on any world axis', () => {
     const parsed = partFeaturesFileSchema.parse({
       version: 1,

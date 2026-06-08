@@ -1,15 +1,20 @@
 /**
  * FG-5b · Chamfer property dialog.
  *
- * Same capability boundary as {@link FilletDialog}: the kernel chamfer is
- * axis-bucket, not picked-edge. `kernelPostSolidOpSchema` offers:
+ * Same three real paths as {@link FilletDialog}, all exposed here:
  *   - `chamfer_all`    — bevel EVERY edge by `lengthMm`.
- *   - `chamfer_select` — bevel the edges in an axis bucket (`edgeDirection`).
+ *   - `chamfer_select` by **axis bucket** (`edgeDirection`) — bevel the edges
+ *     parallel to that world axis.
+ *   - `chamfer_select` by **picked edge** (FG-5b) — when the operator has an edge
+ *     picked carrying a STABLE `"e:<hex>"` id (`selection.occtHash`), the dialog
+ *     emits `pickedEdgeIds: [id]` and the kernel bevels exactly that edge
+ *     (falling back to the axis bucket if it no longer resolves).
  *
- * The dialog exposes those two working modes, shows the operator's live pick as
- * context, and clearly flags (note + gap report) that picked-edge chamfer needs
- * new sidecar/kernel support. Emits the matching `KernelPostSolidOp` through the
- * existing `appendKernelOp` path.
+ * Emits the matching `KernelPostSolidOp` through the existing `appendKernelOp`
+ * path. Same honest boundary as Fillet: the face-tessellated raycast cannot yet
+ * originate a single edge id, so a stable-id EdgeSelection arrives only from a
+ * surface that already holds one; absent that, the axis bucket applies and no
+ * picked id is faked.
  */
 
 import { useState, type JSX } from 'react'
@@ -23,6 +28,7 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
+  pickedOcctIdFor,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
@@ -43,14 +49,22 @@ export interface ChamferDialogProps extends FeatureDialogBaseProps {
   readonly params: ChamferDialogParams
 }
 
-/** Build the emitted `KernelPostSolidOp` for the dialog state (pure, testable). */
+/**
+ * Build the emitted `KernelPostSolidOp` for the dialog state (pure, testable).
+ * Mirrors {@link buildFilletOp}: `'select'` mode layers `pickedEdgeIds` onto
+ * `chamfer_select` when `pickedEdgeId` is a non-empty stable `"e:<hex>"` id,
+ * with the axis bucket as the documented fallback; an empty / null id omits the
+ * field (the schema rejects an empty array).
+ */
 export function buildChamferOp(
   lengthMm: number,
   mode: ChamferMode,
-  edgeDirection: EdgeDirection
+  edgeDirection: EdgeDirection,
+  pickedEdgeId?: string | null
 ): KernelPostSolidOp {
-  return mode === 'all'
-    ? { kind: 'chamfer_all', lengthMm }
+  if (mode === 'all') return { kind: 'chamfer_all', lengthMm }
+  return pickedEdgeId
+    ? { kind: 'chamfer_select', lengthMm, edgeDirection, pickedEdgeIds: [pickedEdgeId] }
     : { kind: 'chamfer_select', lengthMm, edgeDirection }
 }
 
@@ -70,22 +84,34 @@ export function ChamferDialog({
   const length = parsePositiveMm(lengthRaw)
   const canApply = length !== null && disabled !== true
 
+  // FG-5b: an edge pick carrying a stable "e:<hex>" id drives chamfer_select by id.
+  const pickedEdgeId = pickedOcctIdFor(selectionInfo.selection, 'edge')
+
   const handleApply = (): void => {
     if (length === null) return
-    onApply({ target: 'kernelOp', op: buildChamferOp(length, mode, edgeDirection) })
+    onApply({
+      target: 'kernelOp',
+      op: buildChamferOp(length, mode, edgeDirection, mode === 'select' ? pickedEdgeId : null)
+    })
   }
 
-  const pickedEdgeNote =
-    selectionInfo.selection !== null
-      ? 'Picked-edge chamfer is not supported by the kernel yet — applying by axis bucket below. (Gap: needs new sidecar edge-id targeting.)'
-      : undefined
+  const selectionNote =
+    selectionInfo.selection === null
+      ? undefined
+      : pickedEdgeId !== null
+        ? mode === 'select'
+          ? 'Chamfering the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+          : 'Switch Edges to “By axis bucket” to chamfer the picked edge by id; “All edges” bevels everything.'
+        : selectionInfo.selection.kind === 'edge'
+          ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
+          : 'Pick an edge to chamfer it by id; this selection drives the axis bucket below instead.'
 
   return (
     <FeatureDialogCard title="Chamfer" testId="fd-chamfer">
       <SelectionContextBanner
         selectionInfo={selectionInfo}
         emptyPrompt="Pick an edge to chamfer, or bevel all edges / an axis bucket below."
-        note={pickedEdgeNote}
+        note={selectionNote}
         testId="fd-chamfer-selection"
       />
       <DialogNumberField

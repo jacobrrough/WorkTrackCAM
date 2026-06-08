@@ -417,6 +417,10 @@ def execute_script(
         if face_tagged is not None:
             mesh_entry["faceMap"] = face_tagged["faceMap"]
             mesh_entry["faceIds"] = face_tagged["faceIds"]
+            # FG-5b: also embed the edge map so the renderer can wire picked-edge
+            # selection immediately without a second cad.tessellate_with_ids
+            # round trip. Best-effort: absent when face-tagging failed (above).
+            mesh_entry["edgeMap"] = face_tagged.get("edgeMap", {})
         meshes_out.append(mesh_entry)
         face_count_total += int(mesh_payload["triangleCount"])
 
@@ -507,12 +511,31 @@ def tessellate_with_face_ids(
           "faceMap":       {
             "<faceId>": {
               "kind":     "face",
-              "occtHash": int,
+              "occtHash": int,     # session hash; 0 in the bundled OCP build
+              "occtId":   str,     # STABLE geometry hash — the picked handle
               "area":     float,
             },
             ...
           },
+          "edgeMap":       {       # FG-5b — parallel to faceMap, NO faceIds
+            "<occtId>": {          # keyed by the STABLE edge id (not an index)
+              "kind":     "edge",
+              "occtId":   str,     # == the key; the picked-edge handle
+              "occtHash": int,     # session hash; 0 in the bundled OCP build
+              "length":   float,
+            },
+            ...
+          },
         }
+
+    The ``edgeMap`` is keyed by the STABLE per-edge id (``"e:<fnv>"``), NOT by a
+    positional index, because edges have no per-triangle parallel array to map
+    through (the mesh is face-tessellated). The renderer resolves a picked edge
+    by matching the id it stored against ``edgeMap`` keys; the build resolver
+    (:func:`resolve_picked_edges`) matches the same id against the rebuilt
+    solid's edges. ``occtId`` is added to every ``faceMap`` entry as the stable
+    FACE handle (``shell_inward.pickedFaceIds`` matches it). See the FG-5b
+    helper block above for the stability limitation (topological naming).
 
     Raises ``_CadHandlerError`` with one of:
       * ``invalid_handle``      — handle missing from the table.
@@ -601,11 +624,35 @@ def tessellate_with_face_ids(
         face_map[str(face_id)] = {
             "kind": "face",
             "occtHash": _safe_face_hash(face),
+            # FG-5b: STABLE geometry-derived handle (the int occtHash above is 0
+            # in the bundled OCP build — see the helper block). This is what
+            # shell_inward.pickedFaceIds matches against at build time.
+            "occtId": _safe_face_geom_id(face),
             "area": _safe_face_area(face),
         }
 
     triangle_count = len(face_ids)
     bbox_min, bbox_max = doc.bbox_min, doc.bbox_max
+
+    # FG-5b: build the edge map. Edges have no per-triangle parallel array (the
+    # mesh is face-tessellated), so the edgeMap is keyed by the STABLE edge id
+    # and carries only metadata. Best-effort: a failure to enumerate edges must
+    # not break the face-tagged mesh the renderer already depends on.
+    edge_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        for edge in solid.Edges():
+            eid = _safe_edge_geom_id(edge)
+            # If two edges hash identically (rare geometric coincidence) keep the
+            # first — the resolver applies the op to ALL geometric matches anyway.
+            if eid not in edge_map:
+                edge_map[eid] = {
+                    "kind": "edge",
+                    "occtId": eid,
+                    "occtHash": _safe_edge_hash(edge),
+                    "length": _safe_edge_length(edge),
+                }
+    except Exception:  # noqa: BLE001 - edge ids are non-critical metadata
+        edge_map = {}
 
     return {
         "vertices": vertices_flat,
@@ -614,6 +661,7 @@ def tessellate_with_face_ids(
         "triangleCount": triangle_count,
         "bbox": {"min": list(bbox_min), "max": list(bbox_max)},
         "faceMap": face_map,
+        "edgeMap": edge_map,
     }
 
 
@@ -671,6 +719,555 @@ def _safe_face_area(face: Any) -> float:
         return float(face.Area())
     except Exception:  # noqa: BLE001 - area is best-effort
         return 0.0
+
+
+# ── FG-5b: stable geometry-derived ids + picked-id resolution ────────────
+#
+# The selection layer (``src/renderer/design/selection-state.ts``) and the
+# fillet/chamfer/shell schema (``src/shared/part-features-schema.ts``
+# ``pickedEdgeIds`` / ``pickedFaceIds``) need a topology handle that:
+#
+#   1. is the SAME for the same geometric edge/face across an independent
+#      rebuild of the same script (so a picked id survives a parametric edit),
+#      and
+#   2. can be resolved back to the exact OCCT edge/face at build time.
+#
+# OCCT's ``TopoDS_Shape.HashCode`` is NOT usable here: in the bundled OCP build
+# (OCCT 7.7+/8.x, cadquery 2.7.0) ``HashCode`` was REMOVED from the binding —
+# ``hasattr(face.wrapped, "HashCode")`` is False, so the legacy
+# ``_safe_face_hash`` returns 0 for every face in this environment, and the
+# session-bound alternatives (``TopTools_ShapeMapHasher`` / Python ``hash`` on
+# the wrapped shape) change on every rebuild (fresh pointers) and so fail
+# requirement (1).
+#
+# So the stable handle is a **quantized-geometry FNV-1a hash**, the SAME
+# technique ``engines/cad/cadquery_drawing_geometry.py`` uses for its stable 2D
+# drawing ids. We hash the edge's (sorted endpoints + quantized length) or the
+# face's (quantized centroid + area + outward normal). This is deterministic,
+# orientation-independent, dependency-free, and — critically — survives a
+# rebuild that reproduces the same geometry.
+#
+# Stability limitation (topological naming). A geometry hash is stable across a
+# rebuild that REPRODUCES the same edge/face geometry. It is NOT stable across a
+# parametric change that MOVES or RESIZES that topology (a 20 mm box edge and a
+# 25 mm box edge hash differently), nor is it guaranteed unique if two distinct
+# edges happen to share endpoints + length (rare on real parts; the resolver
+# below handles a multi-match by applying the op to ALL matches, which for a
+# genuine geometric coincidence is the right behaviour). This is the same
+# fundamental limit every B-rep kernel hits without a full topological-naming
+# graph; the schema doc and the FG-5b UI both flag it.
+
+# FNV-1a 64-bit constants (same family as cadquery_drawing_geometry._fnv1a and
+# the renderer's plate-thumbnail cache key — determinism, not crypto strength).
+_GEOM_FNV_OFFSET = 0xCBF29CE484222325
+_GEOM_FNV_PRIME = 0x100000001B3
+_GEOM_FNV_MASK = 0xFFFFFFFFFFFFFFFF
+
+# Decimal places coordinates/length/area are quantized to before hashing. 1e-3
+# mm is finer than any CAD tolerance and absorbs float jitter (e.g. a centroid
+# that lands at -3.5e-16 instead of 0.0) so the same feature keeps its id.
+_GEOM_QUANT = 3
+
+
+def _geom_q(value: float) -> float:
+    """Quantize a coordinate/length to the id grid; fold -0.0 to 0.0."""
+    try:
+        r = round(float(value), _GEOM_QUANT)
+    except Exception:  # noqa: BLE001 - non-numeric → 0.0 keeps the id stable
+        return 0.0
+    return 0.0 if r == 0.0 else r
+
+
+def _geom_fnv1a(payload: str) -> str:
+    """FNV-1a 64-bit hash of ``payload`` as a fixed-width hex string.
+
+    Python's builtin ``hash`` is salted per process, so it is unusable for a
+    stable cross-run id; this is the dependency-free deterministic alternative.
+    """
+    h = _GEOM_FNV_OFFSET
+    for byte in payload.encode("utf-8"):
+        h ^= byte
+        h = (h * _GEOM_FNV_PRIME) & _GEOM_FNV_MASK
+    return f"{h:016x}"
+
+
+def _xyz_of(point: Any) -> Tuple[float, float, float]:
+    """Best-effort (x, y, z) from a cadquery Vector / OCP point / tuple."""
+    for ax in ("x", "y", "z"):
+        if hasattr(point, ax):
+            return (
+                _geom_q(getattr(point, "x")),
+                _geom_q(getattr(point, "y")),
+                _geom_q(getattr(point, "z")),
+            )
+    if hasattr(point, "X") and hasattr(point, "Y") and hasattr(point, "Z"):
+        return (_geom_q(point.X()), _geom_q(point.Y()), _geom_q(point.Z()))
+    try:
+        return (_geom_q(point[0]), _geom_q(point[1]), _geom_q(point[2]))
+    except Exception:  # noqa: BLE001 - degenerate point → origin
+        return (0.0, 0.0, 0.0)
+
+
+def _safe_edge_geom_id(edge: Any) -> str:
+    """Stable ``"e:"``-prefixed id for a cadquery ``Edge``.
+
+    Keyed on the SORTED quantized endpoints (orientation-independent) + the
+    quantized edge length. Returns ``"e:degenerate"`` if the geometry can't be
+    read (the resolver then simply never matches it — safe).
+    """
+    try:
+        verts = list(edge.Vertices())
+        ends = sorted(
+            (_geom_q(v.X), _geom_q(v.Y), _geom_q(v.Z))
+            if hasattr(v, "X")
+            else _xyz_of(v)
+            for v in verts
+        )
+        length = _geom_q(edge.Length())
+        # A closed circle has no distinct endpoints; fold in the center so two
+        # concentric circles of different radius still separate (length differs
+        # too, but the center makes coincident-length cases robust).
+        center = _xyz_of(edge.Center())
+        payload = f"E|len{length:.3f}|c{center[0]:.3f},{center[1]:.3f},{center[2]:.3f}|"
+        payload += "|".join(f"{p[0]:.3f},{p[1]:.3f},{p[2]:.3f}" for p in ends)
+        return "e:" + _geom_fnv1a(payload)
+    except Exception:  # noqa: BLE001 - unreadable edge → never-matching id
+        return "e:degenerate"
+
+
+def _safe_face_geom_id(face: Any) -> str:
+    """Stable ``"f:"``-prefixed id for a cadquery ``Face``.
+
+    Keyed on the quantized centroid + quantized area + quantized outward normal
+    (so two coplanar faces with the same centroid but opposite normals — e.g.
+    the two caps of a zero-thickness sliver — still separate). Returns
+    ``"f:degenerate"`` on read failure (resolver never matches it — safe).
+    """
+    try:
+        center = _xyz_of(face.Center())
+        area = _geom_q(face.Area())
+        try:
+            nrm = face.normalAt()
+            normal = _xyz_of(nrm)
+        except Exception:  # noqa: BLE001 - normal optional; centroid+area alone
+            normal = (0.0, 0.0, 0.0)
+        payload = (
+            f"F|c{center[0]:.3f},{center[1]:.3f},{center[2]:.3f}"
+            f"|a{area:.3f}"
+            f"|n{normal[0]:.3f},{normal[1]:.3f},{normal[2]:.3f}"
+        )
+        return "f:" + _geom_fnv1a(payload)
+    except Exception:  # noqa: BLE001 - unreadable face → never-matching id
+        return "f:degenerate"
+
+
+def _safe_edge_hash(edge: Any) -> int:
+    """Session OCCT hash for an edge (``occtHash`` int field), or 0.
+
+    Parallels :func:`_safe_face_hash`. In the bundled OCP build ``HashCode`` is
+    gone from the edge binding, so this returns 0 there (the STABLE handle is
+    :func:`_safe_edge_geom_id`, not this). Kept so the ``edgeMap`` entry shape
+    mirrors ``faceMap`` and so a future binding that restores ``HashCode`` lights
+    up automatically.
+    """
+    try:
+        wrapped = edge.wrapped
+    except Exception:  # noqa: BLE001 - fall through
+        return 0
+    if wrapped is None:
+        return 0
+    hash_code = getattr(wrapped, "HashCode", None)
+    if callable(hash_code):
+        for upper in (2_147_483_647, 1_000_000_000, 1_000_000):
+            try:
+                h = hash_code(upper)
+                return int(h) if h is not None else 0
+            except Exception:  # noqa: BLE001 - try next bound
+                continue
+    return 0
+
+
+def _safe_edge_length(edge: Any) -> float:
+    """Return ``edge.Length()`` as a float, or 0.0 on failure (best-effort)."""
+    try:
+        return float(edge.Length())
+    except Exception:  # noqa: BLE001 - length is best-effort metadata
+        return 0.0
+
+
+def resolve_picked_edges(solid: Any, picked_ids: Any) -> Tuple[List[Any], List[str]]:
+    """Resolve picked stable edge ids to actual cadquery ``Edge`` objects.
+
+    Returns ``(matched_edges, unresolved_ids)``. ``matched_edges`` are the
+    ``solid.Edges()`` whose :func:`_safe_edge_geom_id` is in ``picked_ids``
+    (de-duplicated, order follows the solid's edge order for determinism).
+    ``unresolved_ids`` are the requested ids with no matching edge — the caller
+    falls back to the axis bucket for those and surfaces a non-fatal warning.
+
+    NEVER raises and NEVER guesses: an id that doesn't match contributes
+    nothing to ``matched_edges`` (so the op is applied to the wrong edge over
+    our dead body — Safety Rule, the kernel is sacred).
+    """
+    wanted = _normalize_id_list(picked_ids)
+    if not wanted:
+        return [], []
+    try:
+        edges = list(solid.Edges())
+    except Exception:  # noqa: BLE001 - no topology → everything unresolved
+        return [], sorted(wanted)
+    matched: List[Any] = []
+    seen_ids: set = set()
+    for edge in edges:
+        eid = _safe_edge_geom_id(edge)
+        if eid in wanted:
+            matched.append(edge)
+            seen_ids.add(eid)
+    unresolved = sorted(wanted - seen_ids)
+    return matched, unresolved
+
+
+def resolve_picked_faces(solid: Any, picked_ids: Any) -> Tuple[List[Any], List[str]]:
+    """Resolve picked stable face ids to actual cadquery ``Face`` objects.
+
+    Mirror of :func:`resolve_picked_edges` for faces. Returns
+    ``(matched_faces, unresolved_ids)``. Same never-raise, never-guess contract.
+    """
+    wanted = _normalize_id_list(picked_ids)
+    if not wanted:
+        return [], []
+    try:
+        faces = list(solid.Faces())
+    except Exception:  # noqa: BLE001 - no topology → everything unresolved
+        return [], sorted(wanted)
+    matched: List[Any] = []
+    seen_ids: set = set()
+    for face in faces:
+        fid = _safe_face_geom_id(face)
+        if fid in wanted:
+            matched.append(face)
+            seen_ids.add(fid)
+    unresolved = sorted(wanted - seen_ids)
+    return matched, unresolved
+
+
+def _normalize_id_list(picked_ids: Any) -> set:
+    """Coerce a wire ``pickedEdgeIds`` / ``pickedFaceIds`` value to a string set.
+
+    Accepts a list/tuple of strings (the schema shape); silently drops any
+    non-string / empty entry so a malformed wire value degrades to "resolve
+    what you can, fall back for the rest" rather than raising mid-build.
+    """
+    if not isinstance(picked_ids, (list, tuple, set)):
+        return set()
+    out: set = set()
+    for entry in picked_ids:
+        if isinstance(entry, str) and entry:
+            out.add(entry)
+    return out
+
+
+# ── FG-5b: axis-bucket selectors (the fallback when no/unresolved picked id) ──
+#
+# These reproduce the axis-bucket targeting that the (schema-level)
+# ``edgeDirection`` / ``openDirection`` fields name. An edge is "in" a bucket
+# when its undirected tangent is parallel to that world axis (so ``+Z`` and
+# ``-Z`` name the SAME set of vertical edges — an edge has no inherent sign);
+# a face is the ``openDirection`` cap when its OUTWARD normal points along that
+# SIGNED axis (here the sign matters: ``+Z`` is the top cap, ``-Z`` the bottom).
+# This is the documented, working pre-FG-5b behaviour; the picked-id path layers
+# on top of it and falls back to it.
+
+_AXIS_VEC: Dict[str, Tuple[float, float, float]] = {
+    "+X": (1.0, 0.0, 0.0),
+    "-X": (-1.0, 0.0, 0.0),
+    "+Y": (0.0, 1.0, 0.0),
+    "-Y": (0.0, -1.0, 0.0),
+    "+Z": (0.0, 0.0, 1.0),
+    "-Z": (0.0, 0.0, -1.0),
+}
+
+# Cosine tolerance for "parallel to an axis". 0.999 ≈ 2.6° — tight enough that
+# only genuinely axis-aligned box/prism edges qualify, loose enough to absorb
+# tessellation/float noise.
+_AXIS_PARALLEL_COS = 0.999
+
+
+def _unit(vec: Tuple[float, float, float]) -> Optional[Tuple[float, float, float]]:
+    mag = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2])
+    if mag <= 1e-9:
+        return None
+    return (vec[0] / mag, vec[1] / mag, vec[2] / mag)
+
+
+def _edge_tangent(edge: Any) -> Optional[Tuple[float, float, float]]:
+    """Undirected unit tangent of a (straight) edge from its endpoints.
+
+    Curved edges return ``None`` (no single tangent → never in an axis bucket),
+    which is the right behaviour: an axis bucket only ever meant straight edges.
+    """
+    try:
+        verts = list(edge.Vertices())
+        if len(verts) != 2:
+            return None
+        a, b = verts[0], verts[1]
+        return _unit((b.X - a.X, b.Y - a.Y, b.Z - a.Z))
+    except Exception:  # noqa: BLE001 - unreadable edge → not bucketable
+        return None
+
+
+def _edges_in_axis_bucket(solid: Any, edge_direction: str) -> List[Any]:
+    """Edges whose undirected tangent is parallel to ``edge_direction``'s axis.
+
+    ``+Z`` and ``-Z`` return the same set (edges are undirected). Returns [] for
+    an unknown direction string or an unreadable solid.
+    """
+    axis = _AXIS_VEC.get(edge_direction)
+    if axis is None:
+        return []
+    try:
+        edges = list(solid.Edges())
+    except Exception:  # noqa: BLE001
+        return []
+    out: List[Any] = []
+    for edge in edges:
+        tan = _edge_tangent(edge)
+        if tan is None:
+            continue
+        # |dot| because the edge is undirected: parallel either way counts.
+        dot = abs(tan[0] * axis[0] + tan[1] * axis[1] + tan[2] * axis[2])
+        if dot >= _AXIS_PARALLEL_COS:
+            out.append(edge)
+    return out
+
+
+def _faces_in_open_bucket(solid: Any, open_direction: str) -> List[Any]:
+    """Faces whose OUTWARD normal points along the SIGNED ``open_direction``.
+
+    Sign matters for a cap: ``+Z`` is the top face, ``-Z`` the bottom. Returns []
+    for an unknown direction or unreadable solid.
+    """
+    axis = _AXIS_VEC.get(open_direction)
+    if axis is None:
+        return []
+    try:
+        faces = list(solid.Faces())
+    except Exception:  # noqa: BLE001
+        return []
+    out: List[Any] = []
+    for face in faces:
+        try:
+            nrm = face.normalAt()
+            unit = _unit((nrm.x, nrm.y, nrm.z))
+        except Exception:  # noqa: BLE001 - unreadable normal → skip
+            continue
+        if unit is None:
+            continue
+        dot = unit[0] * axis[0] + unit[1] * axis[1] + unit[2] * axis[2]
+        if dot >= _AXIS_PARALLEL_COS:  # signed: must point the SAME way
+            out.append(face)
+    return out
+
+
+# ── FG-5b: high-level op application (picked-id first, axis-bucket fallback) ──
+#
+# These are the canonical implementations the kernel build path calls for the
+# ``fillet_select`` / ``chamfer_select`` / ``shell_inward`` ops. Each takes a
+# cadquery ``Workplane`` (wrapping the current solid) plus the op dict and
+# returns ``(new_workplane, warnings)``. The kernel is sacred: an op is NEVER
+# applied to the wrong topology — a picked id that doesn't resolve contributes
+# nothing and we fall back to the axis bucket with a non-fatal warning; if even
+# the bucket is empty we return the solid UNCHANGED with a warning rather than
+# raising (a no-op is always safer than a wrong cut).
+
+
+def _warn(warnings: List[str], message: str) -> None:
+    warnings.append(message)
+
+
+def apply_fillet_select_op(
+    workplane: Any, op: Dict[str, Any]
+) -> Tuple[Any, List[str]]:
+    """Apply a ``fillet_select`` op. Picked edge ids win; else the axis bucket.
+
+    ``op`` keys: ``radiusMm`` (required), ``edgeDirection`` (axis-bucket
+    fallback), ``pickedEdgeIds`` (optional list of stable edge ids).
+    """
+    warnings: List[str] = []
+    radius = float(op.get("radiusMm", 0.0) or 0.0)
+    if radius <= 0:
+        _warn(warnings, "fillet_select skipped: radiusMm must be > 0")
+        return workplane, warnings
+
+    solid = workplane.findSolid()
+    edges, source = _select_edges(solid, op, "fillet_select", warnings)
+    if not edges:
+        _warn(warnings, "fillet_select skipped: no edges to fillet (left solid unchanged)")
+        return workplane, warnings
+
+    try:
+        result = workplane.newObject(edges).fillet(radius)
+    except Exception as exc:  # noqa: BLE001 - OCC fillet can reject a radius
+        _warn(
+            warnings,
+            f"fillet_select failed on {len(edges)} {source} edge(s): {exc} "
+            "(left solid unchanged)",
+        )
+        return workplane, warnings
+    return result, warnings
+
+
+def apply_chamfer_select_op(
+    workplane: Any, op: Dict[str, Any]
+) -> Tuple[Any, List[str]]:
+    """Apply a ``chamfer_select`` op. Picked edge ids win; else the axis bucket.
+
+    ``op`` keys: ``lengthMm`` (required), ``edgeDirection`` (fallback),
+    ``pickedEdgeIds`` (optional).
+    """
+    warnings: List[str] = []
+    length = float(op.get("lengthMm", 0.0) or 0.0)
+    if length <= 0:
+        _warn(warnings, "chamfer_select skipped: lengthMm must be > 0")
+        return workplane, warnings
+
+    solid = workplane.findSolid()
+    edges, source = _select_edges(solid, op, "chamfer_select", warnings)
+    if not edges:
+        _warn(warnings, "chamfer_select skipped: no edges to chamfer (left solid unchanged)")
+        return workplane, warnings
+
+    try:
+        result = workplane.newObject(edges).chamfer(length)
+    except Exception as exc:  # noqa: BLE001 - OCC chamfer can reject a length
+        _warn(
+            warnings,
+            f"chamfer_select failed on {len(edges)} {source} edge(s): {exc} "
+            "(left solid unchanged)",
+        )
+        return workplane, warnings
+    return result, warnings
+
+
+def apply_shell_inward_op(
+    workplane: Any, op: Dict[str, Any]
+) -> Tuple[Any, List[str]]:
+    """Apply a ``shell_inward`` op. Picked face ids win; else the axis bucket.
+
+    ``op`` keys: ``thicknessMm`` (required), ``openDirection`` (axis-bucket
+    fallback, default ``+Z``), ``pickedFaceIds`` (optional list of stable face
+    ids). The wall is hollowed INWARD (negative thickness to ``cq.shell``).
+    """
+    warnings: List[str] = []
+    thickness = float(op.get("thicknessMm", 0.0) or 0.0)
+    if thickness <= 0:
+        _warn(warnings, "shell_inward skipped: thicknessMm must be > 0")
+        return workplane, warnings
+
+    solid = workplane.findSolid()
+    faces, source = _select_faces(solid, op, warnings)
+    if not faces:
+        _warn(warnings, "shell_inward skipped: no open face resolved (left solid unchanged)")
+        return workplane, warnings
+
+    # Inward shell = negative thickness on the chosen open face(s).
+    try:
+        result = workplane.newObject(faces).shell(-thickness)
+        return result, warnings
+    except Exception as exc:  # noqa: BLE001 - OCC may reject the first cap
+        _warn(
+            warnings,
+            f"shell_inward on {len(faces)} {source} face(s) rejected by OCC: {exc}",
+        )
+
+    # OCC rejected the chosen cap — try the OPPOSITE axis-bucket cap, matching
+    # the documented "kernel tries the opposite cap if OCC rejects the first"
+    # behaviour. Only meaningful for the axis-bucket path.
+    open_dir = op.get("openDirection") or "+Z"
+    opposite = _opposite_direction(open_dir)
+    if opposite is not None:
+        opp_faces = _faces_in_open_bucket(solid, opposite)
+        if opp_faces:
+            try:
+                result = workplane.newObject(opp_faces).shell(-thickness)
+                _warn(
+                    warnings,
+                    f"shell_inward fell back to the opposite cap {opposite}",
+                )
+                return result, warnings
+            except Exception as exc:  # noqa: BLE001
+                _warn(warnings, f"shell_inward opposite cap {opposite} also rejected: {exc}")
+
+    _warn(warnings, "shell_inward skipped: OCC rejected every candidate cap (left solid unchanged)")
+    return workplane, warnings
+
+
+def _select_edges(
+    solid: Any, op: Dict[str, Any], op_kind: str, warnings: List[str]
+) -> Tuple[List[Any], str]:
+    """Pick edges for a fillet/chamfer op: picked ids first, axis bucket else.
+
+    Returns ``(edges, source)`` where ``source`` is ``"picked"`` or
+    ``"axis-bucket"`` for the warning text. An UNRESOLVED picked id appends a
+    non-fatal warning and the op falls back to the axis bucket for the whole op
+    (we do NOT mix a partial picked set with the bucket — that would surprise
+    the operator; an all-or-nothing fallback is predictable).
+    """
+    picked = op.get("pickedEdgeIds")
+    if picked:
+        matched, unresolved = resolve_picked_edges(solid, picked)
+        if unresolved:
+            _warn(
+                warnings,
+                f"{op_kind}: {len(unresolved)} picked edge id(s) did not resolve "
+                f"against the rebuilt solid {sorted(unresolved)!r}; "
+                "falling back to the axis bucket "
+                "(topological-naming limit — the edge may have moved or been "
+                "removed by an earlier op)",
+            )
+        elif matched:
+            return matched, "picked"
+        # If nothing matched at all we fall through to the bucket below.
+    edge_direction = op.get("edgeDirection")
+    if not isinstance(edge_direction, str):
+        return [], "axis-bucket"
+    return _edges_in_axis_bucket(solid, edge_direction), "axis-bucket"
+
+
+def _select_faces(
+    solid: Any, op: Dict[str, Any], warnings: List[str]
+) -> Tuple[List[Any], str]:
+    """Pick faces for a shell op: picked ids first, axis bucket else.
+
+    Same all-or-nothing fallback contract as :func:`_select_edges`.
+    """
+    picked = op.get("pickedFaceIds")
+    if picked:
+        matched, unresolved = resolve_picked_faces(solid, picked)
+        if unresolved:
+            _warn(
+                warnings,
+                f"shell_inward: {len(unresolved)} picked face id(s) did not "
+                f"resolve against the rebuilt solid {sorted(unresolved)!r}; "
+                "falling back to the axis bucket (topological-naming limit)",
+            )
+        elif matched:
+            return matched, "picked"
+    open_dir = op.get("openDirection") or "+Z"
+    if not isinstance(open_dir, str):
+        open_dir = "+Z"
+    return _faces_in_open_bucket(solid, open_dir), "axis-bucket"
+
+
+def _opposite_direction(direction: str) -> Optional[str]:
+    """Map ``+Z`` -> ``-Z`` etc. for the shell opposite-cap retry."""
+    if not isinstance(direction, str) or len(direction) != 2:
+        return None
+    sign, axis = direction[0], direction[1]
+    if sign == "+":
+        return "-" + axis
+    if sign == "-":
+        return "+" + axis
+    return None
 
 
 def _coerce_to_workplane(body: Any) -> Any:
@@ -994,4 +1591,13 @@ __all__ = [
     "list_operations",
     "scan_banned_tokens",
     "tessellate_with_face_ids",
+    # FG-5b: stable id derivation + picked-id → topology resolution
+    "_safe_edge_geom_id",
+    "_safe_face_geom_id",
+    "resolve_picked_edges",
+    "resolve_picked_faces",
+    # FG-5b: build-time op application (picked-id first, axis-bucket fallback)
+    "apply_fillet_select_op",
+    "apply_chamfer_select_op",
+    "apply_shell_inward_op",
 ]

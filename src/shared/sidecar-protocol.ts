@@ -143,15 +143,55 @@ export type CadFaceMapEntry = {
   /** Reserved for future use; always ``"face"`` in V1. */
   kind: 'face'
   /**
-   * OCCT TopoDS hash code for the face. Stable across re-runs of the same
-   * script (same construction history → same hash). ``0`` if the OCP /
-   * PythonOCC binding does not expose ``HashCode`` on this version.
+   * OCCT TopoDS hash code for the face. ``0`` whenever the OCP / PythonOCC
+   * binding does not expose ``HashCode`` — which is the case in the bundled
+   * OCP build (OCCT 7.7+/8.x removed it), so this is effectively always ``0``
+   * today. Use {@link CadFaceMapEntry.occtId} as the stable handle instead;
+   * this field is retained only for back-compat + a future binding that
+   * restores ``HashCode``.
    */
   occtHash: number
+  /**
+   * FG-5b · STABLE geometry-derived face handle (``"f:<fnv>"``). Hashed from
+   * the face's quantized centroid + area + outward normal, so it survives a
+   * rebuild that reproduces the same geometry (unlike the session-bound
+   * ``occtHash``). This is the value the renderer stores on a face pick and
+   * the value ``shell_inward.pickedFaceIds`` carries — the kernel resolves it
+   * back to the OCCT face at build time. NOT stable across a parametric change
+   * that moves/resizes the face (topological-naming limit).
+   *
+   * Optional at the type level so the assembly faceMap path
+   * ({@link CadAssemblyFaceMapEntry}) — which does not emit it yet — still
+   * satisfies the type; the single-body tessellator always populates it.
+   */
+  occtId?: string
   /** Optional surface area in mm² (``Face.Area()``). ``0`` on failure. */
   area?: number
   /** Diagnostic; only present if a single face failed mid-tessellation. */
   error?: string
+}
+
+/**
+ * FG-5b · Per-edge metadata in the ``edgeMap`` dict. Parallel to
+ * {@link CadFaceMapEntry} but keyed by the STABLE edge id (``"e:<fnv>"``) —
+ * NOT by a positional index, because the mesh is face-tessellated and edges
+ * have no per-triangle parallel array. The renderer resolves a picked edge by
+ * matching the id it stored against ``edgeMap`` keys; the kernel resolves the
+ * same id against the rebuilt solid for ``fillet_select`` / ``chamfer_select``
+ * ``pickedEdgeIds`` targeting.
+ */
+export type CadEdgeMapEntry = {
+  /** Always ``"edge"``. */
+  kind: 'edge'
+  /** STABLE geometry-derived edge handle; equals this entry's key in ``edgeMap``. */
+  occtId: string
+  /**
+   * Session OCCT hash; ``0`` in the bundled OCP build (no ``HashCode`` on the
+   * edge binding) — see {@link CadFaceMapEntry.occtHash}. Use ``occtId``.
+   */
+  occtHash: number
+  /** Edge arc length in mm (``Edge.Length()``); ``0`` on failure. */
+  length: number
 }
 
 export type CadTessellateWithIdsResult = {
@@ -173,6 +213,12 @@ export type CadTessellateWithIdsResult = {
    * serialization). Renderer's selection inspector reads this.
    */
   faceMap: Record<string, CadFaceMapEntry>
+  /**
+   * FG-5b · Per-edge metadata keyed by the STABLE edge id (``"e:<fnv>"``).
+   * Empty ``{}`` when the sidecar could not enumerate edges (non-critical —
+   * face picking still works). See {@link CadEdgeMapEntry}.
+   */
+  edgeMap: Record<string, CadEdgeMapEntry>
 }
 
 // ── cad.execute_script ──────────────────────────────────────────────────────
@@ -224,6 +270,13 @@ export type CadExecuteScriptMesh = {
    * for the same reason ``faceIds`` is absent.
    */
   faceMap?: Record<string, CadFaceMapEntry>
+  /**
+   * FG-5b · Optional per-edge metadata dict, embedded best-effort so the
+   * renderer can wire picked-edge selection without a second
+   * ``cad.tessellate_with_ids`` round trip. Keyed by the stable edge id; see
+   * {@link CadEdgeMapEntry}. Absent for the same reason ``faceMap`` is absent.
+   */
+  edgeMap?: Record<string, CadEdgeMapEntry>
 }
 
 export type CadScriptError = {

@@ -720,6 +720,33 @@ describe('coerceTessellateWithIdsResult', () => {
     const r = coerceTessellateWithIdsResult(raw)
     expect(r?.triangleCount).toBe(4)
   })
+
+  // --- FG-5b: occtId on faces + the new edgeMap ---
+
+  it('carries the stable occtId on a faceMap entry when present', () => {
+    const raw = validResultRaw()
+    raw.faceMap = { '3': { kind: 'face', occtHash: 0, occtId: 'f:abc123', area: 0.5 } }
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(r?.faceMap['3']?.occtId).toBe('f:abc123')
+  })
+
+  it('coerces the edgeMap and drops malformed edge entries', () => {
+    const raw = validResultRaw()
+    raw.edgeMap = {
+      'e:aaa': { kind: 'edge', occtId: 'e:aaa', occtHash: 0, length: 10 },
+      'e:bbb': { kind: 'face', occtId: 'e:bbb', occtHash: 0, length: 5 }, // wrong kind
+      'e:ccc': { kind: 'edge', occtHash: 0, length: 5 }, // missing occtId
+      'e:ddd': null
+    }
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(Object.keys(r?.edgeMap ?? {}).sort()).toEqual(['e:aaa'])
+    expect(r?.edgeMap['e:aaa']?.length).toBe(10)
+  })
+
+  it('defaults edgeMap to an empty object when the sidecar omits it', () => {
+    const r = coerceTessellateWithIdsResult(validResultRaw())
+    expect(r?.edgeMap).toEqual({})
+  })
 })
 
 describe('cad:tessellateWithIds handler', () => {

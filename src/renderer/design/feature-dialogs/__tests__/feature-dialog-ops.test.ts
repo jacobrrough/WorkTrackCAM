@@ -21,8 +21,14 @@ import {
   EDGE_DIRECTION_OPTIONS,
   parseClampedInt,
   parseFiniteMm,
-  parsePositiveMm
+  parsePositiveMm,
+  pickedOcctIdFor
 } from '../feature-dialog-types'
+import {
+  makeEdgeSelection,
+  makeFaceSelection,
+  makeVertexSelection
+} from '../../selection-state'
 
 describe('FG-5b op builders emit schema-valid kernel ops', () => {
   describe('buildFilletOp', () => {
@@ -39,6 +45,29 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
         expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
       }
     })
+
+    it('FG-5b: layers pickedEdgeIds onto fillet_select when a stable edge id is passed', () => {
+      const op = buildFilletOp(1.5, 'select', '+Z', 'e:abc123')
+      expect(op).toEqual({
+        kind: 'fillet_select',
+        radiusMm: 1.5,
+        edgeDirection: '+Z',
+        pickedEdgeIds: ['e:abc123']
+      })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('FG-5b: ignores a picked edge id in "all" mode (fillet_all has no targeting)', () => {
+      const op = buildFilletOp(2, 'all', '+Z', 'e:abc123')
+      expect(op).toEqual({ kind: 'fillet_all', radiusMm: 2 })
+      expect(op).not.toHaveProperty('pickedEdgeIds')
+    })
+
+    it('FG-5b: a null / empty picked id omits the field (schema rejects empty arrays)', () => {
+      const op = buildFilletOp(2, 'select', '+Z', null)
+      expect(op).not.toHaveProperty('pickedEdgeIds')
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
   })
 
   describe('buildChamferOp', () => {
@@ -52,6 +81,23 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
       const op = buildChamferOp(0.8, 'select', '+Y')
       expect(op).toEqual({ kind: 'chamfer_select', lengthMm: 0.8, edgeDirection: '+Y' })
       expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('FG-5b: layers pickedEdgeIds onto chamfer_select when a stable edge id is passed', () => {
+      const op = buildChamferOp(0.8, 'select', '-X', 'e:deadbeef')
+      expect(op).toEqual({
+        kind: 'chamfer_select',
+        lengthMm: 0.8,
+        edgeDirection: '-X',
+        pickedEdgeIds: ['e:deadbeef']
+      })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('FG-5b: ignores a picked edge id in "all" mode', () => {
+      const op = buildChamferOp(1, 'all', '+Z', 'e:deadbeef')
+      expect(op).toEqual({ kind: 'chamfer_all', lengthMm: 1 })
+      expect(op).not.toHaveProperty('pickedEdgeIds')
     })
   })
 
@@ -67,6 +113,23 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
         const op = buildShellOp(1.5, dir)
         expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
       }
+    })
+
+    it('FG-5b: layers pickedFaceIds onto shell_inward when a stable face id is passed', () => {
+      const op = buildShellOp(2, '+Z', 'f:cap42')
+      expect(op).toEqual({
+        kind: 'shell_inward',
+        thicknessMm: 2,
+        openDirection: '+Z',
+        pickedFaceIds: ['f:cap42']
+      })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('FG-5b: a null / empty picked id omits the field (schema rejects empty arrays)', () => {
+      const op = buildShellOp(2, '+Z', null)
+      expect(op).not.toHaveProperty('pickedFaceIds')
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
     })
   })
 
@@ -136,5 +199,29 @@ describe('FG-5b parse helpers', () => {
       expect(parseClampedInt('', 0, 255)).toBeNull()
       expect(parseClampedInt('abc', 0, 255)).toBeNull()
     })
+  })
+})
+
+describe('FG-5b pickedOcctIdFor — the kernel-by-id gate', () => {
+  it('returns the stable id when the selection matches the kind AND carries occtHash', () => {
+    expect(pickedOcctIdFor(makeFaceSelection(4, 'f:cap'), 'face')).toBe('f:cap')
+    expect(pickedOcctIdFor(makeEdgeSelection(7, 'e:rail'), 'edge')).toBe('e:rail')
+    expect(pickedOcctIdFor(makeVertexSelection(2, 'v:corner'), 'vertex')).toBe('v:corner')
+  })
+
+  it('returns null when the selection KIND does not match the requested kind', () => {
+    // A face pick must NOT drive a fillet (which wants an edge), and vice versa.
+    expect(pickedOcctIdFor(makeFaceSelection(4, 'f:cap'), 'edge')).toBeNull()
+    expect(pickedOcctIdFor(makeEdgeSelection(7, 'e:rail'), 'face')).toBeNull()
+  })
+
+  it('returns null when the selection carries no stable occtHash (id-only pick)', () => {
+    expect(pickedOcctIdFor(makeFaceSelection(4), 'face')).toBeNull()
+    expect(pickedOcctIdFor(makeEdgeSelection(7), 'edge')).toBeNull()
+  })
+
+  it('returns null for an empty occtHash string and for a null selection', () => {
+    expect(pickedOcctIdFor(makeFaceSelection(4, ''), 'face')).toBeNull()
+    expect(pickedOcctIdFor(null, 'face')).toBeNull()
   })
 })

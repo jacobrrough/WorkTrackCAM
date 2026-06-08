@@ -25,6 +25,14 @@
  *     the defensive read in `Viewport3D.readGeometryFaceIds` — a
  *     malformed / mismatched array silently disables face-pick rather
  *     than throwing.
+ *   - FG-5b: ALSO stashes a parallel `faceOcctIds` string array
+ *     (`geometry.userData.faceOcctIds[i]` is the STABLE `"f:<hex>"`
+ *     handle of triangle `i`, looked up from `tess.faceMap[faceId].occtId`).
+ *     This is the value a face pick carries up as `FaceSelection.occtHash`
+ *     and the value `shell_inward.pickedFaceIds` resolves at build. Only
+ *     stashed when the numeric `faceIds` stash succeeded AND every face id
+ *     has an `occtId` in the `faceMap` — a partial map disables the stable
+ *     id path (the pick degrades to id-only, exactly like before FG-5b).
  *   - Computes vertex normals so the shaded material lights correctly
  *     (the sidecar ships positions + indices only).
  *
@@ -54,6 +62,33 @@ export function sanitizeFaceIds(
     }
   }
   return faceIds.slice()
+}
+
+/**
+ * FG-5b · Build the per-triangle STABLE face-id array from a sanitized numeric
+ * `faceIds` array + the sidecar's `faceMap`. `out[i]` is the `"f:<hex>"` handle
+ * of triangle `i` (looked up via `faceMap[String(faceIds[i])].occtId`).
+ *
+ * Returns `null` when ANY triangle's face id has no `occtId` in the map (e.g.
+ * a face that failed mid-tessellation carries no `occtId`, or the assembly
+ * faceMap path that doesn't emit it yet) — an all-or-nothing contract so the
+ * viewport never carries a half-populated stable-id stash that would silently
+ * drop the picked-id path for some faces. Pure; exported for the focused unit
+ * test.
+ */
+export function buildFaceOcctIds(
+  faceIds: readonly number[],
+  faceMap: CadTessellateWithIdsResult['faceMap'] | undefined,
+): string[] | null {
+  if (!faceMap || typeof faceMap !== 'object') return null
+  const out: string[] = new Array(faceIds.length)
+  for (let i = 0; i < faceIds.length; i++) {
+    const entry = faceMap[String(faceIds[i])]
+    const occtId = entry?.occtId
+    if (typeof occtId !== 'string' || occtId.length === 0) return null
+    out[i] = occtId
+  }
+  return out
 }
 
 /**
@@ -88,6 +123,13 @@ export function buildViewportGeometry(
   const sanitized = sanitizeFaceIds(tess.faceIds, triangleCount)
   if (sanitized) {
     geometry.userData = { ...geometry.userData, faceIds: sanitized }
+    // FG-5b: stash the parallel STABLE `"f:<hex>"` ids so a face pick can
+    // carry the value `shell_inward.pickedFaceIds` resolves at build. Only
+    // when EVERY face id maps to an occtId (all-or-nothing — see helper).
+    const faceOcctIds = buildFaceOcctIds(sanitized, tess.faceMap)
+    if (faceOcctIds) {
+      geometry.userData = { ...geometry.userData, faceOcctIds }
+    }
   }
 
   return geometry

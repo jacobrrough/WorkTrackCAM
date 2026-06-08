@@ -8,6 +8,30 @@ const suppressKernel = { suppressed: z.boolean().optional() } as const
 const mm = z.number().finite()
 const mmPos = z.number().finite().positive()
 
+/**
+ * Picked-topology OCCT-hash id list (FG-5b targeting).
+ *
+ * Each entry is the **stable OCCT hash string** the selection layer carries on
+ * `FaceSelection.occtHash` (`src/renderer/design/selection-state.ts`) — the
+ * decimal string form of the per-face / per-edge `HashCode` the sidecar emits
+ * in `faceMap` / `edgeMap` (`engines/cad/cadquery_script.py`
+ * `tessellate_with_face_ids`). When present on a fillet/chamfer/shell op the
+ * kernel resolves these ids back to the exact OCCT edges/faces at build and
+ * applies the op to ONLY that topology; the axis-bucket `edgeDirection` /
+ * `openDirection` stays as the fallback used when no id is present OR a picked
+ * id fails to resolve against the rebuilt solid (topological-naming limit —
+ * a hash may not survive an arbitrary parametric rebuild; see the sidecar
+ * stability note). Strings (not numbers) so the value round-trips the renderer
+ * selection handle unchanged and stays JSON-stable.
+ *
+ * `.min(1)` so a present-but-empty array can't masquerade as "targeted": an
+ * empty list is meaningless (it would resolve to nothing and silently fall back
+ * to the axis bucket), so the schema rejects it — callers omit the field
+ * entirely to mean "use the axis bucket". Capped at 256 to bound resolver work
+ * on a single op.
+ */
+const pickedOcctIds = z.array(z.string().min(1)).min(1).max(256)
+
 const pathPoint2d = z.tuple([mm, mm])
 const vec3 = z.tuple([mm, mm, mm])
 
@@ -461,12 +485,27 @@ export const kernelPostSolidOpSchema = z.union([
     kind: z.literal('fillet_select'),
     radiusMm: mmPos,
     edgeDirection: z.enum(['+X', '-X', '+Y', '-Y', '+Z', '-Z']),
+    /**
+     * FG-5b · Optional picked-edge targeting. When present, the kernel fillets
+     * ONLY the OCCT edges whose stable hash matches one of these ids; when
+     * absent (or none resolve at build), it falls back to the `edgeDirection`
+     * axis bucket. Additive + `.optional()` so every existing v1
+     * `part/features.json` parses unchanged (Safety Rule 2).
+     */
+    pickedEdgeIds: pickedOcctIds.optional(),
     ...suppressKernel
   }),
   z.object({
     kind: z.literal('chamfer_select'),
     lengthMm: mmPos,
     edgeDirection: z.enum(['+X', '-X', '+Y', '-Y', '+Z', '-Z']),
+    /**
+     * FG-5b · Optional picked-edge targeting (same contract as
+     * `fillet_select.pickedEdgeIds`): resolves to exact OCCT edges at build,
+     * falls back to `edgeDirection` when absent / unresolved. Additive +
+     * `.optional()` (Safety Rule 2).
+     */
+    pickedEdgeIds: pickedOcctIds.optional(),
     ...suppressKernel
   }),
   /**
@@ -477,6 +516,14 @@ export const kernelPostSolidOpSchema = z.union([
     kind: z.literal('shell_inward'),
     thicknessMm: mmPos,
     openDirection: z.enum(['+X', '-X', '+Y', '-Y', '+Z', '-Z']).optional(),
+    /**
+     * FG-5b · Optional picked-FACE targeting. When present, the kernel opens
+     * the cap whose stable OCCT face hash matches one of these ids (the open
+     * faces removed before the inward offset) instead of the `openDirection`
+     * axis-bucket extremum; falls back to the axis bucket when absent OR none
+     * resolve at build. Additive + `.optional()` (Safety Rule 2).
+     */
+    pickedFaceIds: pickedOcctIds.optional(),
     ...suppressKernel
   }),
   patternRectangularSchema,
