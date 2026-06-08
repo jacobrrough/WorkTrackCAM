@@ -43,7 +43,7 @@ export const THEMES: readonly ThemeMeta[] = [
 ]
 
 /** Default brand theme (the `:root` block in themes.css matches this). */
-export const DEFAULT_THEME: ThemeId = 'titanium'
+export const DEFAULT_THEME: ThemeId = 'graphite'
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS)
 

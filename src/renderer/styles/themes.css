@@ -1,35 +1,35 @@
 /* ============================================================
    WorkTrack3D -- Theme color tokens (GENERATED; see P2 / gen-themes).
-   Default (no data-theme attr) = Titanium. 10 swappable themes.
+   Default (no data-theme attr) = Graphite Pro. 10 swappable themes.
    Per-environment accent overrides come LAST so machine-env accents
    win over the active theme accent. Primitives live in tokens.css.
    ============================================================ */
 
-/* Default theme = Titanium */
+/* Default theme = Graphite Pro (the mockup default — matches [data-theme='graphite']) */
 :root {
-  --bg0: #22262b;
-  --bg1: #292d33;
-  --bg2: #333841;
-  --bg3: #3b414b;
-  --bg4: #454c57;
-  --border: #424954;
-  --border-hi: #566070;
-  --txt0: #eef1f5;
-  --txt1: #b9c1cc;
-  --txt2: #868f9c;
-  --accent: #6f9fc4;
-  --accent-hi: #88b4d6;
-  --accent-dim: rgba(111,159,196,0.14);
-  --ok: #5cc99a;
-  --warn: #e6b84a;
-  --err: #e0726f;
-  --info: #6f9fc4;
-  --ok-dim: rgba(92,201,154,0.12);
-  --warn-dim: rgba(230,184,74,0.12);
-  --err-dim: rgba(224,114,111,0.1);
-  --info-dim: rgba(111,159,196,0.1);
+  --bg0: #0f1115;
+  --bg1: #14161b;
+  --bg2: #1b1e25;
+  --bg3: #20242c;
+  --bg4: #2a2f3a;
+  --border: #2a2f38;
+  --border-hi: #3a4150;
+  --txt0: #e8ebf1;
+  --txt1: #aab2c2;
+  --txt2: #6c7585;
+  --accent: #4d8aff;
+  --accent-hi: #6ba0ff;
+  --accent-dim: rgba(77,138,255,0.14);
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --info: #38bdf8;
+  --ok-dim: rgba(52,211,153,0.12);
+  --warn-dim: rgba(251,191,36,0.12);
+  --err-dim: rgba(248,113,113,0.1);
+  --info-dim: rgba(56,189,248,0.1);
   --surface-overlay: rgba(255,255,255,0.03);
-  --glass-bg: rgba(41,45,51,0.85);
+  --glass-bg: rgba(20,22,27,0.85);
   --glass-border: rgba(255,255,255,0.06);
   --overlay-bg: rgba(0,0,0,0.65);
   --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
@@ -39,12 +39,12 @@
   --elevation-2: 0 4px 14px rgba(0,0,0,0.4);
   --elevation-3: 0 8px 30px rgba(0,0,0,0.45);
   --elevation-4: 0 20px 60px rgba(0,0,0,0.6);
-  --accent-8: rgba(111,159,196,0.08);
-  --accent-10: rgba(111,159,196,0.1);
-  --accent-12: rgba(111,159,196,0.12);
-  --accent-16: rgba(111,159,196,0.16);
-  --accent-20: rgba(111,159,196,0.2);
-  --accent-28: rgba(111,159,196,0.28);
+  --accent-8: rgba(77,138,255,0.08);
+  --accent-10: rgba(77,138,255,0.1);
+  --accent-12: rgba(77,138,255,0.12);
+  --accent-16: rgba(77,138,255,0.16);
+  --accent-20: rgba(77,138,255,0.2);
+  --accent-28: rgba(77,138,255,0.28);
 }
 
 [data-theme='graphite'] {

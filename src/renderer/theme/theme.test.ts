@@ -3,12 +3,12 @@ import { resolveTheme, applyTheme } from './useTheme'
 import { THEMES, THEME_IDS, DEFAULT_THEME, isThemeId } from './theme-registry'
 
 describe('theme-registry', () => {
-  it('exposes exactly 10 themes, all valid ids, Titanium as default', () => {
+  it('exposes exactly 10 themes, all valid ids, Graphite Pro as default', () => {
     expect(THEME_IDS).toHaveLength(10)
     expect(THEMES).toHaveLength(10)
     expect(new Set(THEMES.map(t => t.id))).toEqual(new Set(THEME_IDS))
     expect(THEME_IDS).toContain(DEFAULT_THEME)
-    expect(DEFAULT_THEME).toBe('titanium')
+    expect(DEFAULT_THEME).toBe('graphite')
   })
 
   it('every theme has a label, mode, and blurb', () => {
@@ -36,16 +36,16 @@ describe('resolveTheme', () => {
     for (const id of THEME_IDS) expect(resolveTheme(id)).toBe(id)
   })
 
-  it('maps legacy dark -> titanium and light -> precision', () => {
-    expect(resolveTheme('dark')).toBe('titanium')
+  it('maps legacy dark -> graphite (default) and light -> precision', () => {
+    expect(resolveTheme('dark')).toBe('graphite')
     expect(resolveTheme('light')).toBe('precision')
   })
 
   it('falls back to the default theme for undefined / null / unknown values', () => {
-    expect(resolveTheme(undefined)).toBe('titanium')
-    expect(resolveTheme(null)).toBe('titanium')
-    expect(resolveTheme('not-a-theme')).toBe('titanium')
-    expect(resolveTheme(123)).toBe('titanium')
+    expect(resolveTheme(undefined)).toBe('graphite')
+    expect(resolveTheme(null)).toBe('graphite')
+    expect(resolveTheme('not-a-theme')).toBe('graphite')
+    expect(resolveTheme(123)).toBe('graphite')
   })
 
   it('resolves system to one of the valid theme ids', () => {
@@ -81,8 +81,8 @@ describe('applyTheme', () => {
   })
 
   it('applies the mapped theme for a legacy value', () => {
-    expect(applyTheme('dark')).toBe('titanium')
+    expect(applyTheme('dark')).toBe('graphite')
     const doc = (globalThis as { document: { documentElement: { dataset: Record<string, string> } } }).document
-    expect(doc.documentElement.dataset.theme).toBe('titanium')
+    expect(doc.documentElement.dataset.theme).toBe('graphite')
   })
 })
