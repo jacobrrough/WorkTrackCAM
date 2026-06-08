@@ -3,10 +3,9 @@ import { AppProviders } from '../contexts/AppProviders'
 import { AppShell } from './AppShell'
 
 /**
- * Root of the ground-up WorkTrack3D shell (P3), dark-launched behind the
- * `__APP_SHELL__` build flag. `main.tsx` renders this instead of `ShopApp`
- * when WT_SHELL=next; the default build still boots the legacy shell until
- * the P5 cutover. Reuses the same provider stack as the legacy app.
+ * Root of the WorkTrack3D CAD-first shell. `main.tsx` renders this as the sole
+ * application shell — the legacy ShopApp was retired at the P5 cutover (the
+ * `__APP_SHELL__` dark-launch flag is gone).
  */
 export default function WorkTrack3DApp(): ReactElement {
   return (

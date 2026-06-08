@@ -17695,3 +17695,46 @@ RESULTS: tsc clean; full TS suite 14,904 pass (+64); venv sidecar mate tests pas
 solve); no G-code; no engine change in THIS commit (the cadquery Shape fix shipped in e639484);
 additive; no `any`. Assembly mates are now reachable AND functional. NEXT: continue parity stacks
 (each built + wired); next per plan order is Stack 6 (rest machining — CAM, gcode-safety gated).
+
+
+### P5 CUTOVER (done): retire the legacy ShopApp shell — new CAD-first shell is the only one
+User directed: "get rid of the old shell first, then run it." Previously gated on CAM hardening +
+operator validation; user overrode the gate. Done directly (not a workflow) with typecheck + full-suite
+gates as the safety net, then booted the app to confirm.
+
+DELETED:
+- `src/renderer/src/ShopApp.tsx` (legacy shell root) + the 4 components only it imported:
+  `AppHeader.tsx`/`ShopBrandBar`, `NavRail.tsx`, `AppStatusBar.tsx`, `environments/EnvironmentSplash.tsx`.
+- `src/renderer/styles/control-center.css` (+ its `@import` in index.css) — confirmed NO surviving
+  component references `.cc-*` classes before deleting.
+- The `__APP_SHELL__` dark-launch flag: removed the `define` from electron.vite.config.ts (main +
+  renderer) and vitest.config.ts; `main.tsx` now renders `WorkTrack3DApp` directly (no flag, no ShopApp
+  import). `__APP_PRODUCT__` kept (separate concern). Only remaining `__APP_SHELL__` mentions are
+  comments noting it was removed.
+- Obsolete tests: `AppHeader.test.tsx`, `shop-app-toolbar-button-types.test.ts`,
+  `moonraker-preview-banner-shopapp-wire.test.ts`, `moonraker-push-failure-toast-wire.test.ts` (the
+  latter 3 fs-read the deleted ShopApp source).
+
+ADDED / PRESERVED COVERAGE:
+- NEW `src/renderer/app/__tests__/new-shell-button-types.test.ts` — replaces the retired AppHeader
+  button-type pin, retargeted to walk `src/renderer/app/**` (the new shell tree that
+  `renderer-button-types-extended` — scoped to `src/renderer/src/**` — does NOT cover). PASSES: the new
+  shell has no latent-submit `<button>` (every one carries `type="button"`).
+
+BLAST RADIUS: `phase` was ShopApp in-memory state, NOT a persisted schema field → no migration risk
+(Safety Rule 2 intact). The 5 deleted components were referenced ONLY by ShopApp + their own tests
+(verified by grep). Typecheck surfaced exactly 1 dangling import (AppHeader.test); the full suite
+surfaced the 3 source-reading pins. CLAUDE.md updated (AppHeader/DesignWorkspace-overlay/NavRail entries
+→ the new shell).
+
+VALIDATION: tsc clean; full TS suite 14,854 pass (−50 = 4 deleted obsolete test files, +2 new pin); no
+G-code paths. BOOT SMOKE: `npm run dev` compiled main + preload + renderer clean, `dev server running`,
+`start electron app...`, `[WorkTrack3D]` prefix — the app boots the new shell as the SOLE shell, no
+ShopApp, no crash (the only console lines are benign DevTools Autofill + non-fatal dev auto-update).
+Set `settings.pythonPath` in the running app's userData (`worktrack-3d/settings.json`) to the cadquery
+venv so CAD ops work for operator testing.
+
+CAVEAT (pre-existing, unchanged): new-shell CAM (onRunCam/onRunSlice) is wired through the proven engine
+but less battle-tested than the retired ShopApp CAM (task #10). For CAM, verify program zero / WCS /
+retracts via simulate before running real jobs. NEXT: resume parity stacks (each built + wired); CAM
+phase (Stack 6 rest machining) is gcode-safety-gated.

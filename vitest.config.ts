@@ -2,8 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   define: {
-    __APP_PRODUCT__: JSON.stringify('unified'),
-    __APP_SHELL__: JSON.stringify('legacy')
+    __APP_PRODUCT__: JSON.stringify('unified')
   },
   test: {
     environment: 'node',

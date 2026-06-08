@@ -28,8 +28,7 @@ const monacoEditorPlugin =
 export default defineConfig({
   main: {
     define: {
-      __APP_PRODUCT__: JSON.stringify('cam'),
-      __APP_SHELL__: JSON.stringify(process.env.WT_SHELL ?? 'legacy')
+      __APP_PRODUCT__: JSON.stringify('cam')
     },
     plugins: [externalizeDepsPlugin()]
   },
@@ -39,11 +38,7 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     define: {
-      __APP_PRODUCT__: JSON.stringify('cam'),
-      // Dark-launch flag for the ground-up WorkTrack3D shell (P3). 'legacy'
-      // boots the proven ShopApp; `WT_SHELL=next npm run dev` boots the new
-      // shell. The default flips to 'next' at the P5 cutover.
-      __APP_SHELL__: JSON.stringify(process.env.WT_SHELL ?? 'legacy')
+      __APP_PRODUCT__: JSON.stringify('cam')
     },
     resolve: {
       alias: {
