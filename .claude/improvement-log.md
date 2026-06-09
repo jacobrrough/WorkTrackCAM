@@ -17823,3 +17823,62 @@ rendered pixels?) and exercise by hand before claiming done.
 required ship gate); then shell polish (StatusBar cursor coords, marking menu) + the deferred
 VCarve P0s (mount the `Sketch2DCanvas` vector-authoring surface, Text/TrueType vectors, NFP
 nesting, pocket islands).
+
+## Cycle 235 — campaign cont'd: Laguna VCarve (3d) + the 2D sketch surface (3e) (2026-06-08)
+
+**Focus:** complete the third machine and close the last big "unreachable surface" gap. After
+Cycle 234 (Waves 0–3c) wired Carvera 4-axis + K2 FDM, this cycle delivers the Laguna VCarve CAM
+and mounts the built 2D sketcher — so all three target machines now have a real, gcode-safe,
+per-machine CAM and the Vectors ribbon stops being a stub.
+
+**Baseline → result:** 15,331 → **15,436 pass / 1 skip / 0 fail**; `tsc` clean; zero regressions.
+
+**Commits:**
+- `282861b` — **Wave 3d Laguna VCarve**: the flagship gap closed. `cnc_vcarve`
+  (`generateVCarve2dLines` / `solveVCarveRidge` in cam-local.ts) is a TRUE variable-depth
+  medial-axis carve (distance-field clearance raster → ridge; depth = clamp(r/tan(half), 0,
+  min(maxDepthMm, stock))), distinct from the fixed-depth `cnc_chamfer`. New `cnc_vcarve` op kind
+  + params, routed through cam-runner-2d, posted through the UNCHANGED `vcarve_mach3.hbs`.
+  router-commands.ts (router-gated ribbon) + 6 ro_* catalog rows registered in ManufactureHost;
+  DXF import lands entities in the design model cam-2d-derive reads; cnc_vcarve added to
+  VCARVE_PRO_OPS; the My-Shop Sign preset remapped cnc_chamfer → cnc_vcarve.
+  **gcode-safety Laguna PASS** — post + profile byte-identical; cam-local-vcarve.test.ts pins the
+  posted G-code (%, G21→G90→G17, M3+G4 P2.0, M5+G4 P3.0, **M30-not-M2**, dust gated, per-branch
+  safe-Z, deepest-at-widest, depth capped).
+- `284707e` — **Wave 3e the 2D sketch surface (FG-3)**: the rich Sketch2DCanvas (line/rect/circle/
+  arc/polygon/slot/spline/trim/fillet/transform/constraints + snap + the #20 numeric fix) was
+  mounted nowhere. New SketchSurface.tsx wraps the session-wired canvas (26-tool palette + snap +
+  per-tool params) as the live Design Sketch-stage body; DesignWorkspace gains additive
+  sketchDesign/onSketchDesignChange props; DesignWorkspaceHost threads DesignSessionContext.design
+  and wraps Save so a drawn vector persists to design/sketch.json and round-trips on reload
+  (MvpSketchCanvas kept as the provider-less fallback). DXF bulge arcs now tessellate to real
+  curves (tessellateBulgeArc, 0.05 mm chord tol, cap 64 seg/arc) instead of chords.
+- `97f6478` — **gcode-safety reference invariants** (tracked skill docs): folded this cycle's two
+  new rules into the references (see below).
+
+**New G-code safety invariants (recorded here for the tracked log, also in the skill refs):**
+1. **V-carve depth cap (Laguna).** `cnc_vcarve` depth is hard-capped to
+   `min(maxDepthMm, stockThicknessMm)` in dispatch2dStrategy — the V-bit never plunges past the
+   stock bottom into the spoilboard/vacuum table. CAVEAT: when setup stock thickness is undefined
+   the cap is only `maxDepthMm` (a rapid-below-stock advisory is surfaced); operators relying on
+   the stock guard must set setup stock. Every disjoint medial branch starts at safe-Z.
+2. **K2 process-override temp clamp.** Wave-3b `planOrcaOverrides` clamps temperature override
+   keys to the K2 ceiling (350/120) at override time AND leaves the pre-upload temperature
+   validator intact — two independent guards; the override path can only narrow temps, never
+   raise above ceiling.
+
+**Machines:** all three now have real per-machine CAM — K2 Plus FDM (3b), Carvera 4-axis (3a),
+Laguna VCarve (3d).
+
+**Honest residuals (deferred, not regressions):** Text/TrueType font→vector is still missing
+(sign lettering can't yet originate in-app — the next obvious wave); the DXF import button lives on
+the Manufacture ribbon and there's no live cross-workspace reload onto an already-mounted Design
+canvas (data lands in the shared model correctly); vector boolean/offset/array/align/node-edit
+absent; true-shape nesting is still bbox-BLF (not polygon NFP), pocket is raster-only (no islands),
+v-carve has no separate flat-bottom clearance pass yet; renderer tests are node-SSR (no jsdom) so a
+drawn vector is pinned via the exact serialize→save→load data contract, not a pointer event —
+recommend a hands-on Electron pass (memory `feedback-ui-needs-hands-on-verification`).
+
+**Next:** Text/TrueType machinable vectors; an Import-DXF button on the Design sketch surface;
+vector editing (offset/boolean/array/node-edit); Assemble + Drawings workspace wiring; shell polish
+(StatusBar cursor coords, marking menu); then the parked CAM Stacks B/C/D (adaptive/rest).
