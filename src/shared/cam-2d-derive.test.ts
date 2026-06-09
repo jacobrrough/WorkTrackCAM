@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import opentype, { type Font } from 'opentype.js'
+import * as opentype from 'opentype.js'
+import type { Font } from 'opentype.js'
 import {
   contourPointSignature,
   deriveContourPointsFromDesign,
