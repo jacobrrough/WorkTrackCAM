@@ -31,6 +31,8 @@ import {
   resolveManufactureSetupForCam
 } from '../../shared/cam-cut-params'
 import { rotaryDimsFromSetupStock, shopJobStockAsCamSetup } from '../../shared/cam-setup-defaults'
+import { buildPlacement, identityPlacement, type Placement } from './rotary-placement'
+import type { RotaryFixtureConfig } from '../../shared/rotary-collision'
 
 /** Args the new-shell host (ManufactureHost) can assemble from its in-scope state. */
 export type RunCamForOpArgs = {
@@ -86,6 +88,81 @@ function resolveToolDiameterMm(params: Record<string, unknown>): number {
   // ASSUMPTION: matches ShopApp's inline guard exactly — explicit finite >0 wins,
   // otherwise 6 mm (the same fallback resolveCamCutParams uses, cam-cut-params.ts:99).
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 6
+}
+
+/**
+ * Resolve the 4-axis part-orientation placement for a setup.
+ *
+ * The `RotaryOrientGizmo` persists its output on `setup.rotaryPlacement`
+ * (Wave 3a). When present we normalize it through `buildPlacement` (coercing
+ * any non-finite numeric to a safe value — scale never 0) so the engine
+ * always receives a clean, finite transform. Absent ⇒ identity, exactly
+ * preserving the historical hard-coded `identityTransform` behavior (the STL
+ * is then assumed authored in rotary WCS with X = the rotation axis).
+ *
+ * SAFETY (G-code is sacred): the placement only feeds `frame.ts`, which
+ * re-centers the bbox and validates `meshRadialMax ≤ stockRadius` before any
+ * toolpath is generated. A bad orientation is REJECTED by the engine's
+ * pre-gen validator, never silently cut.
+ */
+function resolveRotaryPlacement(setup: ManufactureSetup | undefined): Placement {
+  const p = setup?.rotaryPlacement
+  if (!p) return identityPlacement()
+  return buildPlacement({
+    position: p.position,
+    rotation: p.rotation,
+    scale: p.scale
+  })
+}
+
+/**
+ * Assemble a {@link RotaryFixtureConfig} (chuck + optional tailstock) from a
+ * setup's rotary fields, for the 4-axis collision sweep.
+ *
+ * The chuck's axial extent is the machinable-span start (`chuckDepth +
+ * clampOffset`) — the same boundary the X-span validator uses — so the sweep's
+ * chuck cylinder is coaxial with the real fixture footprint. The chuck outer
+ * radius comes from the setup override when set, else the engine falls back to
+ * the machine-profile `rotaryChuckOuterRadiusMm` (so returning `undefined` here
+ * keeps today's default-on chuck sweep intact). The tailstock arm is only
+ * included when BOTH tailstock fields are present.
+ *
+ * Returns `undefined` when the setup supplies neither a chuck-radius override
+ * NOR a tailstock — letting the engine run its machine-default chuck-only
+ * sweep (matching pre-Wave-3a behavior).
+ *
+ * SAFETY: this is advisory-only — `checkRotaryFixtureCollision` produces
+ * clearance WARNINGS on the run result and never alters the emitted G-code.
+ */
+function resolveRotaryFixture(setup: ManufactureSetup | undefined): RotaryFixtureConfig | undefined {
+  if (!setup) return undefined
+  const chuckOuter = setup.rotaryChuckOuterRadiusMm
+  const tailStart = setup.rotaryTailstockStartXMm
+  const tailOuter = setup.rotaryTailstockOuterRadiusMm
+  const hasTail =
+    typeof tailStart === 'number' &&
+    Number.isFinite(tailStart) &&
+    typeof tailOuter === 'number' &&
+    Number.isFinite(tailOuter) &&
+    tailOuter > 0
+  const hasChuckOverride = typeof chuckOuter === 'number' && Number.isFinite(chuckOuter) && chuckOuter > 0
+  // Nothing setup-specific to supply → defer to the engine's machine-default sweep.
+  if (!hasChuckOverride && !hasTail) return undefined
+  // Chuck body occupies X in [0, machXStart] = [0, chuckDepth + clampOffset].
+  const chuckDepthMm = Math.max(0, (setup.rotaryChuckDepthMm ?? 0) + (setup.rotaryClampOffsetMm ?? 0))
+  // The collision sweep requires a positive chuck radius. When the setup
+  // supplied a tailstock but no chuck-radius override, leave the chuck radius
+  // at 0 — the sweep treats a 0-radius chuck as effectively absent (no point
+  // is ever inside a 0-radius cylinder), so only the tailstock arm fires.
+  const config: RotaryFixtureConfig = {
+    chuckDepthMm,
+    chuckOuterRadiusMm: hasChuckOverride ? chuckOuter : 0
+  }
+  if (hasTail) {
+    config.tailstockStartXMm = tailStart
+    config.tailstockOuterRadiusMm = tailOuter
+  }
+  return config
 }
 
 /**
@@ -224,6 +301,16 @@ export async function runCamForOp(args: RunCamForOpArgs): Promise<RunCamForOpRes
   const stockY = setup?.stock && setup.stock.kind !== 'fromExtents' ? setup.stock.y : undefined
   const stockZ = setup?.stock && setup.stock.kind !== 'fromExtents' ? setup.stock.z : undefined
 
+  // ── 4-axis orientation + fixture (Wave 3a). Replaces the historical
+  // hard-coded identity placement: the RotaryOrientGizmo persists a real
+  // viewer-space Placement on the setup, and the setup carries optional
+  // chuck-outer / tailstock geometry for the collision sweep. Both are
+  // resolved here and sent only for the 4-axis path. SAFETY: placement feeds
+  // frame.ts (which validates radial extent pre-gen); fixture feeds the
+  // advisory collision sweep (warnings only). ──────────────────────────────
+  const rotaryPlacement = resolveRotaryPlacement(setup)
+  const rotaryFixture = resolveRotaryFixture(setup)
+
   // ── Build the payload (field order mirrors ShopApp.tsx:1482-1507). ────────
   const r = await fab().camRun({
     stlPath: stlPathForCam,
@@ -246,14 +333,19 @@ export async function runCamForOp(args: RunCamForOpArgs): Promise<RunCamForOpRes
     stockBoxZMm: stockZ,
     stockBoxXMm: stockX,
     stockBoxYMm: stockY,
-    // 4-axis-only fields: mesh X-clamp + the gizmo placement. ManufactureFile
-    // has no per-op transform → identity placement (GAP-PLACEMENT): correct when
-    // the STL is authored in rotary WCS (X = rotation axis); rotary intent (e.g.
-    // contourPoints / indexAnglesDeg) rides in operationParams.
+    // 4-axis-only fields: mesh X-clamp + the gizmo placement + fixture sweep.
+    // Wave 3a: `placement` now carries the RotaryOrientGizmo's real orientation
+    // (identity when the operator left it untouched — equivalent to the old
+    // hard-coded transform, i.e. the STL is assumed authored in rotary WCS with
+    // X = rotation axis). `rotaryFixture` (chuck/tailstock) is sent only when the
+    // setup supplied chuck-radius or tailstock geometry; otherwise omitted so the
+    // engine runs its machine-default chuck-only sweep. Rotary intent (e.g.
+    // contourPoints / indexAnglesDeg) still rides in operationParams.
     ...(is4axis
       ? {
           useMeshMachinableXClamp: params['useMeshMachinableXClamp'] === true,
-          placement: identityTransform
+          placement: rotaryPlacement,
+          ...(rotaryFixture ? { rotaryFixture } : {})
         }
       : {}),
     // Only include priorPostedGcode when non-empty (ShopApp.tsx:1506).

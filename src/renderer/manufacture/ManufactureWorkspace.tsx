@@ -63,7 +63,9 @@ import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
 import { LagunaNestingPanel } from './LagunaNestingPanel'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
+import { ProbeCyclePanel } from './ProbeCyclePanel'
 import { ProfileStack } from './ProfileStack'
+import type { Placement } from './rotary-placement'
 
 
 /**
@@ -80,7 +82,7 @@ import { ProfileStack } from './ProfileStack'
  * doesn't lose any existing controls. Gizmo wiring is a follow-up.
  */
 export type WorkflowStageFdm = 'prepare' | 'preview' | 'device'
-export type WorkflowStageCnc = 'setup' | 'toolpaths' | 'simulate' | 'send'
+export type WorkflowStageCnc = 'setup' | 'toolpaths' | 'simulate' | 'probing' | 'send'
 export type WorkflowStage = WorkflowStageFdm | WorkflowStageCnc
 export type WorkflowEnv = 'fdm' | 'cnc'
 
@@ -100,6 +102,7 @@ const CNC_STAGES: ReadonlyArray<WorkflowStageDef<WorkflowStageCnc>> = [
   { id: 'setup', label: 'Setup', title: 'Stock, WCS origin, axis mode' },
   { id: 'toolpaths', label: 'Toolpaths', title: 'Tool selection + CAM generation' },
   { id: 'simulate', label: 'Simulate', title: '3D toolpath simulation' },
+  { id: 'probing', label: 'Probing', title: 'On-machine touch-probe cycles (WCS / bore / boss / corner / tool length)' },
   { id: 'send', label: 'Send', title: 'Post-process and send G-code to controller' }
 ] as const
 
@@ -617,6 +620,24 @@ type Props = {
   onGoProject: () => void
   /** After importing a mesh into the project from Manufacture, refresh project sidecars (e.g. `project.json`). */
   onAfterMeshImport?: () => void | Promise<void>
+  /**
+   * Wave 3a (Mill-4 ribbon) — host-requested workflow stage. When set to a
+   * stage valid for the active env, the workspace switches to it and then
+   * fires `onRequestedStageHandled` so the host can clear the request. Lets
+   * the CAM ribbon commands (openSetup / openProbing / openSimulate / openSend)
+   * navigate the workflow-stage strip the workspace owns internally. Optional —
+   * absent keeps the workspace fully self-driven (existing behavior).
+   */
+  requestedStage?: WorkflowStage | null
+  onRequestedStageHandled?: () => void
+  /**
+   * Wave 3a (Mill-4 ribbon) — host-requested new-operation kind (a runtime
+   * `cnc_*` op kind). When set, the workspace seeds a new operation of that
+   * kind on the active plate and fires `onRequestedNewOpKindHandled`. Drives
+   * the ribbon's `newOperation(kind)` action. Optional.
+   */
+  requestedNewOpKind?: string | null
+  onRequestedNewOpKindHandled?: () => void
 }
 
 export function ManufactureWorkspace({
@@ -646,7 +667,11 @@ export function ManufactureWorkspace({
   onMigrateProjectToolsToMachine,
   onGoSettings,
   onGoProject,
-  onAfterMeshImport
+  onAfterMeshImport,
+  requestedStage = null,
+  onRequestedStageHandled,
+  requestedNewOpKind = null,
+  onRequestedNewOpKindHandled
 }: Props) {
   const [mfg, setMfg] = useState<ManufactureFile>(() => emptyManufacture())
   // Gap #7 v1 â€” active plate id. Initialized lazily so emptyManufacture() always
@@ -970,6 +995,25 @@ export function ManufactureWorkspace({
     updateSetup(si, { axisMode: mode })
   }
 
+  // Wave 3a — persist the 4-axis orient-gizmo placement on the setup. The
+  // gizmo emits a viewer-space Placement; run-cam-for-op sends it to the
+  // 4-axis engine in place of the historical hard-coded identity transform.
+  function updateSetupRotaryPlacement(si: number, placement: Placement): void {
+    updateSetup(si, { rotaryPlacement: placement })
+  }
+
+  // Wave 3a — replace the active plate's entire setups array (Multi-Setup
+  // Wizard auto-assign WCS). Routes through the plate-state helper so the
+  // write lands on the active plate, mirroring the other setup mutations.
+  function replaceSetups(next: ManufactureSetup[]): void {
+    setMfg((m) => updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: next })))
+  }
+
+  // Wave 3a — append a single setup (Multi-Setup Wizard flip suggestion).
+  function appendSetup(setup: ManufactureSetup): void {
+    setMfg((m) => updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: [...p.setups, setup] })))
+  }
+
   function updateSetupMaterialType(si: number, mat: StockMaterialType | undefined): void {
     setMfg((m) =>
       updateActivePlate(m, activePlateId, (p) => {
@@ -996,6 +1040,25 @@ export function ManufactureWorkspace({
     setMfg((m) =>
       updateActivePlate(m, activePlateId, (p) => ({ ...p, operations: [...p.operations, op] }))
     )
+  }
+
+  // Wave 3a (Mill-4 ribbon) — seed a new operation of a specific runtime op
+  // kind (the ribbon's `newOperation(kind)` action passes a `cnc_*` kind via
+  // CAM_COMMAND_OP_KIND). Mirrors `addOp` but takes the kind; the kind is
+  // validated against the schema's known kinds by the caller (cam-commands).
+  function addOpOfKind(kind: ManufactureOperation['kind']): void {
+    const id = crypto.randomUUID()
+    const activePlate = getActivePlate(mfg, activePlateId)
+    const op: ManufactureOperation = {
+      id,
+      kind,
+      label: `Op ${activePlate.operations.length + 1}`,
+      sourceMesh: 'assets/design-sample.stl'
+    }
+    setMfg((m) =>
+      updateActivePlate(m, activePlateId, (p) => ({ ...p, operations: [...p.operations, op] }))
+    )
+    setSelectedOpIndex(activePlate.operations.length)
   }
 
   function updateOp(i: number, patch: Partial<ManufactureOperation>): void {
@@ -1346,6 +1409,31 @@ export function ManufactureWorkspace({
       setWorkflowStage(defaultWorkflowStageFor(workflowEnv))
     }
   }, [workflowEnv, workflowStage])
+
+  // Wave 3a (Mill-4 ribbon) — apply a host-requested workflow stage. The CAM
+  // ribbon commands set `requestedStage`; we honor it only when it is valid
+  // for the active env (so e.g. a stale 'probing' request from a CNC ribbon
+  // can't strand an FDM machine), then fire the consumed callback so the host
+  // clears the one-shot request.
+  useEffect(() => {
+    if (!requestedStage) return
+    const fdmIds = new Set<WorkflowStage>(FDM_STAGES.map((s) => s.id))
+    const cncIds = new Set<WorkflowStage>(CNC_STAGES.map((s) => s.id))
+    const valid = workflowEnv === 'fdm' ? fdmIds : cncIds
+    if (valid.has(requestedStage)) setWorkflowStage(requestedStage)
+    onRequestedStageHandled?.()
+  }, [requestedStage, workflowEnv, onRequestedStageHandled])
+
+  // Wave 3a (Mill-4 ribbon) — seed a host-requested new operation kind, then
+  // clear the one-shot request. Navigates to the Plan tab so the freshly
+  // seeded op is visible in the operation list/editor.
+  useEffect(() => {
+    if (!requestedNewOpKind) return
+    addOpOfKind(requestedNewOpKind as ManufactureOperation['kind'])
+    onPanelTabChange('plan')
+    onRequestedNewOpKindHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on request change
+  }, [requestedNewOpKind])
 
   /**
    * Gap #9 â€” Laguna sheet size derived from the first setup whose machineId
@@ -1821,6 +1909,10 @@ export function ManufactureWorkspace({
         onFitStockPadChange={setFitStockPadMm}
         onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
         onSave={() => void save()}
+        onUpdateSetupRotaryPlacement={updateSetupRotaryPlacement}
+        onReplaceSetups={replaceSetups}
+        onAppendSetup={appendSetup}
+        onStatus={onStatus}
       />
     ) : panelTab === 'simulate' ? (
       /* -- SIMULATE TAB: full-screen 3D toolpath viewer -- */
@@ -1928,6 +2020,23 @@ export function ManufactureWorkspace({
   )
 
   // CNC 'send' stage body â€” Carvera upload + Laguna setup sheet + ProfileStack.
+  // CNC 'probing' stage body (Wave 3a) -- mounts the formerly-dead
+  // ProbeCyclePanel (5 cycle types: single-surface / bore / boss / corner /
+  // tool-length). The panel generates safe touch-probe G-code via the
+  // probe:generate IPC and is self-contained (no props). SAFETY: probing
+  // G-code is operator-verified on the controller before running; the panel
+  // shows that advisory inline.
+  const probingStageBody: ReactNode = (
+    <section
+      className="panel workspace-stage-body workspace-stage-body--probing"
+      aria-labelledby="mfg-stage-probing-heading"
+      data-testid="workflow-stage-body-probing"
+    >
+      <h2 id="mfg-stage-probing-heading">Probing</h2>
+      <ProbeCyclePanel />
+    </section>
+  )
+
   const sendStageBody: ReactNode = (
     <div
       className="workspace-stage-body workspace-stage-body--send"
@@ -1960,6 +2069,9 @@ export function ManufactureWorkspace({
       break
     case 'simulate':
       stageBody = simulateStageBody
+      break
+    case 'probing':
+      stageBody = probingStageBody
       break
     case 'send':
       stageBody = sendStageBody

@@ -542,6 +542,10 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
           useMeshMachinableXClamp: camPayload.useMeshMachinableXClamp,
           toolSlot: camPayload.toolSlot,
           placement: camPayload.placement,
+          // 4-axis chuck/tailstock collision sweep input. Advisory-only: the
+          // engine emits clearance WARNINGS, never changes the toolpath. When
+          // absent the engine falls back to the machine-default chuck-only sweep.
+          rotaryFixture: camPayload.rotaryFixture,
           signal: controller.signal,
           onProgress: (event: CamProgressEvent) => {
             const win = ctx.getMainWindow()

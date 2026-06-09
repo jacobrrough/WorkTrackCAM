@@ -49,6 +49,32 @@ export const camRunPayloadSchema = z.object({
         z: z.number().finite()
       })
     })
+    .optional(),
+  /**
+   * Optional rotary fixture geometry (chuck + optional tailstock) for the
+   * 4-axis collision sweep. Mirrors `RotaryFixtureConfig` in
+   * `src/shared/rotary-collision.ts`. When supplied, the 4-axis engine parses
+   * its own posted G-code into segments and checks every move for radial
+   * clearance against the chuck/tailstock cylinders, surfacing any violations
+   * as WARNINGS on the run result. Safety: advisory-only — never alters the
+   * emitted toolpath/post output. Ignored by non-4-axis ops. When the renderer
+   * omits the tailstock fields the engine still runs the chuck-only sweep
+   * (synthesizing a chuck from the machine profile's `rotaryChuckOuterRadiusMm`
+   * when neither this fixture's chuck radius nor a setup override is present).
+   */
+  rotaryFixture: z
+    .object({
+      chuckDepthMm: z.number().nonnegative().finite(),
+      // nonnegative (not positive): the tailstock-only case sends
+      // chuckOuterRadiusMm = 0 to mean "no chuck override — defer the chuck
+      // sweep to the engine's machine-profile default" (see
+      // `resolveRotaryFixture` in run-cam-for-op.ts). A 0-radius chuck cylinder
+      // never flags a collision, so the engine's default chuck sweep is what
+      // actually runs in that case.
+      chuckOuterRadiusMm: z.number().nonnegative().finite(),
+      tailstockStartXMm: z.number().nonnegative().finite().optional(),
+      tailstockOuterRadiusMm: z.number().positive().finite().optional()
+    })
     .optional()
 })
 

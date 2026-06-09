@@ -80,3 +80,19 @@ export {
   buildDesignCommands,
   registerDesignCommands
 } from './design-commands'
+
+// Manufacture (CAM) ribbon handlers — host-action contract + register wiring
+// (Wave-3 Carvera-first; mirrors design-commands).
+export {
+  type CamCommandActions,
+  type CamCommandKind,
+  CAM_COMMAND_OP_KIND,
+  MULTI_SETUP_COMMAND_ID,
+  PROBING_COMMAND_ID,
+  SEND_COMMAND_ID,
+  classifyCamCommand,
+  camCommandEnabled,
+  camCommandIds,
+  buildCamCommands,
+  registerCamCommands
+} from './cam-commands'

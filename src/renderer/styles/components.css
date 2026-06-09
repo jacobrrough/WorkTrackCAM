@@ -746,3 +746,28 @@ body > .tb-tooltip::after {
   from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
   to   { opacity: 1; transform: translate(-50%, -100%); }
 }
+
+
+/* ============================================================
+   No-code build->render — "Building model..." overlay.
+   Non-blocking status pill pinned top-center of the Design cockpit
+   viewport while the host session's kernel build (build_part.py) runs
+   after a feature-timeline edit. Anchored to the relatively-positioned
+   `.design-workspace__viewport-col` (see styles/shell/design-cockpit.css).
+   ============================================================ */
+.design-workspace__build-indicator {
+  position: absolute;
+  top: var(--sp-4, 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: var(--sp-2, 6px) var(--sp-4, 12px);
+  background: var(--accent-12, var(--bg3));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--txt0);
+  font-size: var(--fs-sm, 12px);
+  font-weight: 600;
+  box-shadow: var(--elevation-2);
+  pointer-events: none;
+}

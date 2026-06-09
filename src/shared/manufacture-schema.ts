@@ -165,7 +165,69 @@ export const setupSchema = z.object({
   /** mm — safety buffer after chuck before machinable zone (4-axis). */
   rotaryClampOffsetMm: z.number().nonnegative().optional(),
   /** Cross-section shape for 4-axis rotary stock: 'cylinder' (round bar) or 'square' (square bar). */
-  rotaryStockProfile: z.enum(['cylinder', 'square']).optional().describe('Rotary stock cross-section: cylinder or square')
+  rotaryStockProfile: z.enum(['cylinder', 'square']).optional().describe('Rotary stock cross-section: cylinder or square'),
+  /**
+   * Outer radius of the rotary CHUCK body (mm) for the 4-axis collision sweep.
+   * Typically larger than the stock radius (the jaw front face). When set on a
+   * setup it overrides the machine-profile `rotaryChuckOuterRadiusMm` default in
+   * the `checkRotaryFixtureCollision` sweep (see `src/shared/rotary-collision.ts`).
+   * Advisory only — feeds collision WARNINGS, never alters emitted G-code.
+   */
+  rotaryChuckOuterRadiusMm: z
+    .number()
+    .positive()
+    .finite()
+    .optional()
+    .describe('Outer radius of the rotary chuck body (mm) for the 4-axis collision sweep'),
+  /**
+   * Axial position where the TAILSTOCK body begins (mm), measured along the
+   * rotation axis (engine X) from the chuck face. Tailstock occupies X ≥ this
+   * value. Set together with `rotaryTailstockOuterRadiusMm` to enable the
+   * tailstock arm of the 4-axis collision sweep; omit both to skip it.
+   * Advisory only — feeds collision WARNINGS, never alters emitted G-code.
+   */
+  rotaryTailstockStartXMm: z
+    .number()
+    .nonnegative()
+    .finite()
+    .optional()
+    .describe('Axial X where the tailstock body begins (mm) for the 4-axis collision sweep'),
+  /** Outer radius of the tailstock body (mm). Required to enable the tailstock collision check. */
+  rotaryTailstockOuterRadiusMm: z
+    .number()
+    .positive()
+    .finite()
+    .optional()
+    .describe('Outer radius of the tailstock body (mm) for the 4-axis collision sweep'),
+  /**
+   * Three.js viewer-space orientation of the part for a 4-axis rotary job —
+   * produced by the `RotaryOrientGizmo`. Mirrors the engine `Placement`
+   * (`src/main/cam-axis4/frame.ts`): position (mm) / rotation (intrinsic XYZ
+   * Euler degrees) / scale (1 = unscaled). When present it replaces the
+   * historical hard-coded identity transform in `run-cam-for-op.ts` so the
+   * 4-axis engine aligns a real-world STL to the rotation axis (engine X).
+   * Absent ⇒ identity (the STL is assumed authored in rotary WCS).
+   */
+  rotaryPlacement: z
+    .object({
+      position: z.object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        z: z.number().finite()
+      }),
+      rotation: z.object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        z: z.number().finite()
+      }),
+      scale: z.object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        z: z.number().finite()
+      })
+    })
+    .optional()
+    .describe('4-axis rotary part orientation (Three.js viewer-space placement) from the orient gizmo')
 })
 
 export type ManufactureSetup = z.infer<typeof setupSchema>

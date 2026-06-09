@@ -433,6 +433,77 @@ describe('Carvera 4-axis pipeline (real machine profile, full pipe)', () => {
     expect(chuckWarns).toHaveLength(0)
   }, 15_000)
 
+  // Wave 3a -- TAILSTOCK collision sweep reachable end-to-end. Before Wave 3a
+  // nothing supplied a rotaryFixture WITH tailstock fields across the IPC
+  // boundary (camRunPayloadSchema had no rotaryFixture key), so the tailstock
+  // arm of checkRotaryFixtureCollision was dead. This pins the full path:
+  // a contour cutting PAST the tailstock start, at a radial Z well inside the
+  // tailstock body radius, must surface a tailstock collision warning.
+  it('Wave 3a: surfaces a TAILSTOCK collision warning when rotaryFixture carries tailstock geometry', async () => {
+    const machine = cachedCarveraMachine
+
+    const stockLen = 80
+    const stockDia = 30
+    const chuckDepth = 15
+    const clampOffset = 2
+    const C = Math.PI * stockDia
+
+    // Contour at X = 60 -- well past the chuck's axial shadow AND past the
+    // tailstock start (X = 50). The feed cut sits at radial Z ~14.5 mm, deep
+    // inside the 20 mm tailstock body radius.
+    const contourPoints: [number, number][] = [
+      [60, 0],
+      [60, C * 0.3],
+      [60, C * 0.6],
+      [60, C * 0.9]
+    ]
+
+    const result = await runCamPipeline({
+      stlPath: scratch('carvera-tailstock.stl'),
+      outputGcodePath: scratch('carvera-tailstock-out.nc'),
+      machine,
+      resourcesRoot,
+      appRoot: process.cwd(),
+      zPassMm: -0.5,
+      stepoverMm: 1,
+      feedMmMin: 400,
+      plungeMmMin: 120,
+      safeZMm: 25,
+      pythonPath: 'python',
+      operationKind: 'cnc_4axis_contour',
+      operationLabel: 'tailstock-test',
+      rotaryStockLengthMm: stockLen,
+      rotaryStockDiameterMm: stockDia,
+      rotaryChuckDepthMm: chuckDepth,
+      rotaryClampOffsetMm: clampOffset,
+      toolDiameterMm: 3.0,
+      operationParams: { contourPoints },
+      workCoordinateIndex: 1,
+      // Wave 3a: caller-supplied chuck + TAILSTOCK fixture (this is the exact
+      // shape run-cam-for-op.resolveRotaryFixture assembles from a setup with
+      // tailstock fields, threaded through cam:run's new rotaryFixture key).
+      rotaryFixture: {
+        chuckDepthMm: chuckDepth + clampOffset,
+        chuckOuterRadiusMm: 46,
+        tailstockStartXMm: 50,
+        tailstockOuterRadiusMm: 20
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The tailstock arm of the sweep must fire: a feed cut at X=60 / Z~14.5 is
+    // inside the tailstock body (starts X=50, radius 20). SAFETY: this is a
+    // warning only -- the emitted G-code is unchanged (post contract intact).
+    expect(result.warnings).toBeDefined()
+    expect(result.warnings!.some((w) => /tailstock/i.test(w))).toBe(true)
+
+    // And the post contract is untouched: still M2 (never M30) + Y0 centering.
+    expect(result.gcode).toMatch(/^M2\b/m)
+    expect(result.gcode).not.toMatch(/^M30\b/m)
+    expect(result.gcode).toMatch(/G0\s+Y0\b/)
+  }, 15_000)
+
   // [ID-0008] default-on rotary-collision sweep
   // The 2026-04-24 cycle lifts the rotary fixture sweep from opt-in to
   // on-by-default whenever: the machine is a 4-axis CNC with a known

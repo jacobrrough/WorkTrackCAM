@@ -3563,3 +3563,151 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+
+/* ============================================================
+   RotaryOrientGizmo — Carvera 4-axis part-orientation control
+   (tool-catalog §2.4). Presentational; emits a Placement to the
+   host. Theme tokens only.
+   ============================================================ */
+.rotary-orient-gizmo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-6);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--txt0);
+}
+.rotary-orient-gizmo[aria-disabled='true'] {
+  opacity: var(--disabled-opacity);
+  pointer-events: none;
+}
+.rotary-orient-gizmo__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.rotary-orient-gizmo__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+.rotary-orient-gizmo__subtitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  line-height: var(--leading-normal);
+}
+
+/* ── Numeric rotation fields ── */
+.rotary-orient-gizmo__rotations {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-4);
+}
+.rotary-orient-gizmo__field {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--text-sm);
+  color: var(--txt1);
+}
+.rotary-orient-gizmo__axis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-sm);
+  color: var(--bg0);
+}
+.rotary-orient-gizmo__axis--x { background: #e74c3c; }
+.rotary-orient-gizmo__axis--y { background: #2ecc71; }
+.rotary-orient-gizmo__axis--z { background: #3d7eff; }
+.rotary-orient-gizmo__num {
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.rotary-orient-gizmo__num:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  box-shadow: var(--focus-ring);
+}
+.rotary-orient-gizmo__unit {
+  font-size: var(--text-xs);
+  color: var(--txt2);
+}
+
+/* ── Quick-sets ── */
+.rotary-orient-gizmo__quicksets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.rotary-orient-gizmo__quickset {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+.rotary-orient-gizmo__quickset--reset {
+  flex: 0 0 auto;
+}
+
+/* ── Read-out ── */
+.rotary-orient-gizmo__readout {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-2) var(--sp-8);
+  margin: 0;
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.rotary-orient-gizmo__readout-item {
+  display: contents;
+}
+.rotary-orient-gizmo__readout-item dt {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--txt1);
+  white-space: nowrap;
+}
+.rotary-orient-gizmo__readout-item dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+}
+.rotary-orient-gizmo__fit {
+  font-family: var(--font);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+}
+.rotary-orient-gizmo__fit--ok {
+  color: var(--ok);
+  background: var(--ok-dim);
+}
+.rotary-orient-gizmo__fit--over {
+  color: var(--err);
+  background: var(--err-dim);
+}

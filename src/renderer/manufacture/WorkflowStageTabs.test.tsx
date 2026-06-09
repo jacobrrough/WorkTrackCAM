@@ -3,8 +3,12 @@
  * viewport must render the correct stage set for each env (FDM vs CNC).
  *
  * Stage sets are pinned by CLAUDE.md My-Shop-Only:
- *   - FDM (K2 Plus):                   Prepare / Preview / Device         (3 tabs)
- *   - CNC (Laguna / Carvera 3+4-axis): Setup / Toolpaths / Simulate / Send (4 tabs)
+ *   - FDM (K2 Plus):                   Prepare / Preview / Device                  (3 tabs)
+ *   - CNC (Laguna / Carvera 3+4-axis): Setup / Toolpaths / Simulate / Probing / Send (5 tabs)
+ *
+ * Wave 3a added the CNC "Probing" stage (mounts the formerly-dead
+ * ProbeCyclePanel — 5 touch-probe cycle types). It sits between Simulate and
+ * Send because probing is the last on-machine setup step before running.
  *
  * The strip uses roving-tabindex (only the active tab has tabIndex=0) and
  * carries a `data-testid` per tab so dependent tests / E2E flows can poke
@@ -99,21 +103,23 @@ describe('WorkflowStageTabs -- FDM env (K2 Plus)', () => {
 })
 
 describe('WorkflowStageTabs -- CNC env (Laguna / Carvera 3/4-axis)', () => {
-  it('renders exactly the four CNC stage buttons: Setup / Toolpaths / Simulate / Send', () => {
+  it('renders exactly the five CNC stage buttons: Setup / Toolpaths / Simulate / Probing / Send', () => {
     const html = render(baseProps({ env: 'cnc', stage: 'setup' }))
     expect(html).toContain('data-testid="workflow-stage-tabs"')
     expect(html).toContain('data-env="cnc"')
 
-    // The four CNC stage buttons render
+    // The five CNC stage buttons render
     expect(html).toContain('data-testid="workflow-stage-tab-setup"')
     expect(html).toContain('data-testid="workflow-stage-tab-toolpaths"')
     expect(html).toContain('data-testid="workflow-stage-tab-simulate"')
+    expect(html).toContain('data-testid="workflow-stage-tab-probing"')
     expect(html).toContain('data-testid="workflow-stage-tab-send"')
 
     // Visible labels
     expect(html).toContain('>Setup<')
     expect(html).toContain('>Toolpaths<')
     expect(html).toContain('>Simulate<')
+    expect(html).toContain('>Probing<')
     expect(html).toContain('>Send<')
 
     // FDM stages must NOT render under CNC env
@@ -154,11 +160,11 @@ describe('WorkflowStageTabs -- visible counts (Bambu/Orca/Fusion pattern)', () =
     expect(buttons!.length).toBe(3)
   })
 
-  it('CNC env renders exactly 4 tab buttons (Setup/Toolpaths/Simulate/Send)', () => {
+  it('CNC env renders exactly 5 tab buttons (Setup/Toolpaths/Simulate/Probing/Send)', () => {
     const html = render(baseProps({ env: 'cnc', stage: 'setup' }))
     const buttons = html.match(/data-testid="workflow-stage-tab-/g)
     expect(buttons).not.toBeNull()
-    expect(buttons!.length).toBe(4)
+    expect(buttons!.length).toBe(5)
   })
 })
 

@@ -37,8 +37,8 @@
  * `runCamForOp` likewise receives `tools: null` (toolId→diameter lookups then
  * degrade to each op's explicit `toolDiameterMm` or the 6 mm default).
  */
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
-import { ManufactureWorkspace } from '../manufacture/ManufactureWorkspace'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { ManufactureWorkspace, type WorkflowStage } from '../manufacture/ManufactureWorkspace'
 import { useMachineSession } from '../contexts/MachineSessionContext'
 import { useToast } from '../contexts/ToastContext'
 import { fab } from '../src/shop-types'
@@ -49,6 +49,7 @@ import { runCamForOp } from '../manufacture/run-cam-for-op'
 import { runSliceForOp } from '../manufacture/run-slice-for-op'
 import { getPlates } from '../manufacture/plate-state'
 import type { ManufactureFile, ManufactureOperation } from '../../shared/manufacture-schema'
+import { registerCamCommands, type CamCommandActions } from '../commands'
 
 /** Default Python interpreter when `settings.pythonPath` is unset. */
 const DEFAULT_PYTHON_PATH = 'python'
@@ -113,6 +114,13 @@ export function ManufactureHost(): ReactElement {
   // Local UI state owned by the host.
   const [panelTab, setPanelTab] = useState<ManufacturePanelTab>(DEFAULT_PANEL_TAB)
   const [importText, setImportText] = useState<string>('')
+
+  // Wave 3a (Mill-4 ribbon) — one-shot requests the host pushes DOWN into the
+  // workspace so the CAM ribbon commands can drive the workflow-stage strip +
+  // op-seeding the workspace owns internally. Cleared via the workspace's
+  // `onRequested*Handled` callbacks after it consumes each request.
+  const [requestedStage, setRequestedStage] = useState<WorkflowStage | null>(null)
+  const [requestedNewOpKind, setRequestedNewOpKind] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -284,6 +292,53 @@ export function ManufactureHost(): ReactElement {
     pushToast('warn', NAVIGATE_ADVISORY)
   }, [pushToast])
 
+  // ── Mill-4 ribbon go-live (Wave 3a) ───────────────────────────────────────
+  // Register the Manufacture-ribbon command handlers on the shared command
+  // registry (mirrors DesignWorkspaceHost's `registerDesignCommands` wiring).
+  // The action bag is the seam between a catalog `command.id` and real shell
+  // behavior: setup / probing / simulate / send navigate the workspace's
+  // workflow-stage strip (via the one-shot `requestedStage` prop), op-seeding
+  // pushes a `cnc_*` kind down through `requestedNewOpKind`, multi-setup +
+  // tool-library route to the Setup / Tools sub-tabs. SAFETY: these handlers
+  // only OPEN authoring surfaces — they never generate, mutate, or post a
+  // toolpath (that stays in `runCamForOp` + the engine + the carvera_4axis.hbs
+  // post, all untouched here). Enablement gating (rotary ops require `mill4`,
+  // etc.) lives in `cam-commands.ts` `camCommandEnabled`.
+  const camActions = useMemo<CamCommandActions>(
+    () => ({
+      openSetup: () => {
+        setPanelTab('setup')
+        setRequestedStage('setup')
+      },
+      newOperation: (kind: string) => {
+        // The kind is already the runtime `cnc_*` op kind (cam-commands maps the
+        // catalog id via CAM_COMMAND_OP_KIND before calling this). Seed it on the
+        // active plate; the workspace navigates to Plan to surface the new op.
+        setRequestedNewOpKind(kind)
+      },
+      openProbing: () => setRequestedStage('probing'),
+      openSimulate: () => {
+        setPanelTab('simulate')
+        setRequestedStage('simulate')
+      },
+      openSend: () => {
+        setPanelTab('cam')
+        setRequestedStage('send')
+      },
+      openMultiSetup: () => {
+        // The Multi-Setup Wizard is mounted inside the 4-axis Setup tab body.
+        setPanelTab('setup')
+        setRequestedStage('setup')
+      },
+      openToolLibrary: () => setPanelTab('tools')
+    }),
+    []
+  )
+
+  // Register on the shared registry; dispose on unmount so a host remount never
+  // double-registers (the effect returns `registerCamCommands`'s disposer).
+  useEffect(() => registerCamCommands(camActions), [camActions])
+
   return (
     <div className="wt-workspace-host">
       <ManufactureWorkspace
@@ -309,6 +364,10 @@ export function ManufactureHost(): ReactElement {
         onImportToolLibraryFromFile={handleImportToolLibraryFromFile}
         onGoSettings={handleGoSettings}
         onGoProject={handleGoProject}
+        requestedStage={requestedStage}
+        onRequestedStageHandled={() => setRequestedStage(null)}
+        requestedNewOpKind={requestedNewOpKind}
+        onRequestedNewOpKindHandled={() => setRequestedNewOpKind(null)}
       />
     </div>
   )

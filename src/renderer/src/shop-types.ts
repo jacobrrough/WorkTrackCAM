@@ -98,6 +98,18 @@ export declare const window: Window & {
         rotation: { x: number; y: number; z: number }
         scale: { x: number; y: number; z: number }
       }
+      /**
+       * Optional rotary fixture geometry (chuck + optional tailstock) for the
+       * 4-axis collision sweep. Advisory-only — surfaces clearance WARNINGS on
+       * the result and never alters the emitted toolpath. Ignored by non-4-axis
+       * ops. See `RotaryFixtureConfig` in `src/shared/rotary-collision.ts`.
+       */
+      rotaryFixture?: {
+        chuckDepthMm: number
+        chuckOuterRadiusMm: number
+        tailstockStartXMm?: number
+        tailstockOuterRadiusMm?: number
+      }
     }) => Promise<{ ok: boolean; gcode?: string; error?: string; hint?: string; usedEngine?: string; warnings?: string[] }>
     readTextFile: (filePath: string) => Promise<string>
     /**

@@ -391,6 +391,77 @@ describe('[ID-0262] (C) camRunPayloadSchema optional fields', () => {
     expect('placement' in out).toBe(false)
   })
 
+  // ── Wave 3a: rotaryFixture (chuck + optional tailstock) contract ──
+  it('accepts a chuck-only rotaryFixture', () => {
+    const out = camRunPayloadSchema.parse(
+      validPayload({ rotaryFixture: { chuckDepthMm: 17, chuckOuterRadiusMm: 46 } })
+    )
+    expect(out.rotaryFixture?.chuckDepthMm).toBe(17)
+    expect(out.rotaryFixture?.chuckOuterRadiusMm).toBe(46)
+    expect(out.rotaryFixture?.tailstockStartXMm).toBeUndefined()
+  })
+
+  it('accepts a chuck + tailstock rotaryFixture', () => {
+    const out = camRunPayloadSchema.parse(
+      validPayload({
+        rotaryFixture: {
+          chuckDepthMm: 17,
+          chuckOuterRadiusMm: 40,
+          tailstockStartXMm: 70,
+          tailstockOuterRadiusMm: 12
+        }
+      })
+    )
+    expect(out.rotaryFixture?.tailstockStartXMm).toBe(70)
+    expect(out.rotaryFixture?.tailstockOuterRadiusMm).toBe(12)
+  })
+
+  it('accepts chuckOuterRadiusMm = 0 (tailstock-only: chuck deferred to engine)', () => {
+    // run-cam-for-op's tailstock-only path emits chuckOuterRadiusMm = 0 to mean
+    // "no chuck override — let the engine run its machine-default chuck sweep".
+    // The schema MUST accept it (nonnegative, not positive) or that payload
+    // would be rejected at the IPC boundary and the tailstock check lost.
+    const out = camRunPayloadSchema.parse(
+      validPayload({
+        rotaryFixture: {
+          chuckDepthMm: 17,
+          chuckOuterRadiusMm: 0,
+          tailstockStartXMm: 75,
+          tailstockOuterRadiusMm: 10
+        }
+      })
+    )
+    expect(out.rotaryFixture?.chuckOuterRadiusMm).toBe(0)
+    expect(out.rotaryFixture?.tailstockStartXMm).toBe(75)
+  })
+
+  it('rejects a non-finite chuckOuterRadiusMm', () => {
+    expect(() =>
+      camRunPayloadSchema.parse(
+        validPayload({ rotaryFixture: { chuckDepthMm: 17, chuckOuterRadiusMm: NaN } })
+      )
+    ).toThrow()
+  })
+
+  it('rejects a negative chuckDepthMm', () => {
+    expect(() =>
+      camRunPayloadSchema.parse(
+        validPayload({ rotaryFixture: { chuckDepthMm: -1, chuckOuterRadiusMm: 40 } })
+      )
+    ).toThrow()
+  })
+
+  it('rejects a rotaryFixture missing chuckOuterRadiusMm', () => {
+    expect(() =>
+      camRunPayloadSchema.parse(validPayload({ rotaryFixture: { chuckDepthMm: 17 } }))
+    ).toThrow()
+  })
+
+  it('omits rotaryFixture from output when not present', () => {
+    const out = camRunPayloadSchema.parse(validPayload())
+    expect('rotaryFixture' in out).toBe(false)
+  })
+
   it('omits operationParams from output when not present', () => {
     const out = camRunPayloadSchema.parse(validPayload())
     expect('operationParams' in out).toBe(false)
@@ -715,14 +786,19 @@ describe('[ID-0262] (H) three-machine path realism', () => {
 // (I) Source-text whitelist
 // --------------------------------------------------------------------------
 describe('[ID-0262] (I) source-text whitelist', () => {
-  it('source file is exactly 94 lines (size pin)', async () => {
+  it('source file is exactly 120 lines (size pin)', async () => {
+    // Wave 3a: +26 lines for the optional `rotaryFixture` object on
+    // camRunPayloadSchema (chuck + tailstock geometry for the 4-axis collision
+    // sweep, incl. the nonnegative-chuck rationale comment). Was 94 lines
+    // pre-Wave-3a.
     const src = await readSrc()
-    expect(src.split('\n').length).toBe(95) // 94 lines + trailing newline -> 95 split entries
+    expect(src.split('\n').length).toBe(121) // 120 lines + trailing newline -> 121 split entries
   })
 
-  it('source file is <= 4000 bytes (small, focused schema layer)', async () => {
+  it('source file is <= 5000 bytes (small, focused schema layer)', async () => {
+    // Wave 3a bumped the cap from 4000 -> 5000 for the `rotaryFixture` object.
     const src = await readSrc()
-    expect(Buffer.byteLength(src, 'utf-8')).toBeLessThanOrEqual(4000)
+    expect(Buffer.byteLength(src, 'utf-8')).toBeLessThanOrEqual(5000)
   })
 
   it('imports zod (not yup, joi, or other validators)', async () => {

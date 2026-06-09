@@ -16,6 +16,7 @@ import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
+import type { KernelBuildResult } from '../main/cad/build-kernel-part'
 import type { PartFeaturesFile } from '../shared/part-features-schema'
 import type { CamProgressEvent } from '../shared/cam-progress'
 import type { PythonDepCheckOutcome } from '../main/python-dep-check'
@@ -264,6 +265,16 @@ export type Api = {
   designSave: (projectDir: string, json: string) => Promise<void>
   designReadKernelManifest: (projectDir: string) => Promise<KernelManifest | null>
   designReadKernelStlBase64: (projectDir: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
+  /**
+   * Run the no-code kernel build: `design/sketch.json` + `part/features.json`
+   * (kernelOps timeline) → CadQuery `build_part.py` → `output/kernel-part.step`
+   * + `output/kernel-part.stl` + `part/kernel-manifest.json`. The renderer then
+   * reloads the STL via {@link designReadKernelStlBase64} to show the built
+   * solid. `pythonPath` is validated (`isPythonPathSafe`) main-side; pass the
+   * configured Settings python (or `'python'`). Never throws — failures come
+   * back as `{ ok: false, error, detail?, manifest }`.
+   */
+  kernelBuild: (projectDir: string, pythonPath: string) => Promise<KernelBuildResult>
   modelExportStl: (projectDir: string, filename: string, base64: string) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
 
   // ── Post-processors ──────────────────────────────────────────────────────
@@ -921,6 +932,7 @@ const api: Api = {
   designSave: (projectDir, json) => ipcRenderer.invoke('design:save', projectDir, json),
   designReadKernelManifest: (projectDir) => ipcRenderer.invoke('design:readKernelManifest', projectDir),
   designReadKernelStlBase64: (projectDir) => ipcRenderer.invoke('design:readKernelStlBase64', projectDir),
+  kernelBuild: (projectDir, pythonPath) => ipcRenderer.invoke('cad:kernelBuild', projectDir, pythonPath),
   modelExportStl: (projectDir, filename, base64) => ipcRenderer.invoke('model:exportStl', { projectDir, filename, base64 }),
 
   // Post-processors

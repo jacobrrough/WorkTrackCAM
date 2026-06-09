@@ -591,6 +591,75 @@ export function ManufactureOperationList({
               </>
             ) : null}
             {op.kind === 'cnc_4axis_roughing' || op.kind === 'cnc_4axis_finishing' || op.kind === 'cnc_4axis_contour' || op.kind === 'cnc_4axis_indexed' || op.kind === 'cnc_4axis_continuous' ? (
+              <div className="row row--mt-xs" data-testid={`op-4axis-rotary-tuning-${i}`}>
+                <label title="Angular stepover (degrees) around the rotation axis. Blank = auto from linear stepover and stock Ø.">
+                  Stepover (&deg;)
+                  <input
+                    type="number"
+                    min={0.1}
+                    step={1}
+                    data-testid={`op-4axis-stepover-deg-${i}`}
+                    value={cutParamFieldValue(op, 'stepoverDeg')}
+                    onChange={(e) => onSetCutParam(i, 'stepoverDeg', e.target.value, 'positive')}
+                    placeholder="auto"
+                  />
+                </label>
+                <label title="Extend cuts past material edges (mm). Blank = tool diameter.">
+                  Overcut (mm)
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    data-testid={`op-4axis-overcut-${i}`}
+                    value={
+                      typeof op.params?.['overcutMm'] === 'number'
+                        ? String(op.params['overcutMm'])
+                        : ''
+                    }
+                    onChange={(e) => {
+                      const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                      const v = e.target.value.trim()
+                      if (!v) delete base.overcutMm
+                      else {
+                        const n = Number.parseFloat(v)
+                        if (Number.isFinite(n) && n >= 0) base.overcutMm = n
+                      }
+                      onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                    }}
+                    placeholder="= tool &Oslash;"
+                  />
+                </label>
+                <label title="Insert extra A-axis passes where surface curvature is high (denser sampling on corners/edges).">
+                  <input
+                    type="checkbox"
+                    data-testid={`op-4axis-adaptive-refinement-${i}`}
+                    checked={op.params?.['adaptiveRefinement'] === true}
+                    onChange={(e) => {
+                      const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                      if (e.target.checked) base.adaptiveRefinement = true
+                      else delete base.adaptiveRefinement
+                      onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                    }}
+                  />
+                  Adaptive A refinement
+                </label>
+                <label title="Skip empty waterline passes above the mesh's max radial extent (faster on undersized parts).">
+                  <input
+                    type="checkbox"
+                    data-testid={`op-4axis-mesh-radial-z-bands-${i}`}
+                    checked={op.params?.['useMeshRadialZBands'] === true}
+                    onChange={(e) => {
+                      const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                      if (e.target.checked) base.useMeshRadialZBands = true
+                      else delete base.useMeshRadialZBands
+                      onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                    }}
+                  />
+                  Mesh-radial Z bands
+                </label>
+              </div>
+            ) : null}
+            {op.kind === 'cnc_4axis_roughing' || op.kind === 'cnc_4axis_finishing' || op.kind === 'cnc_4axis_contour' || op.kind === 'cnc_4axis_indexed' || op.kind === 'cnc_4axis_continuous' ? (
               <div className="row row--mt-xs">
                 <label title="Clamp machinable X to STL bounding box (disable if WCS mismatch)">
                   <input
@@ -616,30 +685,6 @@ export function ManufactureOperationList({
                         value={cutParamFieldValue(op, 'zStepMm')}
                         onChange={(e) => onSetCutParam(i, 'zStepMm', e.target.value, 'positive')}
                         placeholder="0 = auto"
-                      />
-                    </label>
-                    <label title="Extend cuts past material edges (mm)">
-                      Overcut (mm)
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.5}
-                        value={
-                          typeof op.params?.['overcutMm'] === 'number'
-                            ? String(op.params['overcutMm'])
-                            : ''
-                        }
-                        onChange={(e) => {
-                          const base: Record<string, unknown> = { ...(op.params ?? {}) }
-                          const v = e.target.value.trim()
-                          if (!v) delete base.overcutMm
-                          else {
-                            const n = Number.parseFloat(v)
-                            if (Number.isFinite(n) && n >= 0) base.overcutMm = n
-                          }
-                          onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
-                        }}
-                        placeholder="= tool &Oslash;"
                       />
                     </label>
                   </>
