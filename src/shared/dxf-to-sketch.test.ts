@@ -447,6 +447,50 @@ describe('dxfToSketch — bulge arcs tessellate (rounded-rectangle round-trip)',
     expect(derived.length).toBeGreaterThanOrEqual(3)
   })
 
+  it('a closed LWPOLYLINE with a 180° bulge (semicircle, b=1) tessellates to the arc, not the chord', () => {
+    // D-shape: a straight chord (0,0)->(10,0) (the flat) and a CLOSING 180° arc
+    // back to (0,0). bulge=1 => θ=4·atan(1)=180°; chord (10,0)->(0,0), center (5,0),
+    // radius 5, CCW apex (5,5). A chord-linearisation would flatten the arc onto
+    // y=0 (zero height); true tessellation lifts the intermediate points onto the
+    // circle so the contour extent reflects the arc's true bounding box.
+    const dxf = [
+      '0', 'SECTION', '2', 'ENTITIES',
+      '0', 'LWPOLYLINE', '8', 'PROFILE', '90', '2', '70', '1',
+      '10', '0', '20', '0', // v0=(0,0); seg 0->1 straight (the flat of the D)
+      '42', '1', '10', '10', '20', '0' // v1=(10,0); closing seg 1->0 carries bulge=1
+    ]
+    dxf.push('0', 'ENDSEC', '0', 'EOF', '')
+    const { design, importedCount } = dxfToSketch(parseDxf(dxf.join('\n')), emptyDesign(), {
+      idPrefix: 'd'
+    })
+    expect(importedCount).toBe(1)
+    const poly = design.entities[0]!
+    if (poly.kind !== 'polyline') throw new Error('expected polyline')
+    expect(poly.closed).toBe(true)
+
+    const pts = polylinePositions(poly, design.points)
+    expect(pts.length).toBeGreaterThan(2) // interior arc samples inserted (a chord adds none)
+    // Every emitted point lies on the radius-5 circle centred at (5,0), in the +y half.
+    let maxCircleDev = 0
+    for (const [x, y] of pts) {
+      expect(y).toBeGreaterThanOrEqual(-1e-6) // arc stays above the chord, never below
+      maxCircleDev = Math.max(maxCircleDev, Math.abs(Math.hypot(x - 5, y) - 5))
+    }
+    expect(maxCircleDev).toBeLessThan(0.05) // points lie on the true arc, not a chord
+
+    // The derived contour extent matches the ARC's true bounding box (apex y≈5),
+    // NOT the straight chord (whose y extent would be 0).
+    const contour = listContourCandidatesFromDesign(design).find((c) => c.label.startsWith('Polyline'))
+    expect(contour).toBeDefined()
+    const xs = contour!.points.map((p) => p[0])
+    const ys = contour!.points.map((p) => p[1])
+    expect(Math.max(...ys)).toBeGreaterThan(4.9) // arc apex reached, not the chord's 0
+    expect(Math.max(...ys)).toBeLessThanOrEqual(5 + 1e-6)
+    expect(Math.min(...ys)).toBeCloseTo(0, 6)
+    expect(Math.min(...xs)).toBeCloseTo(0, 6)
+    expect(Math.max(...xs)).toBeCloseTo(10, 6)
+  })
+
   it('keeps a partially-bulged polyline mixed (straight segments stay straight)', () => {
     // Triangle where only the first segment bulges; the other two are straight chords.
     const dxf = [
