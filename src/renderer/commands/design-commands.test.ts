@@ -87,6 +87,14 @@ describe('classifyDesignCommand', () => {
     // A Manufacture-workspace command is never a Design feature dialog.
     expect(classifyDesignCommand('mf_op_parallel')).toBeNull()
   })
+
+  it('routes the sketch vector-edit ops (offset/boolean/array) to sketch_op', () => {
+    for (const id of ['sk_offset', 'sk_boolean', 'sk_array_rect', 'sk_array_circular']) {
+      expect(classifyDesignCommand(id)).toBe('sketch_op')
+      // They are NOT draw tools (no SketchTool mapping).
+      expect(id in DESIGN_SKETCH_COMMAND_TO_TOOL).toBe(false)
+    }
+  })
 })
 
 describe('designCommandIds — the registered id set', () => {
@@ -235,6 +243,33 @@ describe('dispatch — handlers call the right action', () => {
     // Arming Text flips sketch mode + records the catalog id; the mounted
     // SketchSurface opens the Text dialog when `sk_text` is the armed tool.
     expect(actions.calls).toEqual([`armSketchTool:${SKETCH_TEXT_COMMAND_ID}`])
+  })
+
+  it('a sketch vector-edit op arms its catalog id (surface opens the dialog)', () => {
+    const reg = new CommandRegistry()
+    const actions = makeActions()
+    registerDesignCommands(actions, reg)
+
+    const sketching = ctx({ workspace: 'design', sketchMode: true })
+    expect(reg.run('sk_offset', sketching)).toBe(true)
+    expect(reg.run('sk_boolean', sketching)).toBe(true)
+    expect(reg.run('sk_array_rect', sketching)).toBe(true)
+    expect(reg.run('sk_array_circular', sketching)).toBe(true)
+    expect(actions.calls).toEqual([
+      'armSketchTool:sk_offset',
+      'armSketchTool:sk_boolean',
+      'armSketchTool:sk_array_rect',
+      'armSketchTool:sk_array_circular'
+    ])
+  })
+
+  it('a sketch vector-edit op is DISABLED (no dispatch) when not in sketch mode', () => {
+    const reg = new CommandRegistry()
+    const actions = makeActions()
+    registerDesignCommands(actions, reg)
+    // It MODIFIES a loop, so it needs an active sketch (unlike sketch-entry/text).
+    expect(reg.run('sk_offset', ctx({ workspace: 'design', sketchMode: false }))).toBe(false)
+    expect(actions.calls).toEqual([])
   })
 
   it('a solid command opens its feature dialog by catalog id', () => {

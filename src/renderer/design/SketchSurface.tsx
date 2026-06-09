@@ -42,13 +42,50 @@
  */
 
 import { useEffect, useMemo, useState, type JSX } from 'react'
-import type { DesignFileV2 } from '../../shared/design-schema'
+import type { DesignFileV2, SketchEntity } from '../../shared/design-schema'
 import { Sketch2DCanvas, type SketchTool } from './Sketch2DCanvas'
 import { sketchToolForDesignCommand } from './design-command-map'
 import { TextDialog, type FontBufferLoader } from './feature-dialogs/TextDialog'
+import {
+  ArraySketchDialog,
+  BooleanSketchDialog,
+  OffsetSketchDialog,
+  sketchEditDialogForCommand,
+  type SketchEditDialogKind
+} from './feature-dialogs/SketchEditDialogs'
+import { closedLoopEntityIds } from '../../shared/sketch-boolean-offset'
 
 /** Catalog id of the Text command — arming it opens the Text dialog on this surface. */
 export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
+
+/**
+ * A short human label for a closed-loop entity, surfaced in the selection list
+ * so the operator knows which loop a row is. Mirrors the `cam-2d-derive` labels.
+ */
+function entityLabel(e: SketchEntity): string {
+  switch (e.kind) {
+    case 'rect':
+      return `Rectangle ${e.id}`
+    case 'circle':
+      return `Circle ${e.id}`
+    case 'slot':
+      return `Slot ${e.id}`
+    case 'ellipse':
+      return `Ellipse ${e.id}`
+    case 'arc':
+      return `Arc ${e.id}`
+    case 'polyline':
+      return `Polyline ${e.id}`
+    case 'spline_fit':
+    case 'spline_cp':
+      return `Spline ${e.id}`
+    default: {
+      const _never: never = e
+      void _never
+      return 'Loop'
+    }
+  }
+}
 
 /** A palette entry: the canvas tool id + its human label + group heading. */
 interface SketchSurfaceToolDef {
@@ -180,6 +217,14 @@ export function SketchSurface({
   // Wave 3f — the Text dialog mounts as an overlay on the surface. Armed by the
   // `sk_text` ribbon command (auto-open) or the surface's own "Text" button.
   const [textDialogOpen, setTextDialogOpen] = useState(false)
+  // Wave 3g — which sketch-edit dialog (offset / boolean / array) is open, or
+  // `null`. Opened by the `sk_offset`/`sk_boolean`/`sk_array_*` ribbon commands
+  // (auto-open, mirroring `sk_text`) or the surface's own Modify buttons.
+  const [editDialog, setEditDialog] = useState<SketchEditDialogKind | null>(null)
+  // Wave 3g — the closed loops the operator has picked as the op's inputs. A Set
+  // of entity ids from the live design; toggled in the selection list. Stale ids
+  // (an entity deleted out from under the selection) are filtered at read time.
+  const [selectedEntityIds, setSelectedEntityIds] = useState<ReadonlySet<string>>(new Set())
   // Guards the Import-DXF button while the host's picker + parse + merge is in
   // flight, so a double-click can't kick off two overlapping file pickers.
   const [importingDxf, setImportingDxf] = useState(false)
@@ -202,11 +247,41 @@ export function SketchSurface({
     if (armedToolCommandId === SKETCH_TEXT_COMMAND_ID) setTextDialogOpen(true)
   }, [armedToolCommandId])
 
+  // Wave 3g — the offset / boolean / array commands likewise have no draw tool;
+  // arming one opens the matching edit dialog (mirroring the Text pattern). Fires
+  // on the transition so re-arming the same op re-opens a dialog the operator closed.
+  useEffect(() => {
+    const kind = sketchEditDialogForCommand(armedToolCommandId ?? '')
+    if (kind) setEditDialog(kind)
+  }, [armedToolCommandId])
+
   const gridMm = snapEnabled ? SNAP_GRID_MM : SNAP_OFF_GRID_MM
 
   /** Total entity + point count, surfaced as an honest "what's in the sketch" read-out. */
   const entityCount = design.entities.length
   const pointCount = useMemo(() => Object.keys(design.points).length, [design.points])
+
+  // Wave 3g — the closed loops in the design (entity ids that bound a region),
+  // the rows of the selection list + the pool the edit dialogs accept as inputs.
+  const closedLoopIds = useMemo(() => new Set(closedLoopEntityIds(design)), [design])
+  const closedLoopEntities = useMemo(
+    () => design.entities.filter((e) => closedLoopIds.has(e.id)),
+    [design.entities, closedLoopIds]
+  )
+  // The selection narrowed to ids still present in the design (drop stale picks).
+  const selectedIds = useMemo(() => {
+    const live = new Set(design.entities.map((e) => e.id))
+    return [...selectedEntityIds].filter((id) => live.has(id))
+  }, [design.entities, selectedEntityIds])
+
+  function toggleSelected(id: string): void {
+    setSelectedEntityIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // Run the host's DXF import, guarding against overlapping pickers. The host
   // owns the file-picker → parse → additive-merge → persist chain; this only
@@ -315,6 +390,39 @@ export function SketchSurface({
             Text
           </button>
 
+          {/* Wave 3g — Modify launchers: open the offset / boolean / array dialog
+              on the currently-selected closed loops (the selection list below). */}
+          <button
+            type="button"
+            className="sketch-surface__edit-btn"
+            data-testid="sketch-surface-offset"
+            aria-pressed={editDialog === 'offset'}
+            title="Offset the selected closed loop(s) by a signed distance (+ outset / − inset)"
+            onClick={() => setEditDialog((d) => (d === 'offset' ? null : 'offset'))}
+          >
+            Offset
+          </button>
+          <button
+            type="button"
+            className="sketch-surface__edit-btn"
+            data-testid="sketch-surface-boolean"
+            aria-pressed={editDialog === 'boolean'}
+            title="Boolean union / subtract / intersect of 2+ selected closed loops"
+            onClick={() => setEditDialog((d) => (d === 'boolean' ? null : 'boolean'))}
+          >
+            Boolean
+          </button>
+          <button
+            type="button"
+            className="sketch-surface__edit-btn"
+            data-testid="sketch-surface-array"
+            aria-pressed={editDialog === 'array'}
+            title="Rectangular or circular array of the selected entities"
+            onClick={() => setEditDialog((d) => (d === 'array' ? null : 'array'))}
+          >
+            Array
+          </button>
+
           {showFilletParam && (
             <label className="sketch-surface__param" data-testid="sketch-surface-fillet-radius">
               Radius (mm)
@@ -411,6 +519,81 @@ export function SketchSurface({
                 onHint={onSketchHint}
                 loadFontBuffer={loadFontBuffer}
               />
+            </div>
+          )}
+
+          {/* Wave 3g — the offset / boolean / array dialog overlay. Operates on
+              the `selectedIds` picked in the loop-selection list; on Apply the
+              dialog pushes the additively-merged design through onDesignChange. */}
+          {editDialog !== null && (
+            <div className="sketch-surface__edit-overlay" data-testid="sketch-surface-edit-overlay">
+              {/* Loop selection list — pick the closed loop(s) the op acts on. */}
+              <div
+                className="sketch-surface__loop-list"
+                role="group"
+                aria-label="Closed loops"
+                data-testid="sketch-surface-loop-list"
+              >
+                <div className="sketch-surface__loop-list-head">
+                  Closed loops ({closedLoopEntities.length})
+                </div>
+                {closedLoopEntities.length === 0 ? (
+                  <div
+                    className="sketch-surface__loop-empty"
+                    data-testid="sketch-surface-loop-empty"
+                  >
+                    Draw or import a closed loop to use this tool.
+                  </div>
+                ) : (
+                  closedLoopEntities.map((e) => {
+                    const checked = selectedEntityIds.has(e.id)
+                    return (
+                      <label
+                        key={e.id}
+                        className="sketch-surface__loop-row"
+                        data-testid={`sketch-surface-loop-${e.id}`}
+                        data-selected={checked ? 'true' : 'false'}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          data-testid={`sketch-surface-loop-check-${e.id}`}
+                          onChange={() => toggleSelected(e.id)}
+                        />
+                        {entityLabel(e)}
+                      </label>
+                    )
+                  })
+                )}
+              </div>
+
+              {editDialog === 'offset' && (
+                <OffsetSketchDialog
+                  design={design}
+                  selectedIds={selectedIds}
+                  onApply={(next) => onDesignChange(next)}
+                  onClose={() => setEditDialog(null)}
+                  onHint={onSketchHint}
+                />
+              )}
+              {editDialog === 'boolean' && (
+                <BooleanSketchDialog
+                  design={design}
+                  selectedIds={selectedIds}
+                  onApply={(next) => onDesignChange(next)}
+                  onClose={() => setEditDialog(null)}
+                  onHint={onSketchHint}
+                />
+              )}
+              {editDialog === 'array' && (
+                <ArraySketchDialog
+                  design={design}
+                  selectedIds={selectedIds}
+                  onApply={(next) => onDesignChange(next)}
+                  onClose={() => setEditDialog(null)}
+                  onHint={onSketchHint}
+                />
+              )}
             </div>
           )}
         </div>

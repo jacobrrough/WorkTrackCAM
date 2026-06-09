@@ -617,6 +617,83 @@
   box-shadow: var(--shadow-2, 0 8px 24px rgba(0, 0, 0, 0.35));
   border-radius: var(--radius-md);
 }
+/* Wave 3g -- Offset/Boolean/Array launchers. Same chip shape as the Text button. */
+.sketch-surface__edit-btn {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--bg1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sketch-surface__edit-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.sketch-surface__edit-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+}
+/* The edit (offset/boolean/array) overlay floats over the top-RIGHT of the canvas
+   so it doesn't collide with the top-left Text dialog. It stacks the closed-loop
+   selection list above the active dialog. */
+.sketch-surface__edit-overlay {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 300px;
+  max-height: calc(100% - 2 * var(--sp-3));
+  overflow: auto;
+}
+.sketch-surface__loop-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2, 0 8px 24px rgba(0, 0, 0, 0.35));
+  max-height: 200px;
+  overflow: auto;
+}
+.sketch-surface__loop-list-head {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--txt1);
+}
+.sketch-surface__loop-empty {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+}
+.sketch-surface__loop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+  cursor: pointer;
+}
+.sketch-surface__loop-row[data-selected='true'] {
+  color: var(--accent);
+}
+.sketch-surface__edit-overlay .fd-dialog {
+  box-shadow: var(--shadow-2, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+.fd-sk-array__rotate {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--txt0);
+}
 /* The multi-line text entry inside the Text dialog. */
 .fd-text__textarea {
   resize: vertical;

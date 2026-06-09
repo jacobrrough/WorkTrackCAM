@@ -35,6 +35,12 @@ The 2026-06-08 Text-engine wave added `opentype.js@^2.0.0` (runtime, MIT) +
 `npm audit` and `npm audit --omit=dev` stayed at **0** advisories (verified
 2026-06-08). See "Clean dependency additions" below.
 
+The 2026-06-09 Offset+Boolean sketch-engine wave added `clipper-lib@^6.4.2`
+(runtime, **Boost Software License** — permissive MIT/BSD-class). `npm install`
+added **one** package; both `npm audit` and `npm audit --omit=dev` stayed at **0**
+advisories (verified 2026-06-09). Types via a local ambient `.d.ts` (no `@types`
+package exists). See "Clean dependency additions" below.
+
 The electron-builder 26.8.1 bump (this wave) closed the last open chain — the
 dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
 `npm audit` now reports a clean tree across dev **and** prod.
@@ -142,6 +148,36 @@ dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
   reads under `resources/` only and touches no project directory or G-code path.
   Re-running `npm audit` + `npm audit --omit=dev` on this wave (no dep change
   beyond the already-recorded opentype.js) → **0 / 0** (verified 2026-06-08).
+- **Status**: **CLEAN** — no advisory opened.
+
+### clipper-lib — Offset + Boolean sketch-geometry engine (2026-06-09)
+- **Added**: `clipper-lib@^6.4.2` (runtime dependency, **Boost Software License
+  1.0** — a permissive MIT/BSD-class license, allowed by the dependency policy).
+  No `@types` package exists; the typed surface is a local ambient declaration
+  `src/shared/clipper-lib.d.ts` (no `any`).
+- **Why**: powers `src/shared/sketch-boolean-offset.ts`, the pure
+  offset (`offsetSketchEntities`) + boolean (`booleanSketchEntities`) engine that
+  closes the "Vectors · Edit → Offset / Boolean (weld)" P1 gap in
+  docs/plans/catalog/vcarve-laguna.md for the Laguna sign / cabinet workflow.
+  Clipper is the CAM-standard polygon library and does BOTH boolean ops and
+  `ClipperOffset`. Pure JS, no native bindings, no file/network I/O.
+- **Audit**: `npm install` added **1** package (481 audited); `npm audit` → **0**
+  and `npm audit --omit=dev` → **0** (verified 2026-06-09). clipper-lib 6.4.2 is a
+  dependency-free single-file JS translation of Angus Johnson's C# Clipper.
+- **Import shape (Wave-3f build lesson)**: `clipper-lib` is a CommonJS module
+  (`module.exports = ClipperLib`), so the namespace object lands on `.default`
+  under both Node ESM interop and the electron-vite (Rollup) production build —
+  hence a **default** import (`import ClipperLib from 'clipper-lib'`), the OPPOSITE
+  of opentype.js (an ESM, named-only package that needed `import * as`). Verified
+  by a **production build smoke**: `electron-vite build` bundled the engine into
+  the renderer (803 modules, `ClipperOffset` + clipper enums present in
+  `out/renderer/assets/index-*.js`) with no ESM/CJS Rollup error. A green
+  `tsc`+`vitest` alone is NOT sufficient proof — the bundler smoke is required.
+- **Security note**: the engine performs no file/network I/O — it takes a
+  `DesignFileV2` (or a bare entity list) and runs deterministic integer-scaled
+  polygon math (mm → int via `CLIPPER_SCALE` 1e4). No attacker-controlled parsing
+  surface is added. It never emits, mutates, or posts a toolpath (G-code stays
+  downstream in cam-local → cam-runner-2d → vcarve_mach3.hbs, untouched).
 - **Status**: **CLEAN** — no advisory opened.
 
 ---

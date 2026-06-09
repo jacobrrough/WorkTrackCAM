@@ -56,6 +56,7 @@ import {
   DESIGN_CONSTRAINT_COMMAND_TO_TYPE,
   DESIGN_SKETCH_COMMAND_TO_TOOL
 } from '../design/design-command-map'
+import { SKETCH_EDIT_COMMAND_IDS } from '../design/feature-dialogs/SketchEditDialogs'
 import {
   DESIGN_RIBBON_COMMAND_IDS,
   FUSION_STYLE_COMMAND_CATALOG
@@ -123,6 +124,15 @@ export type DesignCommandKind =
    * `SketchTool` draw mapping — arming it opens the dialog on the live surface.
    */
   | 'sketch_text'
+  /**
+   * Open a sketch vector-EDIT dialog (`sk_offset` / `sk_boolean` /
+   * `sk_array_rect` / `sk_array_circular`). These MODIFY existing closed loops,
+   * so unlike a Create tool they require sketch mode (there must already be a
+   * loop to offset / combine / array). Like `sk_text` they have no `SketchTool`
+   * draw mapping — arming one opens the matching dialog on the live surface
+   * (which reads the catalog id back through {@link sketchEditDialogForCommand}).
+   */
+  | 'sketch_op'
   /** Open a solid / construct feature dialog (`so_*`, construct planes, …). */
   | 'feature_dialog'
   /** Run an Inspect tool (`ut_measure`, `ut_section`). */
@@ -135,6 +145,15 @@ export const SKETCH_PLANE_COMMAND_ID = 'sk_choose_plane'
 
 /** Catalog id for the Text → machinable-vectors command (opens the Text dialog). */
 export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
+
+/**
+ * Catalog ids that arm a sketch vector-EDIT dialog (offset / boolean / array) on
+ * the live surface. Re-exported from the dialog module so the dialog ↔ command
+ * mapping has ONE source of truth. These classify as {@link DesignCommandKind}
+ * `'sketch_op'` and dispatch through `armSketchTool` (the surface opens the right
+ * dialog from the armed id).
+ */
+const SKETCH_OP_COMMAND_IDS: ReadonlySet<string> = new Set(SKETCH_EDIT_COMMAND_IDS)
 
 /** Inspect command ids handled here (Measure / Section). */
 const INSPECT_COMMAND_IDS: ReadonlySet<string> = new Set(['ut_measure', 'ut_section'])
@@ -186,6 +205,10 @@ export function classifyDesignCommand(id: string): DesignCommandKind | null {
   // mapping (it opens the Text dialog). Classify it explicitly before the
   // sketch-tool map so it routes to `sketch_text`, not to a missing tool.
   if (id === SKETCH_TEXT_COMMAND_ID) return 'sketch_text'
+  // Sketch vector-edit ops (offset / boolean / array) have no draw-tool mapping —
+  // they open a dialog on the live surface. Classify them before the draw-tool
+  // map so they route to `sketch_op`, not to a missing tool.
+  if (SKETCH_OP_COMMAND_IDS.has(id)) return 'sketch_op'
   if (id in DESIGN_SKETCH_COMMAND_TO_TOOL) return 'sketch_tool'
   if (id in DESIGN_CONSTRAINT_COMMAND_TO_TYPE) return 'sketch_constraint'
   if (id.startsWith('dim_')) return 'sketch_dimension'
@@ -246,6 +269,9 @@ export function designCommandEnabled(kind: DesignCommandKind, ctx: CommandContex
     case 'sketch_tool':
     case 'sketch_constraint':
     case 'sketch_dimension':
+    // A vector-edit op modifies an existing loop, so it needs an active sketch
+    // (same gate as a draw/constraint tool) — unlike the sketch-*entry* commands.
+    case 'sketch_op':
       return isDesignRoute(ctx) && ctx.sketchMode === true
     case 'sketch_enter':
     case 'sketch_text':
@@ -288,6 +314,12 @@ function runForKind(
       // mounted SketchSurface opens its Text dialog when this catalog id is the
       // armed tool. Arming implies entering sketch mode (the `armSketchTool`
       // contract), so the surface is mounted and ready to receive the dialog.
+      return () => actions.armSketchTool(id)
+    case 'sketch_op':
+      // sk_offset / sk_boolean / sk_array_*: arm the op's catalog id on the
+      // surface exactly like Text. The mounted SketchSurface maps the armed id
+      // to its offset / boolean / array dialog (sketchEditDialogForCommand) and
+      // opens it over the currently-selected closed loops.
       return () => actions.armSketchTool(id)
     case 'feature_dialog':
       return () => actions.openFeatureDialog(id)

@@ -227,7 +227,16 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'design',
     'implemented',
     'CREATE',
-    'Closed point-ID polyline → miter offset copy (Sketch ribbon Δ mm); palette scrolls to offset controls'
+    'Signed (+outset/−inset) miter/round/square offset of the selected closed loop(s) via the pure shared engine src/shared/sketch-boolean-offset.ts (offsetSketchEntities, Clipper-backed; integers via CLIPPER_SCALE 1e4) — additive-merge into the session sketch, collapse → empty result (no throw). LIVE on the Design sketch surface: arming sk_offset (ribbon/palette) opens the Offset dialog over the loop-selection list (SketchSurface → feature-dialogs/SketchEditDialogs.tsx OffsetSketchDialog); the merged loops persist on Save and become cam-2d-derive contour/pocket/V-carve geometry.'
+  ),
+  c(
+    'sk_boolean',
+    'Boolean (weld / subtract / intersect)',
+    'sketch_modify',
+    'design',
+    'implemented',
+    'MODIFY',
+    'Closed-loop union / difference / intersection via the pure shared engine src/shared/sketch-boolean-offset.ts (booleanSketchEntities, Clipper-backed). Subject + clip closed entities → merged CLOSED loops (outer CCW, holes CW — the cam-2d-derive polygon-with-holes contract), additive-merge into the session sketch; disjoint/over-clipped ops return an empty result (no throw). LIVE on the Design sketch surface: arming sk_boolean opens the Boolean dialog (SketchEditDialogs.tsx BooleanSketchDialog) over 2+ selected loops — union welds all, subtract/intersect treat the first pick as subject + the rest as clips.'
   ),
   c(
     'sk_project',
@@ -255,6 +264,24 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'implemented',
     'CREATE',
     'Linear: Pat # + ΔX/ΔY along k×Δ. Circular: pivot + total° + start°, step = total°÷Pat # (matches kernel pattern_circular). Path: translation-only samples along selected polyline (optional closed-path sampling).'
+  ),
+  c(
+    'sk_array_rect',
+    'Rectangular array',
+    'sketch_create',
+    'design',
+    'implemented',
+    'CREATE',
+    'Grid of copies of the selected entities (src/shared/sketch-array.ts rectangularArray): cols×rows incl. the original, dxMm/dyMm spacing, pure additive merge into the session sketch (original preserved, deterministic copy ids from sourceId+cell, never mutates base). Copies become profile/pocket/v-carve/drill geometry. LIVE on the Design sketch surface: arming sk_array_rect opens the Array dialog (SketchEditDialogs.tsx ArraySketchDialog) in rectangular mode over the selected entities.'
+  ),
+  c(
+    'sk_array_circular',
+    'Circular array',
+    'sketch_create',
+    'design',
+    'implemented',
+    'CREATE',
+    'Polar copies of the selected entities about a center (src/shared/sketch-array.ts circularArray): count incl. the original, step = totalAngleDeg÷count (matches sk_pattern_sk; count=4/360°→0/90/180/270), optional rotateCopies spins each copy vs. translate-only. Pure additive merge (original preserved, deterministic copy ids, never mutates base). LIVE on the Design sketch surface: arming sk_array_circular opens the Array dialog (ArraySketchDialog) in circular mode over the selected entities.'
   ),
   c(
     'sk_move_sk',
@@ -1235,12 +1262,15 @@ export const DESIGN_RIBBON_COMMAND_IDS = new Set<string>([
   'sk_fillet_sk',
   'sk_chamfer_sk',
   'sk_offset',
+  'sk_boolean',
   'sk_project',
   'sk_move_sk',
   'sk_rotate_sk',
   'sk_scale_sk',
   'sk_mirror_sk',
   'sk_pattern_sk',
+  'sk_array_rect',
+  'sk_array_circular',
   'sk_choose_plane',
   'co_offset_plane',
   'co_datum_axis',
