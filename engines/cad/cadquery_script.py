@@ -678,6 +678,37 @@ def tessellate_with_face_ids(
     }
 
 
+def tessellate_body_with_face_ids(body: Any, *, tolerance_mm: float = 0.1) -> Dict[str, Any]:
+    """Face-tagged tessellation for a raw Workplane/Solid (no pre-registered handle).
+
+    Registers ``body`` under a throwaway handle, runs the SAME
+    :func:`tessellate_with_face_ids` core the script path uses (identical face +
+    edge id hashing via ``_safe_face_geom_id`` / ``_safe_edge_geom_id``), then
+    removes the handle. This lets ``engines/occt/build_part.py`` emit a pickable
+    tessellation of ITS OWN body in the EXACT coordinate space its
+    ``fillet_select`` / ``chamfer_select`` / ``shell_inward`` ops resolve picked
+    ids against — so a viewport pick taken from the no-code build round-trips to
+    the same edge/face instead of silently falling back to the axis bucket (the
+    cross-path id-space mismatch: the script tessellation and the build_part body
+    used to occupy different spaces). build_part is single-threaded per process,
+    so mutating ``_HANDLES`` with a throwaway entry that is always removed in the
+    ``finally`` is safe.
+    """
+    workplane = _coerce_to_workplane(body)
+    bbox_min, bbox_max = _safe_bbox(workplane)
+    handle = f"buildpart:{uuid.uuid4().hex}"
+    _HANDLES[handle] = StepDocument(
+        workplane=workplane,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        source_path="<build_part_pick>",
+    )
+    try:
+        return tessellate_with_face_ids(handle, tolerance_mm=tolerance_mm)
+    finally:
+        _HANDLES.pop(handle, None)
+
+
 def _tessellate_with_face_ids_for_handle(
     handle: str, *, tolerance_mm: float
 ) -> Optional[Dict[str, Any]]:

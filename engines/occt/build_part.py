@@ -1328,6 +1328,26 @@ def build_part(payload: Dict[str, Any], output_dir: str, base: str) -> Dict[str,
     except Exception as exc:  # noqa: BLE001
         raise _BuildError(f"no solid after post-ops: {exc}", detail=str(exc))
 
+    # 3.5) Pickable tessellation-with-ids of the PRE-placement body — the SAME
+    # coordinate space fillet_select / chamfer_select / shell_inward resolve
+    # picked ids against, so a viewport pick from the no-code build round-trips
+    # to the exact edge/face instead of silently falling back to the axis bucket
+    # (the cross-path id-space mismatch). The STL is exported in WORLD space
+    # (after placement); the renderer transforms this geometry by
+    # ``pickPlacement`` for display — the ids are placement-INDEPENDENT because
+    # op resolution is pre-placement too. Best-effort: a selection-tessellation
+    # failure NEVER blocks the STL/CAM-critical export (the kernel is sacred).
+    tolerance = _stl_tolerance_from_payload(payload)
+    pick_tessellation: Optional[Dict[str, Any]] = None
+    try:
+        from engines.cad.cadquery_script import (  # noqa: PLC0415
+            tessellate_body_with_face_ids,
+        )
+
+        pick_tessellation = tessellate_body_with_face_ids(wp, tolerance_mm=tolerance)
+    except Exception as exc:  # noqa: BLE001 - selection info is non-critical
+        warnings.append(f"pick tessellation skipped: {exc}")
+
     # 4) Placement: canonical -> world (matches the renderer preview transform).
     plane = payload.get("sketchPlane")
     if isinstance(plane, dict):
@@ -1342,7 +1362,6 @@ def build_part(payload: Dict[str, Any], output_dir: str, base: str) -> Dict[str,
 
     step_path = out_dir / f"{base}.step"
     stl_path = out_dir / f"{base}.stl"
-    tolerance = _stl_tolerance_from_payload(payload)
 
     try:
         _export_step(cq, wp, step_path)
@@ -1370,6 +1389,22 @@ def build_part(payload: Dict[str, Any], output_dir: str, base: str) -> Dict[str,
     # / a future browser can list them. Never affects geometry (Safety Rule 1).
     if extras.get("datums"):
         result["datums"] = extras["datums"]
+    # task_f76b39b3: emit the pre-placement pickable tessellation + the
+    # canonical->world placement basis so the renderer can pick edges/faces on
+    # the no-code body and have those ids RESOLVE at the next build (closing the
+    # cross-path id-space mismatch). Additive + optional: absent when the
+    # tessellation failed — the STL/CAM-critical path is unaffected.
+    if pick_tessellation is not None:
+        result["pickTessellation"] = pick_tessellation
+        basis = _placement_basis(plane) if isinstance(plane, dict) else None
+        if basis is not None:
+            u, v, n, o = basis
+            result["pickPlacement"] = {
+                "u": list(u),
+                "v": list(v),
+                "n": list(n),
+                "origin": list(o),
+            }
     if warnings:
         result["warnings"] = warnings
     return result

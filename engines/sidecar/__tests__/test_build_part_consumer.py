@@ -22,6 +22,9 @@ solid and prove (Safety Rule 5):
     ``(x, z, -y)`` for datum XY);
   * the script invoked EXACTLY as build-kernel-part.ts invokes it (argv +
     last-stdout-line JSON) returns the contracted envelope.
+  * a picked id taken from build_part's OWN ``pickTessellation`` (emitted in the
+    pre-placement op-resolution space) round-trips to the exact edge, while a
+    centered script-space id mismatches + safely falls back (task_f76b39b3).
 
 Run the Tier-2 tests with the cadquery venv python:
     C:/Users/jrrou/wtcam-sidecar-venv/Scripts/python.exe -m pytest \
@@ -400,3 +403,75 @@ def test_subprocess_unknown_solid_kind_envelope() -> None:
     assert proc.returncode == 1
     assert parsed["ok"] is False
     assert parsed["error"] == "unknown_solid_kind"
+
+
+@requires_cadquery
+def test_picked_id_from_build_part_pick_tessellation_round_trips() -> None:
+    """task_f76b39b3 (cross-path id space): a picked id taken from build_part's
+    OWN ``pickTessellation`` — the no-code body's edges, in the pre-placement
+    space its ops resolve against — round-trips at re-build: it fillets ONLY that
+    edge with NO axis-bucket fallback. This is the REAL renderer pick path,
+    unlike ``_picked_vertical_edge_id`` which hand-builds the id directly in
+    build_part's space. The base payload carries a non-identity datum-XY
+    placement, so this ALSO proves the round-trip is placement-INDEPENDENT (ids
+    are hashed pre-placement; op resolution is pre-placement; display is post)."""
+    base = bp.build_part(_payload(), tempfile.mkdtemp(), "kernel-part")
+    tess = base["pickTessellation"]
+    assert len(tess["edgeMap"]) == 12  # a rectangle->extrude box has 12 edges
+    assert len(tess["faceMap"]) == 6
+    assert base["pickPlacement"]["v"] == [0.0, 0.0, -1.0]  # datum-XY basis emitted
+    vertical = [
+        eid for eid, e in tess["edgeMap"].items() if abs(e["length"] - 8.0) < 1e-3
+    ]
+    assert len(vertical) == 4  # four vertical (extrude-direction) edges
+    picked = vertical[0]
+
+    res_picked = bp.build_part(
+        _payload([{"kind": "fillet_select", "radiusMm": 2.0, "pickedEdgeIds": [picked]}]),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    res_bucket = bp.build_part(
+        _payload([{"kind": "fillet_select", "radiusMm": 2.0, "edgeDirection": "+Z"}]),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert res_picked.get("warnings") is None  # OWN id resolved -> NO fallback
+    picked_removed = _BASE_VOL - _vol_of_step(res_picked["stepPath"])
+    bucket_removed = _BASE_VOL - _vol_of_step(res_bucket["stepPath"])
+    assert picked_removed > 0.0
+    assert abs(bucket_removed - 4.0 * picked_removed) < 1e-2  # one edge vs four
+
+
+@requires_cadquery
+def test_centered_script_space_id_mismatches_build_part_and_falls_back() -> None:
+    """Companion negative: an id hashed from a DIFFERENT space — a centered
+    ``box`` (z=[-4,4], like the script-path canonical body) — does NOT resolve
+    against build_part's extrude body (z=[0,8]); it falls back to the axis bucket
+    WITH a warning (never a wrong cut). This pins WHY build_part must emit its own
+    pickTessellation: the prior cross-path mismatch silently defeated picks."""
+    import cadquery as cq
+
+    from engines.cad.cadquery_script import tessellate_body_with_face_ids
+
+    centered = cq.Workplane("XY").box(20, 12, 8)  # centered: z=[-4, 4]
+    ctess = tessellate_body_with_face_ids(centered)
+    cvert = [
+        eid for eid, e in ctess["edgeMap"].items() if abs(e["length"] - 8.0) < 1e-3
+    ]
+    res = bp.build_part(
+        _payload([{
+            "kind": "fillet_select", "radiusMm": 2.0,
+            "edgeDirection": "+Z", "pickedEdgeIds": [cvert[0]],
+        }]),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    bucket = bp.build_part(
+        _payload([{"kind": "fillet_select", "radiusMm": 2.0, "edgeDirection": "+Z"}]),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    warns = res.get("warnings") or []
+    assert any("did not resolve" in w for w in warns)  # mismatch -> fallback warning
+    assert abs(_vol_of_step(res["stepPath"]) - _vol_of_step(bucket["stepPath"])) < 1e-4
