@@ -65,6 +65,15 @@ import { LagunaNestingPanel } from './LagunaNestingPanel'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
 import { ProbeCyclePanel } from './ProbeCyclePanel'
 import { ProfileStack } from './ProfileStack'
+import { FdmProcessPanel } from './FdmProcessPanel'
+import { FdmDeviceControls } from './FdmDeviceControls'
+import {
+  buildFdmSliceOverrides,
+  parseFdmProcessOverrides,
+  serializeFdmProcessOverrides,
+  type FdmProcessOverrides
+} from '../../shared/fdm-process-overrides'
+import type { K2PlusQualityPresetId } from '../../shared/k2-plus-slice-presets'
 import type { Placement } from './rotary-placement'
 
 
@@ -621,17 +630,17 @@ type Props = {
   /** After importing a mesh into the project from Manufacture, refresh project sidecars (e.g. `project.json`). */
   onAfterMeshImport?: () => void | Promise<void>
   /**
-   * Wave 3a (Mill-4 ribbon) � host-requested workflow stage. When set to a
+   * Wave 3a (Mill-4 ribbon) � host-requested workflow stage. When set to a
    * stage valid for the active env, the workspace switches to it and then
    * fires `onRequestedStageHandled` so the host can clear the request. Lets
    * the CAM ribbon commands (openSetup / openProbing / openSimulate / openSend)
-   * navigate the workflow-stage strip the workspace owns internally. Optional �
+   * navigate the workflow-stage strip the workspace owns internally. Optional �
    * absent keeps the workspace fully self-driven (existing behavior).
    */
   requestedStage?: WorkflowStage | null
   onRequestedStageHandled?: () => void
   /**
-   * Wave 3a (Mill-4 ribbon) � host-requested new-operation kind (a runtime
+   * Wave 3a (Mill-4 ribbon) � host-requested new-operation kind (a runtime
    * `cnc_*` op kind). When set, the workspace seeds a new operation of that
    * kind on the active plate and fires `onRequestedNewOpKindHandled`. Drives
    * the ribbon's `newOperation(kind)` action. Optional.
@@ -731,6 +740,19 @@ export function ManufactureWorkspace({
   )
 
   const fab = window.fab
+
+  // Wave-3b (K2 FDM) — editable PROCESS overrides for the next slice.
+  // Hydrated from AppSettings.k2ProcessOverridesJson (persisted) and edited
+  // via the FdmProcessPanel in the Device stage. The pure mapping +
+  // input-side temperature clamp live in shared/fdm-process-overrides.ts;
+  // this state is just the form model. An effect below resyncs it whenever
+  // the persisted settings string changes (e.g. on project load).
+  const [processOverrides, setProcessOverrides] = useState<FdmProcessOverrides>(() =>
+    parseFdmProcessOverrides(settings?.k2ProcessOverridesJson)
+  )
+  // Per-plate slice status for the PlateTabs status pills + the device
+  // stage's live controls. Session-only; keyed by plate id.
+  const [plateSliceStatus, setPlateSliceStatus] = useState<Record<string, 'idle' | 'slicing' | 'done' | 'error'>>({})
 
   /**
    * Gap #7 v1 — "effective" manufacture file projected onto the active plate.
@@ -929,20 +951,156 @@ export function ManufactureWorkspace({
     }
     const stlPath = `${projectDir}/${op.sourceMesh}`
     const out = `${projectDir}/output/slice.gcode`
+    // Wave-3b: thread the editable PROCESS overrides into the slice. The
+    // pure builder clamps temperatures to the K2 ceiling on the way out
+    // (the main-process planOrcaOverrides clamps again, and the pre-upload
+    // validateGcodeFileTemps gate is the final backstop) and never emits
+    // G-code itself. `overrides: null` ⇒ field omitted ⇒ byte-identical
+    // to a no-override slice.
+    const { overrides, warnings: overrideWarnings } = buildFdmSliceOverrides(processOverrides)
+    for (const w of overrideWarnings) onStatus?.(w)
     const r = await fab.sliceOrca({
       stlPath,
       outPath: out,
       machineId: activeMachineId,
       qualityPresetId: settings?.k2QualityPresetId,
-      filamentId: settings?.activeFilamentId
+      filamentId: settings?.activeFilamentId,
+      ...(overrides ? { overrides } : {})
     })
     if (r.ok) {
       setLastSliceGcodePath(out)
-      onStatus?.(`Sliced via OrcaSlicer → ${out}`)
+      // Surface any per-slice override clamp warnings (e.g. a requested
+      // temperature above the K2 ceiling was reduced) so a clamp is never
+      // silent — the operator sees exactly what was capped before sending.
+      const warn = r.warnings && r.warnings.length > 0 ? ` (${r.warnings.join('; ')})` : ''
+      onStatus?.(`Sliced via OrcaSlicer → ${out}${warn}`)
     } else {
       onStatus?.(`Slice failed (${r.error})${r.hint ? `: ${r.hint}` : ''}`)
     }
   }
+
+  // Wave-3b — resync the editable PROCESS overrides when the persisted
+  // settings string changes (project load / external edit). Keeps the
+  // form model in step with disk without clobbering in-flight edits on
+  // unrelated re-renders (the dependency is the serialized string only).
+  useEffect(() => {
+    setProcessOverrides(parseFdmProcessOverrides(settings?.k2ProcessOverridesJson))
+  }, [settings?.k2ProcessOverridesJson])
+
+  // Wave-3b — persist an edit from the FdmProcessPanel. Mirrors into local
+  // state immediately (so the panel is responsive) AND serializes to
+  // AppSettings.k2ProcessOverridesJson via the parent. A cleared form
+  // serializes to undefined so the setting is removed rather than stored
+  // as an empty object.
+  const handleChangeProcessOverrides = useCallback(
+    (next: FdmProcessOverrides): void => {
+      setProcessOverrides(next)
+      const json = serializeFdmProcessOverrides(next)
+      onSaveSettingsField({ k2ProcessOverridesJson: json ?? undefined })
+    },
+    [onSaveSettingsField]
+  )
+
+  // Wave-3b — persist a new K2 quality-preset baseline from the process
+  // panel (same field the ProfileStack / Slice panel dropdowns write).
+  const handleChangeQualityPreset = useCallback(
+    (id: K2PlusQualityPresetId): void => {
+      onSaveSettingsField({ k2QualityPresetId: id })
+    },
+    [onSaveSettingsField]
+  )
+
+  // Wave-3b — slice a specific plate by id (PlateTabs split-button primary).
+  // Resolves the first FDM-sliceable op on that plate (an op with a source
+  // mesh; fdm_slice preferred) and slices its source mesh DIRECTLY via the
+  // proven `slice:orca` path (same override clamp + Send-to-K2 recording as
+  // runFdmSliceFromOp). It does NOT route through runFdmSliceFromOp because
+  // that reads the active-plate projection, which lags a just-issued plate
+  // switch by one render. Defensive: non-FDM machine, no project/machine, or
+  // no sliceable op ⇒ status + return before any IPC. No G-code emitted here.
+  const slicePlateById = useCallback(
+    async (plateId: string): Promise<void> => {
+      const machineForSlice = machines.find((m) => m.id === activeMachineId)
+      if (machineForSlice && machineForSlice.kind !== 'fdm') {
+        onStatus?.('Slice is for the FDM printer (K2 Plus). Use Generate toolpath for CNC machines.')
+        return
+      }
+      const plate = getPlates(mfg).find((pl) => pl.id === plateId)
+      if (!plate) {
+        onStatus?.('Plate not found.')
+        return
+      }
+      const sliceOps = plate.operations
+        .map((op, idx) => ({ op, idx }))
+        .filter(({ op }) => op.kind === 'fdm_slice' && (op.sourceMesh?.trim().length ?? 0) > 0)
+      const target =
+        sliceOps[0] ??
+        plate.operations
+          .map((op, idx) => ({ op, idx }))
+          .find(({ op }) => (op.sourceMesh?.trim().length ?? 0) > 0)
+      if (!target) {
+        onStatus?.('No FDM slice operation with a source mesh on this plate. Add one in the job tree.')
+        return
+      }
+      if (!projectDir) {
+        onStatus?.('Open a project before slicing.')
+        return
+      }
+      if (!activeMachineId) {
+        onStatus?.('Select an FDM machine before slicing.')
+        return
+      }
+      // Reflect the slice on the plate strip + reveal the plate so the
+      // operator sees which plate is slicing. Slicing itself reads the
+      // resolved op's source mesh DIRECTLY (below) rather than via the
+      // active-plate projection, so it is correct even before the
+      // setActivePlateId state settles on the next render.
+      if (activePlateId !== plateId) handleSelectPlate(plateId)
+      setPlateSliceStatus((s) => ({ ...s, [plateId]: 'slicing' }))
+      // Wave-3b: same override clamp + warning surfacing as runFdmSliceFromOp.
+      const { overrides, warnings: overrideWarnings } = buildFdmSliceOverrides(processOverrides)
+      for (const w of overrideWarnings) onStatus?.(w)
+      const stlPath = `${projectDir}/${target.op.sourceMesh}`
+      const out = `${projectDir}/output/slice.gcode`
+      try {
+        const r = await fab.sliceOrca({
+          stlPath,
+          outPath: out,
+          machineId: activeMachineId,
+          qualityPresetId: settings?.k2QualityPresetId,
+          filamentId: settings?.activeFilamentId,
+          ...(overrides ? { overrides } : {})
+        })
+        if (r.ok) {
+          setLastSliceGcodePath(out)
+          const warn = r.warnings && r.warnings.length > 0 ? ` (${r.warnings.join('; ')})` : ''
+          onStatus?.(`Sliced ${plate.label} via OrcaSlicer → ${out}${warn}`)
+          setPlateSliceStatus((s) => ({ ...s, [plateId]: 'done' }))
+        } else {
+          onStatus?.(`Slice failed (${r.error})${r.hint ? `: ${r.hint}` : ''}`)
+          setPlateSliceStatus((s) => ({ ...s, [plateId]: 'error' }))
+        }
+      } catch (e) {
+        onStatus?.(`Slice failed: ${e instanceof Error ? e.message : String(e)}`)
+        setPlateSliceStatus((s) => ({ ...s, [plateId]: 'error' }))
+      }
+    },
+    // handleSelectPlate is a stable component fn; mfg + activePlateId +
+    // machines + activeMachineId + projectDir + settings + processOverrides
+    // are the live inputs the slice reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mfg, activePlateId, machines, activeMachineId, projectDir, settings, processOverrides]
+  )
+
+  // Wave-3b — slice every plate sequentially (PlateTabs dropdown caret).
+  const sliceAllPlatesSequential = useCallback(
+    async (): Promise<void> => {
+      for (const plate of getPlates(mfg)) {
+        await slicePlateById(plate.id)
+      }
+    },
+    [mfg, slicePlateById]
+  )
 
   // ── Setup mutations ───────────────────────────────────────────────────────────
 
@@ -995,21 +1153,21 @@ export function ManufactureWorkspace({
     updateSetup(si, { axisMode: mode })
   }
 
-  // Wave 3a � persist the 4-axis orient-gizmo placement on the setup. The
+  // Wave 3a � persist the 4-axis orient-gizmo placement on the setup. The
   // gizmo emits a viewer-space Placement; run-cam-for-op sends it to the
   // 4-axis engine in place of the historical hard-coded identity transform.
   function updateSetupRotaryPlacement(si: number, placement: Placement): void {
     updateSetup(si, { rotaryPlacement: placement })
   }
 
-  // Wave 3a � replace the active plate's entire setups array (Multi-Setup
+  // Wave 3a � replace the active plate's entire setups array (Multi-Setup
   // Wizard auto-assign WCS). Routes through the plate-state helper so the
   // write lands on the active plate, mirroring the other setup mutations.
   function replaceSetups(next: ManufactureSetup[]): void {
     setMfg((m) => updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: next })))
   }
 
-  // Wave 3a � append a single setup (Multi-Setup Wizard flip suggestion).
+  // Wave 3a � append a single setup (Multi-Setup Wizard flip suggestion).
   function appendSetup(setup: ManufactureSetup): void {
     setMfg((m) => updateActivePlate(m, activePlateId, (p) => ({ ...p, setups: [...p.setups, setup] })))
   }
@@ -1042,7 +1200,7 @@ export function ManufactureWorkspace({
     )
   }
 
-  // Wave 3a (Mill-4 ribbon) � seed a new operation of a specific runtime op
+  // Wave 3a (Mill-4 ribbon) � seed a new operation of a specific runtime op
   // kind (the ribbon's `newOperation(kind)` action passes a `cnc_*` kind via
   // CAM_COMMAND_OP_KIND). Mirrors `addOp` but takes the kind; the kind is
   // validated against the schema's known kinds by the caller (cam-commands).
@@ -1410,7 +1568,7 @@ export function ManufactureWorkspace({
     }
   }, [workflowEnv, workflowStage])
 
-  // Wave 3a (Mill-4 ribbon) � apply a host-requested workflow stage. The CAM
+  // Wave 3a (Mill-4 ribbon) � apply a host-requested workflow stage. The CAM
   // ribbon commands set `requestedStage`; we honor it only when it is valid
   // for the active env (so e.g. a stale 'probing' request from a CNC ribbon
   // can't strand an FDM machine), then fire the consumed callback so the host
@@ -1424,7 +1582,7 @@ export function ManufactureWorkspace({
     onRequestedStageHandled?.()
   }, [requestedStage, workflowEnv, onRequestedStageHandled])
 
-  // Wave 3a (Mill-4 ribbon) � seed a host-requested new operation kind, then
+  // Wave 3a (Mill-4 ribbon) � seed a host-requested new operation kind, then
   // clear the one-shot request. Navigates to the Plan tab so the freshly
   // seeded op is visible in the operation list/editor.
   useEffect(() => {
@@ -1972,13 +2130,30 @@ export function ManufactureWorkspace({
     />
   )
 
-  // FDM 'device' stage body — Send-to-K2 view + ProfileStack.
+  // FDM 'device' stage body — editable Process editor + Supports, the
+  // Send-to-K2 slice/upload surface, the live Pause/Resume/Cancel job
+  // controls, and the ProfileStack. The FdmProcessPanel is only meaningful
+  // for the K2 Plus; for any other FDM machine we still show the slice +
+  // device surfaces but omit the K2-specific process editor.
+  const isK2PlusActive = activeMachine?.id === 'creality-k2-plus'
   const deviceStageBody: ReactNode = (
     <div
       className="workspace-stage-body workspace-stage-body--device"
       data-testid="workflow-stage-body-device"
     >
+      {isK2PlusActive ? (
+        <FdmProcessPanel
+          value={processOverrides}
+          onChangeProcess={handleChangeProcessOverrides}
+          qualityPresetId={settings?.k2QualityPresetId ?? 'standard'}
+          onChangeQualityPreset={handleChangeQualityPreset}
+        />
+      ) : null}
       <SliceManufacturePanel {...auxPanelProps} />
+      <FdmDeviceControls
+        printerUrl={settings?.moonrakerUrl ?? ''}
+        onStatus={onStatus}
+      />
       <ProfileStack
         machineMode="fdm"
         machine={activeMachine ?? null}
@@ -2092,10 +2267,13 @@ export function ManufactureWorkspace({
       <PlateTabs
         plates={platesForStrip}
         activePlateId={activePlateId}
+        plateStatuses={plateSliceStatus}
         onSelectPlate={handleSelectPlate}
         onAddPlate={handleAddPlate}
         onRemovePlate={handleRemovePlate}
         onRenamePlate={handleRenamePlate}
+        onSlicePlate={(plateId) => void slicePlateById(plateId)}
+        onSliceAllPlates={() => void sliceAllPlatesSequential()}
       />
       <ManufactureSubTabStrip tab={panelTab} onChange={onPanelTabChange} />
       <CamProgressBar running={camRunning} onCancel={() => void handleCamCancel()} />

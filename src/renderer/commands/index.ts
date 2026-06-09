@@ -96,3 +96,28 @@ export {
   buildCamCommands,
   registerCamCommands
 } from './cam-commands'
+
+// Manufacture (FDM / K2 Plus slicer) ribbon handlers — host-action contract +
+// register wiring (Wave-3b; mirrors cam-commands). Prepare / Arrange / Supports /
+// Process / Preview / Device + slice + live job controls; FDM-only enablement.
+export {
+  type FdmCommandActions,
+  type FdmCommandKind,
+  FDM_IMPORT_COMMAND_ID,
+  FDM_ARRANGE_COMMAND_ID,
+  FDM_ORIENT_COMMAND_ID,
+  FDM_SUPPORTS_COMMAND_ID,
+  FDM_PROCESS_COMMAND_ID,
+  FDM_PREVIEW_COMMAND_ID,
+  FDM_DEVICE_COMMAND_ID,
+  FDM_SLICE_PLATE_COMMAND_ID,
+  FDM_SLICE_ALL_COMMAND_ID,
+  FDM_JOB_PAUSE_COMMAND_ID,
+  FDM_JOB_RESUME_COMMAND_ID,
+  FDM_JOB_CANCEL_COMMAND_ID,
+  classifyFdmCommand,
+  fdmCommandEnabled,
+  fdmCommandIds,
+  buildFdmCommands,
+  registerFdmCommands
+} from './fdm-commands'

@@ -158,7 +158,7 @@ export type Api = {
     filamentId?: string
     overrides?: Record<string, string | number>
   }) => Promise<
-    | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
+    | { ok: true; outputGcodePath: string; stdout: string; stderr: string; warnings: string[] }
     | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
   >
   /**

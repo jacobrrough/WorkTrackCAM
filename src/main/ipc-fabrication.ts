@@ -319,7 +319,7 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
         overrides?: Record<string, string | number>
       }
     ): Promise<
-      | { ok: true; outputGcodePath: string; stdout: string; stderr: string }
+      | { ok: true; outputGcodePath: string; stdout: string; stderr: string; warnings: string[] }
       | { ok: false; error: string; hint?: string; stdout?: string; stderr?: string }
     > => {
       if (!payload || typeof payload !== 'object') {
@@ -387,7 +387,11 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
           ok: true as const,
           outputGcodePath: result.outputGcodePath,
           stdout: result.stdout,
-          stderr: result.stderr
+          stderr: result.stderr,
+          // Per-slice override clamp warnings (e.g. a requested nozzle temp
+          // above the K2 ceiling was reduced). Surfaced to the operator so a
+          // clamp is never silent. Empty when there were no overrides.
+          warnings: result.warnings
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)

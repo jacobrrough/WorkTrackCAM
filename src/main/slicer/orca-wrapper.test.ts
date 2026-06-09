@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { buildOrcaArgs, resolveOrcaInstall, type OrcaSliceConfig } from './orca-wrapper'
+import {
+  buildOrcaArgs,
+  planOrcaOverrides,
+  resolveOrcaInstall,
+  K2_OVERRIDE_TEMP_CEILINGS,
+  type OrcaSliceConfig
+} from './orca-wrapper'
 
 const baseConfig: OrcaSliceConfig = {
   inputPath: '/jobs/widget.stl',
@@ -93,17 +99,15 @@ describe('buildOrcaArgs', () => {
     expect(args).not.toContain('--set')
   })
 
-  it('overrides field is currently ignored (no --set flag in Orca 2.3.x CLI)', () => {
-    // The OrcaSliceConfig type retains `overrides` for source-compat with
-    // the IPC handler and existing callers, but OrcaSlicer 2.3.x has no
-    // `--set key=value` flag. Per-job overrides must go through a tmpdir
-    // overlay JSON appended to `--load-settings`; that work is tracked
-    // separately. This test pins the current "ignored" behaviour so the
-    // pure-function `buildOrcaArgs` stays predictable.
-    const args = buildOrcaArgs({
-      ...baseConfig,
-      overrides: { nozzle_temperature: 220, layer_height: 0.2 },
-    })
+  it('overrides never become a --set flag (Orca 2.3.x CLI has none); merge is overlay-based', () => {
+    // Per-slice overrides are applied by APPENDING an overlay JSON to the
+    // load list (see planOrcaOverrides + the overlay-merge suite below), NOT
+    // by a `--set key=value` flag (which OrcaSlicer 2.3.x rejects). Even with
+    // `overlays` supplied, no Slic3r-era `--set` / `key=value` argv appears.
+    const args = buildOrcaArgs(
+      { ...baseConfig, overrides: { nozzle_temperature: 220, layer_height: 0.2 } },
+      { processOverlayPath: '/tmp/p.json', filamentOverlayPath: '/tmp/f.json' }
+    )
     expect(args).not.toContain('--set')
     expect(args).not.toContain('nozzle_temperature=220')
     expect(args).not.toContain('layer_height=0.2')
@@ -113,6 +117,24 @@ describe('buildOrcaArgs', () => {
     expect(args).toContain('--slice')
     expect(args).toContain('--outputdir')
     expect(args[args.length - 1]).toBe('/jobs/widget.stl')
+  })
+
+  it('EMPTY/absent overrides → argv is byte-for-byte identical to the no-override baseline', () => {
+    // The override merge is purely additive: passing no `overlays` arg, an
+    // empty one, or a config whose `overrides` is undefined/empty must all
+    // reproduce the historical argv exactly. This is the load-bearing
+    // regression guard so the e2e + the pure-arg pins above never shift.
+    const baseline = buildOrcaArgs(baseConfig)
+    expect(buildOrcaArgs(baseConfig, {})).toEqual(baseline)
+    expect(buildOrcaArgs({ ...baseConfig, overrides: undefined })).toEqual(baseline)
+    expect(buildOrcaArgs({ ...baseConfig, overrides: {} })).toEqual(baseline)
+    // And an explicitly-empty overlay object (no paths) is still identical.
+    expect(
+      buildOrcaArgs(
+        { ...baseConfig, overrides: { layer_height: 0.3 } },
+        { processOverlayPath: undefined, filamentOverlayPath: undefined }
+      )
+    ).toEqual(baseline)
   })
 
   it('preserves the order: settings → filaments → slice → outputdir → input', () => {
@@ -128,6 +150,48 @@ describe('buildOrcaArgs', () => {
     // Input mesh must be after every flag-and-value pair.
     expect(args.indexOf('/jobs/widget.stl')).toBe(args.length - 1)
   })
+
+  // ── Per-slice overlay merge ────────────────────────────────────────────────
+
+  it('appends a PROCESS overlay LAST in --load-settings (after machine;process)', () => {
+    const args = buildOrcaArgs(baseConfig, { processOverlayPath: '/tmp/ov/process-override.json' })
+    const settings = args[args.indexOf('--load-settings') + 1]
+    // The CLI deep-merges files left→right; the overlay must come last so it
+    // wins over the base process profile.
+    expect(settings).toBe(
+      '/profiles/k2-plus-machine.json;/profiles/standard-process.json;/tmp/ov/process-override.json'
+    )
+    expect(settings.split(';')).toHaveLength(3)
+    // A process overlay must NOT leak into the filament load list.
+    const filaments = args[args.indexOf('--load-filaments') + 1]
+    expect(filaments).toBe('/profiles/pla-filament.json')
+  })
+
+  it('appends a FILAMENT overlay LAST in --load-filaments (after the base filament)', () => {
+    const args = buildOrcaArgs(baseConfig, { filamentOverlayPath: '/tmp/ov/filament-override.json' })
+    const filaments = args[args.indexOf('--load-filaments') + 1]
+    expect(filaments).toBe('/profiles/pla-filament.json;/tmp/ov/filament-override.json')
+    expect(filaments.split(';')).toHaveLength(2)
+    // A filament overlay must NOT leak into --load-settings.
+    const settings = args[args.indexOf('--load-settings') + 1]
+    expect(settings).toBe('/profiles/k2-plus-machine.json;/profiles/standard-process.json')
+  })
+
+  it('appends BOTH overlays to their respective load lists when both are present', () => {
+    const args = buildOrcaArgs(baseConfig, {
+      processOverlayPath: '/tmp/ov/process-override.json',
+      filamentOverlayPath: '/tmp/ov/filament-override.json',
+    })
+    expect(args[args.indexOf('--load-settings') + 1]).toBe(
+      '/profiles/k2-plus-machine.json;/profiles/standard-process.json;/tmp/ov/process-override.json'
+    )
+    expect(args[args.indexOf('--load-filaments') + 1]).toBe(
+      '/profiles/pla-filament.json;/tmp/ov/filament-override.json'
+    )
+    // Flag/positional shape is otherwise unchanged.
+    expect(args[args.length - 1]).toBe('/jobs/widget.stl')
+    expect(args).not.toContain('--set')
+  })
 })
 
 describe('resolveOrcaInstall', () => {
@@ -138,5 +202,134 @@ describe('resolveOrcaInstall', () => {
     expect(() => resolveOrcaInstall('/nonexistent/app/root')).toThrow(
       /OrcaSlicer binary not bundled/,
     )
+  })
+})
+
+describe('planOrcaOverrides', () => {
+  it('empty / undefined / null → no overlays, no warnings (keeps argv byte-for-byte)', () => {
+    for (const empty of [undefined, null, {}] as const) {
+      const plan = planOrcaOverrides(empty)
+      expect(plan.processOverlay).toBeNull()
+      expect(plan.filamentOverlay).toBeNull()
+      expect(plan.warnings).toEqual([])
+    }
+  })
+
+  it('routes process keys into a process overlay (scalar strings) with the Orca discriminators', () => {
+    const plan = planOrcaOverrides({
+      layer_height: 0.3,
+      sparse_infill_density: '40%',
+      wall_loops: 4,
+      outer_wall_speed: 120,
+      inner_wall_speed: 150,
+      enable_support: '1',
+      brim_type: 'outer_only',
+    })
+    expect(plan.filamentOverlay).toBeNull()
+    expect(plan.warnings).toEqual([])
+    expect(plan.processOverlay).toEqual({
+      type: 'process',
+      name: 'WorkTrack3D per-slice overrides',
+      // numbers coerced to strings; strings preserved verbatim.
+      layer_height: '0.3',
+      sparse_infill_density: '40%',
+      wall_loops: '4',
+      outer_wall_speed: '120',
+      inner_wall_speed: '150',
+      enable_support: '1',
+      brim_type: 'outer_only',
+    })
+  })
+
+  it('routes temperature keys into a FILAMENT overlay as single-element string arrays', () => {
+    const plan = planOrcaOverrides({
+      nozzle_temperature: 230,
+      nozzle_temperature_initial_layer: '235',
+      hot_plate_temp: 60,
+      hot_plate_temp_initial_layer: 65,
+    })
+    // No process overlay when only temps were overridden.
+    expect(plan.processOverlay).toBeNull()
+    expect(plan.warnings).toEqual([])
+    expect(plan.filamentOverlay).toEqual({
+      type: 'filament',
+      name: 'WorkTrack3D per-slice filament overrides',
+      nozzle_temperature: ['230'],
+      nozzle_temperature_initial_layer: ['235'],
+      hot_plate_temp: ['60'],
+      hot_plate_temp_initial_layer: ['65'],
+    })
+  })
+
+  it('CLAMPS an over-ceiling NOZZLE override to 350 C and records a warning', () => {
+    const plan = planOrcaOverrides({ nozzle_temperature: 400 })
+    expect(plan.filamentOverlay?.nozzle_temperature).toEqual([
+      String(K2_OVERRIDE_TEMP_CEILINGS.nozzleC),
+    ])
+    expect(plan.filamentOverlay?.nozzle_temperature).toEqual(['350'])
+    expect(plan.warnings).toHaveLength(1)
+    expect(plan.warnings[0]).toMatch(/nozzle_temperature/)
+    expect(plan.warnings[0]).toMatch(/400 C/)
+    expect(plan.warnings[0]).toMatch(/350 C/)
+  })
+
+  it('CLAMPS an over-ceiling BED override to 120 C and records a warning', () => {
+    const plan = planOrcaOverrides({ hot_plate_temp: 150 })
+    expect(plan.filamentOverlay?.hot_plate_temp).toEqual([
+      String(K2_OVERRIDE_TEMP_CEILINGS.bedC),
+    ])
+    expect(plan.filamentOverlay?.hot_plate_temp).toEqual(['120'])
+    expect(plan.warnings).toHaveLength(1)
+    expect(plan.warnings[0]).toMatch(/hot_plate_temp/)
+    expect(plan.warnings[0]).toMatch(/150 C/)
+    expect(plan.warnings[0]).toMatch(/120 C/)
+  })
+
+  it('a temperature AT the ceiling passes untouched with no warning (firmware allows equality)', () => {
+    const plan = planOrcaOverrides({ nozzle_temperature: 350, hot_plate_temp: 120 })
+    expect(plan.filamentOverlay?.nozzle_temperature).toEqual(['350'])
+    expect(plan.filamentOverlay?.hot_plate_temp).toEqual(['120'])
+    expect(plan.warnings).toEqual([])
+  })
+
+  it('a BELOW-ceiling temperature is honoured verbatim (no clamp, no warning)', () => {
+    const plan = planOrcaOverrides({ nozzle_temperature: 215, hot_plate_temp: 60 })
+    expect(plan.filamentOverlay?.nozzle_temperature).toEqual(['215'])
+    expect(plan.filamentOverlay?.hot_plate_temp).toEqual(['60'])
+    expect(plan.warnings).toEqual([])
+  })
+
+  it('drops a non-numeric temperature override with a warning (never reaches the slicer)', () => {
+    const plan = planOrcaOverrides({ nozzle_temperature: 'hot', layer_height: 0.2 })
+    // The bad temp is NOT written into the filament overlay.
+    expect(plan.filamentOverlay).toBeNull()
+    // The valid process key still flows through.
+    expect(plan.processOverlay?.layer_height).toBe('0.2')
+    expect(plan.warnings).toHaveLength(1)
+    expect(plan.warnings[0]).toMatch(/nozzle_temperature/)
+    expect(plan.warnings[0]).toMatch(/not a valid temperature/)
+  })
+
+  it('mixes process + temperature overrides into separate overlays in one plan', () => {
+    const plan = planOrcaOverrides({
+      layer_height: 0.16,
+      wall_loops: 5,
+      nozzle_temperature: 500, // clamped
+    })
+    expect(plan.processOverlay).toMatchObject({
+      type: 'process',
+      layer_height: '0.16',
+      wall_loops: '5',
+    })
+    expect(plan.filamentOverlay?.nozzle_temperature).toEqual(['350'])
+    expect(plan.warnings).toHaveLength(1)
+    expect(plan.warnings[0]).toMatch(/Clamped nozzle_temperature/)
+  })
+
+  it('K2 ceilings match the machine profile (nozzle 350 C / bed 120 C)', () => {
+    // Pins the ceiling constants to CLAUDE.md §1 + creality-k2-plus.json so a
+    // careless bump cannot silently raise the clamp above the K2 firmware cap.
+    expect(K2_OVERRIDE_TEMP_CEILINGS.nozzleC).toBe(350)
+    expect(K2_OVERRIDE_TEMP_CEILINGS.bedC).toBe(120)
   })
 })

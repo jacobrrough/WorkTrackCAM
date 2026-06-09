@@ -134,6 +134,23 @@ export const appSettingsSchema = z.object({
   k2QualityPresetId: z.enum(['standard', 'high_speed']).optional(),
   activeFilamentId: z.string().optional(),
   /**
+   * Creality K2 Plus per-job PROCESS overrides as a compact JSON object
+   * string (see `src/shared/fdm-process-overrides.ts` —
+   * `FdmProcessOverrides`). Edited in the Manufacture → Process stage and
+   * threaded into the `slice:orca` `overrides` map so the operator's layer
+   * height / infill / wall loops / speed / temps actually drive the slice.
+   *
+   * Safety Rule 1 (G-code is sacred): temperature fields are clamped to the
+   * K2 firmware ceiling on BOTH the input side (`buildFdmSliceOverrides`) and
+   * the main-process overlay (`planOrcaOverrides`), and the pre-upload
+   * `validateGcodeFileTemps` gate still rejects any over-ceiling produced
+   * G-code. Stored verbatim as a string (validated as a JSON object in the
+   * superRefine below); absent/blank means "use the quality preset values".
+   * Additive + optional so existing settings.json files load unchanged.
+   * Only meaningful when the active machine is the Creality K2 Plus.
+   */
+  k2ProcessOverridesJson: z.string().optional(),
+  /**
    * Extra CuraEngine `-s` keys as JSON object, e.g. `{"infill_pattern":"grid","material_print_temperature":"210"}`.
    * Merged after the numeric preset; keys match Cura setting ids (underscore names).
    */
@@ -311,6 +328,25 @@ export const appSettingsSchema = z.object({
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['curaEngineExtraSettingsJson'],
+        message: 'must be valid JSON'
+      })
+    }
+  }
+
+  if (data.k2ProcessOverridesJson !== undefined) {
+    try {
+      const parsed = JSON.parse(data.k2ProcessOverridesJson)
+      if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['k2ProcessOverridesJson'],
+          message: 'must be a JSON object string (e.g. {"layerHeightMm":0.2,"infillDensityPct":15})'
+        })
+      }
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['k2ProcessOverridesJson'],
         message: 'must be valid JSON'
       })
     }

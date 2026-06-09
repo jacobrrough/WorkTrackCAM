@@ -3711,3 +3711,38 @@
   color: var(--err);
   background: var(--err-dim);
 }
+
+/* ── Wave-3b — FDM (K2 Plus) Process editor + live device controls ───────── */
+.fdm-process-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+}
+.fdm-process-supports {
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  padding: 0.5rem 0.75rem;
+}
+.fdm-process-supports legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+.fdm-supports-enable {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+.fdm-device-controls-row {
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+/* Destructive accent for the Cancel job button (no global .danger rule). */
+.fdm-device-cancel:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
+}
+.fdm-device-cancel:not(:disabled):hover {
+  background: var(--err-dim);
+}

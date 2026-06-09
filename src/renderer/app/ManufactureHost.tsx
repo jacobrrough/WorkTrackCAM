@@ -49,7 +49,12 @@ import { runCamForOp } from '../manufacture/run-cam-for-op'
 import { runSliceForOp } from '../manufacture/run-slice-for-op'
 import { getPlates } from '../manufacture/plate-state'
 import type { ManufactureFile, ManufactureOperation } from '../../shared/manufacture-schema'
-import { registerCamCommands, type CamCommandActions } from '../commands'
+import {
+  registerCamCommands,
+  registerFdmCommands,
+  type CamCommandActions,
+  type FdmCommandActions
+} from '../commands'
 
 /** Default Python interpreter when `settings.pythonPath` is unset. */
 const DEFAULT_PYTHON_PATH = 'python'
@@ -338,6 +343,74 @@ export function ManufactureHost(): ReactElement {
   // Register on the shared registry; dispose on unmount so a host remount never
   // double-registers (the effect returns `registerCamCommands`'s disposer).
   useEffect(() => registerCamCommands(camActions), [camActions])
+
+  // ── FDM (K2 Plus) ribbon go-live (Wave 3b) ────────────────────────────────
+  // Register the FDM slicer-ribbon command handlers on the shared registry
+  // (mirrors the CAM wiring above). The action bag is the seam between a
+  // catalog `command.id` and real shell behavior:
+  //   - openProcess / openSupports / openPreview / openDevice navigate the
+  //     workspace's FDM workflow-stage strip via the one-shot `requestedStage`
+  //     prop (the Process editor + Supports toggle live in the Device stage).
+  //   - slicePlate / sliceAll defer to the host's proven `handleRunSlice`
+  //     OrcaSlicer path (behind which the per-slice temperature clamp +
+  //     pre-upload `validateGcodeFileTemps` gate still run). They emit no
+  //     G-code here.
+  //   - jobPause / jobResume / jobCancel call the existing Moonraker job IPC
+  //     on the configured printer URL. No temperature targets move.
+  //   - importModel / arrange / autoOrient surface an honest advisory: the
+  //     mesh-binding import + plate arrange/auto-orient are workspace-internal
+  //     (or not yet built), so the ribbon entry points greet the operator with
+  //     the right place to act rather than pretending. Enablement gating (FDM
+  //     machine + Manufacture route) lives in `fdm-commands.ts`.
+  const handleFdmJobControl = useCallback(
+    (verb: 'pause' | 'resume' | 'cancel'): void => {
+      const url = settings?.moonrakerUrl?.trim() ?? ''
+      if (url.length === 0) {
+        pushToast('warn', 'Add a Moonraker URL in Settings to control the running print.')
+        return
+      }
+      void (async () => {
+        try {
+          const call =
+            verb === 'pause'
+              ? fab().moonrakerPause(url)
+              : verb === 'resume'
+                ? fab().moonrakerResume(url)
+                : fab().moonrakerCancel(url)
+          const r = await call
+          if (r.ok) pushToast('ok', `K2 Plus: ${verb} sent.`)
+          else pushToast('err', `K2 Plus ${verb} failed`, r.error)
+        } catch (e) {
+          pushToast('err', `K2 Plus ${verb} failed`, e instanceof Error ? e.message : String(e))
+        }
+      })()
+    },
+    [settings, pushToast]
+  )
+
+  const fdmActions = useMemo<FdmCommandActions>(
+    () => ({
+      importModel: () =>
+        pushToast(
+          'warn',
+          'Import a mesh from the Manufacture → Plan tab (bind an STL to an FDM slice op).'
+        ),
+      arrange: () => pushToast('warn', 'Auto-arrange is coming — place parts on the plate manually for now.'),
+      autoOrient: () => pushToast('warn', 'Auto-orient is coming — set part orientation in Design for now.'),
+      openSupports: () => setRequestedStage('device'),
+      openProcess: () => setRequestedStage('device'),
+      openPreview: () => setRequestedStage('preview'),
+      openDevice: () => setRequestedStage('device'),
+      slicePlate: () => handleRunSlice(),
+      sliceAll: () => handleRunSlice(),
+      jobPause: () => handleFdmJobControl('pause'),
+      jobResume: () => handleFdmJobControl('resume'),
+      jobCancel: () => handleFdmJobControl('cancel')
+    }),
+    [pushToast, handleRunSlice, handleFdmJobControl]
+  )
+
+  useEffect(() => registerFdmCommands(fdmActions), [fdmActions])
 
   return (
     <div className="wt-workspace-host">
