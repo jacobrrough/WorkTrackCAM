@@ -72,6 +72,35 @@ If a shop-specific post enables dust-on (the `dustCollection` flag), it MUST emi
 
 ---
 
+## V-carve toolpath invariants (`cnc_vcarve`, added 2026-06-08)
+
+The `cnc_vcarve` op (`generateVCarve2dLines` / `solveVCarveRidge` in `src/main/cam-local.ts`) is a
+TRUE variable-depth medial-axis carve — distinct from `cnc_chamfer` (a fixed-depth single bevel).
+It posts through the UNCHANGED `vcarve_mach3.hbs` generic XYZ emitter, so every header/footer
+invariant above still holds. The engine owns only the cut body; its safety rules:
+
+- **Depth is HARD-CAPPED to the material.** Carve depth = `clamp(r / tan(vBitAngle/2), 0,
+  min(maxDepthMm, stockThicknessMm))`, applied in `dispatch2dStrategy`. The V-bit must NEVER plunge
+  past the bottom of the stock. A 10 mm carve requested on 3 mm stock emits no Z below −3 (with an
+  operator hint). **Do not remove the `min(..., stockBoxZMm)` clamp** — it is the V-carve analogue
+  of the safe-Z retract: the last guard between a deep letter and the spoilboard/vacuum table.
+- **Caveat — no setup stock → cap is `maxDepthMm` only.** When `job.stockBoxZMm` is undefined there
+  is no material-bottom clamp; only the requested/default `maxDepthMm` bounds depth (a
+  rapid-below-stock advisory is surfaced). Operators relying on the stock-thickness guard MUST set
+  setup stock thickness.
+- **Every disjoint medial branch starts at safe-Z.** Chained output lifts `G0 Z<safeZ>`, rapids XY,
+  then `G1` plunges — NEVER a bare XY rapid at cut depth. The body begins and ends at safe-Z; the
+  deepest seed leads.
+- **Depth profile is deepest at the widest span** (correct V-carve — wide strokes cut deep, runout
+  to zero at the tip).
+- **The clearance raster is bounded** by `VCARVE_MAX_GRID_CELLS` so a full-sheet 1524×3048 job
+  cannot exhaust the main process.
+
+Pinned by `src/main/cam-local-vcarve.test.ts` (real wedge / letter-V / diamond fixtures + the posted
+`vcarve_mach3.hbs` G-code: `%`, G21→G90→G17, M3+G4 P2.0, M5+G4 P3.0, M30-not-M2, capped depth).
+
+---
+
 ## Anti-patterns (forbidden emissions)
 
 - **M2 in the footer** -- That's Carvera's terminator, not Mach3's. Will leave the RichAuto controller in an undefined state. Always emit `M30`.

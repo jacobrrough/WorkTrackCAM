@@ -41,6 +41,21 @@ If any toolpath, slicer profile, or generated G-code references temperatures abo
 
 ---
 
+## Process overrides clamp to the ceiling (`planOrcaOverrides`, added 2026-06-08)
+
+Per-slice process overrides (Wave 3b — `src/shared/fdm-process-overrides.ts` +
+`orca-wrapper.planOrcaOverrides`) let the operator tweak layer height / infill / walls / speed /
+temperatures for a single slice. The safety rule: **temperature override keys are CLAMPED to the
+K2 ceiling** (nozzle ≤ 350 °C, bed ≤ 120 °C) with an operator warning BEFORE they reach OrcaSlicer
+— the override path can only NARROW a temperature toward the ceiling, never raise one above it. It
+does NOT bypass the pre-upload temperature validator: the override changes the slicer *input*, and
+the validator still re-checks the emitted *file* at push time. So two independent guards remain —
+the clamp at override time and the validator at upload time. Neither may be removed. Pinned by
+`src/shared/fdm-process-overrides.test.ts` (a 100–800 °C fuzz proving emitted temps never exceed
+350 / 120).
+
+---
+
 ## Moonraker upload contract (load-bearing invariants)
 
 These five invariants are pinned both in `src/main/moonraker-push.ts` and in the contract test `src/main/k2-moonraker-upload-contract.test.ts`. Doc-vs-code drift on any of them fails CI.
