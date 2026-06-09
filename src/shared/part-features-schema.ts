@@ -473,6 +473,57 @@ const coilCutSchema = z.object({
   ...suppressKernel
 })
 
+// ── Construct datums (reference geometry — marker ops, no solid change) ───────
+//
+// Datums are CONSTRUCTION GEOMETRY: a reference plane / axis / point the
+// operator builds to anchor later sketches & features. They do NOT alter the
+// solid, so — exactly like `sheet_fold` / `sheet_flat_pattern` /
+// `loft_guide_rails` — the kernel records each as a non-geometry MARKER in the
+// build manifest and carries the prior solid forward unchanged (the kernel is
+// sacred; a datum can never crash or modify the body). Persisted in
+// `part/features.json` `kernelOps[]` so they survive save/load and show in the
+// timeline; surfaced to the manifest as `datums[]` by `build_part.py`.
+
+const datumBaseEnum = z.enum(['XY', 'XZ', 'YZ'])
+const datumAxisEnum = z.enum(['X', 'Y', 'Z'])
+
+/**
+ * Offset construction plane parallel to a canonical datum (XY/XZ/YZ) at a signed
+ * `offsetMm` along that datum's normal. `offsetMm` may be 0 (a coincident
+ * reference plane is still a useful anchor). `label` is optional operator text.
+ */
+const datumPlaneSchema = z.object({
+  kind: z.literal('datum_plane'),
+  basePlane: datumBaseEnum,
+  offsetMm: mm,
+  label: z.string().max(80).optional(),
+  ...suppressKernel
+})
+
+/**
+ * Construction reference axis through `(originXMm, originYMm, originZMm)` aligned
+ * with a canonical axis direction (X/Y/Z). For revolve / circular-pattern axes.
+ */
+const datumAxisSchema = z.object({
+  kind: z.literal('datum_axis'),
+  axis: datumAxisEnum,
+  originXMm: mm.default(0),
+  originYMm: mm.default(0),
+  originZMm: mm.default(0),
+  label: z.string().max(80).optional(),
+  ...suppressKernel
+})
+
+/** Construction reference point at an explicit world `(x, y, z)` in mm. */
+const datumPointSchema = z.object({
+  kind: z.literal('datum_point'),
+  xMm: mm,
+  yMm: mm,
+  zMm: mm,
+  label: z.string().max(80).optional(),
+  ...suppressKernel
+})
+
 /**
  * Ordered post-base ops for `engines/occt/build_part.py` (Phase 3). Persisted in `part/features.json`.
  * Order is significant: e.g. apply `fillet_all` / `chamfer_all` before `shell_inward` when you want fillets on outer edges;
@@ -554,7 +605,10 @@ export const kernelPostSolidOpSchema = z.union([
   loftGuideRailsSchema,
   plasticRuleFilletSchema,
   plasticBossSchema,
-  plasticLipGrooveSchema
+  plasticLipGrooveSchema,
+  datumPlaneSchema,
+  datumAxisSchema,
+  datumPointSchema
 ])
 
 export type KernelPostSolidOp = z.infer<typeof kernelPostSolidOpSchema>

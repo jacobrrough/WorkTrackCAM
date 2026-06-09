@@ -1,4 +1,4 @@
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useThree } from '@react-three/fiber'
 import { Bounds, GizmoHelper, GizmoViewcube, Grid, OrbitControls } from '@react-three/drei'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -33,6 +33,10 @@ import {
   triangleToFaceId,
   trianglesForFace
 } from './selection-raycast'
+import {
+  readGeometryPickableEdges,
+  type PickableEdge
+} from './viewport3d-geometry'
 
 export type MeasureMarker = { x: number; y: number; z: number }
 
@@ -53,6 +57,19 @@ type Props = {
   /** When true, **Shift+click** the solid to pick world points (see `onMeasurePoint`). */
   measureMode?: boolean
   onMeasurePoint?: (p: THREE.Vector3) => void
+  /**
+   * CONTROLLED activation of the viewport's built-in point-to-point measure
+   * tool (the one the HUD's "Measure" button toggles). When the parent flips
+   * this to `true` (e.g. the Design ribbon's `runInspect('ut_measure')`), the
+   * tool arms exactly as if the operator clicked the HUD button; flipping it to
+   * `false` disarms + clears the in-flight points. Optional + additive — when
+   * omitted the tool stays operator-driven (every existing mount is unchanged).
+   * The parent should mirror the tool's own state via {@link onMeasureActiveChange}
+   * so the HUD button and the ribbon stay in sync.
+   */
+  measureActive?: boolean
+  /** Fires when the built-in measure tool's active state changes (HUD toggle, ESC cancel, or controlled `measureActive`). */
+  onMeasureActiveChange?: (active: boolean) => void
   /** When true, plain click on the solid reports a world point for sketch **Project** (see `onProjectSketchPoint`). */
   projectSketchMode?: boolean
   onProjectSketchPoint?: (p: THREE.Vector3) => void
@@ -85,16 +102,20 @@ type Props = {
    *   the geometry also carries the parallel `userData.faceOcctIds` stash,
    *   the `FaceSelection.occtHash` carries the STABLE `"f:<hex>"` handle
    *   the Shell dialog emits as `shell_inward.pickedFaceIds`.
-   * - `'edge'` / `'vertex'` — the edge-fillet / chamfer flows. HONEST
-   *   LIMITATION: the mesh is face-tessellated, so the sidecar emits NO
-   *   per-triangle edge / vertex id mapping (only `faceIds` + `faceMap`
-   *   + a flat, position-less `edgeMap`) — the raycast cannot originate a
-   *   single edge id from a triangle hit yet. In these modes the click
-   *   looks for an `edgeIds` / `vertexIds` stash (plus the parallel stable
-   *   `edgeOcctIds` / `vertexOcctIds`) on the geometry and no-ops cleanly
-   *   when absent (today's reality) — it never fabricates an id. The prop
-   *   + plumbing exist so a future per-triangle edge surface lights up
-   *   edge picking (and its `pickedEdgeIds` emit) without a viewport change.
+   * - `'edge'` — the edge-fillet / chamfer flow. FG-5: the mesh is
+   *   face-tessellated (no per-triangle edge mapping), so the edge pick does
+   *   NOT come from the body raycast. Instead `cad.tessellate_with_ids` emits a
+   *   per-edge sampled POLYLINE list (`edges`), the geometry carries it on
+   *   `userData.pickableEdges`, and the viewport renders one raycastable
+   *   `LineSegments` per edge (only in this mode, so they never steal face
+   *   clicks). A click near one resolves to its stable `"e:<hex>"` id via
+   *   `makeEdgeSelection` → forwarded as `pickedEdgeIds`. A body click in this
+   *   mode still routes through `resolveSelectionFromPick`, which correctly
+   *   no-ops (no per-triangle edge stash) so clicking the surface selects
+   *   nothing.
+   * - `'vertex'` — reserved. HONEST LIMITATION: no kernel vertex-id mapping
+   *   exists yet, so a body click looks for a `vertexIds` stash and no-ops
+   *   cleanly when absent — it never fabricates an id.
    */
   selectionMode?: SelectionKind
   /**
@@ -124,6 +145,14 @@ type Props = {
    * tessellation), the overlay silently no-ops.
    */
   highlightedFaceId?: number | null
+  /**
+   * FG-5 · Currently-highlighted edge id (the `EdgeSelection.faceId`, i.e. the
+   * polyline ordinal). When set AND the geometry carries the
+   * `userData.pickableEdges` stash, the matching edge line renders in the bright
+   * selection color so the operator gets clear "this edge is picked" feedback.
+   * Silently no-ops when absent (legacy tessellation / no edges).
+   */
+  highlightedEdgeId?: number | null
 }
 
 const HOME_POS: [number, number, number] = [120, 90, 120]
@@ -348,6 +377,115 @@ export function buildFaceHighlightSegments(
   return out
 }
 
+/**
+ * FG-5 · One selectable edge line. Renders a `THREE.LineSegments` from the
+ * polyline's pre-built segment-endpoint buffer and reports an edge pick on
+ * click. The line carries its own clickable mesh so Three.js raycasts it
+ * directly (no per-triangle edge mapping needed — the mesh is face-tessellated).
+ *
+ * `onPick` fires only in edge `selectionMode` (the parent gates it). The line's
+ * material brightens when `highlighted` so the active pick is unmistakable. A
+ * geometry is built per edge and disposed on unmount / when the positions change.
+ */
+const PickableEdgeLine = memo(function PickableEdgeLine({
+  edge,
+  highlighted,
+  onPick,
+  clipPlane
+}: {
+  edge: PickableEdge
+  highlighted: boolean
+  onPick: (edge: PickableEdge) => void
+  clipPlane?: THREE.Plane | null
+}) {
+  const clippingPlanes = clipPlane ? [clipPlane] : undefined
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(edge.positions, 3))
+    return g
+  }, [edge.positions])
+  const prevRef = useRef<THREE.BufferGeometry | null>(null)
+  useEffect(() => {
+    if (prevRef.current && prevRef.current !== geom) prevRef.current.dispose()
+    prevRef.current = geom
+    return () => {
+      geom.dispose()
+    }
+  }, [geom])
+
+  return (
+    <lineSegments
+      geometry={geom}
+      position={[0, 0, 0]}
+      renderOrder={highlighted ? 4 : 3}
+      onClick={(e) => {
+        e.stopPropagation()
+        onPick(edge)
+      }}
+    >
+      <lineBasicMaterial
+        color={highlighted ? '#fde047' : '#67e8f9'}
+        transparent
+        opacity={highlighted ? 0.98 : 0.6}
+        depthTest={!highlighted}
+        clippingPlanes={clippingPlanes}
+      />
+    </lineSegments>
+  )
+})
+
+/**
+ * FG-5 · The full set of pickable edges for the active solid. Renders nothing
+ * unless edge `selectionMode` is active (face mode keeps the plain decorative
+ * `EdgesGeometry` overlay only — these selectable lines would otherwise steal
+ * clicks meant for faces). Reads the polylines off the geometry's
+ * `userData.pickableEdges` stash; silently renders nothing when absent.
+ */
+const PickableEdges = memo(function PickableEdges({
+  geometry,
+  active,
+  highlightedEdgeId,
+  onPickEdge,
+  clipPlane
+}: {
+  geometry: THREE.BufferGeometry
+  active: boolean
+  highlightedEdgeId?: number | null
+  onPickEdge: (edge: PickableEdge) => void
+  clipPlane?: THREE.Plane | null
+}) {
+  const edges = useMemo(() => readGeometryPickableEdges(geometry), [geometry])
+  if (!active || !edges) return null
+  return (
+    <group data-testid="viewport-3d-pickable-edges">
+      {edges.map((edge) => (
+        <PickableEdgeLine
+          key={edge.occtId}
+          edge={edge}
+          highlighted={highlightedEdgeId === edge.edgeId}
+          onPick={onPickEdge}
+          clipPlane={clipPlane}
+        />
+      ))}
+    </group>
+  )
+})
+
+/**
+ * FG-5 · Reactively set the raycaster's Line-pick threshold (world mm) from
+ * inside the Canvas. The default Three.js Line threshold is 1 world unit, which
+ * is too tight to grab a thin edge on a small part and too loose on a huge one —
+ * so we scale it to the model. A zero-render component (only touches the
+ * raycaster object) mounted alongside the scene.
+ */
+function LineRaycastThreshold({ thresholdMm }: { thresholdMm: number }): null {
+  const raycaster = useThree((s) => s.raycaster)
+  useEffect(() => {
+    raycaster.params.Line = { ...(raycaster.params.Line ?? {}), threshold: thresholdMm }
+  }, [raycaster, thresholdMm])
+  return null
+}
+
 /** Geometry is already placed in world space (see `sketchPreviewPlacementMatrix`). */
 const Solid = memo(function Solid({
   geometry,
@@ -362,6 +500,7 @@ const Solid = memo(function Solid({
   onSelect,
   selectionMode,
   highlightedFaceId,
+  highlightedEdgeId,
   clipPlane
 }: {
   geometry: THREE.BufferGeometry
@@ -376,6 +515,7 @@ const Solid = memo(function Solid({
   onSelect?: (selection: Selection) => void
   selectionMode?: SelectionKind
   highlightedFaceId?: number | null
+  highlightedEdgeId?: number | null
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -425,6 +565,23 @@ const Solid = memo(function Solid({
       highlightGeom?.dispose()
     }
   }, [highlightGeom])
+
+  /**
+   * FG-5 · An edge line was clicked. Build an `EdgeSelection` carrying the
+   * polyline ordinal as `faceId` and the stable `"e:<hex>"` id as `occtHash`
+   * (the value the Fillet / Chamfer dialogs forward as `pickedEdgeIds`). Only
+   * meaningful in edge `selectionMode`, which is also the only mode in which the
+   * `PickableEdges` lines render at all.
+   */
+  const handleEdgePick = useCallback(
+    (edge: PickableEdge): void => {
+      if (!onSelect) return
+      onSelect(makeEdgeSelection(edge.edgeId, edge.occtId))
+    },
+    [onSelect],
+  )
+
+  const edgePickActive = selectionMode === 'edge' && !!onSelect
 
   return (
     <group>
@@ -524,6 +681,19 @@ const Solid = memo(function Solid({
           />
         </lineSegments>
       ) : null}
+      {/*
+        FG-5 — pickable edge lines (edge-mode fillet/chamfer). Renders one
+        selectable line per topology edge ONLY in edge selectionMode, so the
+        lines never steal clicks meant for faces. Reads the polylines off the
+        geometry's `userData.pickableEdges` stash; no-ops cleanly when absent.
+      */}
+      <PickableEdges
+        geometry={geometry}
+        active={edgePickActive}
+        highlightedEdgeId={highlightedEdgeId}
+        onPickEdge={handleEdgePick}
+        clipPlane={clipPlane}
+      />
     </group>
   )
 })
@@ -815,6 +985,8 @@ export function Viewport3D({
   geometry,
   measureMode,
   onMeasurePoint,
+  measureActive,
+  onMeasureActiveChange,
   projectSketchMode,
   onProjectSketchPoint,
   facePickMode,
@@ -833,7 +1005,8 @@ export function Viewport3D({
   onSnapToBed,
   onSelect,
   selectionMode = 'face',
-  highlightedFaceId = null
+  highlightedFaceId = null,
+  highlightedEdgeId = null
 }: Props) {
   const disposed = useRef<THREE.BufferGeometry | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
@@ -844,6 +1017,25 @@ export function Viewport3D({
 
   /* Built-in measurement tool (independent from parent measureMode/measureMarkers). */
   const measureTool = useMeasurementTool(measureUnit)
+
+  /* CONTROLLED measure activation: mirror the parent's `measureActive` prop into
+     the tool. Only acts when the prop is defined AND differs from the tool's
+     current state, so the operator's own HUD toggle is never fought by a stale
+     prop value. */
+  const measureSetActive = measureTool.setActive
+  useEffect(() => {
+    if (measureActive === undefined) return
+    if (measureActive !== measureTool.active) {
+      measureSetActive(measureActive)
+    }
+  }, [measureActive, measureTool.active, measureSetActive])
+
+  /* Report the tool's active state back up (HUD toggle, ESC cancel, or the
+     controlled prop) so the parent can keep the ribbon/chrome in sync. */
+  const notifyMeasureActive = onMeasureActiveChange
+  useEffect(() => {
+    notifyMeasureActive?.(measureTool.active)
+  }, [measureTool.active, notifyMeasureActive])
 
   /**
    * Unified Shift+click handler: feeds the built-in measurement tool AND
@@ -890,6 +1082,15 @@ export function Viewport3D({
   /** Scale the WCS triad to the model: ~18% of bounding sphere radius, clamped 8–50 mm. */
   const triSizeMm = Math.min(50, Math.max(8, measureMarkerRadiusMm * 12))
 
+  /**
+   * FG-5 · Raycaster line-pick threshold (world mm). Three.js raycasts a line
+   * only when the ray passes within this distance, so an operator never has to
+   * click a 1-px-wide edge exactly. Scaled to the model (≈ the measure-marker
+   * radius) and clamped so it stays a forgiving-but-precise grab band on both
+   * tiny Carvera parts and full-sheet Laguna stock.
+   */
+  const linePickThresholdMm = Math.min(4, Math.max(0.6, measureMarkerRadiusMm * 0.9))
+
   const enableRotate = navMode === 'orbit'
   const enablePan = navMode !== 'zoom'
   const enableZoom = true
@@ -902,6 +1103,8 @@ export function Viewport3D({
         gl={{ antialias: true, powerPreference: 'high-performance', alpha: false, localClippingEnabled: clipping }}
       >
         <color attach="background" args={['#0c0612']} />
+        {/* FG-5: scale the Line raycast band to the model so near-edge clicks register. */}
+        <LineRaycastThreshold thresholdMm={linePickThresholdMm} />
         <ambientLight intensity={0.38} />
         <hemisphereLight args={['#c4b5fd', '#1a1024', 0.45]} />
         <directionalLight position={[90, 140, 70]} intensity={1.05} />
@@ -921,6 +1124,7 @@ export function Viewport3D({
               onSelect={onSelect}
               selectionMode={selectionMode}
               highlightedFaceId={highlightedFaceId}
+              highlightedEdgeId={highlightedEdgeId}
               clipPlane={clipPlane}
             />
           </Bounds>

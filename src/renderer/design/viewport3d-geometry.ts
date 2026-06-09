@@ -41,7 +41,26 @@
  */
 
 import * as THREE from 'three'
-import type { CadTessellateWithIdsResult } from '../../shared/sidecar-protocol'
+import type {
+  CadEdgePolyline,
+  CadTessellateWithIdsResult,
+} from '../../shared/sidecar-protocol'
+
+/**
+ * FG-5 · A renderer-ready pickable edge: the stable edge id + handle plus a flat
+ * `Float32Array` of segment endpoints (`[x0,y0,z0, x1,y1,z1, ...]`) ready to feed
+ * a `THREE.LineSegments` geometry. {@link Viewport3D} renders one selectable line
+ * object per entry and raycasts a near-edge click back to `edgeId` / `occtId`.
+ *
+ * `edgeId` is the 0-based ordinal in the source `edges` list (the `EdgeSelection`
+ * numeric `faceId`); `occtId` is the STABLE `"e:<hex>"` handle the Fillet /
+ * Chamfer dialogs forward to the kernel as `pickedEdgeIds`.
+ */
+export type PickableEdge = {
+  readonly edgeId: number
+  readonly occtId: string
+  readonly positions: Float32Array
+}
 
 /**
  * Validate a candidate `faceIds` array against the triangle count.
@@ -92,6 +111,57 @@ export function buildFaceOcctIds(
 }
 
 /**
+ * FG-5 · Turn the sidecar's per-edge polylines into {@link PickableEdge}s the
+ * viewport can render + raycast. Each polyline becomes a flat segment-endpoint
+ * buffer (`p0→p1, p1→p2, …`) so a single `THREE.LineSegments` traces the whole
+ * edge. The `edgeId` is the polyline's ordinal (the `EdgeSelection.faceId`); the
+ * `occtId` is its stable `"e:<hex>"` handle (forwarded to the kernel as
+ * `pickedEdgeIds`).
+ *
+ * Defensive: drops any polyline with fewer than 2 well-formed `[x,y,z]` points so
+ * a malformed entry can't produce a degenerate (un-pickable) line. Returns `[]`
+ * when there are no usable edges. Pure; exported for the focused unit test.
+ */
+export function buildPickableEdges(
+  edges: readonly CadEdgePolyline[] | null | undefined,
+): PickableEdge[] {
+  if (!Array.isArray(edges) || edges.length === 0) return []
+  const out: PickableEdge[] = []
+  for (let edgeId = 0; edgeId < edges.length; edgeId++) {
+    const poly = edges[edgeId]
+    if (!poly || typeof poly.id !== 'string' || poly.id.length === 0) continue
+    const pts = poly.points
+    if (!Array.isArray(pts) || pts.length < 2) continue
+    // Validate every point is a finite [x,y,z] triple before building the buffer.
+    let ok = true
+    for (const p of pts) {
+      if (
+        !Array.isArray(p) ||
+        p.length !== 3 ||
+        !Number.isFinite(p[0]) ||
+        !Number.isFinite(p[1]) ||
+        !Number.isFinite(p[2])
+      ) {
+        ok = false
+        break
+      }
+    }
+    if (!ok) continue
+    // (pts.length - 1) segments × 2 endpoints × 3 floats.
+    const positions = new Float32Array((pts.length - 1) * 6)
+    let cursor = 0
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i]
+      const b = pts[i + 1]
+      positions[cursor++] = a[0]; positions[cursor++] = a[1]; positions[cursor++] = a[2]
+      positions[cursor++] = b[0]; positions[cursor++] = b[1]; positions[cursor++] = b[2]
+    }
+    out.push({ edgeId, occtId: poly.id, positions })
+  }
+  return out
+}
+
+/**
  * Build a `THREE.BufferGeometry` from a selection-grade tessellation, or
  * `null` when the payload carries no usable triangle data.
  *
@@ -100,6 +170,9 @@ export function buildFaceOcctIds(
  *   - has computed vertex normals,
  *   - carries a sanitized `userData.faceIds` array when the sidecar
  *     provided a valid one (enables {@link Viewport3D} face-pick).
+ *   - FG-5: carries a `userData.pickableEdges` array (from
+ *     {@link buildPickableEdges}) when the sidecar emitted edge polylines, so
+ *     the viewport can render + raycast selectable edges for fillet/chamfer.
  */
 export function buildViewportGeometry(
   tess: CadTessellateWithIdsResult | null | undefined,
@@ -132,5 +205,28 @@ export function buildViewportGeometry(
     }
   }
 
+  // FG-5: stash the pickable edge polylines so the viewport can render +
+  // raycast selectable edges (edge-mode fillet/chamfer). Independent of the
+  // faceIds stash above — edges are emitted even when face-pick is degraded.
+  const pickableEdges = buildPickableEdges(tess.edges)
+  if (pickableEdges.length > 0) {
+    geometry.userData = { ...geometry.userData, pickableEdges }
+  }
+
   return geometry
+}
+
+/**
+ * FG-5 · Read the `pickableEdges` stash off a geometry's `userData`, or `null`
+ * when absent (legacy / no-edge tessellation). Defensive — mirrors
+ * {@link readGeometryFaceIds} so the viewport short-circuits cleanly when no
+ * edges are present. Pure; exported for the focused unit test.
+ */
+export function readGeometryPickableEdges(
+  geometry: THREE.BufferGeometry | null | undefined,
+): readonly PickableEdge[] | null {
+  if (!geometry || !geometry.userData) return null
+  const candidate = (geometry.userData as Record<string, unknown>).pickableEdges
+  if (!Array.isArray(candidate) || candidate.length === 0) return null
+  return candidate as readonly PickableEdge[]
 }

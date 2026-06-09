@@ -184,9 +184,12 @@ describe('resolveSelectionFromPick — pick mode branching', () => {
     expect(resolveSelectionFromPick('face', g, 0)).toBeNull()
   })
 
-  it('edge mode returns null today (sidecar emits no edge ids — no fabrication)', () => {
-    // THE honesty boundary: a face-tagged mesh must NOT yield an edge
-    // selection just because the triangle resolves to a face.
+  it('edge mode body-click returns null (the BODY raycast never fabricates an edge id)', () => {
+    // THE honesty boundary: clicking the face-tagged BODY in edge mode must NOT
+    // yield an edge selection just because the triangle resolves to a face. The
+    // real edge pick (FG-5) comes from the dedicated raycastable edge LINES
+    // (`pickableEdges`), NOT from this body-click resolver — so this path stays
+    // a clean no-op when the geometry has no per-triangle `edgeIds` stash.
     const g = makeTwoTriangleGeometry([0, 1])
     expect(resolveSelectionFromPick('edge', g, 0)).toBeNull()
   })

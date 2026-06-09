@@ -72,6 +72,15 @@ import {
 export interface DesignCommandActions {
   /** Enter the contextual sketch stage (no specific tool armed yet). */
   readonly armSketchMode: () => void
+  /**
+   * Start a sketch by picking its plane: arm viewport FACE-pick so the next face
+   * the operator clicks becomes the sketch plane (its origin / normal / xAxis
+   * feed the sketch-plane placement). The Construct `sk_choose_plane` command
+   * routes here. With no pick the host may fall back to the canonical datum
+   * plane. Distinct from {@link armSketchMode}, which jumps straight into sketch
+   * mode without choosing a face plane first.
+   */
+  readonly armSketchPlane: () => void
   /** Leave sketch mode (finish / cancel the active sketch). */
   readonly disarmSketchMode: () => void
   /**
@@ -134,6 +143,7 @@ const FEATURE_DIALOG_RIBBON_GROUPS: ReadonlySet<string> = new Set([
   'solid_create',
   'solid_modify',
   'solid_pattern',
+  'construct',
   'surface',
   'sheet_metal',
   'plastic'
@@ -251,8 +261,9 @@ function runForKind(
 ): (ctx: CommandContext) => void {
   switch (kind) {
     case 'sketch_enter':
-      // sk_choose_plane: arm sketch mode (plane pick happens on the viewport).
-      return () => actions.armSketchMode()
+      // sk_choose_plane: arm viewport face-pick so the next picked face becomes
+      // the sketch plane (the host enters sketch mode once a face is chosen).
+      return () => actions.armSketchPlane()
     case 'sketch_tool':
     case 'sketch_constraint':
     case 'sketch_dimension':

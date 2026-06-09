@@ -33,6 +33,7 @@ function makeActions(): DesignCommandActions & { calls: string[] } {
   return {
     calls,
     armSketchMode: () => calls.push('armSketchMode'),
+    armSketchPlane: () => calls.push('armSketchPlane'),
     disarmSketchMode: () => calls.push('disarmSketchMode'),
     armSketchTool: (toolId) => calls.push(`armSketchTool:${toolId}`),
     openFeatureDialog: (kind) => calls.push(`openFeatureDialog:${kind}`),
@@ -82,11 +83,23 @@ describe('classifyDesignCommand', () => {
 })
 
 describe('designCommandIds — the registered id set', () => {
-  it('includes sk_choose_plane even though it has no catalog row', () => {
+  it('includes sk_choose_plane (the Construct sketch-on-face entry)', () => {
     const ids = new Set(designCommandIds())
     expect(ids.has(SKETCH_PLANE_COMMAND_ID)).toBe(true)
-    // Confirm the premise: it is genuinely absent from the catalog.
-    expect(FUSION_STYLE_COMMAND_CATALOG.some((c) => c.id === SKETCH_PLANE_COMMAND_ID)).toBe(false)
+    // It now ships a catalog row in the Construct group (so it appears as a
+    // ribbon button + in the palette) but STILL classifies as sketch_enter
+    // (checked before the feature-dialog group match), not a feature dialog.
+    const row = FUSION_STYLE_COMMAND_CATALOG.find((c) => c.id === SKETCH_PLANE_COMMAND_ID)
+    expect(row?.ribbon).toBe('construct')
+    expect(classifyDesignCommand(SKETCH_PLANE_COMMAND_ID)).toBe('sketch_enter')
+  })
+
+  it('routes the Construct datum rows (co_offset_plane / axis / point) to feature dialogs', () => {
+    const ids = new Set(designCommandIds())
+    for (const id of ['co_offset_plane', 'co_datum_axis', 'co_datum_point']) {
+      expect(classifyDesignCommand(id)).toBe('feature_dialog')
+      expect(ids.has(id)).toBe(true)
+    }
   })
 
   it('covers every classifiable DESIGN_RIBBON_COMMAND_IDS entry', () => {
@@ -191,7 +204,7 @@ describe('dispatch — handlers call the right action', () => {
     expect(actions.calls).toEqual(['armSketchTool:dim_radial'])
   })
 
-  it('sk_choose_plane arms sketch mode (the create-sketch entry)', () => {
+  it('sk_choose_plane arms face-pick for the sketch plane (the create-sketch entry)', () => {
     const reg = new CommandRegistry()
     const actions = makeActions()
     registerDesignCommands(actions, reg)
@@ -200,7 +213,7 @@ describe('dispatch — handlers call the right action', () => {
     expect(reg.run(SKETCH_PLANE_COMMAND_ID, ctx({ workspace: 'design', sketchMode: false }))).toBe(
       true
     )
-    expect(actions.calls).toEqual(['armSketchMode'])
+    expect(actions.calls).toEqual(['armSketchPlane'])
   })
 
   it('a solid command opens its feature dialog by catalog id', () => {

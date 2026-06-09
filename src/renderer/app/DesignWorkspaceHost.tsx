@@ -104,6 +104,13 @@ export function DesignWorkspaceHost({
   const [sketchActive, setSketchActive] = useState(false)
   const [armedSketchTool, setArmedSketchTool] = useState<string | null>(null)
   const [requestedFeatureDialog, setRequestedFeatureDialog] = useState<FeatureDialogKind | null>(null)
+  // FG-5 Inspect — a one-shot "open measure/section" request the workspace
+  // consumes to TOGGLE the matching viewport overlay, then acks via
+  // `onInspectConsumed` so we clear it.
+  const [requestedInspect, setRequestedInspect] = useState<'ut_measure' | 'ut_section' | null>(null)
+  // Construct sketch-on-face — armed by `sk_choose_plane`; the workspace turns
+  // it into viewport face-pick and clears it once a face is chosen.
+  const [sketchPlanePickArmed, setSketchPlanePickArmed] = useState(false)
 
   // ── FG-3 — the Design-ribbon host actions (the seam design-commands.ts left) ─
   // Stable identities so a single `registerDesignCommands` registration covers
@@ -113,9 +120,16 @@ export function DesignWorkspaceHost({
       armSketchMode: () => {
         setSketchActive(true)
       },
+      armSketchPlane: () => {
+        // Construct `sk_choose_plane`: arm viewport face-pick so the next picked
+        // face becomes the sketch plane. The workspace enters sketch mode once a
+        // face is chosen (via `onSketchPlanePicked` → our `setSketchActive`).
+        setSketchPlanePickArmed(true)
+      },
       disarmSketchMode: () => {
         setSketchActive(false)
         setArmedSketchTool(null)
+        setSketchPlanePickArmed(false)
       },
       armSketchTool: (toolId: string) => {
         // Arming a tool implies entering sketch mode (design-commands.ts
@@ -136,11 +150,13 @@ export function DesignWorkspaceHost({
         onToast('warn', `${catalogId}: no property dialog yet — drive it from the CadQuery code drawer for now.`)
       },
       runInspect: (kind: string) => {
-        // Measure / Section live in the mounted Viewport3D's own HUD; the
-        // workspace exposes no controlled measure/section prop yet. Point the
-        // operator at the live tool rather than pretending to run it.
-        const tool = kind === 'ut_section' ? 'Section' : 'Measure'
-        onToast('ok', `${tool}: use the ${tool} control in the 3D viewport toolbar.`)
+        // FG-5 Inspect — drive the mounted Viewport3D's measure tool / section
+        // clip directly: hand the workspace a one-shot request it TOGGLES (a
+        // second dispatch turns the overlay back off). Only the two Inspect ids
+        // this module registers reach here.
+        if (kind === 'ut_measure' || kind === 'ut_section') {
+          setRequestedInspect(kind)
+        }
       }
     }),
     [onToast]
@@ -207,6 +223,16 @@ export function DesignWorkspaceHost({
       armedSketchTool={armedSketchTool}
       requestedFeatureDialog={requestedFeatureDialog}
       onFeatureDialogConsumed={() => setRequestedFeatureDialog(null)}
+      // FG-5 Inspect — one-shot measure/section request + its ack.
+      requestedInspect={requestedInspect}
+      onInspectConsumed={() => setRequestedInspect(null)}
+      // Construct sketch-on-face — arm face-pick; on a pick enter sketch mode +
+      // disarm so the next plain click goes back to normal selection.
+      sketchPlanePickArmed={sketchPlanePickArmed}
+      onSketchPlanePicked={() => {
+        setSketchActive(true)
+        setSketchPlanePickArmed(false)
+      }}
       onCommandSurface={handleCommandSurface}
       // No-code build→render: the session maintains the kernel-built solid's
       // geometry (rebuilt automatically when the feature timeline changes) and a

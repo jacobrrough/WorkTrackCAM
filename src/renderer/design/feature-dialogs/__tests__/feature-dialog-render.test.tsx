@@ -19,6 +19,9 @@ import { FilletDialog } from '../FilletDialog'
 import { ChamferDialog } from '../ChamferDialog'
 import { ShellDialog } from '../ShellDialog'
 import { HoleDialog } from '../HoleDialog'
+import { DatumPlaneDialog } from '../DatumPlaneDialog'
+import { DatumAxisDialog } from '../DatumAxisDialog'
+import { DatumPointDialog } from '../DatumPointDialog'
 import type { FeatureDialogSelectionInfo } from '../feature-dialog-types'
 import { makeEdgeSelection, makeFaceSelection } from '../../selection-state'
 
@@ -324,6 +327,79 @@ describe('FG-5b — HoleDialog render contract', () => {
       })
     )
     expect(html).toContain('not supported yet')
+  })
+})
+
+describe('Construct datum dialog render contracts', () => {
+  it('DatumPlaneDialog renders base-plane select + offset (mm) + apply, no selection needed', () => {
+    const html = render(
+      createElement(DatumPlaneDialog, {
+        params: { basePlane: 'XY', offsetMm: 0 },
+        selectionInfo: NO_SELECTION,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('data-testid="fd-datum-plane"')
+    expect(html).toContain('data-testid="fd-datum-plane-base"')
+    expect(html).toContain('data-testid="fd-datum-plane-offset"')
+    expect(html).toContain('data-testid="fd-datum-plane-apply"')
+    expect(html).toContain('does not change the model')
+    expectAllButtonsTyped(html)
+  })
+
+  it('DatumPlaneDialog disables apply with an honest hint when disabled (no project)', () => {
+    const html = render(
+      createElement(DatumPlaneDialog, {
+        params: { basePlane: 'XY', offsetMm: 0 },
+        selectionInfo: NO_SELECTION,
+        onApply: noop,
+        disabled: true
+      })
+    )
+    expect(html).toMatch(/data-testid="fd-datum-plane-apply"[^>]*disabled/)
+    expect(html).toContain('Open a project')
+  })
+
+  it('DatumAxisDialog renders direction + X/Y/Z origin + apply', () => {
+    const html = render(
+      createElement(DatumAxisDialog, {
+        params: { axis: 'Z', originXMm: 0, originYMm: 0, originZMm: 0 },
+        selectionInfo: NO_SELECTION,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('data-testid="fd-datum-axis-dir"')
+    expect(html).toContain('data-testid="fd-datum-axis-x"')
+    expect(html).toContain('data-testid="fd-datum-axis-y"')
+    expect(html).toContain('data-testid="fd-datum-axis-z"')
+    expect(html).toContain('data-testid="fd-datum-axis-apply"')
+    expectAllButtonsTyped(html)
+  })
+
+  it('DatumPointDialog renders X/Y/Z + apply', () => {
+    const html = render(
+      createElement(DatumPointDialog, {
+        params: { xMm: 0, yMm: 0, zMm: 0 },
+        selectionInfo: NO_SELECTION,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('data-testid="fd-datum-point-x"')
+    expect(html).toContain('data-testid="fd-datum-point-y"')
+    expect(html).toContain('data-testid="fd-datum-point-z"')
+    expect(html).toContain('data-testid="fd-datum-point-apply"')
+    expectAllButtonsTyped(html)
+  })
+
+  it('datum dialogs leak no inline styles (themed tokens only)', () => {
+    const dialogs: ReactElement[] = [
+      createElement(DatumPlaneDialog, { params: { basePlane: 'XY', offsetMm: 0 }, selectionInfo: NO_SELECTION, onApply: noop }),
+      createElement(DatumAxisDialog, { params: { axis: 'Z' }, selectionInfo: NO_SELECTION, onApply: noop }),
+      createElement(DatumPointDialog, { params: {}, selectionInfo: NO_SELECTION, onApply: noop })
+    ]
+    for (const el of dialogs) {
+      expect(render(el)).not.toMatch(/style="/)
+    }
   })
 })
 

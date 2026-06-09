@@ -7,9 +7,18 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { buildFaceOcctIds, buildViewportGeometry, sanitizeFaceIds } from './viewport3d-geometry'
+import {
+  buildFaceOcctIds,
+  buildPickableEdges,
+  buildViewportGeometry,
+  readGeometryPickableEdges,
+  sanitizeFaceIds,
+} from './viewport3d-geometry'
 import { readGeometryFaceIds, readGeometryFaceOcctIds } from './Viewport3D'
-import type { CadTessellateWithIdsResult } from '../../shared/sidecar-protocol'
+import type {
+  CadEdgePolyline,
+  CadTessellateWithIdsResult,
+} from '../../shared/sidecar-protocol'
 
 /** Build a minimal faceMap whose entries carry a stable `"f:<hex>"` occtId. */
 function faceMapWithOcctIds(
@@ -33,6 +42,7 @@ function oneTriangle(
     bbox: { min: [0, 0, 0], max: [10, 10, 0] },
     faceMap: {},
     edgeMap: {},
+    edges: [],
     ...over,
   }
 }
@@ -167,5 +177,75 @@ describe('buildFaceOcctIds', () => {
   it('returns null when an entry occtId is empty', () => {
     const map = faceMapWithOcctIds({ '0': '' })
     expect(buildFaceOcctIds([0], map)).toBeNull()
+  })
+})
+
+// ── FG-5: pickable edge polylines ──────────────────────────────────────────
+
+/** A straight edge polyline (2 endpoints) with a stable id. */
+function straightEdge(id: string): CadEdgePolyline {
+  return { id, points: [[0, 0, 0], [10, 0, 0]] }
+}
+
+describe('buildPickableEdges', () => {
+  it('returns [] for null / undefined / empty input', () => {
+    expect(buildPickableEdges(null)).toEqual([])
+    expect(buildPickableEdges(undefined)).toEqual([])
+    expect(buildPickableEdges([])).toEqual([])
+  })
+
+  it('builds one segment-endpoint buffer per polyline, carrying ordinal + stable id', () => {
+    const out = buildPickableEdges([straightEdge('e:aaa'), straightEdge('e:bbb')])
+    expect(out).toHaveLength(2)
+    expect(out[0].edgeId).toBe(0)
+    expect(out[0].occtId).toBe('e:aaa')
+    expect(out[1].edgeId).toBe(1)
+    expect(out[1].occtId).toBe('e:bbb')
+    // A 2-point edge → 1 segment → 6 floats (two endpoints × 3).
+    expect(Array.from(out[0].positions)).toEqual([0, 0, 0, 10, 0, 0])
+  })
+
+  it('emits (n-1) segments × 6 floats for a multi-point (curved) polyline', () => {
+    const curved: CadEdgePolyline = {
+      id: 'e:curve',
+      points: [[0, 0, 0], [1, 1, 0], [2, 0, 0]],
+    }
+    const out = buildPickableEdges([curved])
+    // 3 points → 2 segments → 12 floats, tracing p0→p1, p1→p2.
+    expect(out[0].positions.length).toBe(12)
+    expect(Array.from(out[0].positions)).toEqual([0, 0, 0, 1, 1, 0, 1, 1, 0, 2, 0, 0])
+  })
+
+  it('drops polylines with < 2 points, a missing id, or a malformed point', () => {
+    const out = buildPickableEdges([
+      { id: 'e:ok', points: [[0, 0, 0], [1, 0, 0]] },
+      { id: '', points: [[0, 0, 0], [1, 0, 0]] }, // empty id → drop
+      { id: 'e:short', points: [[0, 0, 0]] }, // < 2 points → drop
+      { id: 'e:nan', points: [[0, 0, 0], [Number.NaN, 0, 0]] }, // non-finite → drop
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].occtId).toBe('e:ok')
+  })
+})
+
+describe('readGeometryPickableEdges', () => {
+  it('round-trips the stash that buildViewportGeometry writes', () => {
+    const g = buildViewportGeometry(
+      oneTriangle({ edges: [straightEdge('e:one'), straightEdge('e:two')] }),
+    )
+    const edges = readGeometryPickableEdges(g)
+    expect(edges).not.toBeNull()
+    expect(edges).toHaveLength(2)
+    expect(edges![0].occtId).toBe('e:one')
+  })
+
+  it('returns null when the geometry has no edge polylines (legacy / no edges)', () => {
+    const g = buildViewportGeometry(oneTriangle()) // edges: [] by default
+    expect(readGeometryPickableEdges(g)).toBeNull()
+  })
+
+  it('returns null for a null / undefined geometry', () => {
+    expect(readGeometryPickableEdges(null)).toBeNull()
+    expect(readGeometryPickableEdges(undefined)).toBeNull()
   })
 })

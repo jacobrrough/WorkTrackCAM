@@ -99,4 +99,63 @@ describe('DesignWorkspace — no-code build→render', () => {
     )
     expect(html).not.toContain('data-testid="design-workspace-build-indicator"')
   })
+
+  it('mounts the Inspect (Measure / Section) toggles whenever a model is displayed', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# no-code model',
+        kernelViewportGeometry: makeBoxGeometry()
+      })
+    )
+    expect(html).toContain('data-testid="design-workspace-inspect-tools"')
+    expect(html).toContain('data-testid="design-workspace-inspect-measure"')
+    expect(html).toContain('data-testid="design-workspace-inspect-section"')
+  })
+
+  it('does NOT mount the Inspect toggles when no model is displayed (empty-state)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# typed but not run',
+        kernelViewportGeometry: null
+      })
+    )
+    expect(html).not.toContain('data-testid="design-workspace-inspect-tools"')
+  })
+
+  it('arms the sketch-on-face prompt when sketchPlanePickArmed + a model is shown', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# pick a face to sketch on',
+        kernelViewportGeometry: makeBoxGeometry(),
+        sketchPlanePickArmed: true
+      })
+    )
+    expect(html).toContain('data-testid="design-workspace-sketch-plane-prompt"')
+    expect(html).toContain('Click a face to start a sketch')
+  })
+
+  it('does NOT show the sketch-on-face prompt without a model to pick from', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# armed but nothing to pick',
+        kernelViewportGeometry: null,
+        sketchPlanePickArmed: true
+      })
+    )
+    expect(html).not.toContain('data-testid="design-workspace-sketch-plane-prompt"')
+  })
+
+  it('renders the Construct datum picker buttons when a session sink is threaded', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# session with datum picker',
+        kernelViewportGeometry: makeBoxGeometry(),
+        onAppendKernelOp: () => undefined
+      })
+    )
+    // The Plane / Axis / Point datum picker buttons join the 6 solid features.
+    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_plane"')
+    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_axis"')
+    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_point"')
+  })
 })

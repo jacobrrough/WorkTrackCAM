@@ -63,6 +63,7 @@ import { Viewport3D } from './Viewport3D'
 import { MvpSketchCanvas } from './Sketch2DCanvas'
 import { sketchToolForDesignCommand } from './design-command-map'
 import { buildViewportGeometry } from './viewport3d-geometry'
+import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import { DrawingView } from './DrawingView'
@@ -98,6 +99,7 @@ import {
   setSelection,
   selectionToSurface,
   type Selection,
+  type SelectionKind,
   type SelectionSurface
 } from './selection-state'
 
@@ -391,6 +393,40 @@ export interface DesignWorkspaceProps {
   /** FG-5 — acknowledge that {@link requestedFeatureDialog} was applied (one-shot reset). */
   readonly onFeatureDialogConsumed?: () => void
   /**
+   * FG-5 Inspect — a one-shot request from the ribbon's Inspect commands
+   * (`'ut_measure'` | `'ut_section'`). When this changes to a non-null value the
+   * workspace TOGGLES the matching viewport mode (measure tool / section clip) —
+   * so dispatching Measure twice turns it off, the Fusion behavior — then calls
+   * {@link onInspectConsumed} so the host can clear the one-shot. Optional —
+   * when omitted Inspect is only reachable via the in-viewport HUD toggles, so
+   * every existing pin holds.
+   */
+  readonly requestedInspect?: 'ut_measure' | 'ut_section' | null
+  /** FG-5 Inspect — acknowledge that {@link requestedInspect} was applied (one-shot reset). */
+  readonly onInspectConsumed?: () => void
+  /**
+   * Construct sketch-on-face — when `true`, the workspace arms viewport FACE-pick
+   * so the next face the operator clicks becomes the sketch plane. Driven by the
+   * Construct `sk_choose_plane` command (host `armSketchPlane`). On a pick the
+   * workspace records the face plane, enters sketch mode (via {@link onSketchEnter}),
+   * surfaces the chosen plane to the operator, and calls {@link onSketchPlanePicked}.
+   * Optional + additive — when omitted face-pick-for-sketch is simply unavailable
+   * and every existing mount is unchanged.
+   */
+  readonly sketchPlanePickArmed?: boolean
+  /**
+   * Construct sketch-on-face — fired with the picked face's plane basis (world
+   * origin / outward normal / in-plane xAxis, all mm) once the operator clicks a
+   * face while {@link sketchPlanePickArmed}. The host records it as the active
+   * sketch plane. Optional — when omitted the workspace still enters sketch mode
+   * + shows the plane readout, just without host-side capture.
+   */
+  readonly onSketchPlanePicked?: (plane: {
+    readonly origin: [number, number, number]
+    readonly normal: [number, number, number]
+    readonly xAxis: [number, number, number]
+  }) => void
+  /**
    * FG-1/FG-3 — push the combined command surface (`hasSelection` ∪
    * `selectionKind` ∪ `sketchMode`) up into the Context Engine so the contextual
    * Sketch ribbon tab appears in sketch mode and selection-gated commands
@@ -486,6 +522,10 @@ export function DesignWorkspace({
   armedSketchTool = null,
   requestedFeatureDialog = null,
   onFeatureDialogConsumed,
+  requestedInspect = null,
+  onInspectConsumed,
+  sketchPlanePickArmed = false,
+  onSketchPlanePicked,
   onCommandSurface,
   kernelViewportGeometry = null,
   kernelBuilding = false,
@@ -550,6 +590,52 @@ export function DesignWorkspace({
    *     stale selection IDs become meaningless).
    */
   const [selection, setSelectionState] = useState<Selection | null>(initialSelection)
+
+  /**
+   * FG-5 · Which entity kind a plain viewport click picks: `'face'` (shell /
+   * sketch-on-face) or `'edge'` (fillet / chamfer). Drives the cockpit's
+   * face/edge toggle AND the `Viewport3D.selectionMode` prop. Switching modes
+   * clears any active selection (a picked face is meaningless once the operator
+   * is hunting edges, and vice versa) so the highlight never lies.
+   */
+  const [selectionMode, setSelectionModeState] = useState<SelectionKind>('face')
+  const handleSelectionModeChange = useCallback((next: SelectionKind): void => {
+    setSelectionModeState((prev) => {
+      if (prev !== next) setSelectionState(clearSelection())
+      return next
+    })
+  }, [])
+
+  // ── FG-5 Inspect — measure + section-clip state (drives the mounted viewport) ─
+  /**
+   * Whether the viewport's built-in point-to-point measure tool is armed. Driven
+   * by the ribbon's `runInspect('ut_measure')` (one-shot toggle) AND the cockpit
+   * Inspect toggle below; mirrored back from `Viewport3D.onMeasureActiveChange`
+   * so the viewport's own HUD button stays in sync (ESC inside the viewport
+   * disarms it, which flows back here).
+   */
+  const [measureActive, setMeasureActive] = useState(false)
+  /**
+   * Whether the engineering section clip is on. When on, the workspace passes a
+   * `sectionClipY` (the model's mid-height) to `Viewport3D` so geometry below
+   * that world-Y plane is clipped away — the built-in section HUD the catalog
+   * `ut_section` row promises. Toggled by `runInspect('ut_section')` + the
+   * cockpit toggle.
+   */
+  const [sectionActive, setSectionActive] = useState(false)
+
+  // ── Construct sketch-on-face — the picked face plane (readout + host capture) ─
+  /**
+   * The face plane the operator picked via `sk_choose_plane` (Construct →
+   * Sketch on face). Captured on the viewport face-pick while
+   * `sketchPlanePickArmed`; surfaced as a cockpit readout so the operator sees
+   * which face their sketch is keyed to. `null` until a face is picked.
+   */
+  const [sketchFacePlane, setSketchFacePlane] = useState<{
+    readonly origin: [number, number, number]
+    readonly normal: [number, number, number]
+    readonly xAxis: [number, number, number]
+  } | null>(null)
 
   /**
    * Latest selection-grade tessellation from `cad.tessellate_with_ids`.
@@ -937,6 +1023,30 @@ export function DesignWorkspace({
     onFeatureDialogConsumed?.()
   }, [requestedFeatureDialog, onFeatureDialogConsumed])
 
+  // ── FG-5 Inspect — open a measure/section request from the ribbon ───────────
+  // `requestedInspect` is a one-shot from the host; when it lands, TOGGLE the
+  // matching viewport mode (so a second dispatch turns it off — the Fusion
+  // behavior) and acknowledge so the host can clear the request. Toggling
+  // measure ON also drops section, and vice versa, so the two inspect overlays
+  // never fight each other on the same viewport.
+  useEffect(() => {
+    if (requestedInspect === null) return
+    if (requestedInspect === 'ut_measure') {
+      setMeasureActive((on) => {
+        const next = !on
+        if (next) setSectionActive(false)
+        return next
+      })
+    } else if (requestedInspect === 'ut_section') {
+      setSectionActive((on) => {
+        const next = !on
+        if (next) setMeasureActive(false)
+        return next
+      })
+    }
+    onInspectConsumed?.()
+  }, [requestedInspect, onInspectConsumed])
+
   // ── FG-1/FG-3 — push the combined command surface up to the Context Engine ──
   // selection ∪ sketchMode, in ONE push, so the provider's single `setSurface`
   // cell carries both (a selection-only push would clobber sketchMode and vice
@@ -986,7 +1096,18 @@ export function DesignWorkspace({
       }
       return `Face ${selection.faceId}`
     }
-    if (selection.kind === 'edge') return `Edge ${selection.faceId}`
+    if (selection.kind === 'edge') {
+      // FG-5: the edgeMap is keyed by the STABLE edge id (occtHash on the
+      // selection), NOT by the ordinal — so look up the length via occtHash.
+      const entry =
+        selection.occtHash != null
+          ? selectionTessellation?.edgeMap?.[selection.occtHash]
+          : undefined
+      if (entry?.length && Number.isFinite(entry.length)) {
+        return `Edge ${selection.faceId} · ${entry.length.toFixed(1)} mm`
+      }
+      return `Edge ${selection.faceId}`
+    }
     return `Vertex ${selection.faceId}`
   }, [selection, selectionTessellation])
 
@@ -1021,6 +1142,59 @@ export function DesignWorkspace({
   const scriptGeometryActive = viewportGeometry !== null
   const displayedViewportGeometry: BufferGeometry | null =
     viewportGeometry ?? kernelViewportGeometry
+
+  /**
+   * FG-5 Inspect — the world-Y plane the section clip cuts at when
+   * `sectionActive`. Sits at the displayed model's mid-height (so the cut bites
+   * into the body, not above/below it). `null` when section is off OR there is
+   * no geometry — `Viewport3D` treats a null/non-finite `sectionClipY` as "no
+   * clip", so the viewport renders whole.
+   */
+  const sectionClipY = useMemo<number | null>(() => {
+    if (!sectionActive || displayedViewportGeometry === null) return null
+    const { min, max } = worldYRangeFromExtrudeMeshGeometry(displayedViewportGeometry)
+    return (min + max) / 2
+  }, [sectionActive, displayedViewportGeometry])
+
+  /**
+   * Construct sketch-on-face — `true` while the viewport should accept a face
+   * pick to choose the sketch plane. Gated on ANY displayed geometry (the
+   * face-pick reads the face origin/normal straight off the Three.js click — it
+   * does NOT need the kernel faceIds stash that `onSelect` requires, so the
+   * no-code kernel solid works too) AND not already in sketch mode. When armed,
+   * `Viewport3D.facePickMode` is enabled and a plain face click routes to
+   * {@link handleSketchPlaneFacePick} instead of selection.
+   */
+  const facePickForSketchActive =
+    sketchPlanePickArmed === true && displayedViewportGeometry !== null && !sketchMode
+
+  /**
+   * Construct sketch-on-face — the operator clicked a face while arming the
+   * sketch plane. Capture the face plane basis (origin / normal / xAxis the
+   * viewport derives from the pick), enter sketch mode, surface the plane as a
+   * readout, and hand the plane to the host. The picked basis matches the
+   * `sketchPlane = { kind: 'face', origin, normal, xAxis }` shape `build_part.py`
+   * consumes for face-plane placement, so a future session wire is a drop-in.
+   */
+  const handleSketchPlaneFacePick = useCallback(
+    (pick: {
+      origin: [number, number, number]
+      normal: [number, number, number]
+      xAxis: [number, number, number]
+    }): void => {
+      setSketchFacePlane(pick)
+      onSketchPlanePicked?.(pick)
+      onSketchEnter?.()
+      toast('ok', 'Sketch plane set to the picked face.')
+    },
+    [onSketchPlanePicked, onSketchEnter, toast],
+  )
+
+  // Leaving sketch mode clears the captured face plane so a stale readout never
+  // lingers into the next sketch.
+  useEffect(() => {
+    if (!sketchMode) setSketchFacePlane(null)
+  }, [sketchMode])
 
   // ── FG-5b — per-feature property dialogs ──────────────────────────────────
   /**
@@ -1079,6 +1253,12 @@ export function DesignWorkspace({
           kind: 'hole',
           params: { profileIndex: 0, mode: 'through_all', depthMm: 10, zStartMm: 0 },
         }
+      case 'datum_plane':
+        return { kind: 'datum_plane', params: { basePlane: 'XY', offsetMm: 0 } }
+      case 'datum_axis':
+        return { kind: 'datum_axis', params: { axis: 'Z', originXMm: 0, originYMm: 0, originZMm: 0 } }
+      case 'datum_point':
+        return { kind: 'datum_point', params: { xMm: 0, yMm: 0, zMm: 0 } }
       default: {
         const _never: never = effectiveFeatureDialog
         void _never
@@ -1341,12 +1521,35 @@ export function DesignWorkspace({
           ) : displayedViewportGeometry ? (
             <Viewport3D
               geometry={displayedViewportGeometry}
-              // Face-pick only against the script-path geometry (it carries the
-              // userData.faceIds the picker resolves). The no-code kernel STL has
-              // none, so we don't wire a selectable surface we can't map back.
-              onSelect={scriptGeometryActive ? handleViewportSelect : undefined}
+              // Face/edge-pick only against the script-path geometry (it carries
+              // the userData.faceIds + pickableEdges the picker resolves). The
+              // no-code kernel STL has neither, so we don't wire a selectable
+              // surface we can't map back. While arming the sketch plane the
+              // face click is consumed by `onPickFace` (sketch-on-face), so we
+              // suppress `onSelect` to avoid double-handling the same click.
+              onSelect={
+                scriptGeometryActive && !facePickForSketchActive
+                  ? handleViewportSelect
+                  : undefined
+              }
+              selectionMode={selectionMode}
+              // Construct sketch-on-face: a plain face click chooses the sketch
+              // plane (origin/normal/xAxis) while armed via `sk_choose_plane`.
+              facePickMode={facePickForSketchActive}
+              onPickFace={facePickForSketchActive ? handleSketchPlaneFacePick : undefined}
+              // FG-5 Inspect: controlled measure-tool activation (ribbon
+              // `ut_measure`) + section clip (`ut_section`); mirrored back so the
+              // viewport's own HUD button + the cockpit toggle stay in sync.
+              measureActive={measureActive}
+              onMeasureActiveChange={setMeasureActive}
+              sectionClipY={sectionClipY}
               highlightedFaceId={
                 scriptGeometryActive && selection?.kind === 'face'
+                  ? selection.faceId
+                  : null
+              }
+              highlightedEdgeId={
+                scriptGeometryActive && selection?.kind === 'edge'
                   ? selection.faceId
                   : null
               }
@@ -1372,6 +1575,117 @@ export function DesignWorkspace({
               data-testid="design-workspace-build-indicator"
             >
               Building model…
+            </div>
+          )}
+          {/*
+            FG-5 — face/edge selection-mode toggle. Picks what a plain viewport
+            click selects: faces (shell / sketch-on-face) or edges (fillet /
+            chamfer). Only shown when a pickable script geometry is mounted (the
+            no-code kernel STL carries no faceIds / edge polylines). Anchored
+            top-center so it never fights the bottom-center selection chip.
+          */}
+          {scriptGeometryActive && !sketchMode && (
+            <div
+              className="design-workspace__selection-mode"
+              role="group"
+              aria-label="Selection mode"
+              data-testid="design-workspace-selection-mode"
+            >
+              <button
+                type="button"
+                className={`design-workspace__selection-mode-btn${selectionMode === 'face' ? ' design-workspace__selection-mode-btn--active' : ''}`}
+                aria-pressed={selectionMode === 'face'}
+                onClick={() => handleSelectionModeChange('face')}
+                title="Select faces (shell, sketch on face)"
+                data-testid="design-workspace-selection-mode-face"
+              >
+                Faces
+              </button>
+              <button
+                type="button"
+                className={`design-workspace__selection-mode-btn${selectionMode === 'edge' ? ' design-workspace__selection-mode-btn--active' : ''}`}
+                aria-pressed={selectionMode === 'edge'}
+                onClick={() => handleSelectionModeChange('edge')}
+                title="Select edges (fillet, chamfer)"
+                data-testid="design-workspace-selection-mode-edge"
+              >
+                Edges
+              </button>
+            </div>
+          )}
+          {/*
+            FG-5 Inspect — Measure / Section toggles. The same `measureActive` /
+            `sectionActive` state the ribbon's `ut_measure` / `ut_section`
+            commands drive, surfaced in-cockpit so Inspect is reachable both from
+            the ribbon AND the viewport. Mounted whenever a model is displayed
+            (measure/section need geometry); hidden in sketch mode (the sketcher
+            owns the center pane then).
+          */}
+          {displayedViewportGeometry && !sketchMode && (
+            <div
+              className="design-workspace__inspect-tools"
+              role="group"
+              aria-label="Inspect"
+              data-testid="design-workspace-inspect-tools"
+            >
+              <button
+                type="button"
+                className={`design-workspace__inspect-btn${measureActive ? ' design-workspace__inspect-btn--active' : ''}`}
+                aria-pressed={measureActive}
+                onClick={() =>
+                  setMeasureActive((on) => {
+                    const next = !on
+                    if (next) setSectionActive(false)
+                    return next
+                  })
+                }
+                title="Measure — Shift+click two points on the model"
+                data-testid="design-workspace-inspect-measure"
+              >
+                Measure
+              </button>
+              <button
+                type="button"
+                className={`design-workspace__inspect-btn${sectionActive ? ' design-workspace__inspect-btn--active' : ''}`}
+                aria-pressed={sectionActive}
+                onClick={() =>
+                  setSectionActive((on) => {
+                    const next = !on
+                    if (next) setMeasureActive(false)
+                    return next
+                  })
+                }
+                title="Section — clip the model at its mid-height (world Y)"
+                data-testid="design-workspace-inspect-section"
+              >
+                Section
+              </button>
+            </div>
+          )}
+          {/*
+            Construct sketch-on-face — honest prompt while arming the sketch
+            plane (the operator dispatched `sk_choose_plane`): click a face to
+            choose it. Once a face is picked the readout shows the chosen plane
+            (and the workspace has entered sketch mode).
+          */}
+          {facePickForSketchActive && (
+            <div
+              className="design-workspace__sketch-plane-prompt"
+              role="status"
+              aria-live="polite"
+              data-testid="design-workspace-sketch-plane-prompt"
+            >
+              Click a face to start a sketch on its plane.
+            </div>
+          )}
+          {sketchMode && sketchFacePlane !== null && (
+            <div
+              className="design-workspace__sketch-plane-readout"
+              role="status"
+              aria-live="polite"
+              data-testid="design-workspace-sketch-plane-readout"
+            >
+              Sketch plane: face at ({sketchFacePlane.origin.map((c) => c.toFixed(1)).join(', ')})
             </div>
           )}
           {/*
@@ -1510,6 +1824,9 @@ export function DesignWorkspace({
                       ['chamfer', 'Chamfer'],
                       ['shell', 'Shell'],
                       ['hole', 'Hole'],
+                      ['datum_plane', 'Plane'],
+                      ['datum_axis', 'Axis'],
+                      ['datum_point', 'Point'],
                     ] as ReadonlyArray<readonly [FeatureDialogKind, string]>
                   ).map(([kind, label]) => {
                     const active = effectiveFeatureDialog === kind

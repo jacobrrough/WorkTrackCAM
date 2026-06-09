@@ -54,6 +54,7 @@ function makeHostActions(): {
   actions: DesignCommandActions
   state: {
     sketchActive: boolean
+    sketchPlaneArmed: boolean
     armedTool: string | null
     openedDialog: FeatureDialogKind | null
     toasts: string[]
@@ -61,6 +62,7 @@ function makeHostActions(): {
 } {
   const state = {
     sketchActive: false,
+    sketchPlaneArmed: false,
     armedTool: null as string | null,
     openedDialog: null as FeatureDialogKind | null,
     toasts: [] as string[]
@@ -69,8 +71,12 @@ function makeHostActions(): {
     armSketchMode: () => {
       state.sketchActive = true
     },
+    armSketchPlane: () => {
+      state.sketchPlaneArmed = true
+    },
     disarmSketchMode: () => {
       state.sketchActive = false
+      state.sketchPlaneArmed = false
       state.armedTool = null
     },
     armSketchTool: (toolId) => {
@@ -135,6 +141,36 @@ describe('Design ribbon go-live — action dispatch through the registry', () =>
 
     reg.run('ut_measure', ctx({ workspace: 'design' }))
     expect(state.toasts).toContain('inspect:ut_measure')
+  })
+
+  it('sk_choose_plane arms face-pick for the sketch plane (Construct entry)', () => {
+    const reg = new CommandRegistry()
+    const { actions, state } = makeHostActions()
+    registerDesignCommands(actions, reg)
+
+    // Valid from the Design route even before sketch mode (it STARTS a sketch).
+    const ran = reg.run('sk_choose_plane', ctx({ workspace: 'design', sketchMode: false }))
+    expect(ran).toBe(true)
+    expect(state.sketchPlaneArmed).toBe(true)
+    // It does NOT jump straight into sketch mode — that happens once a face is picked.
+    expect(state.sketchActive).toBe(false)
+  })
+
+  it('the Construct datum rows open their datum dialogs (co_* → datum_* kinds)', () => {
+    const reg = new CommandRegistry()
+    const { actions, state } = makeHostActions()
+    registerDesignCommands(actions, reg)
+
+    for (const [id, kind] of [
+      ['co_offset_plane', 'datum_plane'],
+      ['co_datum_axis', 'datum_axis'],
+      ['co_datum_point', 'datum_point']
+    ] as const) {
+      state.openedDialog = null
+      const ran = reg.run(id, ctx({ workspace: 'design' }))
+      expect(ran, `expected handler for ${id}`).toBe(true)
+      expect(state.openedDialog).toBe(kind)
+    }
   })
 
   it('sketch tools stay DISABLED (no dispatch) when not in sketch mode', () => {

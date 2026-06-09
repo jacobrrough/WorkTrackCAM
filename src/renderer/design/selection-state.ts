@@ -96,16 +96,16 @@ export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelect
  * Build an `EdgeSelection`. Mirrors {@link makeFaceSelection} so the edge
  * branch has a single construction site.
  *
- * IMPORTANT (honesty boundary): the running viewport CANNOT yet produce an
- * edge id from a raycast — the mesh is face-tessellated, so
- * `cad.tessellate_with_ids` emits a per-triangle `faceIds` array + `faceMap`
- * and a flat, position-less `edgeMap`, but NO per-triangle edge mapping (see
- * `engines/cad/cadquery_script.py::tessellate_with_face_ids`). This
- * constructor exists so a surface that already HAS an edge id from another
- * source (e.g. a future per-triangle edge stash, or a feature dialog that
- * names an edge) can build the value. When `occtHash` carries the stable
- * `"e:<hex>"` handle, the Fillet / Chamfer dialogs forward it to the kernel as
- * `pickedEdgeIds`. The viewport does not fabricate edge ids.
+ * FG-5: the running viewport NOW produces a real edge pick. The mesh is
+ * face-tessellated (so there is no per-triangle edge mapping), so instead the
+ * sidecar's `cad.tessellate_with_ids` emits a per-edge sampled POLYLINE list
+ * (`edges`, each with its stable `"e:<hex>"` id); `Viewport3D` renders one
+ * raycastable `LineSegments` per polyline and calls this constructor with the
+ * polyline ordinal (`edgeId`) + its stable id (`occtHash`) when the operator
+ * clicks near an edge in Edges mode. When `occtHash` carries the stable id, the
+ * Fillet / Chamfer dialogs forward it to the kernel as `pickedEdgeIds` so the op
+ * targets exactly that edge. The viewport never fabricates an id — a polyline
+ * without a stable id is simply not pickable.
  */
 export function makeEdgeSelection(edgeId: number, occtHash?: string): EdgeSelection {
   return occtHash !== undefined

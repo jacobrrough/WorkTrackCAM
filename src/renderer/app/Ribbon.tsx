@@ -81,7 +81,7 @@ interface RibbonTabDef {
 const DESIGN_TABS: readonly RibbonTabDef[] = [
   { id: 'sketch', label: 'Sketch', groups: ['sketch_create', 'sketch_modify', 'sketch_constraint', 'sketch_dimension'] },
   { id: 'solid', label: 'Solid', groups: ['solid_create', 'solid_modify', 'solid_pattern'] },
-  { id: 'construct', label: 'Construct', groups: ['surface', 'sheet_metal', 'plastic'] },
+  { id: 'construct', label: 'Construct', groups: ['construct', 'surface', 'sheet_metal', 'plastic'] },
   { id: 'inspect', label: 'Inspect', groups: ['inspect'] },
   { id: 'drawing', label: 'Drawing', groups: ['drawing'] }
 ]
@@ -229,6 +229,7 @@ const PANEL_LABELS: Readonly<Record<CommandRibbonGroup, string>> = {
   solid_create: 'Create',
   solid_modify: 'Modify',
   solid_pattern: 'Pattern',
+  construct: 'Construct',
   surface: 'Surface',
   sheet_metal: 'Sheet Metal',
   plastic: 'Plastic',

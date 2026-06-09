@@ -603,3 +603,110 @@
 .fd-apply-row__btn {
   align-self: flex-start;
 }
+
+/* ── FG-5 — face/edge selection-mode toggle ─────────────────────────
+   Segmented control overlaying the top-center of the viewport. Picks what a
+   plain click selects: faces (shell / sketch-on-face) or edges (fillet /
+   chamfer). Absolutely positioned so it never reflows the viewport canvas;
+   `.design-workspace__viewport-col` is the positioned ancestor. */
+.design-workspace__selection-mode {
+  position: absolute;
+  top: var(--sp-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg2, rgba(12, 6, 18, 0.82));
+  border: 1px solid var(--border, #3e4260);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: var(--elevation-1, 0 2px 8px rgba(0, 0, 0, 0.4));
+}
+.design-workspace__selection-mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--txt1, #c8cad8);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--sp-1, 4px) var(--sp-3, 12px);
+  border-radius: var(--radius-xs, 4px);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.design-workspace__selection-mode-btn:hover {
+  color: var(--txt0, #e8eaf0);
+  background: var(--bg3, rgba(255, 255, 255, 0.05));
+}
+.design-workspace__selection-mode-btn--active {
+  color: var(--accent-hi, #fff);
+  background: var(--accent, #3d7eff);
+}
+.design-workspace__selection-mode-btn--active:hover {
+  color: var(--accent-hi, #fff);
+  background: var(--accent, #3d7eff);
+}
+
+/* FG-5 Inspect — Measure / Section toggle group. Same pill style as the
+   selection-mode toggle, stacked just below it (top-center) so the two never
+   overlap. Reuses the selection-mode button visuals via shared declarations. */
+.design-workspace__inspect-tools {
+  position: absolute;
+  top: calc(var(--sp-3) + 38px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg2, rgba(12, 6, 18, 0.82));
+  border: 1px solid var(--border, #3e4260);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: var(--elevation-1, 0 2px 8px rgba(0, 0, 0, 0.4));
+}
+.design-workspace__inspect-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--txt1, #c8cad8);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--sp-1, 4px) var(--sp-3, 12px);
+  border-radius: var(--radius-xs, 4px);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.design-workspace__inspect-btn:hover {
+  color: var(--txt0, #e8eaf0);
+  background: var(--bg3, rgba(255, 255, 255, 0.05));
+}
+.design-workspace__inspect-btn--active,
+.design-workspace__inspect-btn--active:hover {
+  color: var(--accent-hi, #fff);
+  background: var(--accent, #3d7eff);
+}
+
+/* Construct sketch-on-face — the "click a face" prompt while arming + the
+   chosen-plane readout once a face is picked. Both anchored top-center, just
+   under the toggles, using the same sunken pill surface. */
+.design-workspace__sketch-plane-prompt,
+.design-workspace__sketch-plane-readout {
+  position: absolute;
+  top: calc(var(--sp-3) + 38px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: 80%;
+  padding: var(--sp-1, 4px) var(--sp-3, 12px);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--txt0, #e8eaf0);
+  background: var(--bg2, rgba(12, 6, 18, 0.82));
+  border: 1px solid var(--accent, #3d7eff);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: var(--elevation-1, 0 2px 8px rgba(0, 0, 0, 0.4));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

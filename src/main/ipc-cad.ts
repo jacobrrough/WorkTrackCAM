@@ -51,6 +51,7 @@ import type {
   CadExportFormat,
   CadExportResult,
   CadEdgeMapEntry,
+  CadEdgePolyline,
   CadFaceMapEntry,
   CadListOperationsResult,
   CadOperationSummary,
@@ -1215,6 +1216,26 @@ function looksLikeFaceMapEntry(value: unknown): value is CadFaceMapEntry {
  * edge (length read failure → 0), so we validate the minimum shape and let the
  * coercer re-pick the documented fields.
  */
+/**
+ * FG-5 · Result shape guard for a single `edges` polyline entry. Validates the
+ * stable id + a points array of `[x, y, z]` number triples (length >= 2). A
+ * malformed polyline is dropped by the coercer (the renderer simply can't pick
+ * that one edge) rather than poisoning the whole tessellation.
+ */
+function looksLikeEdgePolyline(value: unknown): value is CadEdgePolyline {
+  if (!value || typeof value !== 'object') return false
+  const e = value as Record<string, unknown>
+  if (typeof e.id !== 'string' || e.id.length === 0) return false
+  if (!Array.isArray(e.points) || e.points.length < 2) return false
+  for (const pt of e.points) {
+    if (!Array.isArray(pt) || pt.length !== 3) return false
+    if (typeof pt[0] !== 'number' || !Number.isFinite(pt[0])) return false
+    if (typeof pt[1] !== 'number' || !Number.isFinite(pt[1])) return false
+    if (typeof pt[2] !== 'number' || !Number.isFinite(pt[2])) return false
+  }
+  return true
+}
+
 function looksLikeEdgeMapEntry(value: unknown): value is CadEdgeMapEntry {
   if (!value || typeof value !== 'object') return false
   const e = value as Record<string, unknown>
@@ -1320,6 +1341,18 @@ export function coerceTessellateWithIdsResult(
     }
   }
 
+  // FG-5: coerce the edge polyline list (parallel to edgeMap). Each entry is
+  // re-validated; malformed polylines drop silently so the renderer renders +
+  // raycasts only the well-formed edges (face picking is unaffected either way).
+  const edges: CadEdgePolyline[] = Array.isArray(raw.edges)
+    ? raw.edges.filter(looksLikeEdgePolyline).map((e) => ({
+        id: e.id,
+        points: e.points.map(
+          (p): [number, number, number] => [p[0], p[1], p[2]],
+        ),
+      }))
+    : []
+
   return {
     vertices,
     indices,
@@ -1328,6 +1361,7 @@ export function coerceTessellateWithIdsResult(
     bbox: raw.bbox,
     faceMap,
     edgeMap,
+    edges,
   }
 }
 

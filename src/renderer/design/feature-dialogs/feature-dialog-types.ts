@@ -46,10 +46,15 @@ import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
 import type { Selection } from '../selection-state'
 
 /**
- * The six features that have a property dialog in this folder. Mirrors the
- * catalog ids (`so_extrude`, `so_revolve`, `so_fillet`, `so_chamfer`,
- * `so_shell`, `so_hole`) without coupling the dialog kit to the full
- * 152-entry catalog.
+ * The features that have a property dialog in this folder. Mirrors the catalog
+ * ids (`so_extrude`, `so_revolve`, `so_fillet`, `so_chamfer`, `so_shell`,
+ * `so_hole`, plus the Construct datum rows `co_offset_plane` / `co_datum_axis` /
+ * `co_datum_point`) without coupling the dialog kit to the full catalog.
+ *
+ * The three `datum_*` kinds emit a CONSTRUCTION-geometry marker op (no solid
+ * change) — see {@link FeatureDialogChange} `target: 'kernelOp'` and the
+ * `datum_plane` / `datum_axis` / `datum_point` schemas in
+ * `part-features-schema.ts`. They build via `build_part.py` as manifest markers.
  */
 export type FeatureDialogKind =
   | 'extrude'
@@ -58,6 +63,9 @@ export type FeatureDialogKind =
   | 'chamfer'
   | 'shell'
   | 'hole'
+  | 'datum_plane'
+  | 'datum_axis'
+  | 'datum_point'
 
 /** The catalog command id each dialog corresponds to (single source of truth). */
 export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, string>> = {
@@ -66,7 +74,10 @@ export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, strin
   fillet: 'so_fillet',
   chamfer: 'so_chamfer',
   shell: 'so_shell',
-  hole: 'so_hole'
+  hole: 'so_hole',
+  datum_plane: 'co_offset_plane',
+  datum_axis: 'co_datum_axis',
+  datum_point: 'co_datum_point'
 }
 
 /**

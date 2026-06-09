@@ -71,6 +71,31 @@ export {
   type HoleDialogProps
 } from './HoleDialog'
 
+// Construct datums (reference geometry — marker ops; no solid change).
+export {
+  DatumPlaneDialog,
+  DatumLabelField,
+  buildDatumPlaneOp,
+  DATUM_BASE_PLANE_OPTIONS,
+  type DatumBasePlane,
+  type DatumPlaneDialogParams,
+  type DatumPlaneDialogProps
+} from './DatumPlaneDialog'
+export {
+  DatumAxisDialog,
+  buildDatumAxisOp,
+  DATUM_AXIS_OPTIONS,
+  type DatumAxis,
+  type DatumAxisDialogParams,
+  type DatumAxisDialogProps
+} from './DatumAxisDialog'
+export {
+  DatumPointDialog,
+  buildDatumPointOp,
+  type DatumPointDialogParams,
+  type DatumPointDialogProps
+} from './DatumPointDialog'
+
 // The host that selects + routes a dialog.
 export {
   FeatureDialogHost,

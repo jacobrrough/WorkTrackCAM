@@ -1017,6 +1017,68 @@ def _op_loft_guide_rails(cq, wp, op, index, warnings, extras):
     return wp
 
 
+# ── Construct datums (reference geometry — markers; never touch the solid) ────
+#
+# A datum is CONSTRUCTION GEOMETRY: it anchors later sketches/features but does
+# not change the body. So each handler validates its fields, records a manifest
+# marker in ``extras["datums"]``, and returns the workplane UNCHANGED (the
+# kernel is sacred — a datum can never modify or crash the solid). A bad field
+# is a skip-with-warning, exactly like the other marker ops.
+
+
+def _append_datum(extras: Dict[str, Any], entry: Dict[str, Any]) -> None:
+    bucket = extras.setdefault("datums", [])
+    bucket.append(entry)
+
+
+def _op_datum_plane(cq, wp, op, index, warnings, extras):
+    base = str(op.get("basePlane", "")).upper()
+    if base not in ("XY", "XZ", "YZ"):
+        warnings.append(
+            f"op[{index}] datum_plane skipped: basePlane must be XY/XZ/YZ"
+        )
+        return wp
+    offset = _require_finite_mm(op.get("offsetMm", 0.0), "datum_plane.offsetMm")
+    entry: Dict[str, Any] = {"kind": "datum_plane", "basePlane": base, "offsetMm": offset}
+    label = op.get("label")
+    if isinstance(label, str) and label:
+        entry["label"] = label[:80]
+    _append_datum(extras, entry)
+    return wp
+
+
+def _op_datum_axis(cq, wp, op, index, warnings, extras):
+    axis = str(op.get("axis", "")).upper()
+    if axis not in ("X", "Y", "Z"):
+        warnings.append(f"op[{index}] datum_axis skipped: axis must be X/Y/Z")
+        return wp
+    ox = _require_finite_mm(op.get("originXMm", 0.0), "datum_axis.originXMm")
+    oy = _require_finite_mm(op.get("originYMm", 0.0), "datum_axis.originYMm")
+    oz = _require_finite_mm(op.get("originZMm", 0.0), "datum_axis.originZMm")
+    entry: Dict[str, Any] = {
+        "kind": "datum_axis",
+        "axis": axis,
+        "originMm": [ox, oy, oz],
+    }
+    label = op.get("label")
+    if isinstance(label, str) and label:
+        entry["label"] = label[:80]
+    _append_datum(extras, entry)
+    return wp
+
+
+def _op_datum_point(cq, wp, op, index, warnings, extras):
+    x = _require_finite_mm(op.get("xMm"), "datum_point.xMm")
+    y = _require_finite_mm(op.get("yMm"), "datum_point.yMm")
+    z = _require_finite_mm(op.get("zMm"), "datum_point.zMm")
+    entry: Dict[str, Any] = {"kind": "datum_point", "pointMm": [x, y, z]}
+    label = op.get("label")
+    if isinstance(label, str) and label:
+        entry["label"] = label[:80]
+    _append_datum(extras, entry)
+    return wp
+
+
 def _op_plastic_rule_fillet(cq, wp, op, index, warnings, extras):
     radius = _require_finite_mm(op.get("radiusMm"), "plastic_rule_fillet.radiusMm")
     if radius <= 0:
@@ -1160,6 +1222,9 @@ _OP_DISPATCH: Dict[str, Any] = {
     "plastic_rule_fillet": _op_plastic_rule_fillet,
     "plastic_boss": _op_plastic_boss,
     "plastic_lip_groove": _op_plastic_lip_groove,
+    "datum_plane": _op_datum_plane,
+    "datum_axis": _op_datum_axis,
+    "datum_point": _op_datum_point,
 }
 
 # Profiles are needed by profile-index ops (hole/combine/press-pull/sweep). The
@@ -1301,6 +1366,10 @@ def build_part(payload: Dict[str, Any], output_dir: str, base: str) -> Dict[str,
         result["splitKeepHalfspace"] = extras["splitKeepHalfspace"]
     if "loftGuideRailsKernelMode" in extras:
         result["loftGuideRailsKernelMode"] = extras["loftGuideRailsKernelMode"]
+    # Construct datums (reference geometry markers) — surfaced so the TS reader
+    # / a future browser can list them. Never affects geometry (Safety Rule 1).
+    if extras.get("datums"):
+        result["datums"] = extras["datums"]
     if warnings:
         result["warnings"] = warnings
     return result

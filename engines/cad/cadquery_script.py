@@ -639,6 +639,14 @@ def tessellate_with_face_ids(
     # and carries only metadata. Best-effort: a failure to enumerate edges must
     # not break the face-tagged mesh the renderer already depends on.
     edge_map: Dict[str, Dict[str, Any]] = {}
+    # FG-5 (viewport edge picking): a parallel list of per-edge sampled
+    # POLYLINES so the renderer can render the wireframe AND raycast a click
+    # near an edge back to its stable id. Each entry is {id, points:[[x,y,z],...]}
+    # keyed by the SAME stable id (``e:<hex>``) the edge_map / resolver use, so a
+    # picked polyline resolves to the exact OCCT edge at build time. Best-effort
+    # and ADDITIVE: a failure to enumerate edges leaves both maps empty and the
+    # renderer falls back to face-only picking (the STL/CAM path is untouched).
+    edge_polylines: List[Dict[str, Any]] = []
     try:
         for edge in solid.Edges():
             eid = _safe_edge_geom_id(edge)
@@ -651,8 +659,12 @@ def tessellate_with_face_ids(
                     "occtHash": _safe_edge_hash(edge),
                     "length": _safe_edge_length(edge),
                 }
+                pts = _safe_edge_polyline(edge, tolerance_mm=float(tolerance_mm))
+                if len(pts) >= 2:
+                    edge_polylines.append({"id": eid, "points": pts})
     except Exception:  # noqa: BLE001 - edge ids are non-critical metadata
         edge_map = {}
+        edge_polylines = []
 
     return {
         "vertices": vertices_flat,
@@ -662,6 +674,7 @@ def tessellate_with_face_ids(
         "bbox": {"min": list(bbox_min), "max": list(bbox_max)},
         "faceMap": face_map,
         "edgeMap": edge_map,
+        "edges": edge_polylines,
     }
 
 
@@ -893,6 +906,125 @@ def _safe_edge_length(edge: Any) -> float:
         return float(edge.Length())
     except Exception:  # noqa: BLE001 - length is best-effort metadata
         return 0.0
+
+
+# ── FG-5: per-edge polyline sampling (viewport edge picking) ─────────────────
+#
+# The mesh is FACE-tessellated, so an edge has no per-triangle parallel array the
+# renderer can ray-pick through. Instead we emit a sampled POLYLINE per edge: a
+# short ordered list of 3D points the renderer turns into pickable LineSegments
+# (carrying the stable edge id in userData). A click near one of those segments
+# resolves to the edge id — which the kernel then resolves back to the exact OCCT
+# edge for ``fillet_select`` / ``chamfer_select`` ``pickedEdgeIds`` targeting.
+#
+# Why ``positionAt`` and not ``Edge.tessellate``? In the bundled OCP/cadquery
+# build ``Edge.tessellate(tol)`` returns empty point lists (it is wired for faces),
+# so we sample the curve parametrically via ``positionAt(t)`` (t in [0, 1]). A
+# straight edge (geomType "LINE") needs only its two endpoints; a curved edge is
+# sampled at a density that keeps the chord deviation under ``tolerance_mm`` —
+# computed from the radius when available, otherwise a fixed fallback. The point
+# count is bounded so a pathological edge can never explode the wire payload.
+
+# Max sampled points per edge. A circle at 0.1 mm tolerance on a large radius is
+# the worst realistic case; 128 keeps the wire compact while staying smooth.
+_EDGE_POLYLINE_MAX_POINTS = 128
+# Min samples for any curved edge (so a tiny arc still reads as a curve, not a chord).
+_EDGE_POLYLINE_MIN_CURVED = 8
+
+
+def _edge_is_straight(edge: Any) -> bool:
+    """True when the edge is a straight line (only endpoints are needed).
+
+    Prefers ``geomType()`` ("LINE"); falls back to a 3-point colinearity test so an
+    edge whose geomType is unavailable still classifies correctly. Defaults to
+    False (treat as curved → sample more densely) on any read failure — denser
+    sampling is always visually safe, just slightly larger.
+    """
+    try:
+        gt = edge.geomType()
+        if isinstance(gt, str):
+            return gt.upper() == "LINE"
+    except Exception:  # noqa: BLE001 - fall through to the geometric test
+        pass
+    try:
+        a = edge.positionAt(0.0)
+        m = edge.positionAt(0.5)
+        b = edge.positionAt(1.0)
+        # Colinear if the mid point lies on the chord a→b (cross product ~0).
+        ab = (b.x - a.x, b.y - a.y, b.z - a.z)
+        am = (m.x - a.x, m.y - a.y, m.z - a.z)
+        cx = ab[1] * am[2] - ab[2] * am[1]
+        cy = ab[2] * am[0] - ab[0] * am[2]
+        cz = ab[0] * am[1] - ab[1] * am[0]
+        return (cx * cx + cy * cy + cz * cz) <= 1e-12
+    except Exception:  # noqa: BLE001 - unreadable → treat as curved (safe)
+        return False
+
+
+def _edge_sample_count(edge: Any, tolerance_mm: float) -> int:
+    """How many points to sample along a CURVED edge to stay within tolerance.
+
+    Uses the chord-deviation bound for a circular arc: for a subtended angle dθ on
+    radius r, the sagitta is r·(1 − cos(dθ/2)). Solving for dθ at the target
+    deviation gives the segment count = ceil(total_angle / dθ). We estimate the
+    radius from length when ``radius()`` is not exposed (closed circle: r ≈ L/2π).
+    Bounded by [_EDGE_POLYLINE_MIN_CURVED, _EDGE_POLYLINE_MAX_POINTS].
+    """
+    try:
+        length = float(edge.Length())
+    except Exception:  # noqa: BLE001
+        return _EDGE_POLYLINE_MIN_CURVED
+    if not math.isfinite(length) or length <= 0:
+        return _EDGE_POLYLINE_MIN_CURVED
+    radius = None
+    try:
+        r = edge.radius()
+        if math.isfinite(float(r)) and float(r) > 0:
+            radius = float(r)
+    except Exception:  # noqa: BLE001 - radius() not exposed for every curve
+        radius = None
+    if radius is None:
+        # Fall back to the full-circle estimate; for an arc this over-samples
+        # slightly (more points than strictly needed), which is visually safe.
+        radius = length / (2.0 * math.pi)
+    if radius <= 0:
+        return _EDGE_POLYLINE_MIN_CURVED
+    tol = max(1e-4, float(tolerance_mm))
+    if tol >= radius:
+        return _EDGE_POLYLINE_MIN_CURVED
+    # Max angle per segment so the sagitta r(1−cos(dθ/2)) ≈ tol.
+    d_theta = 2.0 * math.acos(max(-1.0, min(1.0, 1.0 - tol / radius)))
+    if d_theta <= 1e-6:
+        return _EDGE_POLYLINE_MAX_POINTS
+    total_angle = length / radius  # arc angle (radians)
+    segments = int(math.ceil(total_angle / d_theta))
+    count = segments + 1
+    return max(_EDGE_POLYLINE_MIN_CURVED, min(_EDGE_POLYLINE_MAX_POINTS, count))
+
+
+def _safe_edge_polyline(
+    edge: Any, *, tolerance_mm: float = 0.1
+) -> List[List[float]]:
+    """Sample ``edge`` into an ordered ``[[x, y, z], ...]`` polyline (>= 2 points).
+
+    Straight edges return their two endpoints; curved edges are sampled at a
+    tolerance-driven density (see :func:`_edge_sample_count`). NEVER raises — an
+    unreadable edge returns ``[]`` so the caller simply omits it from the wire
+    (the renderer then can't pick that one edge, but the rest of the part is fine).
+    """
+    try:
+        if _edge_is_straight(edge):
+            ts = [0.0, 1.0]
+        else:
+            n = _edge_sample_count(edge, tolerance_mm)
+            ts = [i / (n - 1) for i in range(n)] if n >= 2 else [0.0, 1.0]
+        out: List[List[float]] = []
+        for t in ts:
+            pt = edge.positionAt(t)
+            out.append([float(pt.x), float(pt.y), float(pt.z)])
+        return out
+    except Exception:  # noqa: BLE001 - unreadable edge → omit it (never crash)
+        return []
 
 
 def resolve_picked_edges(solid: Any, picked_ids: Any) -> Tuple[List[Any], List[str]]:
@@ -1594,6 +1726,7 @@ __all__ = [
     # FG-5b: stable id derivation + picked-id → topology resolution
     "_safe_edge_geom_id",
     "_safe_face_geom_id",
+    "_safe_edge_polyline",
     "resolve_picked_edges",
     "resolve_picked_faces",
     # FG-5b: build-time op application (picked-id first, axis-bucket fallback)

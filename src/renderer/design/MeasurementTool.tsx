@@ -239,6 +239,20 @@ export function useMeasurementTool(unit: MeasurementUnit = 'mm') {
     setPoints([])
   }, [])
 
+  /**
+   * Imperatively set the active state (used by a controlled parent — e.g. the
+   * Design ribbon's `runInspect('ut_measure')` arming the tool). Clears the
+   * in-flight points when turning the tool OFF so a re-activation starts fresh,
+   * matching the {@link toggle}/{@link cancel} behavior the HUD button uses.
+   */
+  const setActiveControlled = useCallback((next: boolean) => {
+    setActive((prev) => {
+      if (prev === next) return prev
+      if (!next) setPoints([])
+      return next
+    })
+  }, [])
+
   /** Called when Shift+click hits the mesh surface. */
   const addPoint = useCallback((v: THREE.Vector3) => {
     setPoints((prev) => {
@@ -248,5 +262,5 @@ export function useMeasurementTool(unit: MeasurementUnit = 'mm') {
     })
   }, [])
 
-  return { active, points, unit, toggle, cancel, addPoint }
+  return { active, points, unit, toggle, cancel, addPoint, setActive: setActiveControlled }
 }

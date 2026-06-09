@@ -226,4 +226,25 @@ describe('kernelOpSummary', () => {
       })
     ).toContain('plastic rule fillet')
   })
+
+  it('labels Construct datum markers (plane / axis / point)', () => {
+    expect(
+      kernelOpSummary({ kind: 'datum_plane', basePlane: 'XY', offsetMm: 5, label: 'mid' })
+    ).toBe('datum plane XY +5 mm "mid"')
+    expect(
+      kernelOpSummary({ kind: 'datum_plane', basePlane: 'YZ', offsetMm: 0 })
+    ).toBe('datum plane YZ')
+    expect(
+      kernelOpSummary({
+        kind: 'datum_axis',
+        axis: 'Z',
+        originXMm: 1,
+        originYMm: 2,
+        originZMm: 3
+      })
+    ).toBe('datum axis Z @(1,2,3)')
+    expect(
+      kernelOpSummary({ kind: 'datum_point', xMm: 4, yMm: 5, zMm: 6 })
+    ).toBe('datum point (4,5,6)')
+  })
 })

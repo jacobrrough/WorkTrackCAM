@@ -747,6 +747,29 @@ describe('coerceTessellateWithIdsResult', () => {
     const r = coerceTessellateWithIdsResult(validResultRaw())
     expect(r?.edgeMap).toEqual({})
   })
+
+  // --- FG-5: per-edge polyline list (viewport edge picking) ---
+
+  it('coerces the edges polyline list and drops malformed polylines', () => {
+    const raw = validResultRaw()
+    raw.edges = [
+      { id: 'e:aaa', points: [[0, 0, 0], [10, 0, 0]] },
+      { id: '', points: [[0, 0, 0], [1, 0, 0]] }, // empty id → drop
+      { id: 'e:short', points: [[0, 0, 0]] }, // < 2 points → drop
+      { id: 'e:nan', points: [[0, 0, 0], [Number.NaN, 0, 0]] }, // non-finite → drop
+      { id: 'e:bad', points: [[0, 0], [1, 1]] }, // wrong arity → drop
+      null
+    ]
+    const r = coerceTessellateWithIdsResult(raw)
+    expect(r?.edges).toHaveLength(1)
+    expect(r?.edges[0].id).toBe('e:aaa')
+    expect(r?.edges[0].points).toEqual([[0, 0, 0], [10, 0, 0]])
+  })
+
+  it('defaults edges to an empty array when the sidecar omits it', () => {
+    const r = coerceTessellateWithIdsResult(validResultRaw())
+    expect(r?.edges).toEqual([])
+  })
 })
 
 describe('cad:tessellateWithIds handler', () => {

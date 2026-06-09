@@ -29,6 +29,9 @@ import { FilletDialog, type FilletDialogParams } from './FilletDialog'
 import { ChamferDialog, type ChamferDialogParams } from './ChamferDialog'
 import { ShellDialog, type ShellDialogParams } from './ShellDialog'
 import { HoleDialog, type HoleDialogParams } from './HoleDialog'
+import { DatumPlaneDialog, type DatumPlaneDialogParams } from './DatumPlaneDialog'
+import { DatumAxisDialog, type DatumAxisDialogParams } from './DatumAxisDialog'
+import { DatumPointDialog, type DatumPointDialogParams } from './DatumPointDialog'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
 import {
@@ -49,6 +52,9 @@ export type FeatureDialogSpec =
   | { readonly kind: 'chamfer'; readonly params: ChamferDialogParams }
   | { readonly kind: 'shell'; readonly params: ShellDialogParams }
   | { readonly kind: 'hole'; readonly params: HoleDialogParams }
+  | { readonly kind: 'datum_plane'; readonly params: DatumPlaneDialogParams }
+  | { readonly kind: 'datum_axis'; readonly params: DatumAxisDialogParams }
+  | { readonly kind: 'datum_point'; readonly params: DatumPointDialogParams }
 
 export interface FeatureDialogHostProps {
   /** Which dialog to render + its seed params. */
@@ -129,6 +135,12 @@ function renderDialog(
       return <ShellDialog params={spec.params} {...common} />
     case 'hole':
       return <HoleDialog params={spec.params} {...common} />
+    case 'datum_plane':
+      return <DatumPlaneDialog params={spec.params} {...common} />
+    case 'datum_axis':
+      return <DatumAxisDialog params={spec.params} {...common} />
+    case 'datum_point':
+      return <DatumPointDialog params={spec.params} {...common} />
     default: {
       const _never: never = spec
       void _never

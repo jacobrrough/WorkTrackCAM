@@ -824,4 +824,46 @@ describe('part-features-schema', () => {
       })
     ).toThrow()
   })
+
+  // --- Construct datums (reference-geometry marker ops; no solid change) ---
+
+  it('parses datum_plane / datum_axis / datum_point (offset 0 allowed; labels optional)', () => {
+    const parsed = partFeaturesFileSchema.parse({
+      version: 1,
+      items: [],
+      kernelOps: [
+        { kind: 'datum_plane', basePlane: 'XY', offsetMm: 5, label: 'mid plane' },
+        // offset 0 is valid (a coincident reference plane is still useful).
+        { kind: 'datum_plane', basePlane: 'YZ', offsetMm: 0 },
+        { kind: 'datum_axis', axis: 'Z', originXMm: 1, originYMm: 2, originZMm: 3 },
+        // datum_axis origins default to 0 when omitted.
+        { kind: 'datum_axis', axis: 'X' },
+        { kind: 'datum_point', xMm: 4, yMm: 5, zMm: 6, label: 'top center' }
+      ]
+    })
+    expect(parsed.kernelOps).toHaveLength(5)
+    expect(parsed.kernelOps?.[0]?.kind).toBe('datum_plane')
+    const axisDefaulted = parsed.kernelOps?.[3]
+    expect(axisDefaulted && axisDefaulted.kind === 'datum_axis' && axisDefaulted.originXMm).toBe(0)
+  })
+
+  it('rejects a datum_plane with a non-canonical base plane', () => {
+    expect(() =>
+      partFeaturesFileSchema.parse({
+        version: 1,
+        items: [],
+        kernelOps: [{ kind: 'datum_plane', basePlane: 'XX', offsetMm: 1 }]
+      })
+    ).toThrow()
+  })
+
+  it('rejects a datum_point with non-finite coordinates', () => {
+    expect(() =>
+      partFeaturesFileSchema.parse({
+        version: 1,
+        items: [],
+        kernelOps: [{ kind: 'datum_point', xMm: Number.NaN, yMm: 0, zMm: 0 }]
+      })
+    ).toThrow()
+  })
 })

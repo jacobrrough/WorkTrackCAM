@@ -194,6 +194,26 @@ export type CadEdgeMapEntry = {
   length: number
 }
 
+/**
+ * FG-5 · A single topology edge sampled into an ordered 3D polyline so the
+ * renderer can DRAW the edge wireframe AND raycast a click near it back to its
+ * stable id. Parallel to (but distinct from) {@link CadEdgeMapEntry}: the map
+ * carries per-edge metadata keyed by id; this list carries the pickable geometry.
+ *
+ * ``id`` is the SAME stable edge id (``"e:<hex>"``) that keys ``edgeMap`` and that
+ * ``fillet_select`` / ``chamfer_select`` resolve as ``pickedEdgeIds`` — so a
+ * polyline the operator clicks in the viewport resolves to the exact OCCT edge at
+ * build time. ``points`` is an ordered list of ``[x, y, z]`` samples (>= 2): a
+ * straight edge carries its two endpoints; a curved edge is sampled at a
+ * tolerance-driven density (bounded), so the renderer draws a smooth curve.
+ */
+export type CadEdgePolyline = {
+  /** Stable edge id (``"e:<hex>"``); equals a key in ``edgeMap``. */
+  id: string
+  /** Ordered ``[x, y, z]`` samples along the edge (mm); length >= 2. */
+  points: Array<[number, number, number]>
+}
+
 export type CadTessellateWithIdsResult = {
   /** Flat float array; length divisible by 3 (``x0,y0,z0, x1,y1,z1, ...``). */
   vertices: number[]
@@ -219,6 +239,13 @@ export type CadTessellateWithIdsResult = {
    * face picking still works). See {@link CadEdgeMapEntry}.
    */
   edgeMap: Record<string, CadEdgeMapEntry>
+  /**
+   * FG-5 · Per-edge sampled POLYLINES the renderer turns into pickable
+   * ``LineSegments`` (carrying the stable edge id in ``userData``) so the operator
+   * can click an edge in the viewport to originate a picked-edge fillet/chamfer.
+   * Empty ``[]`` when edges could not be enumerated. See {@link CadEdgePolyline}.
+   */
+  edges: CadEdgePolyline[]
 }
 
 // ── cad.execute_script ──────────────────────────────────────────────────────
@@ -277,6 +304,13 @@ export type CadExecuteScriptMesh = {
    * {@link CadEdgeMapEntry}. Absent for the same reason ``faceMap`` is absent.
    */
   edgeMap?: Record<string, CadEdgeMapEntry>
+  /**
+   * FG-5 · Optional per-edge sampled POLYLINES (same shape as
+   * ``cad.tessellate_with_ids``'s ``edges``), embedded best-effort so the
+   * renderer can render + raycast edges straight off the execute_script result.
+   * Absent for the same reason ``edgeMap`` is absent. See {@link CadEdgePolyline}.
+   */
+  edges?: CadEdgePolyline[]
 }
 
 export type CadScriptError = {

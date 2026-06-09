@@ -73,6 +73,12 @@ export function kernelOpSummary(op: KernelPostSolidOp): string {
       return `plastic boss R=${op.outerRadiusMm} h=${op.heightMm}${op.holeRadiusMm ? ` hole=${op.holeRadiusMm}` : ''}`
     case 'plastic_lip_groove':
       return `plastic ${op.mode} box depth=${op.depthMm}`
+    case 'datum_plane':
+      return `datum plane ${op.basePlane}${op.offsetMm !== 0 ? ` +${op.offsetMm} mm` : ''}${op.label ? ` "${op.label}"` : ''}`
+    case 'datum_axis':
+      return `datum axis ${op.axis} @(${op.originXMm},${op.originYMm},${op.originZMm})${op.label ? ` "${op.label}"` : ''}`
+    case 'datum_point':
+      return `datum point (${op.xMm},${op.yMm},${op.zMm})${op.label ? ` "${op.label}"` : ''}`
     default:
       return `kernel op ${(op as { kind: string }).kind}`
   }

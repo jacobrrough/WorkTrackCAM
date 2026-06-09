@@ -323,6 +323,64 @@ def test_subprocess_contract_matches_build_kernel_part_ts() -> None:
 
 
 @requires_cadquery
+def test_construct_datums_are_markers_not_geometry() -> None:
+    """Construct datums (plane / axis / point) are REFERENCE geometry: the kernel
+    surfaces them in the manifest ``datums`` list but the built solid is
+    BYTE-IDENTICAL to a build without them — a datum can never alter the body
+    (Safety Rule 1 + 5)."""
+    datum_ops = [
+        {"kind": "datum_plane", "basePlane": "XY", "offsetMm": 5.0, "label": "mid"},
+        {"kind": "datum_axis", "axis": "Z", "originXMm": 1.0, "originYMm": 2.0, "originZMm": 0.0},
+        {"kind": "datum_point", "xMm": 3.0, "yMm": 4.0, "zMm": 5.0, "label": "p"},
+    ]
+    with_datums = bp.build_part(_payload(datum_ops), tempfile.mkdtemp(), "kernel-part")
+    without = bp.build_part(_payload([]), tempfile.mkdtemp(), "kernel-part")
+
+    # Datums surfaced in the manifest (3 entries, kinds + fields echoed).
+    datums = with_datums.get("datums")
+    assert isinstance(datums, list) and len(datums) == 3
+    assert datums[0] == {"kind": "datum_plane", "basePlane": "XY", "offsetMm": 5.0, "label": "mid"}
+    assert datums[1]["kind"] == "datum_axis" and datums[1]["originMm"] == [1.0, 2.0, 0.0]
+    assert datums[2]["pointMm"] == [3.0, 4.0, 5.0]
+    # A build WITHOUT datums carries no datums key.
+    assert "datums" not in without
+
+    # The solid is byte-identical: datums never touched the geometry.
+    a = Path(with_datums["stlPath"]).read_bytes()
+    b = Path(without["stlPath"]).read_bytes()
+    assert a == b
+
+
+@requires_cadquery
+def test_bad_datum_fields_skip_with_warning_not_raised() -> None:
+    """A structurally-bad datum (bad base plane / axis / NaN coord) is SKIPPED
+    with a warning, never raised — the base solid still builds (kernel is
+    sacred), and a valid op AFTER the bad ones still applies."""
+    res = bp.build_part(
+        _payload(
+            [
+                {"kind": "datum_plane", "basePlane": "BOGUS", "offsetMm": 1.0},
+                {"kind": "datum_axis", "axis": "Q"},
+                {"kind": "datum_point", "xMm": float("nan"), "yMm": 0, "zMm": 0},
+                # A valid datum after the bad ones still records.
+                {"kind": "datum_plane", "basePlane": "YZ", "offsetMm": 0.0},
+            ]
+        ),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert Path(res["stepPath"]).is_file()
+    assert abs(_vol_of_step(res["stepPath"]) - _BASE_VOL) < 1e-3  # solid unchanged
+    warnings = res.get("warnings") or []
+    assert any("datum_plane skipped" in w for w in warnings)
+    assert any("datum_axis skipped" in w for w in warnings)
+    assert any("datum_point" in w for w in warnings)
+    # Only the one VALID datum survived into the manifest.
+    datums = res.get("datums") or []
+    assert len(datums) == 1 and datums[0]["basePlane"] == "YZ"
+
+
+@requires_cadquery
 def test_subprocess_unknown_solid_kind_envelope() -> None:
     """A payload with an unknown solidKind fails with the contracted
     ``unknown_solid_kind`` error code and a non-zero exit (build-kernel-part.ts

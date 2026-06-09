@@ -17,6 +17,9 @@ import { buildFilletOp } from '../FilletDialog'
 import { buildChamferOp } from '../ChamferDialog'
 import { buildShellOp } from '../ShellDialog'
 import { buildHoleOp } from '../HoleDialog'
+import { buildDatumPlaneOp } from '../DatumPlaneDialog'
+import { buildDatumAxisOp } from '../DatumAxisDialog'
+import { buildDatumPointOp } from '../DatumPointDialog'
 import {
   EDGE_DIRECTION_OPTIONS,
   parseClampedInt,
@@ -158,6 +161,50 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
         zStartMm: 1
       })
       expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+  })
+
+  describe('Construct datum op builders (reference geometry markers)', () => {
+    it('buildDatumPlaneOp: offset 0 is allowed; label included only when non-empty', () => {
+      const noLabel = buildDatumPlaneOp('XY', 0)
+      expect(noLabel).toEqual({ kind: 'datum_plane', basePlane: 'XY', offsetMm: 0 })
+      expect(noLabel).not.toHaveProperty('label')
+      expect(() => kernelPostSolidOpSchema.parse(noLabel)).not.toThrow()
+
+      const withLabel = buildDatumPlaneOp('YZ', -3.5, '  mid plane  ')
+      expect(withLabel).toEqual({
+        kind: 'datum_plane',
+        basePlane: 'YZ',
+        offsetMm: -3.5,
+        label: 'mid plane'
+      })
+      expect(() => kernelPostSolidOpSchema.parse(withLabel)).not.toThrow()
+      // A whitespace-only label is treated as absent.
+      expect(buildDatumPlaneOp('XZ', 1, '   ')).not.toHaveProperty('label')
+    })
+
+    it('buildDatumAxisOp: carries axis + origin; label optional', () => {
+      const op = buildDatumAxisOp('Z', { x: 1, y: 2, z: 3 })
+      expect(op).toEqual({
+        kind: 'datum_axis',
+        axis: 'Z',
+        originXMm: 1,
+        originYMm: 2,
+        originZMm: 3
+      })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+      const labelled = buildDatumAxisOp('X', { x: 0, y: 0, z: 0 }, 'rev axis')
+      expect(labelled).toMatchObject({ label: 'rev axis' })
+      expect(() => kernelPostSolidOpSchema.parse(labelled)).not.toThrow()
+    })
+
+    it('buildDatumPointOp: carries x/y/z; label optional', () => {
+      const op = buildDatumPointOp({ x: 4, y: 5, z: 6 })
+      expect(op).toEqual({ kind: 'datum_point', xMm: 4, yMm: 5, zMm: 6 })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+      const labelled = buildDatumPointOp({ x: 0, y: 0, z: 0 }, 'origin')
+      expect(labelled).toMatchObject({ label: 'origin' })
+      expect(() => kernelPostSolidOpSchema.parse(labelled)).not.toThrow()
     })
   })
 })

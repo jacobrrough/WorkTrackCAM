@@ -32,7 +32,10 @@ const CASES: ReadonlyArray<{
   { spec: { kind: 'fillet', params: { radiusMm: 2 } }, dialogTestId: 'fd-fillet' },
   { spec: { kind: 'chamfer', params: { lengthMm: 1 } }, dialogTestId: 'fd-chamfer' },
   { spec: { kind: 'shell', params: { thicknessMm: 2 } }, dialogTestId: 'fd-shell' },
-  { spec: { kind: 'hole', params: { profileIndex: 0 } }, dialogTestId: 'fd-hole' }
+  { spec: { kind: 'hole', params: { profileIndex: 0 } }, dialogTestId: 'fd-hole' },
+  { spec: { kind: 'datum_plane', params: { basePlane: 'XY', offsetMm: 0 } }, dialogTestId: 'fd-datum-plane' },
+  { spec: { kind: 'datum_axis', params: { axis: 'Z' } }, dialogTestId: 'fd-datum-axis' },
+  { spec: { kind: 'datum_point', params: {} }, dialogTestId: 'fd-datum-point' }
 ]
 
 describe('FeatureDialogHost — spec → dialog routing', () => {

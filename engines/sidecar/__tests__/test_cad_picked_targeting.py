@@ -28,6 +28,7 @@ from engines.cad.cadquery_import import reset_handle_table
 from engines.cad.cadquery_script import (
     _normalize_id_list,
     _opposite_direction,
+    _safe_edge_polyline,
     apply_chamfer_select_op,
     apply_fillet_select_op,
     apply_shell_inward_op,
@@ -316,3 +317,107 @@ def test_zero_radius_fillet_is_skipped() -> None:
     out_wp, warn = apply_fillet_select_op(base, {"radiusMm": 0.0, "edgeDirection": "+Z"})
     assert abs(_vol(out_wp) - base_vol) < 1e-9
     assert any("must be > 0" in w for w in warn)
+
+
+# ── FG-5: per-edge POLYLINE emission (viewport edge picking) ──────────────────
+#
+# These cover the NEW ``edges`` field on cad.tessellate_with_ids: a sampled
+# polyline per topology edge keyed by the SAME stable id as edgeMap, so the
+# renderer can render + raycast edges and ORIGINATE a picked-edge fillet from
+# the viewport. Headline (Safety Rule 5): a real cube emits 12 edge polylines,
+# and picking ONE polyline's id fillets ONLY that edge.
+
+
+def test_safe_edge_polyline_never_raises_on_junk_edge() -> None:
+    """Tier-1 (no cadquery): an unreadable edge yields [] rather than raising —
+    the caller then simply omits that edge from the wire."""
+
+    class _Boom:
+        def geomType(self):  # noqa: N802 - mimics cadquery API
+            raise RuntimeError("no geom")
+
+        def positionAt(self, _t):  # noqa: N802
+            raise RuntimeError("no curve")
+
+    assert _safe_edge_polyline(_Boom()) == []
+
+
+@requires_cadquery
+def test_tessellate_emits_edge_polylines_parallel_to_edge_map() -> None:
+    """A box emits 12 edge polylines; every polyline id is a stable ``e:`` id that
+    also keys edgeMap, and every polyline has >= 2 three-component points. Box
+    edges are straight, so each polyline is exactly its two endpoints."""
+    script = "import cadquery as cq\nresult = cq.Workplane('XY').box(20, 15, 10)\n"
+    exec_result = cad_handlers.execute_script({"script": script})
+    handle = exec_result["meshes"][0]["handle"]
+
+    r = cad_handlers.tessellate_with_ids({"handle": handle})
+
+    edges = r["edges"]
+    assert isinstance(edges, list)
+    assert len(edges) == 12, f"expected 12 edge polylines, got {len(edges)}"
+    edge_map = r["edgeMap"]
+    for poly in edges:
+        assert poly["id"].startswith("e:")
+        assert poly["id"] in edge_map, f"polyline id not in edgeMap: {poly['id']}"
+        pts = poly["points"]
+        assert len(pts) >= 2
+        for p in pts:
+            assert len(p) == 3 and all(isinstance(c, float) for c in p)
+    # Straight box edges → exactly two sampled points each.
+    assert {len(poly["points"]) for poly in edges} == {2}
+    # The polyline ids cover exactly the edgeMap key set (no orphans either way).
+    assert {poly["id"] for poly in edges} == set(edge_map.keys())
+
+
+@requires_cadquery
+def test_curved_edges_are_densely_sampled() -> None:
+    """A cylinder's two circular edges sample to many points (tolerance-driven),
+    while its straight seam edge stays at two points — so the renderer draws a
+    smooth circle, not a chord."""
+    script = "import cadquery as cq\nresult = cq.Workplane('XY').circle(8).extrude(10)\n"
+    exec_result = cad_handlers.execute_script({"script": script})
+    r = cad_handlers.tessellate_with_ids({"handle": exec_result["meshes"][0]["handle"]})
+
+    counts = sorted(len(poly["points"]) for poly in r["edges"])
+    # 3 edges: one straight seam (2 pts) + two circles (many pts each).
+    assert counts[0] == 2
+    assert counts[-1] > 8, f"curved edge under-sampled: {counts}"
+
+
+@requires_cadquery
+def test_picked_edge_polyline_id_fillets_only_that_edge() -> None:
+    """HEADLINE end-to-end: take an edge id straight from the tessellation's
+    ``edges`` polyline list (exactly what the viewport raycast hands back) and
+    fillet via apply_fillet_select_op — it must round ONLY that edge (strictly
+    less material than the axis bucket rounding all four parallel edges), with no
+    fallback warning (clean resolve)."""
+    reset_handle_table()
+    script = "import cadquery as cq\nresult = cq.Workplane('XY').box(20, 15, 10)\n"
+    exec_result = cad_handlers.execute_script({"script": script})
+    r = cad_handlers.tessellate_with_ids(
+        {"handle": exec_result["meshes"][0]["handle"]}
+    )
+    # Pick a VERTICAL (+Z bucket) edge's id from the polyline list the way the
+    # renderer would: match a polyline whose two endpoints share x+y (vertical).
+    from engines.cad.cadquery_script import _edges_in_axis_bucket, _safe_edge_geom_id
+
+    base = _cube()
+    base_vol = _vol(base)
+    z_ids = {_safe_edge_geom_id(e) for e in _edges_in_axis_bucket(base.findSolid(), "+Z")}
+    picked_id = next(poly["id"] for poly in r["edges"] if poly["id"] in z_ids)
+
+    picked_wp, picked_warn = apply_fillet_select_op(
+        base, {"radiusMm": 2.0, "pickedEdgeIds": [picked_id]}
+    )
+    bucket_wp, bucket_warn = apply_fillet_select_op(
+        base, {"radiusMm": 2.0, "edgeDirection": "+Z"}
+    )
+
+    assert picked_warn == []  # a viewport-picked id resolves cleanly, no fallback
+    assert bucket_warn == []
+    picked_removed = base_vol - _vol(picked_wp)
+    bucket_removed = base_vol - _vol(bucket_wp)
+    assert picked_removed > 0.0  # the picked edge WAS filleted
+    assert bucket_removed > picked_removed  # the bucket touched more edges
+    assert abs(bucket_removed - 4.0 * picked_removed) < 1e-3  # ~4 identical edges

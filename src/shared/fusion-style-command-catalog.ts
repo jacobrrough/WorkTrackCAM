@@ -18,6 +18,7 @@ export type CommandRibbonGroup =
   | 'solid_create'
   | 'solid_modify'
   | 'solid_pattern'
+  | 'construct'
   | 'surface'
   | 'sheet_metal'
   | 'plastic'
@@ -52,6 +53,7 @@ export const COMMAND_CATALOG_RIBBON_FILTER_OPTIONS: { id: CommandRibbonGroup | '
   { id: 'solid_create', label: 'Solid · Create' },
   { id: 'solid_modify', label: 'Solid · Modify' },
   { id: 'solid_pattern', label: 'Solid · Pattern' },
+  { id: 'construct', label: 'Construct' },
   { id: 'surface', label: 'Surface' },
   { id: 'sheet_metal', label: 'Sheet metal' },
   { id: 'plastic', label: 'Plastic' },
@@ -468,7 +470,7 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'design',
     'partial',
     'MODIFY',
-    'Kernel: `part/features.json` → `kernelOps` → `fillet_all` + directional `fillet_select` (±X/±Y/±Z)'
+    'Kernel: `kernelOps` → `fillet_all` + `fillet_select`. FG-5: pick an edge in the viewport (Edges mode) to fillet exactly that edge (`pickedEdgeIds`, stable `e:<hex>` id resolved at build); axis bucket (±X/±Y/±Z) is the fallback.'
   ),
   c(
     'so_chamfer',
@@ -477,7 +479,7 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'design',
     'partial',
     'MODIFY',
-    'Kernel: `kernelOps` → `chamfer_all` + directional `chamfer_select` (±X/±Y/±Z)'
+    'Kernel: `kernelOps` → `chamfer_all` + `chamfer_select`. FG-5: pick an edge in the viewport (Edges mode) to chamfer exactly that edge (`pickedEdgeIds`); axis bucket (±X/±Y/±Z) is the fallback.'
   ),
   c(
     'so_shell',
@@ -486,7 +488,7 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'design',
     'partial',
     'MODIFY',
-    'Kernel: shell_inward (openDirection ±X/±Y/±Z, default +Z) via features.json / Design ribbon'
+    'Kernel: `shell_inward`. FG-5: pick the open face in the viewport (Faces mode) to hollow toward exactly that cap (`pickedFaceIds`, stable `f:<hex>` id); openDirection (±X/±Y/±Z, default +Z) is the fallback.'
   ),
   c(
     'so_hole',
@@ -581,6 +583,44 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'Kernel `mirror_union_plane` (YZ/XZ/XY + origin) — Design ribbon + mirror ∪'
   ),
   c('so_mirror_sketch_plane', 'Mirror (sketch plane)', 'solid_pattern', 'design', 'partial', 'PATTERN', 'Mirror across Y axis in sketch'),
+
+  // —— Construct (datums / reference geometry) ——
+  c(
+    'sk_choose_plane',
+    'Sketch on face / plane',
+    'construct',
+    'design',
+    'implemented',
+    'CREATE',
+    'Pick a model face in the viewport (Faces mode) to start a sketch ON that face plane; with no pick, arms sketch mode on the canonical datum plane. The face origin/normal/xAxis feed the sketch-plane placement (matches build_part.py sketchPlane=face transform).'
+  ),
+  c(
+    'co_offset_plane',
+    'Offset plane',
+    'construct',
+    'design',
+    'implemented',
+    'CONSTRUCT',
+    'Construction datum plane parallel to a base datum (XY/XZ/YZ) at a signed offset. Emits a `datum_plane` marker op the kernel build records without altering the solid (datums are reference geometry, like sheet_fold/loft_guide_rails markers).'
+  ),
+  c(
+    'co_datum_axis',
+    'Construction axis',
+    'construct',
+    'design',
+    'implemented',
+    'CONSTRUCT',
+    'Construction reference axis through a point along an axis direction (X/Y/Z). Emits a `datum_axis` marker op (reference geometry; no solid change).'
+  ),
+  c(
+    'co_datum_point',
+    'Construction point',
+    'construct',
+    'design',
+    'implemented',
+    'CONSTRUCT',
+    'Construction reference point at an explicit X/Y/Z. Emits a `datum_point` marker op (reference geometry; no solid change).'
+  ),
 
   // —— Surface / advanced ——
   c('su_extrude', 'Extrude surface', 'surface', 'design', 'planned', 'CREATE'),
@@ -973,6 +1013,24 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'Design 3D: **Section**, Y clip (world +Y). Same mesh source as **Measure** (kernel when fresh, else preview). **Esc** clears — docs/VERIFICATION.md'
   ),
   c(
+    'in_select_face',
+    'Select faces',
+    'inspect',
+    'design',
+    'implemented',
+    'SELECT',
+    'Design 3D cockpit **Faces** toggle — a plain viewport click picks a model face (stable `f:<hex>` id) for **Shell** open-cap targeting + sketch-on-face. Selection chip shows area; **Esc** clears.'
+  ),
+  c(
+    'in_select_edge',
+    'Select edges',
+    'inspect',
+    'design',
+    'implemented',
+    'SELECT',
+    'Design 3D cockpit **Edges** toggle — a plain viewport click near an edge picks it (stable `e:<hex>` id) so **Fillet** / **Chamfer** target exactly that edge (`pickedEdgeIds`). Sidecar emits per-edge polylines; selection chip shows edge length; **Esc** clears.'
+  ),
+  c(
     'ut_interference',
     'Interference',
     'inspect',
@@ -1115,6 +1173,9 @@ export const DESIGN_RIBBON_COMMAND_IDS = new Set<string>([
   'sk_mirror_sk',
   'sk_pattern_sk',
   'sk_choose_plane',
+  'co_offset_plane',
+  'co_datum_axis',
+  'co_datum_point',
   'dim_linear',
   'dim_aligned',
   'co_coincident',
