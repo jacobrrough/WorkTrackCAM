@@ -55,6 +55,7 @@ import {
   useState,
   type JSX
 } from 'react'
+import type { BufferGeometry } from 'three'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { ViewportChrome } from './ViewportChrome'
@@ -399,6 +400,32 @@ export interface DesignWorkspaceProps {
    * `CommandContextProvider`). Optional — when omitted the push is skipped.
    */
   readonly onCommandSurface?: (surface: SelectionSurface & { readonly sketchMode: boolean }) => void
+  /**
+   * No-code build→render: the live `THREE.BufferGeometry` of the kernel-built
+   * solid (or sketch-preview / imported asset) the host's
+   * `DesignSessionContext` maintains. When the operator builds a model with the
+   * no-code feature timeline (extrude → fillet a picked edge, …) rather than the
+   * CadQuery code drawer, THIS is the geometry that appears in the cockpit
+   * viewport.
+   *
+   * Priority: a freshly-Run script result (the internal selection-grade
+   * `viewportGeometry`) ALWAYS wins so the CadQuery code path is unchanged; this
+   * is the fallback shown when no script has been run. Optional + additive:
+   * omitted by the splash preview / render-pin tests, in which case the viewport
+   * behaves exactly as before (empty-state until a Run).
+   *
+   * No `onSelect` is wired for this geometry — the kernel STL carries no
+   * `userData.faceIds` parallel array, so face-pick stays a script-path feature
+   * (honest: we don't fake a selectable surface we can't resolve).
+   */
+  readonly kernelViewportGeometry?: BufferGeometry | null
+  /**
+   * No-code build→render: `true` while the host's kernel build (`build_part.py`)
+   * is in flight. Surfaced as a non-blocking "Building model…" overlay so the
+   * operator sees the timeline edit is being applied. Optional — defaults to
+   * `false`.
+   */
+  readonly kernelBuilding?: boolean
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -460,6 +487,8 @@ export function DesignWorkspace({
   requestedFeatureDialog = null,
   onFeatureDialogConsumed,
   onCommandSurface,
+  kernelViewportGeometry = null,
+  kernelBuilding = false,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   /**
@@ -977,6 +1006,22 @@ export function DesignWorkspace({
     [selectionTessellation],
   )
 
+  /**
+   * No-code build→render — the geometry the cockpit viewport actually mounts.
+   * A freshly-Run CadQuery script result (`viewportGeometry`, which carries the
+   * `userData.faceIds` for face-pick) takes priority so the code path is
+   * unchanged; otherwise we fall back to the host session's kernel-built solid
+   * (`kernelViewportGeometry`) so adding a no-code feature actually displays the
+   * model. `null` → the empty-state shows (no model built yet either way).
+   *
+   * Face-pick (`onSelect` / `highlightedFaceId`) is wired ONLY for the
+   * script-path geometry; the kernel STL has no faceIds parallel array, so we do
+   * not fake a selectable surface against it.
+   */
+  const scriptGeometryActive = viewportGeometry !== null
+  const displayedViewportGeometry: BufferGeometry | null =
+    viewportGeometry ?? kernelViewportGeometry
+
   // ── FG-5b — per-feature property dialogs ──────────────────────────────────
   /**
    * Selection context handed to the active feature dialog. Reuses the same
@@ -1293,20 +1338,41 @@ export function DesignWorkspace({
                 </div>
               )}
             </div>
-          ) : viewportGeometry ? (
+          ) : displayedViewportGeometry ? (
             <Viewport3D
-              geometry={viewportGeometry}
-              onSelect={handleViewportSelect}
+              geometry={displayedViewportGeometry}
+              // Face-pick only against the script-path geometry (it carries the
+              // userData.faceIds the picker resolves). The no-code kernel STL has
+              // none, so we don't wire a selectable surface we can't map back.
+              onSelect={scriptGeometryActive ? handleViewportSelect : undefined}
               highlightedFaceId={
-                selection?.kind === 'face' ? selection.faceId : null
+                scriptGeometryActive && selection?.kind === 'face'
+                  ? selection.faceId
+                  : null
               }
             />
           ) : (
             <EmptyState
               testId="design-workspace-viewport-empty"
-              title="Click Run to see your design"
-              body="Open the code drawer, write a CadQuery script and run it — your built model will appear here."
+              title="Build a model to see it here"
+              body="Sketch a profile and add a feature (extrude, fillet…), or open the code drawer to write a CadQuery script — your built model appears here."
             />
+          )}
+          {/*
+            No-code build→render — non-blocking "Building model…" overlay while
+            the host session's kernel build (build_part.py) is in flight after a
+            timeline edit. Honest progress cue: the operator sees the feature is
+            being applied rather than wondering if the click did nothing.
+          */}
+          {kernelBuilding && (
+            <div
+              className="design-workspace__build-indicator"
+              role="status"
+              aria-live="polite"
+              data-testid="design-workspace-build-indicator"
+            >
+              Building model…
+            </div>
           )}
           {/*
             CAD V1 Workflow H — selection status chip. Still owned by

@@ -208,6 +208,12 @@ export function DesignWorkspaceHost({
       requestedFeatureDialog={requestedFeatureDialog}
       onFeatureDialogConsumed={() => setRequestedFeatureDialog(null)}
       onCommandSurface={handleCommandSurface}
+      // No-code build→render: the session maintains the kernel-built solid's
+      // geometry (rebuilt automatically when the feature timeline changes) and a
+      // build-in-flight flag. Threading them here is what makes "add a no-code
+      // feature → see the model" actually display in the cockpit viewport.
+      kernelViewportGeometry={session.viewportGeometry}
+      kernelBuilding={session.kernelBuilding}
     />
   )
 }

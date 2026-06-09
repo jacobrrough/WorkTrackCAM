@@ -26,8 +26,20 @@ function parseSplitKeepHalfspace(raw: unknown): KernelManifest['splitKeepHalfspa
 }
 
 export type KernelBuildResult =
-  | { ok: true; stepPath: string; stlPath: string; manifest: KernelManifest }
+  | { ok: true; stepPath: string; stlPath: string; manifest: KernelManifest; warnings?: string[] }
   | { ok: false; error: string; detail?: string; manifest: KernelManifest }
+
+/**
+ * Coerce the optional `warnings` array `build_part.py` emits on a successful
+ * (sacred-kernel) build into a clean `string[]`. A bad post-solid op never
+ * aborts the build — it is skipped with a non-fatal warning carried here — so
+ * the renderer can surface them honestly rather than silently dropping them.
+ */
+function parseWarnings(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out = raw.filter((w): w is string => typeof w === 'string' && w.trim().length > 0)
+  return out.length > 0 ? out : undefined
+}
 
 /**
  * Phase 1: design/sketch.json → JSON payload → CadQuery `build_part.py` → STEP + STL in project output/.
@@ -197,5 +209,6 @@ export async function buildKernelPartFromProject(params: {
   kernelManifestSchema.parse(manifest)
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
 
-  return { ok: true, stepPath, stlPath, manifest }
+  const warnings = parseWarnings(json?.warnings)
+  return warnings ? { ok: true, stepPath, stlPath, manifest, warnings } : { ok: true, stepPath, stlPath, manifest }
 }

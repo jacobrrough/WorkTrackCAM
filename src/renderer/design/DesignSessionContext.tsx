@@ -18,6 +18,7 @@ import {
   kernelInspectStaleReason,
   type KernelInspectStaleReason
 } from '../../shared/kernel-inspect-hash'
+import { formatKernelBuildStatus } from '../../shared/kernel-build-messages'
 import type { KernelManifest } from '../../shared/kernel-manifest-schema'
 import { defaultPartFeatures, type KernelPostSolidOp, type PartFeaturesFile } from '../../shared/part-features-schema'
 import { applyTimelineAction, type TimelineState } from './feature-timeline-actions'
@@ -50,6 +51,15 @@ function docReducer(state: DocState, action: DocAction): DocState {
     past: [...state.past, cloneDesign(state.design)].slice(-64)
   }
 }
+
+/**
+ * Debounce window (ms) for the no-code auto-build. A timeline gesture (append /
+ * edit / reorder / suppress / roll-back) persists features.json then bumps the
+ * timeline signature; this delay coalesces a burst of gestures into ONE kernel
+ * build so the operator isn't slicing OCC on every keystroke. Matches the
+ * 300–400 ms cadence used elsewhere (DesignWorkspace's list-ops debounce).
+ */
+const KERNEL_AUTO_BUILD_DEBOUNCE_MS = 400
 
 const kernelFinishingOpKinds = new Set<KernelPostSolidOp['kind']>([
   'fillet_all',
@@ -102,8 +112,19 @@ export type DesignSessionValue = {
   kernelManifest: KernelManifest | null
   /** When non-null, kernel mesh exists but current design/features may not match it. */
   kernelInspectStaleReason: KernelInspectStaleReason | null
+  /** True while a no-code kernel build (`build_part.py`) is in flight. */
+  kernelBuilding: boolean
   /** Reload `output/kernel-part.stl` + manifest (e.g. after Build STEP). */
   refreshKernelInspectGeometry: () => Promise<void>
+  /**
+   * No-code build→render: persist the live sketch, run the CadQuery kernel build
+   * (`design/sketch.json` + `part/features.json` kernelOps → STEP + STL), then
+   * reload the built STL into {@link viewportGeometry}. Surfaces build
+   * warnings/errors via `onStatus`. Never throws. No-op without a project.
+   * The kernel-op timeline editors fire this automatically (debounced); also
+   * callable directly for an explicit "Build" action.
+   */
+  buildKernelPart: () => Promise<void>
   selection: DesignSelection
   setSelection: (s: DesignSelection) => void
   dispatch: React.Dispatch<DocAction>
@@ -193,8 +214,18 @@ export function DesignSessionProvider({
   const [assetImportGeometry, setAssetImportGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [designHashHex, setDesignHashHex] = useState('')
   const [featuresHashHex, setFeaturesHashHex] = useState('')
+  const [kernelBuilding, setKernelBuilding] = useState(false)
   const kernelGeomRef = useRef<THREE.BufferGeometry | null>(null)
   const assetGeomRef = useRef<THREE.BufferGeometry | null>(null)
+  // No-code build→render serialization. `kernelBuildInFlightRef` guards against
+  // overlapping CadQuery builds (the sidecar is single-flight per process);
+  // `kernelRebuildPendingRef` coalesces a request that arrives mid-build into a
+  // single trailing rebuild so the final on-screen solid always reflects the
+  // latest timeline. `lastBuiltTimelineSigRef` lets the auto-build effect skip
+  // the initial load + no-op re-renders (only an actual timeline change builds).
+  const kernelBuildInFlightRef = useRef(false)
+  const kernelRebuildPendingRef = useRef(false)
+  const lastBuiltTimelineSigRef = useRef<string | null>(null)
 
   const fab = window.fab
 
@@ -344,6 +375,116 @@ export function DesignSessionProvider({
       kernelGeomRef.current = null
     }
   }, [])
+
+  // ── No-code build→render ───────────────────────────────────────────────────
+  // Persist the live sketch (so the BASE solid matches what the operator drew —
+  // the kernel-op editors only persist part/features.json, not design/sketch.json)
+  // then run the CadQuery kernel build and reload the built STL into the viewport.
+  // The kernel is sacred (CLAUDE.md Safety Rule 1): a bad op never aborts the
+  // build (build_part.py skips it with a warning), and an outright build failure
+  // is surfaced honestly via onStatus — never faked as success.
+  const buildKernelPart = useCallback(async () => {
+    if (!projectDir) return
+    // Serialize: if a build is already running, request a single trailing rebuild
+    // and return — the in-flight build's tail will pick up the latest on-disk state.
+    if (kernelBuildInFlightRef.current) {
+      kernelRebuildPendingRef.current = true
+      return
+    }
+    kernelBuildInFlightRef.current = true
+    setKernelBuilding(true)
+    onStatus?.('Building model…')
+    try {
+      // Sync the BASE sketch to disk so build_part.py reads the current profiles.
+      try {
+        await fab.designSave(projectDir, JSON.stringify(design))
+      } catch (e) {
+        onStatus?.(e instanceof Error ? e.message : String(e))
+        return
+      }
+      const settings = await fab.settingsGet()
+      const pythonPath = (settings?.pythonPath ?? '').trim() || 'python'
+      const result = await fab.kernelBuild(projectDir, pythonPath)
+      if (!result.ok) {
+        onStatus?.(formatKernelBuildStatus(result.error, result.detail))
+        // Still refresh so the manifest (now ok:false) marks the inspect mesh
+        // stale rather than leaving a confidently-wrong solid on screen.
+        await refreshKernelInspectGeometry()
+        return
+      }
+      // Reload the freshly built STL + manifest into viewportGeometry.
+      await refreshKernelInspectGeometry()
+      const warnings = result.warnings ?? []
+      if (warnings.length > 0) {
+        onStatus?.(`Model built with ${warnings.length} warning${warnings.length === 1 ? '' : 's'}: ${warnings[0]}`)
+      } else {
+        onStatus?.('Model built.')
+      }
+    } catch (e) {
+      onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      kernelBuildInFlightRef.current = false
+      setKernelBuilding(false)
+      // Drain a coalesced rebuild requested while this build was running.
+      if (kernelRebuildPendingRef.current) {
+        kernelRebuildPendingRef.current = false
+        void buildKernelPart()
+      }
+    }
+  }, [fab, projectDir, design, onStatus, refreshKernelInspectGeometry])
+
+  // Keep the auto-build effect's dep list to the SIGNATURE alone by routing the
+  // trigger through a ref to the latest `buildKernelPart`. `buildKernelPart`'s
+  // identity changes on every sketch edit (it closes over `design`); if it were
+  // in the effect deps, a sketch edit during the debounce window would re-run
+  // the effect, its cleanup would clear the pending timer, and the build would
+  // be silently cancelled. The ref decouples that: the effect fires only when
+  // the timeline signature (or project/loaded) actually changes.
+  const buildKernelPartRef = useRef(buildKernelPart)
+  useEffect(() => {
+    buildKernelPartRef.current = buildKernelPart
+  }, [buildKernelPart])
+
+  // Signature of the EFFECTIVE kernel-op timeline (order + each op's body +
+  // suppress flag + the design-level roll-back marker). Changing the timeline
+  // — appending/editing an op via a feature dialog, reordering, suppressing, or
+  // moving the roll-back bar — changes this string and re-triggers a build.
+  const kernelTimelineSig = useMemo(
+    () =>
+      JSON.stringify({
+        ops: features?.kernelOps ?? [],
+        rolledBackTo: features?.rolledBackTo ?? null
+      }),
+    [features?.kernelOps, features?.rolledBackTo]
+  )
+
+  // Debounced auto-build: when the timeline signature changes after the initial
+  // load, rebuild the solid. We skip the FIRST settled signature per project so
+  // opening a project (which already lazy-loads any existing kernel STL via
+  // refreshKernelInspectGeometry) does not kick off a redundant rebuild — only a
+  // genuine edit does. A short debounce coalesces rapid timeline gestures.
+  useEffect(() => {
+    if (!projectDir || !loaded) {
+      // Reset the baseline so the next project's first signature is treated as
+      // initial (no auto-build) rather than a change vs. the previous project.
+      lastBuiltTimelineSigRef.current = null
+      return
+    }
+    if (lastBuiltTimelineSigRef.current === null) {
+      // First settled signature for this project — adopt it as the baseline and
+      // do NOT build (the existing kernel mesh, if any, is already loaded).
+      lastBuiltTimelineSigRef.current = kernelTimelineSig
+      return
+    }
+    if (lastBuiltTimelineSigRef.current === kernelTimelineSig) return
+    lastBuiltTimelineSigRef.current = kernelTimelineSig
+    const handle = setTimeout(() => {
+      void buildKernelPartRef.current()
+    }, KERNEL_AUTO_BUILD_DEBOUNCE_MS)
+    return () => {
+      clearTimeout(handle)
+    }
+  }, [projectDir, loaded, kernelTimelineSig])
 
   const assetMeshPathsKey = useMemo(() => (assetMeshRelPaths ?? []).join('\0'), [assetMeshRelPaths])
 
@@ -818,7 +959,9 @@ export function DesignSessionProvider({
       inspectMeshSourceLabel,
       kernelManifest,
       kernelInspectStaleReason: kernelInspectStale,
+      kernelBuilding,
       refreshKernelInspectGeometry,
+      buildKernelPart,
       selection,
       setSelection,
       dispatch,
@@ -856,7 +999,9 @@ export function DesignSessionProvider({
       inspectMeshSourceLabel,
       kernelManifest,
       kernelInspectStale,
+      kernelBuilding,
       refreshKernelInspectGeometry,
+      buildKernelPart,
       selection,
       solveReport,
       onDesignChange,
