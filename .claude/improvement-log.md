@@ -17738,3 +17738,88 @@ CAVEAT (pre-existing, unchanged): new-shell CAM (onRunCam/onRunSlice) is wired t
 but less battle-tested than the retired ShopApp CAM (task #10). For CAM, verify program zero / WCS /
 retracts via simulate before running real jobs. NEXT: resume parity stacks (each built + wired); CAM
 phase (Stack 6 rest machining) is gcode-safety-gated.
+
+## Cycle 234 — dynamic machine-adaptive campaign: Waves 0–3c (2026-06-08)
+
+**Focus:** make the toolset adapt per workspace×machine (Fusion-style) and wire every
+built-but-unreachable tool. Headline diagnosis (Wave 0 audit, `docs/plans/tool-catalog.md`,
+617 tools): the app was **access-layer-bound, not capability-bound** — Viewport3D, the 2D
+sketcher, and the 152-command palette were all built + tested but mounted nowhere. Run as a
+main agent directing many sub-agent **workflows** (Build→Integrate→Verify, disjoint file sets
+per concurrent wave, adversarial verify, commit with explicit file lists to separate
+concurrent streams).
+
+**Baseline → result:** full suite 14,854 (post-P5) → **15,331 pass / 1 skip / 0 fail**; `tsc`
+clean throughout; zero regressions across every wave.
+
+**Commits (oldest→newest):**
+- `c99a284` CAM Stack A — in-process stock model (IPW). Fixed a floorZ monotonicity violation
+  (`Math.min(floorZ, stockTopZ)`) + nearest-neighbor part sampling vs. emptyZ bilinear bleed
+  (caught by my own workflow's adversarial verify).
+- `374e9cf` / `7ae7c69` / `37a5b18` — UI fidelity to the 10 mockups: boot on **Graphite Pro**
+  (not Titanium), viewport depth + CAD grid, no-code Design cockpit (feature-tree · chromed
+  viewport · Properties). See memory `keep-10-mockup-ui-style`.
+- `a63264c` — Moonraker URL fix: `new URL()` throws on a scheme-less host →
+  `normalizeMoonrakerUrl` prepends `http://`. Field follow-up: a subsequent HTTP 404 = wrong
+  port (nginx :80 vs Moonraker **:7125**).
+- `8005adb` — package-lock name sync to worktrack-3d.
+- `02a5997` — **Wave 0**: exhaustive CAD/CAM tool catalog + gap audit + master plan (the
+  access-layer diagnosis, the workspace×machine ribbon taxonomy, FG-1..FG-7).
+- `4a6f960` / `f22c33c` — **Wave 1**: the Context Engine (`src/renderer/commands/` registry +
+  `useCommandContext(workspace×machineKind×selection)` + `useResolvedCommands`) — live ribbon,
+  164-command palette, real Viewport3D mounted, bound status. Honesty contract: unwired
+  commands render disabled/greyed.
+- `22d2ea9` — **Wave 2**: CAD foundation — `Sketch2DCanvas` mounted, the 6 feature dialogs,
+  face selection, the redundant Part/Assembly/Drawing tabs de-duped, ribbon live.
+- `6265cf3` — **#15** picked-edge/face targeting (kernel + schema + dialogs): `apply_*_select_op`
+  + `resolve_picked_edges/faces` + FNV-1a geometry-hash ids (OCCT HashCode is absent in the
+  bundled OCP build). Validated 4.0× proof — a picked edge removes exactly that edge vs. the
+  axis bucket's 4.
+- `913b3a7` — **sketcher usability** (USER-REPORTED): exact cursor↔grid mapping (the
+  `clientToCanvasLocal` CSS-px→bitmap scale bug), snap-to-grid, typed dimensions.
+- `f2bd1fa` — **#21 THE KEYSTONE**: the no-code build consumer `engines/occt/build_part.py`
+  never existed in git, so the feature dialogs + timeline built ZERO geometry. Now builds
+  kernel-op timelines → solid (reuses #15's select-ops), exports STEP+STL, never raises. The
+  campaign had wired a lot of UI on top of a build path that was already broken; this fixed the
+  foundation.
+- `f3394fd` — **Wave 3a Carvera 4-axis**: orientation gizmo → real placement (was a hard-coded
+  identity), tailstock collision sweep, `ProbeCyclePanel` + `MultiSetupWizard` mounted, rotary
+  knobs surfaced, Mill-4 ribbon live. gcode-safety PASS — `carvera_4axis.hbs` BYTE-IDENTICAL;
+  carvera-pipeline 17 tests (Y0 centering, **M2-not-M30**, G4 P2 dwell, no M6, X-span clamp).
+- `b1db233` — **Wave 3b K2 FDM**: real process overrides (was a `buildOrcaArgs` no-op) →
+  `planOrcaOverrides` routes temps to a filament overlay **clamped to the K2 ceiling
+  (350/120)** + process keys to a `--load-settings` overlay; live Pause/Resume/Cancel job
+  controls (Moonraker IPC); FDM ribbon. gcode-safety PASS — `fdm_passthrough.hbs` +
+  `gcode-temp-validator.ts` + `moonraker-push.ts` byte-identical; clamp fuzz 100–800 °C never
+  exceeds ceiling.
+- `fe0f5fb` — **Wave 3c CAD finish**: viewport edge-picking (per-edge polylines+ids →
+  `makeEdgeSelection`, activates #15 end-to-end — pick a cube edge → 8.58 mm³ vs. axis-bucket
+  34.34 mm³), Inspect measure/section → viewport HUD, sketch-on-face, Construct datums
+  (byte-identical solid, never raise). cadquery venv 33/33 (Safety Rule 5).
+
+**G-code safety (per machine):** Carvera 4-axis (3a) and K2 FDM (3b) both PASS by construction —
+posts/emitters byte-identical; the only behavior change CLAMPS (temps) or conservatively orients
+(placement), never relaxing a guard. No bad-G-code path introduced. The CAD waves emit no G-code.
+
+**Machines covered:** Carvera 4-axis (3a), K2 Plus FDM (3b). **Laguna VCarve (3d) IN FLIGHT** —
+real `cnc_vcarve` engine (medial-axis + V-bit depth-from-width, capped) + router ribbon + DXF→
+entities wiring; gcode-safety RichAuto (**M30 not M2**, depth cap, safe-Z).
+
+**Honest residuals (documented, not regressions):** topological-naming — stable ids are
+geometry-coordinate hashes, so a SCRIPT-path-picked edge id does NOT resolve against a no-code
+`build_part` body (different coordinate space) → safe axis-bucket fallback + warning, never a
+wrong cut (filed as background task `task_f76b39b3`); the no-code-only STL isn't edge-selectable;
+Inspect Section is a single mid-height clip (`cad.hlr_section` not wired); datums are manifest
+markers (no viewport glyphs yet); forward-looking catalog ids (`mf_op_4axis_*`, `fdm_*`) dispatch
+by id but need catalog rows to render as standalone ribbon buttons.
+
+**Meta-lesson (memory `feedback-ui-needs-hands-on-verification`):** green tests + a mounted
+component ≠ a usable feature. The sketcher (cursor mapping) and the no-code build (missing
+`build_part.py`) both passed tests yet were broken; the user caught both. For interactive/visual
+features, trace the full runtime path (does the spawned file exist? does the transform match the
+rendered pixels?) and exercise by hand before claiming done.
+
+**Next:** finish Wave 3d Laguna (the gcode-safety skill on the emitted v-carve G-code is the
+required ship gate); then shell polish (StatusBar cursor coords, marking menu) + the deferred
+VCarve P0s (mount the `Sketch2DCanvas` vector-authoring surface, Text/TrueType vectors, NFP
+nesting, pocket islands).
