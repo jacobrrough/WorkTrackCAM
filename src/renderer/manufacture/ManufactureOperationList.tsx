@@ -400,7 +400,7 @@ export function ManufactureOperationList({
                   Mesh &gt; G-code
                 </span>
               ) : null}
-              {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
+              {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
                 <span
                   className={`status-chip status-chip--${
                     contourDriftState(op, contourCandidates) === 'changed' || contourDriftState(op, contourCandidates) === 'missing'
@@ -430,6 +430,7 @@ export function ManufactureOperationList({
                   <option value="cnc_parallel">CNC parallel</option>
                   <option value="cnc_contour">CNC contour</option>
                   <option value="cnc_pocket">CNC pocket</option>
+                  <option value="cnc_vcarve">CNC V-carve (medial-axis, variable depth)</option>
                   <option value="cnc_drill">CNC drill</option>
                   <option value="cnc_adaptive">CNC adaptive (OCL AdaptiveWaterline or fallback)</option>
                   <option value="cnc_waterline">CNC waterline (OCL Z-level or fallback)</option>
@@ -592,7 +593,7 @@ export function ManufactureOperationList({
             ) : null}
             {op.kind === 'cnc_4axis_roughing' || op.kind === 'cnc_4axis_finishing' || op.kind === 'cnc_4axis_contour' || op.kind === 'cnc_4axis_indexed' || op.kind === 'cnc_4axis_continuous' ? (
               <div className="row row--mt-xs" data-testid={`op-4axis-rotary-tuning-${i}`}>
-                <label title="Angular stepover (degrees) around the rotation axis. Blank = auto from linear stepover and stock Ø.">
+                <label title="Angular stepover (degrees) around the rotation axis. Blank = auto from linear stepover and stock ï¿½.">
                   Stepover (&deg;)
                   <input
                     type="number"
@@ -1147,7 +1148,66 @@ export function ManufactureOperationList({
                 </label>
               </div>
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
+            {op.kind === 'cnc_vcarve' ? (
+              <div className="row">
+                <label title="FULL included angle of the V-bit (degrees), e.g. 60 or 90. Sets the depth-from-width: depth = clearanceRadius / tan(angle/2).">
+                  V-bit angle (&deg;)
+                  <input
+                    type="number"
+                    min={1}
+                    max={179}
+                    step={1}
+                    value={cutParamFieldValue(op, 'vBitAngleDeg')}
+                    onChange={(e) => onSetCutParam(i, 'vBitAngleDeg', e.target.value, 'positive')}
+                    placeholder="90"
+                  />
+                </label>
+                <label title="HARD depth cap (mm). The V-carve never plunges deeper than this â€” and is further capped to the stock thickness so the bit can't drive past the material.">
+                  Max depth (mm)
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'maxDepthMm')}
+                    onChange={(e) => onSetCutParam(i, 'maxDepthMm', e.target.value, 'positive')}
+                    placeholder="from Z pass / stock"
+                  />
+                </label>
+                <label title="Medial-axis sampling resolution (mm). Smaller = finer ridge + more moves. Defaults to a size-derived value, clamped for main-process safety.">
+                  Carve resolution (mm)
+                  <input
+                    type="number"
+                    min={0.05}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'stepoverMm')}
+                    onChange={(e) => onSetCutParam(i, 'stepoverMm', e.target.value, 'positive')}
+                    placeholder="auto"
+                  />
+                </label>
+                <label title="Reserved: a future flat-bottom prism floor (end-mill clearance pass at this clearance below the carve). Accepted + clamped today; no separate pass is emitted yet.">
+                  Flat-bottom clearance (mm)
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'flatBottomClearance')}
+                    onChange={(e) => onSetCutParam(i, 'flatBottomClearance', e.target.value, 'positive')}
+                    placeholder="none (V-walls only)"
+                  />
+                </label>
+              </div>
+            ) : null}
+            {op.kind === 'cnc_vcarve' ? (
+              <p className="msg manufacture-op-hint">
+                <strong>V-carve (medial-axis, variable depth):</strong> from a closed <strong>contourPoints</strong> loop the
+                engine solves a ridge; at each point the carve depth follows the local half-width (deepest where the shape is
+                widest, running out to zero at narrow tips) for the chosen V-bit angle. Depth is HARD-capped to
+                <strong> Max depth</strong> and to the stock thickness, so the bit never plunges past the material. Routes through
+                the same 2D post (<code>vcarve_mach3.hbs</code> for the Laguna). Output is unverified until post/machine checks (
+                <code>docs/MACHINES.md</code>).
+              </p>
+            ) : null}
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
               <div className="row">
                 <label className="label--wide-420">
                   contourPoints JSON (Array of [x,y] mm)
@@ -1184,13 +1244,13 @@ export function ManufactureOperationList({
                 </button>
               </div>
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
               (() => {
                 const s = contourPointsStats(op.params?.['contourPoints'])
                 return s ? <p className="msg msg--muted">{s}</p> : null
               })()
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
               (() => {
                 const sourceId = typeof op.params?.['contourSourceId'] === 'string' ? op.params['contourSourceId'] : ''
                 const sig = typeof op.params?.['contourSourceSignature'] === 'string' ? op.params['contourSourceSignature'] : ''
@@ -1219,7 +1279,7 @@ export function ManufactureOperationList({
                 return null
               })()
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
               (() => {
                 const derivedAt = typeof op.params?.['contourDerivedAt'] === 'string' ? op.params['contourDerivedAt'] : ''
                 if (!derivedAt) return null

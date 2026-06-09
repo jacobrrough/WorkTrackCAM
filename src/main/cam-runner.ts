@@ -456,6 +456,7 @@ export function validate2dOperationGeometry(
     operationKind === 'cnc_contour' ||
     operationKind === 'cnc_pocket' ||
     operationKind === 'cnc_chamfer' ||
+    operationKind === 'cnc_vcarve' ||
     operationKind === 'cnc_pcb_isolation' ||
     operationKind === 'cnc_pcb_contour'
   ) {
@@ -1060,6 +1061,7 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
     job.operationKind === 'cnc_pocket' ||
     job.operationKind === 'cnc_drill' ||
     job.operationKind === 'cnc_chamfer' ||
+    job.operationKind === 'cnc_vcarve' ||
     job.operationKind === 'cnc_pcb_isolation' ||
     job.operationKind === 'cnc_pcb_contour' ||
     job.operationKind === 'cnc_pcb_drill'

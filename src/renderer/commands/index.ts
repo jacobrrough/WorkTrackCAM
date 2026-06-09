@@ -121,3 +121,26 @@ export {
   buildFdmCommands,
   registerFdmCommands
 } from './fdm-commands'
+
+// Manufacture (Laguna router / VCarve 2.5D) ribbon handlers — host-action
+// contract + register wiring (Wave-3d; mirrors cam-commands / fdm-commands).
+// Vectors (DXF import) / 2D Toolpaths (profile · pocket · drill) / V-Carve /
+// Nesting / Simulate / Send; router-only enablement.
+export {
+  type RouterCommandActions,
+  type RouterCommandKind,
+  ROUTER_IMPORT_DXF_COMMAND_ID,
+  ROUTER_OP_PROFILE_COMMAND_ID,
+  ROUTER_OP_POCKET_COMMAND_ID,
+  ROUTER_OP_VCARVE_COMMAND_ID,
+  ROUTER_OP_DRILL_COMMAND_ID,
+  ROUTER_NEST_COMMAND_ID,
+  ROUTER_SIMULATE_COMMAND_ID,
+  ROUTER_POST_COMMAND_ID,
+  ROUTER_COMMAND_OP_KIND,
+  classifyRouterCommand,
+  routerCommandEnabled,
+  routerCommandIds,
+  buildRouterCommands,
+  registerRouterCommands
+} from './router-commands'

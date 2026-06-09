@@ -106,8 +106,8 @@ export const MY_SHOP_PRESETS: readonly MyShopPreset[] = [
     environmentId: 'vcarve_pro',
     label: 'Sign / lettering V-carve',
     description:
-      'V-bit chamfer + contour on dimensional lumber — smaller stock, T-slot clamped.',
-    primaryOpKind: 'cnc_chamfer'
+      'True medial-axis V-carve (variable depth) + contour on dimensional lumber — smaller stock, T-slot clamped.',
+    primaryOpKind: 'cnc_vcarve'
   },
   // ── Creality K2 Plus — high-speed FDM, Klipper/Moonraker ────────────────
   {

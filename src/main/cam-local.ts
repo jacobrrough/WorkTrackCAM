@@ -1143,6 +1143,295 @@ export function generateChamfer2dLines(params: Chamfer2dParams): string[] {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// V-CARVE TOOLPATH  (Vectric VCarve Pro / Carveco-style cnc_vcarve operation)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// This is the TRUE variable-depth sign-lettering carve — NOT the single-offset
+// fixed-depth bevel that `generateChamfer2dLines` produces. From closed input
+// vector(s) it solves a medial-axis RIDGE; at each ridge point the clearance
+// radius `r` (distance to the nearest boundary edge) sets the V-bit depth
+// `d = r / tan(vBitAngleDeg/2)`, so the carve is deepest where the shape is
+// widest and runs out to zero at narrow tips. The depth profile is therefore
+// monotonic-with-width and is HARD-CAPPED to `min(maxDepthMm, stockThickness)`
+// so the V-bit can never plunge past the material.
+//
+// Medial-axis solver — honest approximation note:
+//   A full Voronoi/exact medial-axis is ideal but heavy. This uses a
+//   DISTANCE-FIELD RIDGE approximation (acceptable per the build brief), which
+//   is robust for closed polygons and main-process-safe:
+//     1. Rasterize a signed clearance field over the contour bbox — for each
+//        interior sample, `r` = distance to the nearest boundary edge across all
+//        rings (even-odd inside test, so islands subtract).
+//     2. A sample is a RIDGE cell when its `r` is a 1-D local maximum along the
+//        X axis OR the Y axis (the discrete skeleton of the distance field).
+//     3. depth = clamp(r / tan(halfAngle), 0, cap).
+//     4. Chain ridge cells into polylines by greedy nearest-neighbour within a
+//        small connection radius; whenever the next ridge cell is beyond that
+//        radius (a disjoint branch / stroke / island) the tool LIFTS to safe-Z
+//        before the rapid to the next branch — never a transit through stock.
+//   Validated (see cam-local-vcarve.test.ts): deepest point sits in the widest
+//   span, depth never exceeds the cap, and the spine depth is monotonic with
+//   local width. The approximation can fragment a ridge at T-junctions into
+//   several branches — that costs extra safe-Z rapids but is never unsafe.
+
+export type VCarve2dParams = {
+  /**
+   * One or more closed polygons in setup WCS (mm). The first ring is the outer
+   * boundary; any further rings are treated as islands (even-odd) so the carve
+   * respects holes. A single ring is the common sign-lettering case.
+   */
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>
+  /** FULL included angle of the V-bit (degrees), e.g. 60 or 90. */
+  vBitAngleDeg: number
+  /** HARD depth cap (mm, positive). The carve never plunges deeper than this. */
+  maxDepthMm: number
+  feedMmMin: number
+  plungeMmMin: number
+  safeZMm: number
+  /**
+   * Medial-axis sampling resolution (mm). Smaller = finer ridge + more moves.
+   * Defaults to a value derived from the shape size, clamped for main-process
+   * safety. The grid is additionally capped to {@link VCARVE_MAX_GRID_CELLS}.
+   */
+  stepoverMm?: number
+  /**
+   * Reserved for a future flat-bottom prism floor (an end-mill clearance pass at
+   * this clearance below the carve). Accepted + clamped today; no separate pass
+   * is emitted yet. Present so the schema/param surface is stable.
+   */
+  flatBottomClearance?: number
+}
+
+export type VCarve2dGenerateResult = {
+  lines: string[]
+  /** User-facing CAM notes (resolution clamps, approximation honesty, etc.). */
+  hints: string[]
+}
+
+/** Caps the V-carve distance-field grid so a full-sheet Laguna job can't blow up the main process. */
+export const VCARVE_MAX_GRID_CELLS = 360_000
+
+/** A solved ridge sample: world XY, clearance radius `r`, and capped carve depth (positive mm). */
+export type VCarveRidgePoint = { x: number; y: number; r: number; depthMm: number }
+
+/** Even-odd inside test across many rings (interior when an odd number of rings contain the point). */
+function pointInsideRings(rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>, x: number, y: number): boolean {
+  let parity = 0
+  for (const ring of rings) {
+    if (ring.length >= 3 && pointInRing2d(ring, x, y)) parity ^= 1
+  }
+  return parity === 1
+}
+
+/** Distance to the nearest boundary edge across all rings (the inscribed-clearance radius). */
+function minDistanceToAnyRing(rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>, x: number, y: number): number {
+  let best = Number.POSITIVE_INFINITY
+  for (const ring of rings) {
+    if (ring.length < 2) continue
+    const d = minDistanceToRingEdges(ring, x, y)
+    if (d < best) best = d
+  }
+  return best
+}
+
+/**
+ * Convert a V-bit FULL included angle to depth-per-clearance-radius (`1/tan(half)`).
+ * A 90° bit → half 45° → factor 1 (depth == radius). A 60° bit → ~1.732 (deeper).
+ * Clamped to a sane half-angle band so a degenerate angle can't divide by ~0.
+ */
+export function vCarveDepthPerRadius(vBitAngleDeg: number): number {
+  const full = Number.isFinite(vBitAngleDeg) ? vBitAngleDeg : 90
+  const halfDeg = Math.min(89, Math.max(1, full / 2))
+  return 1 / Math.tan((halfDeg * Math.PI) / 180)
+}
+
+/**
+ * Solve the distance-field medial-axis ridge for a set of closed rings and map
+ * each ridge cell to a capped V-carve depth. Exported so the engine test can
+ * assert the depth profile (deepest-at-widest, monotonic-with-width, capped)
+ * directly without parsing G-code.
+ */
+export function solveVCarveRidge(params: {
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>
+  vBitAngleDeg: number
+  maxDepthMm: number
+  stepoverMm?: number
+}): { points: VCarveRidgePoint[]; stepMm: number; capMm: number; clampedResolution: boolean } {
+  const rings = params.rings.filter((r) => r.length >= 3)
+  const capMm = Math.max(0, params.maxDepthMm)
+  if (rings.length === 0 || !(capMm > 0)) {
+    return { points: [], stepMm: 0, capMm, clampedResolution: false }
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const ring of rings) {
+    for (const [x, y] of ring) {
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+  }
+  const spanX = maxX - minX
+  const spanY = maxY - minY
+  if (!(spanX > 1e-6) || !(spanY > 1e-6)) {
+    return { points: [], stepMm: 0, capMm, clampedResolution: false }
+  }
+
+  // Default resolution: ~1/120 of the larger span, clamped to [0.2, 2] mm, then
+  // raised if the grid would exceed the cell budget (full-sheet safety).
+  const requested =
+    typeof params.stepoverMm === 'number' && Number.isFinite(params.stepoverMm) && params.stepoverMm > 0
+      ? params.stepoverMm
+      : Math.max(0.2, Math.min(2, Math.max(spanX, spanY) / 120))
+  let step = Math.max(0.05, requested)
+  let clampedResolution = false
+  // Ensure (cols * rows) <= budget by lifting step if necessary. The closed-form
+  // sqrt(area/budget) is a first estimate; the +1 padding and ceil() rounding on
+  // each axis can still tip the product over the cap, so we grow the step in a
+  // bounded loop until the invariant holds exactly (hard main-process guarantee).
+  const cellsAt = (s: number): number => (Math.ceil(spanX / s) + 1) * (Math.ceil(spanY / s) + 1)
+  if (cellsAt(step) > VCARVE_MAX_GRID_CELLS) {
+    step = Math.max(step, Math.sqrt((spanX * spanY) / VCARVE_MAX_GRID_CELLS))
+    let guard = 0
+    while (cellsAt(step) > VCARVE_MAX_GRID_CELLS && guard < 1000) {
+      step *= 1.02
+      guard += 1
+    }
+    clampedResolution = true
+  }
+
+  const cols = Math.ceil(spanX / step) + 1
+  const rows = Math.ceil(spanY / step) + 1
+  const field = new Float64Array(cols * rows)
+  for (let j = 0; j < rows; j++) {
+    const y = minY + j * step
+    for (let i = 0; i < cols; i++) {
+      const x = minX + i * step
+      field[j * cols + i] = pointInsideRings(rings, x, y) ? minDistanceToAnyRing(rings, x, y) : 0
+    }
+  }
+
+  const at = (i: number, j: number): number => (i < 0 || j < 0 || i >= cols || j >= rows ? 0 : field[j * cols + i]!)
+  const depthPerR = vCarveDepthPerRadius(params.vBitAngleDeg)
+  const points: VCarveRidgePoint[] = []
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const d = field[j * cols + i]!
+      if (d <= 1e-6) continue
+      const left = at(i - 1, j)
+      const right = at(i + 1, j)
+      const up = at(i, j - 1)
+      const down = at(i, j + 1)
+      // 1-D local maximum along X or Y (the discrete distance-field skeleton).
+      // The `(d > nbr || nbr === 0)` plateau-breaker keeps a flat ridge one cell
+      // wide instead of a thick band, so the toolpath traces the spine.
+      const ridgeX = d >= left && d >= right && (d > left || d > right || left === 0 || right === 0)
+      const ridgeY = d >= up && d >= down && (d > up || d > down || up === 0 || down === 0)
+      if (!ridgeX && !ridgeY) continue
+      points.push({
+        x: minX + i * step,
+        y: minY + j * step,
+        r: d,
+        depthMm: Math.min(capMm, d * depthPerR)
+      })
+    }
+  }
+  return { points, stepMm: step, capMm, clampedResolution }
+}
+
+/**
+ * Generate a V-carve toolpath from closed vector(s). Emits XYZ feed polylines
+ * (z = -depth) along the medial-axis ridge with safe-Z lifts between disjoint
+ * branches. The body is posted unchanged by `vcarve_mach3.hbs` (Laguna Swift):
+ * the post supplies `%`, G21/G90/G17, spindle warm-up/cool-down, dust M7/M9,
+ * and the M30 terminator — this generator owns only the cut body + safe-Z.
+ *
+ * Caller MUST pass `maxDepthMm` already clamped to the stock thickness / Z
+ * envelope (see `dispatch2dStrategy`) so the cap honours the material.
+ */
+export function generateVCarve2dLines(params: VCarve2dParams): VCarve2dGenerateResult {
+  const hints: string[] = []
+  const { points, stepMm, capMm, clampedResolution } = solveVCarveRidge({
+    rings: params.rings,
+    vBitAngleDeg: params.vBitAngleDeg,
+    maxDepthMm: params.maxDepthMm,
+    stepoverMm: params.stepoverMm
+  })
+  if (points.length === 0) return { lines: [], hints }
+
+  const safeZ = params.safeZMm
+  const feed = params.feedMmMin
+  const plunge = params.plungeMmMin
+  // Connection radius: a ridge step away from a 4/8-neighbour is at most ~√2·step.
+  // 2.2·step keeps chaining local (true disjoint branches stay separated) while
+  // tolerating the diagonal skeleton spacing so a single stroke stays one branch.
+  const connR = Math.max(1e-6, stepMm * 2.2)
+  const connR2 = connR * connR
+
+  const used = new Array<boolean>(points.length).fill(false)
+  // Seed branches from the deepest unused ridge point so the heaviest cut leads.
+  const order = [...points.keys()].sort((a, b) => points[b]!.depthMm - points[a]!.depthMm)
+
+  const lines: string[] = []
+  lines.push(
+    `; V-carve — ${points.length} ridge pts, ${params.vBitAngleDeg.toFixed(0)}° V-bit, depth cap ${capMm.toFixed(3)} mm, res ${stepMm.toFixed(3)} mm`
+  )
+  for (const seed of order) {
+    if (used[seed]) continue
+    let cur = seed
+    used[cur] = true
+    const p0 = points[cur]!
+    // Disjoint branch: always lift to safe-Z, rapid in XY, then plunge.
+    lines.push(`G0 Z${safeZ.toFixed(3)}`)
+    lines.push(`G0 X${p0.x.toFixed(3)} Y${p0.y.toFixed(3)}`)
+    lines.push(`G1 Z${(-p0.depthMm).toFixed(3)} F${plunge.toFixed(0)}`)
+    // Greedy nearest-neighbour walk within the connection radius.
+    for (;;) {
+      const c = points[cur]!
+      let best = -1
+      let bestD2 = connR2 + 1
+      for (let k = 0; k < points.length; k++) {
+        if (used[k]) continue
+        const pk = points[k]!
+        const dx = pk.x - c.x
+        const dy = pk.y - c.y
+        const d2 = dx * dx + dy * dy
+        if (d2 <= connR2 && d2 < bestD2) {
+          bestD2 = d2
+          best = k
+        }
+      }
+      if (best < 0) break
+      used[best] = true
+      cur = best
+      const pn = points[cur]!
+      lines.push(`G1 X${pn.x.toFixed(3)} Y${pn.y.toFixed(3)} Z${(-pn.depthMm).toFixed(3)} F${feed.toFixed(0)}`)
+    }
+  }
+  // Final safe-Z so the post's cool-down/retract starts from clearance.
+  lines.push(`G0 Z${safeZ.toFixed(3)}`)
+
+  if (clampedResolution) {
+    hints.push(
+      `V-carve: sampling resolution was coarsened to ${stepMm.toFixed(3)} mm to keep the medial-axis grid under ${VCARVE_MAX_GRID_CELLS.toLocaleString()} cells for this shape size — pass a larger stepoverMm for an explicit resolution.`
+    )
+  }
+  if (typeof params.flatBottomClearance === 'number' && params.flatBottomClearance > 0) {
+    hints.push(
+      'V-carve: flatBottomClearance is accepted but a separate flat-bottom clearance pass is not emitted yet (V-walls only this release).'
+    )
+  }
+  hints.push(
+    'V-carve depth is a distance-field medial-axis approximation (deepest at the widest span, capped to stock); verify against your V-bit angle + stock thickness before cutting.'
+  )
+  return { lines, hints }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // AUTO-TAB (HOLDING BRIDGE) INSERTION  (Makera CAM-style tabsMode for contour)
 // ────────────────────────────────────────────────────────────────────────────
 

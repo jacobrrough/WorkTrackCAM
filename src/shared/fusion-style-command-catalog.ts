@@ -946,6 +946,65 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'Manufacture **Tier 1** G0/G1 path preview + **Tier 2** 2.5D height-field removal proxy (~88×88 grid, cylindrical tool stamps; not stock-exact) + optional **Tier 3** coarse voxel carve with **Fast/Balanced/Detailed** presets (grid/stamp budgets scale monotonically; still not swept-volume / not collision-safe / not machine kinematics). **Do not** treat preview as safe to run on hardware — docs/VERIFICATION.md + docs/MACHINES.md'
   ),
 
+  // —— Manufacture · Laguna router (VCarve / 2.5D) — router-gated ribbon rows.
+  // Owned by src/renderer/commands/router-commands.ts (classifyRouterCommand).
+  // Enabled only when machineKind === 'router'; the op-seeding rows seed the
+  // runtime cnc_* op kind via ROUTER_COMMAND_OP_KIND.
+  c(
+    'ro_import_dxf',
+    'Import Vectors (DXF)',
+    'manufacture_2d',
+    'manufacture',
+    'partial',
+    'VECTORS',
+    'Laguna router · Vectors → Import. Lands DXF entities (dxf:import IPC + dxf-parser, mm-converted) onto the 2D sketch surface for profiling/pocketing/v-carving. Router-only; opens the importer — no toolpath/G-code here.'
+  ),
+  c(
+    'ro_op_profile',
+    '2D Profile / Contour',
+    'manufacture_2d',
+    'manufacture',
+    'implemented',
+    '2D',
+    'Laguna router · 2D Toolpaths → Profile. Seeds cnc_contour (on/inside/outside, leads, ramp, tabs, multi-depth, climb/conv) via cam-local → cam-runner-2d → vcarve_mach3.hbs. Router-only; opens the op editor — no G-code here.'
+  ),
+  c(
+    'ro_op_pocket',
+    '2D Pocket',
+    'manufacture_2d',
+    'manufacture',
+    'implemented',
+    '2D',
+    'Laguna router · 2D Toolpaths → Pocket. Seeds cnc_pocket (raster clear, ramp entry, wall-stock, finish pass) via cam-local → cam-runner-2d → vcarve_mach3.hbs. Router-only; opens the op editor — no G-code here.'
+  ),
+  c(
+    'ro_op_vcarve',
+    'V-Carve',
+    'manufacture_2d',
+    'manufacture',
+    'partial',
+    'V-CARVE',
+    'Laguna router · V-Carve → V-Carve. Seeds the new cnc_vcarve op (medial-axis variable-depth carve, depth-from-half-width for a known V-bit angle; depth capped to stock thickness / Z envelope). NOT cnc_chamfer (a fixed-depth single-offset bevel). Router-only; opens the op editor — the depth solve + post (vcarve_mach3.hbs, M30/%/G21, safe-Z) run downstream.'
+  ),
+  c(
+    'ro_op_drill',
+    'Drilling',
+    'manufacture_2d',
+    'manufacture',
+    'implemented',
+    '2D',
+    'Laguna router · 2D Toolpaths → Drill. Seeds cnc_drill (peck/dwell canned cycles G81/G82/G83 at vector points) via cam-local → cam-runner-2d → vcarve_mach3.hbs. Router-only; opens the op editor — no G-code here.'
+  ),
+  c(
+    'ro_nest',
+    'True-shape Nesting',
+    'manufacture_setup',
+    'manufacture',
+    'partial',
+    'NESTING',
+    'Laguna router · Nesting. Opens the true-shape nesting panel (LagunaNestingPanel → nesting:nestPolygons → true-shape-v1.ts BLF) to lay parts on the 5x10 sheet and apply placements back onto cut ops. Router-only; opens the panel — no G-code here.'
+  ),
+
   // —— Drawings / documentation (Tier A/B mesh projection + title block) ——
   c(
     'dr_new_sheet',

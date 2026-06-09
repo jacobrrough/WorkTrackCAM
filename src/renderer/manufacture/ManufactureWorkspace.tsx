@@ -7,6 +7,9 @@ import {
   listContourCandidatesFromDesign,
   type DerivedContourCandidate
 } from '../../shared/cam-2d-derive'
+import { dxfToSketch } from '../../shared/dxf-to-sketch'
+import type { DxfParseResult } from '../../shared/dxf-parser'
+import { emptyDesign, type DesignFileV2 } from '../../shared/design-schema'
 import { EmptyState } from '../src/EmptyState'
 import {
   formatDurationShort,
@@ -647,6 +650,17 @@ type Props = {
    */
   requestedNewOpKind?: string | null
   onRequestedNewOpKindHandled?: () => void
+  /**
+   * Wave 3d (Laguna router ribbon) — host-requested DXF vector import. When the
+   * counter increments, the workspace runs {@link importVectorsFromDxf} (file
+   * picker → `dxf:import` → fold into the sketch via `dxfToSketch` → `design:save`)
+   * and fires `onRequestedDxfImportHandled`. Drives the router ribbon's
+   * `importVectorsDxf` action. A monotonic counter (not a boolean) so two
+   * back-to-back imports each fire. Optional — absent keeps the workspace fully
+   * self-driven.
+   */
+  requestedDxfImportNonce?: number
+  onRequestedDxfImportHandled?: () => void
 }
 
 export function ManufactureWorkspace({
@@ -680,7 +694,9 @@ export function ManufactureWorkspace({
   requestedStage = null,
   onRequestedStageHandled,
   requestedNewOpKind = null,
-  onRequestedNewOpKindHandled
+  onRequestedNewOpKindHandled,
+  requestedDxfImportNonce = 0,
+  onRequestedDxfImportHandled
 }: Props) {
   const [mfg, setMfg] = useState<ManufactureFile>(() => emptyManufacture())
   // Gap #7 v1 — active plate id. Initialized lazily so emptyManufacture() always
@@ -901,6 +917,80 @@ export function ManufactureWorkspace({
       return
     }
     setContourCandidates(listContourCandidatesFromDesign(d))
+  }
+
+  /**
+   * Wave-3d (Laguna router) — "Import Vectors (DXF)". Makes the previously
+   * unreachable `dxf:import` IPC a live, end-to-end data path: pick a .dxf →
+   * parse + mm-convert (server side) → fold into the project's sketch model
+   * (`dxfToSketch`, additive merge) → persist via `design:save`. After the save
+   * the existing contour/pocket/V-carve/drill "Derive geometry from sketch" path
+   * (which reads the SAME `design/sketch.json` via `fab.designLoad` →
+   * cam-2d-derive) can consume the imported geometry — no canvas required this
+   * cycle (data path only, per the wave brief).
+   *
+   * SAFETY: imports sketch geometry only — emits no toolpath / G-code. The Laguna
+   * RichAuto/Mach3 post invariants + the V-carve depth cap to stock thickness all
+   * live downstream in cam-local → cam-runner-2d → vcarve_mach3.hbs, untouched.
+   */
+  async function importVectorsFromDxf(): Promise<void> {
+    if (!projectDir) {
+      onStatus?.('Open a project before importing DXF vectors.')
+      return
+    }
+    let filePath: string | null
+    try {
+      filePath = await fab.dialogOpenFile([{ name: 'DXF vectors', extensions: ['dxf'] }])
+    } catch (e) {
+      onStatus?.(`DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (!filePath) return // user cancelled the picker
+    let res: ({ ok: true } & DxfParseResult) | { ok: false; error: string }
+    try {
+      res = await fab.dxfImport(filePath)
+    } catch (e) {
+      onStatus?.(`DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (!res.ok) {
+      onStatus?.(`DXF import failed: ${res.error}`)
+      return
+    }
+    const parse: DxfParseResult = {
+      entities: res.entities,
+      layers: res.layers,
+      units: res.units,
+      warnings: res.warnings
+    }
+    if (parse.entities.length === 0) {
+      onStatus?.('DXF parsed but contained no supported 2D geometry (LINE/CIRCLE/ARC/POLYLINE).')
+      return
+    }
+    // Additive merge onto whatever the project's sketch already holds (a DXF
+    // import must never clobber CAD-authored geometry). `designLoad` returns the
+    // normalized v2 design (or null when no sketch.json exists yet → start empty).
+    let base: DesignFileV2
+    try {
+      base = (await fab.designLoad(projectDir)) ?? emptyDesign()
+    } catch {
+      base = emptyDesign()
+    }
+    const { design, importedCount, skippedCount, notes } = dxfToSketch(parse, base)
+    try {
+      await fab.designSave(projectDir, JSON.stringify(design))
+    } catch (e) {
+      onStatus?.(`DXF import failed to save sketch: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    // Refresh the contour-candidate list so the op editor's "Derive from sketch"
+    // picker immediately offers the imported closed loops.
+    setContourCandidates(listContourCandidatesFromDesign(design))
+    const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped)` : ''
+    onStatus?.(
+      `Imported ${importedCount} DXF vector${importedCount === 1 ? '' : 's'}${skipNote} into the sketch — use "Derive geometry from sketch" on a contour / pocket / V-carve / drill op.`
+    )
+    for (const n of notes.slice(0, 4)) onStatus?.(n)
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────────
@@ -1422,12 +1512,16 @@ export function ManufactureWorkspace({
       onStatus?.(`4-axis wrap: ${contour.length} vertices from sketch (wrap mode set to Contour).`)
       return
     }
-    if (op.kind === 'cnc_contour' || op.kind === 'cnc_pocket') {
+    if (op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve') {
       const sourceId = typeof base['contourSourceId'] === 'string' ? base['contourSourceId'] : undefined
       const selected = sourceId ? listContourCandidatesFromDesign(d).find((c) => c.sourceId === sourceId) : undefined
       const contour = deriveContourPointsFromDesign(d, sourceId)
       if (contour.length < 3) {
-        onStatus?.('No closed sketch profile found for contour/pocket derive.')
+        onStatus?.(
+          op.kind === 'cnc_vcarve'
+            ? 'No closed sketch profile found for V-carve derive (need a closed loop — the medial-axis carve runs between its walls).'
+            : 'No closed sketch profile found for contour/pocket derive.'
+        )
         return
       }
       base.contourPoints = contour
@@ -1592,6 +1686,18 @@ export function ManufactureWorkspace({
     onRequestedNewOpKindHandled?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on request change
   }, [requestedNewOpKind])
+
+  // Wave 3d (Laguna router ribbon) — run a host-requested DXF vector import, then
+  // clear the one-shot request. The nonce changes (not a boolean) so two
+  // back-to-back imports each fire. Routes through `importVectorsFromDxf` (file
+  // picker → dxf:import → fold into sketch via dxfToSketch → design:save). Skips
+  // the initial 0 so a freshly-mounted workspace never auto-opens a file picker.
+  useEffect(() => {
+    if (!requestedDxfImportNonce) return
+    void importVectorsFromDxf()
+    onRequestedDxfImportHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on nonce change
+  }, [requestedDxfImportNonce])
 
   /**
    * Gap #9 — Laguna sheet size derived from the first setup whose machineId

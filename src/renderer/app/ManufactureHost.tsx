@@ -52,8 +52,15 @@ import type { ManufactureFile, ManufactureOperation } from '../../shared/manufac
 import {
   registerCamCommands,
   registerFdmCommands,
+  registerRouterCommands,
+  ROUTER_COMMAND_OP_KIND,
+  ROUTER_OP_DRILL_COMMAND_ID,
+  ROUTER_OP_POCKET_COMMAND_ID,
+  ROUTER_OP_PROFILE_COMMAND_ID,
+  ROUTER_OP_VCARVE_COMMAND_ID,
   type CamCommandActions,
-  type FdmCommandActions
+  type FdmCommandActions,
+  type RouterCommandActions
 } from '../commands'
 
 /** Default Python interpreter when `settings.pythonPath` is unset. */
@@ -126,6 +133,11 @@ export function ManufactureHost(): ReactElement {
   // `onRequested*Handled` callbacks after it consumes each request.
   const [requestedStage, setRequestedStage] = useState<WorkflowStage | null>(null)
   const [requestedNewOpKind, setRequestedNewOpKind] = useState<string | null>(null)
+  // Wave 3d (Laguna router ribbon) — monotonic nonce the host bumps to ask the
+  // workspace to run a DXF vector import (file picker → dxf:import → fold into
+  // the sketch). A counter (not a boolean) so two back-to-back imports each
+  // fire; the workspace clears it via `onRequestedDxfImportHandled`.
+  const [requestedDxfImportNonce, setRequestedDxfImportNonce] = useState<number>(0)
 
   useEffect(() => {
     let cancelled = false
@@ -412,6 +424,58 @@ export function ManufactureHost(): ReactElement {
 
   useEffect(() => registerFdmCommands(fdmActions), [fdmActions])
 
+  // ── Laguna router (VCarve 2.5D) ribbon go-live (Wave 3d) ──────────────────
+  // Register the router slicer-ribbon command handlers on the shared registry
+  // (mirrors the CAM + FDM wiring above). The action bag is the seam between a
+  // catalog `command.id` and real shell behavior:
+  //   - importVectorsDxf bumps `requestedDxfImportNonce`, asking the workspace to
+  //     run its `importVectorsFromDxf` data path (file picker → `dxf:import` →
+  //     fold into the project sketch via `dxfToSketch` → `design:save`). The
+  //     imported closed loops then feed the op editor's "Derive from sketch".
+  //   - opProfile / opPocket / opVcarve / opDrill seed a new op by pushing the
+  //     concrete `cnc_*` kind (from ROUTER_COMMAND_OP_KIND) down through
+  //     `requestedNewOpKind` — the SAME one-shot seam the CAM ribbon uses. The
+  //     V-carve row seeds the NEW `cnc_vcarve` op (medial-axis variable depth),
+  //     NOT `cnc_chamfer` (the gap-audit bug).
+  //   - nest opens the Plan tab (the LagunaNestingPanel lives there) on the Setup
+  //     stage; simulate / post navigate the workflow-stage strip.
+  // SAFETY: these handlers only OPEN authoring surfaces / seed an op kind — they
+  // never generate, mutate, or post a toolpath. Laguna toolpath generation + the
+  // vcarve_mach3.hbs RichAuto/Mach3 invariants (% markers, G21/G90/G17, M3 warm-up
+  // G4 P2, M5+G4 P3 cool-down, dust M7/M9, safe-Z, M30 end) + the V-carve depth
+  // cap to stock thickness all live downstream and are untouched here. Enablement
+  // gating (router machine + Manufacture route) lives in `router-commands.ts`.
+  const routerActions = useMemo<RouterCommandActions>(
+    () => ({
+      importVectorsDxf: () => {
+        // Surface the op list (Plan) so the operator sees where derived geometry
+        // lands, then trigger the workspace's import data path.
+        setPanelTab('plan')
+        setRequestedDxfImportNonce((n) => n + 1)
+      },
+      opProfile: () => setRequestedNewOpKind(ROUTER_COMMAND_OP_KIND[ROUTER_OP_PROFILE_COMMAND_ID] ?? 'cnc_contour'),
+      opPocket: () => setRequestedNewOpKind(ROUTER_COMMAND_OP_KIND[ROUTER_OP_POCKET_COMMAND_ID] ?? 'cnc_pocket'),
+      opVcarve: () => setRequestedNewOpKind(ROUTER_COMMAND_OP_KIND[ROUTER_OP_VCARVE_COMMAND_ID] ?? 'cnc_vcarve'),
+      opDrill: () => setRequestedNewOpKind(ROUTER_COMMAND_OP_KIND[ROUTER_OP_DRILL_COMMAND_ID] ?? 'cnc_drill'),
+      nest: () => {
+        // The true-shape nesting panel is rendered in the Plan tab body.
+        setPanelTab('plan')
+        setRequestedStage('setup')
+      },
+      simulate: () => {
+        setPanelTab('simulate')
+        setRequestedStage('simulate')
+      },
+      post: () => {
+        setPanelTab('cam')
+        setRequestedStage('send')
+      }
+    }),
+    []
+  )
+
+  useEffect(() => registerRouterCommands(routerActions), [routerActions])
+
   return (
     <div className="wt-workspace-host">
       <ManufactureWorkspace
@@ -441,6 +505,10 @@ export function ManufactureHost(): ReactElement {
         onRequestedStageHandled={() => setRequestedStage(null)}
         requestedNewOpKind={requestedNewOpKind}
         onRequestedNewOpKindHandled={() => setRequestedNewOpKind(null)}
+        requestedDxfImportNonce={requestedDxfImportNonce}
+        onRequestedDxfImportHandled={() => {
+          /* nonce is monotonic; nothing to reset — the workspace effect keys on the change */
+        }}
       />
     </div>
   )

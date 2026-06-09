@@ -309,6 +309,27 @@ export const manufactureOperationSchema = z.object({
      */
     'cnc_chamfer',
     /**
+     * V-Carve / prismatic carving (Vectric VCarve Pro / Carveco style) — the TRUE
+     * variable-depth sign-lettering carve, NOT the single-offset fixed-depth bevel that
+     * `cnc_chamfer` produces. From closed input vector(s) a medial-axis ridge is solved
+     * (distance-field approximation in `generateVCarve2dLines`); at each ridge point the
+     * clearance radius `r` (distance to the nearest boundary) sets the V-bit depth
+     * `d = r / tan(vBitAngleDeg/2)`, so the carve is deepest where the shape is widest and
+     * runs out to zero at narrow tips — the depth profile is monotonic-with-width.
+     * Routes through the SAME 2D dispatch + post as the other `cnc_*` 2D ops
+     * (`vcarve_mach3.hbs` for the Laguna Swift); the generic XYZ emitter posts it unchanged.
+     * Params: `contourPoints: [x,y][]` (closed loop in setup WCS, mm),
+     *   `vBitAngleDeg` (FULL included angle of the V-bit, e.g. 60 or 90; default 90),
+     *   `maxDepthMm` (HARD depth cap, mm — the carve never plunges past this; further
+     *     capped to stock thickness via the runner's `stockBoxZMm` so the V-bit cannot
+     *     drive past the material),
+     *   optional `flatBottomClearance` (mm — reserved for a future flat-bottom prism floor;
+     *     accepted + clamped today, no separate clearance pass yet),
+     *   optional `stepoverMm` (mm — medial-axis sampling resolution; smaller = finer ridge),
+     *   plus the shared `feedMmMin`, `plungeMmMin`, `safeZMm`.
+     */
+    'cnc_vcarve',
+    /**
      * Thread milling — helical thread entry along a contour or single bore.
      * Params: `contourPoints: [x,y][]`, `threadPitchMm`, `threadDepthMm`,
      * `threadDirection` ('right'|'left'), `zPassMm`, `toolDiameterMm`, `feedMmMin`, `safeZMm`.
@@ -455,6 +476,10 @@ export const manufactureOperationSchema = z.object({
    *   `tabWidthMm` (default 3), `tabHeightMm` (default 1.5) — holding bridges auto-inserted.
    * - chamfer (`cnc_chamfer`): `contourPoints: [x,y][]`, `chamferAngleDeg` (default 45),
    *   `chamferDepthMm` (how far below surface to reach full width), `toolDiameterMm`, `feedMmMin`.
+   * - vcarve (`cnc_vcarve`): `contourPoints: [x,y][]` (closed loop), `vBitAngleDeg` (FULL included
+   *   V-bit angle, default 90), `maxDepthMm` (hard depth cap; also capped to stock thickness),
+   *   optional `flatBottomClearance` (mm, reserved for a future flat-bottom pass), optional
+   *   `stepoverMm` (medial-axis sampling resolution), `feedMmMin`, `plungeMmMin`, `safeZMm`.
    * - laser (`cnc_laser`): `laserMode` ('vector'|'raster'|'fill'), `laserPower` (0–100),
    *   `laserSpeed` mm/min, `passes`, `contourPoints` for vector/fill.
    * See `resolveCamCutParams` / `resolveCamToolDiameterMm` for defaults.

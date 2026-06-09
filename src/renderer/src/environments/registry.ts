@@ -53,6 +53,7 @@ export interface ShopEnvironment {
 export const VCARVE_PRO_OPS: readonly ManufactureOperationKind[] = [
   'cnc_pocket',
   'cnc_contour',
+  'cnc_vcarve',
   'cnc_drill',
   'cnc_chamfer'
 ] as const
@@ -67,6 +68,7 @@ export const CREALITY_PRINT_OPS: readonly ManufactureOperationKind[] = [
 export const MAKERA_3AXIS_OPS: readonly ManufactureOperationKind[] = [
   'cnc_pocket',
   'cnc_contour',
+  'cnc_vcarve',
   'cnc_drill',
   'cnc_chamfer',
   'cnc_adaptive',

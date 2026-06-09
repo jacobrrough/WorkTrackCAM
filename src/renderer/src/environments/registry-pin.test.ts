@@ -284,9 +284,9 @@ describe('D. ENVIRONMENT_LIST -- ordering and completeness', () => {
 // E. Op-kind invariants per environment
 // ---------------------------------------------------------------------------
 describe('E. Op-kind sets per environment', () => {
-  it('VCARVE_PRO_OPS is the 4-op Laguna 2D/2.5D set', () => {
+  it('VCARVE_PRO_OPS is the 5-op Laguna 2D/2.5D set (incl. true V-carve)', () => {
     expect([...VCARVE_PRO_OPS].sort()).toEqual(
-      ['cnc_pocket', 'cnc_contour', 'cnc_drill', 'cnc_chamfer'].sort()
+      ['cnc_pocket', 'cnc_contour', 'cnc_vcarve', 'cnc_drill', 'cnc_chamfer'].sort()
     )
   })
 
@@ -294,11 +294,12 @@ describe('E. Op-kind sets per environment', () => {
     expect([...CREALITY_PRINT_OPS].sort()).toEqual(['fdm_slice', 'export_stl'].sort())
   })
 
-  it('MAKERA_3AXIS_OPS contains exactly the 13 documented 3-axis op kinds', () => {
-    expect(MAKERA_3AXIS_OPS).toHaveLength(13)
+  it('MAKERA_3AXIS_OPS contains exactly the 14 documented 3-axis op kinds', () => {
+    expect(MAKERA_3AXIS_OPS).toHaveLength(14)
     const expected: readonly ManufactureOperationKind[] = [
       'cnc_pocket',
       'cnc_contour',
+      'cnc_vcarve',
       'cnc_drill',
       'cnc_chamfer',
       'cnc_adaptive',
@@ -315,7 +316,7 @@ describe('E. Op-kind sets per environment', () => {
     }
   })
 
-  it('MAKERA_3AXIS_OPS includes cnc_scallop_finish (the 13th member)', () => {
+  it('MAKERA_3AXIS_OPS includes cnc_scallop_finish (the 14th member)', () => {
     expect(MAKERA_3AXIS_OPS).toContain('cnc_scallop_finish')
   })
 
