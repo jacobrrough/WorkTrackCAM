@@ -103,3 +103,15 @@ export {
   type FeatureDialogSpec,
   type FeatureDialogHostProps
 } from './FeatureDialogHost'
+
+// Wave 3f — Text → machinable sketch vectors dialog (own surface dialog, not
+// routed through FeatureDialogHost since it merges into the sketch model, not a
+// kernel op / script param).
+export {
+  TextDialog,
+  DEFAULT_TEXT_SIZE_MM,
+  DEFAULT_TEXT_LETTER_SPACING_MM,
+  loadBundledFontBufferViaFab,
+  type FontBufferLoader,
+  type TextDialogProps
+} from './TextDialog'

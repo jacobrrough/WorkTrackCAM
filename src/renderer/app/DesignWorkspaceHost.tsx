@@ -13,6 +13,8 @@ import {
 } from '../design/feature-dialogs'
 import type { SelectionSurface } from '../design/selection-state'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
+import { dxfToSketch } from '../../shared/dxf-to-sketch'
+import type { DxfParseResult } from '../../shared/dxf-parser'
 
 /**
  * Reverse of {@link FEATURE_DIALOG_COMMAND_ID}: catalog id (`'so_extrude'`,
@@ -181,6 +183,88 @@ export function DesignWorkspaceHost({
     [onSave, session]
   )
 
+  // Wave 3f — Import DXF directly onto the LIVE Design sketch surface.
+  //
+  // The only DXF-import button used to live on the Manufacture ribbon
+  // (`importVectorsFromDxf`), which reloaded the on-disk sketch, merged, and
+  // re-saved — so a DXF imported there was NOT visible on an already-mounted
+  // Design canvas until a reload (the Wave-3e item-e caveat). This handler closes
+  // that gap: it folds the parsed DXF into the SAME in-memory `session.design`
+  // (the exact model the mounted SketchSurface renders), pushes it through
+  // `session.onDesignChange` so the bulge-accurate vectors appear on the canvas
+  // immediately, then persists the MERGED model straight to `design/sketch.json`
+  // via `fab.designSave` (NOT `session.saveDesign`, which would close over the
+  // pre-merge design — see the persist comment below). importedCount /
+  // skippedCount + the converter notes surface as toasts.
+  //
+  // SAFETY: imports sketch geometry only — emits no toolpath / G-code. The Laguna
+  // RichAuto/Mach3 post invariants + the V-carve depth cap to stock thickness all
+  // live downstream in cam-local → cam-runner-2d → vcarve_mach3.hbs, untouched.
+  const handleImportDxf = useCallback(async () => {
+    const projectDir = session.projectDir
+    if (projectDir === null) {
+      onToast('warn', 'Open a project before importing DXF vectors.')
+      return
+    }
+    const fab = window.fab
+    let filePath: string | null
+    try {
+      filePath = await fab.dialogOpenFile([{ name: 'DXF vectors', extensions: ['dxf'] }])
+    } catch (e) {
+      onToast('err', `DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (!filePath) return // user cancelled the picker
+    let res: ({ ok: true } & DxfParseResult) | { ok: false; error: string }
+    try {
+      res = await fab.dxfImport(filePath)
+    } catch (e) {
+      onToast('err', `DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (!res.ok) {
+      onToast('err', `DXF import failed: ${res.error}`)
+      return
+    }
+    const parse: DxfParseResult = {
+      entities: res.entities,
+      layers: res.layers,
+      units: res.units,
+      warnings: res.warnings
+    }
+    if (parse.entities.length === 0) {
+      onToast('warn', 'DXF parsed but contained no supported 2D geometry (LINE/CIRCLE/ARC/POLYLINE).')
+      return
+    }
+    // Additive merge onto the LIVE session model (never `replace`) so the import
+    // can't clobber CAD-authored geometry already on the canvas. Using
+    // `session.design` (in-memory) rather than a disk reload is what makes the
+    // result appear instantly on the mounted surface.
+    const { design, importedCount, skippedCount, notes } = dxfToSketch(parse, session.design)
+    // Push into the session reducer (immediate canvas update on the mounted
+    // SketchSurface — it renders `session.design`).
+    session.onDesignChange(design)
+    // Persist `design/sketch.json` directly with the MERGED design. We can't lean
+    // on `session.saveDesign()` here: that callback closes over the pre-merge
+    // `session.design` (the reducer edit above only lands on the next render), so
+    // it would write the stale model. Saving the explicit `design` avoids that
+    // race — mirrors the Manufacture-ribbon importer's `fab.designSave(...)` call.
+    // `part/features.json` is re-derived by the next explicit Save / kernel build;
+    // the sketch JSON is the load-bearing artefact the contour/V-carve derive reads.
+    try {
+      await fab.designSave(projectDir, JSON.stringify(design))
+    } catch (e) {
+      onToast('err', `DXF imported onto the canvas but failed to save: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped)` : ''
+    onToast(
+      'ok',
+      `Imported ${importedCount} DXF vector${importedCount === 1 ? '' : 's'}${skipNote} onto the sketch.`
+    )
+    for (const n of notes.slice(0, 3)) onToast('warn', n)
+  }, [session, onToast])
+
   // Forward the combined command surface (selection ∪ sketch mode) DesignWorkspace
   // computes up into the Context Engine. DesignWorkspace stays provider-less; the
   // host (always inside CommandContextProvider) owns the actual push.
@@ -244,6 +328,9 @@ export function DesignWorkspaceHost({
       // use); `session.saveDesign` writes it to `design/sketch.json`.
       sketchDesign={session.design}
       onSketchDesignChange={session.onDesignChange}
+      // Wave 3f — Import DXF onto the live sketch surface (additive-merge into the
+      // session model + persist), so the SketchSurface palette shows the button.
+      onSketchImportDxf={handleImportDxf}
       requestedFeatureDialog={requestedFeatureDialog}
       onFeatureDialogConsumed={() => setRequestedFeatureDialog(null)}
       // FG-5 Inspect — one-shot measure/section request + its ack.

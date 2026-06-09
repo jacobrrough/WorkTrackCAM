@@ -1,6 +1,6 @@
 # WorkTrack3D — Security Posture & Dependency Advisory Tracking
 
-**Last updated**: 2026-06-02
+**Last updated**: 2026-06-08
 **Owner**: dependency-security workflow (DEP stack)
 
 This doc is the source of truth for WorkTrack3D's security posture: which
@@ -18,7 +18,7 @@ The numbers in this file are a snapshot in time; the dashboard is real-time.
 
 ---
 
-## TL;DR — Current State (2026-06-02 snapshot)
+## TL;DR — Current State (2026-06-08 snapshot)
 
 | Severity | Open | Notes |
 |----------|-----:|-------|
@@ -26,9 +26,14 @@ The numbers in this file are a snapshot in time; the dashboard is real-time.
 | High     |    0 | **electron-builder 25.1.8 → 26.8.1** dropped the dev-only `tar`/`cacache` subtree (−141 packages); the high chain is closed. |
 | Moderate |    0 | DOMPurify forced via `overrides`; the prior Monaco/bundler advisories are no longer reported by the current lockfile. |
 | Low      |    0 | `@tootallnate/once` closed in a prior wave. |
-| **Total**| **0** | `npm audit` **and** `npm audit --omit=dev` both report **0 vulnerabilities** (verified 2026-06-02). |
+| **Total**| **0** | `npm audit` **and** `npm audit --omit=dev` both report **0 vulnerabilities** (verified 2026-06-08). |
 
 **Runtime / user-shipping advisory count: 0. Full dev+prod advisory count: 0.**
+
+The 2026-06-08 Text-engine wave added `opentype.js@^2.0.0` (runtime, MIT) +
+`@types/opentype.js@^1.3.10` (dev). `npm install` added **one** package; both
+`npm audit` and `npm audit --omit=dev` stayed at **0** advisories (verified
+2026-06-08). See "Clean dependency additions" below.
 
 The electron-builder 26.8.1 bump (this wave) closed the last open chain — the
 dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
@@ -104,6 +109,40 @@ dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
 | `tmp`                | 0.2.5   | 0.2.7   | GHSA-ph9p-34f9-6g65 (high — path traversal) |
 
 `package.json` was untouched for these. Verify with `git diff package-lock.json`.
+
+---
+
+## Clean dependency additions (no advisory)
+
+### opentype.js — Text → machinable vectors engine (2026-06-08)
+- **Added**: `opentype.js@^2.0.0` (runtime dependency, **MIT** license) +
+  `@types/opentype.js@^1.3.10` (devDependency, types only).
+- **Why**: powers `src/shared/text-to-vectors.ts`, which flattens TrueType glyph
+  outlines into closed sketch contours for sign / lettering CAM
+  (docs/plans/catalog/vcarve-laguna.md). Pure JS, no native bindings.
+- **Bundled asset**: `resources/fonts/Roboto-Regular.ttf` (**Apache-2.0**,
+  Google) ships inside the app so the engine runs with **no network at runtime**.
+  Licensing documented in `resources/fonts/README.md`. The font is packed via
+  `build.extraResources` (lands at `process.resourcesPath/resources/fonts`,
+  resolved by `paths.ts → getResourcesRoot()` — same pattern as OrcaSlicer).
+- **Audit**: `npm install` added **1** package; `npm audit` → **0** and
+  `npm audit --omit=dev` → **0** (verified 2026-06-08). No transitive runtime
+  deps of concern (opentype.js 2.x is dependency-light pure JS).
+- **Security note**: the engine performs no file/network I/O itself — it takes an
+  already-parsed font or a byte buffer and runs deterministic geometry. Font
+  parsing of an attacker-controlled `.ttf` is out of scope today (only the
+  bundled, trusted Roboto face is shipped); if user-supplied fonts are added
+  later, validate/limit the buffer before `opentype.parse`.
+- **Renderer read path (added 2026-06-08, Text-dialog wave)**: the Text dialog
+  reaches the bundled bytes via a read-only IPC `font:read`
+  (`src/main/ipc-core.ts`, mirrors `wizard:readCadSample`). The request carries a
+  **fixed font id** from `src/shared/bundled-font-contract.ts` (`BUNDLED_FONT_IDS`)
+  that maps to a known filename under `getResourcesRoot()/fonts` — never a
+  caller-supplied path — so it cannot be coerced into filesystem traversal. It
+  reads under `resources/` only and touches no project directory or G-code path.
+  Re-running `npm audit` + `npm audit --omit=dev` on this wave (no dep change
+  beyond the already-recorded opentype.js) → **0 / 0** (verified 2026-06-08).
+- **Status**: **CLEAN** — no advisory opened.
 
 ---
 

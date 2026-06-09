@@ -14,6 +14,11 @@ import {
   WIZARD_MACHINE_TO_SAMPLE_FILE,
   type WizardStarterMachineId
 } from '../shared/first-launch-wizard-contract'
+import {
+  BUNDLED_FONT_FILE,
+  isBundledFontId,
+  type BundledFontId
+} from '../shared/bundled-font-contract'
 
 export function registerCoreIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle('app:getVersion', async () => getAppVersion())
@@ -294,6 +299,38 @@ export function registerCoreIpc(ctx: MainIpcWindowContext): void {
         error: `Failed to read CadQuery sample: ${
           e instanceof Error ? e.message : String(e)
         }`
+      }
+    }
+  })
+
+  // `font:read` -- stream a BUNDLED font (resources/fonts/*.ttf) to the renderer
+  // as base64 for the Text -> machinable-vectors engine. Read-only, exactly like
+  // `wizard:readCadSample`: the request carries a fixed font id (never a path),
+  // so the handler maps it to a known filename under getResourcesRoot()/fonts and
+  // can't be coerced into traversing the filesystem. Never touches a project dir
+  // or any G-code path.
+  ipcMain.handle('font:read', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false as const, error: 'Invalid font:read payload' }
+    }
+    const { fontId } = payload as { fontId?: unknown }
+    if (!isBundledFontId(fontId)) {
+      return { ok: false as const, error: 'Unknown bundled font id' }
+    }
+    const id: BundledFontId = fontId
+    const sourcePath = join(getResourcesRoot(), 'fonts', BUNDLED_FONT_FILE[id])
+    try {
+      await access(sourcePath, fsConstants.R_OK)
+    } catch {
+      return { ok: false as const, error: `Bundled font not found: ${BUNDLED_FONT_FILE[id]}` }
+    }
+    try {
+      const buf = await readFile(sourcePath)
+      return { ok: true as const, fontId: id, base64: buf.toString('base64') }
+    } catch (e) {
+      return {
+        ok: false as const,
+        error: `Failed to read bundled font: ${e instanceof Error ? e.message : String(e)}`
       }
     }
   })

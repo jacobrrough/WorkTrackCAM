@@ -36,6 +36,7 @@ import type {
   WizardReadCadSampleRequest,
   WizardReadCadSampleResult
 } from '../shared/first-launch-wizard-contract'
+import type { ReadBundledFontRequest, ReadBundledFontResult } from '../shared/bundled-font-contract'
 import type {
   NestOptions,
   NestResult,
@@ -81,6 +82,8 @@ export type Api = {
   wizardCopySample: (payload: WizardCopySampleRequest) => Promise<WizardCopySampleResult>
   /** First-launch wizard: read the bundled CadQuery starter script for a machine. */
   wizardReadCadSample: (payload: WizardReadCadSampleRequest) => Promise<WizardReadCadSampleResult>
+  /** Read a bundled font (resources/fonts/*.ttf) as base64 for Text → sketch vectors. */
+  fontReadBundled: (payload: ReadBundledFontRequest) => Promise<ReadBundledFontResult>
   dialogOpenFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
   dialogOpenFiles: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string[]>
   dialogSaveFile: (filters: { name: string; extensions: string[] }[], defaultPath?: string) => Promise<string | null>
@@ -855,6 +858,7 @@ const api: Api = {
   samplesList: () => ipcRenderer.invoke('samples:list'),
   wizardCopySample: (payload) => ipcRenderer.invoke('wizard:copySample', payload),
   wizardReadCadSample: (payload) => ipcRenderer.invoke('wizard:readCadSample', payload),
+  fontReadBundled: (payload) => ipcRenderer.invoke('font:read', payload),
   dialogOpenFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFile', filters, defaultPath),
   dialogOpenFiles: (filters, defaultPath) => ipcRenderer.invoke('dialog:openFiles', filters, defaultPath),
   dialogSaveFile: (filters, defaultPath) => ipcRenderer.invoke('dialog:saveFile', filters, defaultPath),

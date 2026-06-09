@@ -561,6 +561,78 @@
   border-color: var(--accent);
   color: var(--accent);
 }
+/* Wave 3f -- Import DXF affordance on the live sketch surface. Accent-bordered
+   to read as a primary import action; disabled (in-flight) dims + blocks. */
+.sketch-surface__import-dxf {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--bg1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sketch-surface__import-dxf:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.sketch-surface__import-dxf:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+/* Wave 3f -- Text dialog launcher on the live sketch surface. Same chip shape as
+   the snap/import buttons; accent-tinted when its dialog is open. */
+.sketch-surface__text-btn {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--bg1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sketch-surface__text-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.sketch-surface__text-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+}
+/* The Text dialog floats over the top-left of the canvas so the operator keeps
+   the sketch in view while typing. The canvas host is the positioning context. */
+.sketch-surface__canvas-host {
+  position: relative;
+}
+.sketch-surface__text-overlay {
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 5;
+  max-width: 320px;
+  box-shadow: var(--shadow-2, 0 8px 24px rgba(0, 0, 0, 0.35));
+  border-radius: var(--radius-md);
+}
+/* The multi-line text entry inside the Text dialog. */
+.fd-text__textarea {
+  resize: vertical;
+  min-height: 2.4em;
+  font: inherit;
+}
+/* Cancel + Apply sit on one row at the dialog foot. */
+.fd-text__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+.fd-text__actions .fd-apply-row {
+  margin: 0;
+}
 .sketch-surface__param {
   display: inline-flex;
   align-items: center;

@@ -7,6 +7,7 @@ import {
 import {
   type DesignCommandActions,
   SKETCH_PLANE_COMMAND_ID,
+  SKETCH_TEXT_COMMAND_ID,
   buildDesignCommands,
   classifyDesignCommand,
   designCommandEnabled,
@@ -72,6 +73,12 @@ describe('classifyDesignCommand', () => {
     expect(classifyDesignCommand('so_revolve')).toBe('feature_dialog')
     expect(classifyDesignCommand('so_fillet')).toBe('feature_dialog')
     expect(classifyDesignCommand('so_pattern_rect')).toBe('feature_dialog')
+  })
+
+  it('routes sk_text to sketch_text (it opens the Text dialog, has no draw tool)', () => {
+    expect(classifyDesignCommand(SKETCH_TEXT_COMMAND_ID)).toBe('sketch_text')
+    // It is NOT in the draw-tool map (no SketchTool), so it must not be sketch_tool.
+    expect(SKETCH_TEXT_COMMAND_ID in DESIGN_SKETCH_COMMAND_TO_TOOL).toBe(false)
   })
 
   it('returns null for non-Design-ribbon ids (CAM ops, unknowns)', () => {
@@ -146,8 +153,8 @@ describe('designCommandEnabled — context gating', () => {
     }
   })
 
-  it('sketch entry / feature / inspect / manage require only the Design route', () => {
-    for (const kind of ['sketch_enter', 'feature_dialog', 'inspect', 'manage'] as const) {
+  it('sketch entry / text / feature / inspect / manage require only the Design route', () => {
+    for (const kind of ['sketch_enter', 'sketch_text', 'feature_dialog', 'inspect', 'manage'] as const) {
       // Enabled on design even without sketch mode (these START a sketch / open a dialog).
       expect(designCommandEnabled(kind, ctx({ workspace: 'design', sketchMode: false }))).toBe(true)
       // Drawings is a Design-flavored route.
@@ -214,6 +221,20 @@ describe('dispatch — handlers call the right action', () => {
       true
     )
     expect(actions.calls).toEqual(['armSketchPlane'])
+  })
+
+  it('sk_text arms the Text command (which the surface turns into the Text dialog)', () => {
+    const reg = new CommandRegistry()
+    const actions = makeActions()
+    registerDesignCommands(actions, reg)
+
+    // Valid from the Design route even before sketch mode (it starts a sketch).
+    expect(reg.run(SKETCH_TEXT_COMMAND_ID, ctx({ workspace: 'design', sketchMode: false }))).toBe(
+      true
+    )
+    // Arming Text flips sketch mode + records the catalog id; the mounted
+    // SketchSurface opens the Text dialog when `sk_text` is the armed tool.
+    expect(actions.calls).toEqual([`armSketchTool:${SKETCH_TEXT_COMMAND_ID}`])
   })
 
   it('a solid command opens its feature dialog by catalog id', () => {

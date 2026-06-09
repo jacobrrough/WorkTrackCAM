@@ -284,6 +284,15 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'Pivot + scale factor; with points selected, scales selection only'
   ),
   c(
+    'sk_text',
+    'Text',
+    'sketch_create',
+    'design',
+    'partial',
+    'CREATE',
+    'TrueType → closed machinable contours (src/shared/text-to-vectors.ts: opentype.js outline flattening; O/A/e counters become CW holes, outer CCW). Reachable: arming it opens the Text dialog on the live sketch surface (text / bundled Roboto font / cap-height / letter-spacing) and inserts the contours into the session sketch model — derivable as profile / pocket / V-carve toolpaths. Partial: single bundled face, no clipart import yet.'
+  ),
+  c(
     'sk_trim',
     'Trim',
     'sketch_modify',
@@ -1213,6 +1222,7 @@ export const DESIGN_RIBBON_COMMAND_IDS = new Set<string>([
   'sk_circle_3pt',
   'sk_polyline',
   'sk_line',
+  'sk_text',
   'sk_arc_3pt',
   'sk_arc_center',
   'sk_ellipse',

@@ -73,6 +73,15 @@ describe('electron-builder build config pin', () => {
     expect(froms).toContain('resources/orca-slicer/profiles')
   })
 
+  it('the bundled Text-engine font tree is packed via extraResources (resolved by getResourcesRoot)', () => {
+    // resources/fonts/Roboto-Regular.ttf feeds src/shared/text-to-vectors.ts.
+    // Like orca-slicer, it must land UNPACKED at process.resourcesPath/resources/fonts
+    // so the packaged main process (paths.ts → getResourcesRoot) can read it.
+    const fontEntry = b.extraResources.find((r) => r.from === 'resources/fonts')
+    expect(fontEntry).toBeDefined()
+    expect(fontEntry?.to).toBe('resources/fonts')
+  })
+
   it('non-win32 OrcaSlicer trees are excluded from the package (no cross-platform bloat)', () => {
     expect(b.files).toContain('!resources/orca-slicer/win32-x64/**')
     expect(b.files).toContain('!resources/orca-slicer/darwin-arm64/**')

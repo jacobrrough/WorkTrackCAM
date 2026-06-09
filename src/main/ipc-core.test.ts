@@ -94,7 +94,8 @@ describe('ipc-core', () => {
       'file:writeText',
       'samples:list',
       'wizard:copySample',
-      'wizard:readCadSample'
+      'wizard:readCadSample',
+      'font:read'
     ]
 
     for (const ch of expectedChannels) {

@@ -128,6 +128,117 @@ describe('SketchSurface — render contract', () => {
   })
 })
 
+describe('SketchSurface — Import-DXF affordance (Wave 3f)', () => {
+  it('renders the Import DXF button when onImportDxf is wired', () => {
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, {
+        design: emptyDesign(),
+        onDesignChange: noop,
+        onImportDxf: noop
+      })
+    )
+    expect(html).toContain('data-testid="sketch-surface-import-dxf"')
+    expect(html).toContain('Import DXF')
+  })
+
+  it('hides the Import DXF button when onImportDxf is NOT wired (splash/preview)', () => {
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
+    )
+    expect(html).not.toContain('data-testid="sketch-surface-import-dxf"')
+  })
+
+  it('the Import DXF button is a type="button" and not disabled at rest', () => {
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, {
+        design: emptyDesign(),
+        onDesignChange: noop,
+        onImportDxf: noop
+      })
+    )
+    const tag = (html.match(/<button[^>]*data-testid="sketch-surface-import-dxf"[^>]*>/) ?? [])[0] ?? ''
+    expect(tag).toContain('type="button"')
+    // SSR initial render: not in-flight, so the control is enabled.
+    expect(tag).not.toContain('disabled')
+  })
+
+  it('surfaces the merged entity count after a DXF additive-merge (render-pin on count)', () => {
+    // The host folds a parsed DXF into the session model via `dxfToSketch`, then
+    // pushes it through `onDesignChange`. The mounted surface renders
+    // `session.design`, so its entity-count read-out must reflect the merged
+    // total. We reproduce that merged model (base entity + 1 imported rect loop)
+    // and assert the surface shows BOTH — proving an import is visible on canvas.
+    const base: DesignFileV2 = {
+      ...emptyDesign(),
+      entities: [DRAWN_RECT] // a pre-existing CAD-authored vector
+    }
+    const importedRect: SketchEntity = {
+      id: 'imp_poly1',
+      kind: 'polyline',
+      pointIds: ['imp_p0', 'imp_p1', 'imp_p2', 'imp_p3'],
+      closed: true
+    }
+    const merged: DesignFileV2 = {
+      ...base,
+      points: {
+        imp_p0: { x: 0, y: 0 },
+        imp_p1: { x: 50, y: 0 },
+        imp_p2: { x: 50, y: 30 },
+        imp_p3: { x: 0, y: 30 }
+      },
+      entities: [...base.entities, importedRect]
+    }
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, {
+        design: merged,
+        onDesignChange: noop,
+        onImportDxf: noop
+      })
+    )
+    expect(html).toContain('data-testid="sketch-surface-count"')
+    // 2 entities (the pre-existing rect + the imported loop) …
+    expect(html).toContain('2 entities')
+    // … and the 4 imported polyline points are surfaced in the same read-out.
+    expect(html).toContain('4 pts')
+  })
+})
+
+describe('SketchSurface — Text dialog affordance (Wave 3f)', () => {
+  it('always renders the Text launcher button on the surface', () => {
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
+    )
+    expect(html).toContain('data-testid="sketch-surface-text"')
+    // The dialog itself is closed by default (opened by the button / sk_text arm).
+    expect(html).not.toContain('data-testid="sketch-surface-text-overlay"')
+  })
+
+  it('the Text button is a type="button" and not pressed at rest', () => {
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
+    )
+    const tag = (html.match(/<button[^>]*data-testid="sketch-surface-text"[^>]*>/) ?? [])[0] ?? ''
+    expect(tag).toContain('type="button"')
+    expect(tag).toContain('aria-pressed="false"')
+  })
+
+  it('accepts the armed sk_text command + a font loader without throwing', () => {
+    // The auto-open is an effect (SSR can't flush it), so we assert the props are
+    // ACCEPTED and the surface still renders; the live open is the host wiring's
+    // job, exercised by the command-registration test.
+    const html = renderToStaticMarkup(
+      createElement(SketchSurface, {
+        design: emptyDesign(),
+        onDesignChange: noop,
+        armedToolCommandId: 'sk_text',
+        loadFontBuffer: async () => new ArrayBuffer(0)
+      })
+    )
+    expect(html).toContain('data-testid="sketch-surface"')
+    expect(html).toContain('data-testid="sketch-surface-text"')
+  })
+})
+
 describe('DesignWorkspace — Sketch stage mounts the session-persisted surface', () => {
   it('mounts SketchSurface (not MvpSketchCanvas) when the session model is wired', () => {
     const html = renderToStaticMarkup(
@@ -168,6 +279,36 @@ describe('DesignWorkspace — Sketch stage mounts the session-persisted surface'
     )
     expect(html).toContain('data-testid="sketch-mvp-wrap"')
     expect(html).not.toContain('data-testid="sketch-surface"')
+  })
+
+  it('threads onSketchImportDxf to the mounted surface (Import DXF button visible)', () => {
+    // Wave 3f — DesignWorkspace forwards `onSketchImportDxf` to SketchSurface's
+    // `onImportDxf`, so the live cockpit shows the Import-DXF affordance.
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        sketchActive: true,
+        sketchDesign: emptyDesign(),
+        onSketchDesignChange: noop,
+        onSketchImportDxf: noop
+      })
+    )
+    expect(html).toContain('data-testid="sketch-surface"')
+    expect(html).toContain('data-testid="sketch-surface-import-dxf"')
+  })
+
+  it('omits the Import DXF button when onSketchImportDxf is not threaded', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        sketchActive: true,
+        sketchDesign: emptyDesign(),
+        onSketchDesignChange: noop
+        // onSketchImportDxf intentionally omitted.
+      })
+    )
+    expect(html).toContain('data-testid="sketch-surface"')
+    expect(html).not.toContain('data-testid="sketch-surface-import-dxf"')
   })
 })
 

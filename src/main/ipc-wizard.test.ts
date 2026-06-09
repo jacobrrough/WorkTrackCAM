@@ -253,4 +253,54 @@ describe('first-launch wizard IPC', () => {
       expect((result as { error: string }).error).toContain('EACCES')
     })
   })
+
+  // ── font:read (Wave 3f — Text → machinable vectors) ─────────────────────
+
+  describe('font:read', () => {
+    it('refuses a non-object payload', async () => {
+      const handler = handlers.get('font:read')!
+      const result = await handler({}, null)
+      expect(result).toEqual({ ok: false, error: 'Invalid font:read payload' })
+    })
+
+    it('refuses an unknown font id (no path traversal)', async () => {
+      const handler = handlers.get('font:read')!
+      const result = await handler({}, { fontId: '../../etc/passwd' })
+      expect(result).toEqual({ ok: false, error: 'Unknown bundled font id' })
+    })
+
+    it('refuses when the bundled font file is missing from resources', async () => {
+      accessMock.mockRejectedValue(new Error('ENOENT'))
+      const handler = handlers.get('font:read')!
+      const result = await handler({}, { fontId: 'roboto-regular' })
+      expect(result.ok).toBe(false)
+      expect((result as { error: string }).error).toMatch(/Bundled font not found/)
+    })
+
+    it('reads the bundled Roboto face as base64 from resources/fonts', async () => {
+      accessMock.mockResolvedValue(undefined)
+      // The handler base64-encodes the Buffer it reads, so return a Buffer.
+      readFileMock.mockResolvedValue(Buffer.from('FONTBYTES'))
+      const handler = handlers.get('font:read')!
+      const result = await handler({}, { fontId: 'roboto-regular' })
+      expect(result).toEqual({
+        ok: true,
+        fontId: 'roboto-regular',
+        base64: Buffer.from('FONTBYTES').toString('base64')
+      })
+      // The handler must reach resources/fonts/Roboto-Regular.ttf.
+      const readPath = String(readFileMock.mock.calls[0][0])
+      expect(readPath).toContain('fonts')
+      expect(readPath).toContain('Roboto-Regular.ttf')
+    })
+
+    it('returns ok=false when readFile throws (no silent swallow)', async () => {
+      accessMock.mockResolvedValue(undefined)
+      readFileMock.mockRejectedValue(new Error('EACCES'))
+      const handler = handlers.get('font:read')!
+      const result = await handler({}, { fontId: 'roboto-regular' })
+      expect(result.ok).toBe(false)
+      expect((result as { error: string }).error).toContain('EACCES')
+    })
+  })
 })

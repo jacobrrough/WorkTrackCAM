@@ -117,6 +117,12 @@ export type DesignCommandKind =
   | 'sketch_dimension'
   /** Enter sketch mode / pick a sketch plane (`sk_choose_plane`). */
   | 'sketch_enter'
+  /**
+   * Open the Text → machinable-vectors dialog (`sk_text`). Like a Create tool it
+   * *starts* a sketch (so it is valid before sketch mode), but it has no
+   * `SketchTool` draw mapping — arming it opens the dialog on the live surface.
+   */
+  | 'sketch_text'
   /** Open a solid / construct feature dialog (`so_*`, construct planes, …). */
   | 'feature_dialog'
   /** Run an Inspect tool (`ut_measure`, `ut_section`). */
@@ -126,6 +132,9 @@ export type DesignCommandKind =
 
 /** Catalog id for the sketch-on-plane / create-sketch entry command. */
 export const SKETCH_PLANE_COMMAND_ID = 'sk_choose_plane'
+
+/** Catalog id for the Text → machinable-vectors command (opens the Text dialog). */
+export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
 
 /** Inspect command ids handled here (Measure / Section). */
 const INSPECT_COMMAND_IDS: ReadonlySet<string> = new Set(['ut_measure', 'ut_section'])
@@ -173,6 +182,10 @@ const CATALOG_RIBBON_BY_ID: ReadonlyMap<string, string> = new Map(
  */
 export function classifyDesignCommand(id: string): DesignCommandKind | null {
   if (id === SKETCH_PLANE_COMMAND_ID) return 'sketch_enter'
+  // `sk_text` lives in the sketch_create ribbon group but has no draw-tool
+  // mapping (it opens the Text dialog). Classify it explicitly before the
+  // sketch-tool map so it routes to `sketch_text`, not to a missing tool.
+  if (id === SKETCH_TEXT_COMMAND_ID) return 'sketch_text'
   if (id in DESIGN_SKETCH_COMMAND_TO_TOOL) return 'sketch_tool'
   if (id in DESIGN_CONSTRAINT_COMMAND_TO_TYPE) return 'sketch_constraint'
   if (id.startsWith('dim_')) return 'sketch_dimension'
@@ -235,6 +248,7 @@ export function designCommandEnabled(kind: DesignCommandKind, ctx: CommandContex
     case 'sketch_dimension':
       return isDesignRoute(ctx) && ctx.sketchMode === true
     case 'sketch_enter':
+    case 'sketch_text':
     case 'feature_dialog':
     case 'inspect':
     case 'manage':
@@ -268,6 +282,12 @@ function runForKind(
     case 'sketch_constraint':
     case 'sketch_dimension':
       // Arm the named tool/constraint/dimension by its catalog id.
+      return () => actions.armSketchTool(id)
+    case 'sketch_text':
+      // sk_text: arm the Text command on the surface. It has no draw tool — the
+      // mounted SketchSurface opens its Text dialog when this catalog id is the
+      // armed tool. Arming implies entering sketch mode (the `armSketchTool`
+      // contract), so the surface is mounted and ready to receive the dialog.
       return () => actions.armSketchTool(id)
     case 'feature_dialog':
       return () => actions.openFeatureDialog(id)

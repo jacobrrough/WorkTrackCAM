@@ -45,6 +45,10 @@ import { useEffect, useMemo, useState, type JSX } from 'react'
 import type { DesignFileV2 } from '../../shared/design-schema'
 import { Sketch2DCanvas, type SketchTool } from './Sketch2DCanvas'
 import { sketchToolForDesignCommand } from './design-command-map'
+import { TextDialog, type FontBufferLoader } from './feature-dialogs/TextDialog'
+
+/** Catalog id of the Text command — arming it opens the Text dialog on this surface. */
+export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
 
 /** A palette entry: the canvas tool id + its human label + group heading. */
 interface SketchSurfaceToolDef {
@@ -131,6 +135,26 @@ export interface SketchSurfaceProps {
   readonly onSketchHint?: (msg: string) => void
   /** Plane label shown at the canvas top-left (e.g. the sketch plane name). */
   readonly planeLabel?: string
+  /**
+   * Wave 3f — import machinable DXF vectors directly onto THIS sketch surface.
+   * When wired (DesignWorkspaceHost fills it), the palette shows an "Import DXF"
+   * button that runs the host's file-picker → `dxf:import` → `dxfToSketch`
+   * additive-merge into the SAME session design model, so the imported
+   * (bulge-accurate) vectors appear immediately on the mounted canvas AND persist.
+   * Resolves the Wave-3e item-e caveat (the only DXF button used to live on the
+   * Manufacture ribbon, so an import there was invisible to an already-mounted
+   * Design canvas). Returns once the import settles; the surface reflects whatever
+   * the host pushed via `onDesignChange`. Optional — absent hides the button
+   * (the splash preview + render-pin tests render without it).
+   */
+  readonly onImportDxf?: () => void | Promise<void>
+  /**
+   * Wave 3f — inject the font-bytes loader the {@link TextDialog} uses. Defaults
+   * (when omitted) to the dialog's own `font:read`-IPC loader. Tests pass a
+   * loader backed by an on-disk font buffer so the surface mounts the dialog
+   * without Electron. Optional.
+   */
+  readonly loadFontBuffer?: FontBufferLoader
 }
 
 /**
@@ -147,10 +171,18 @@ export function SketchSurface({
   onDesignChange,
   armedToolCommandId = null,
   onSketchHint,
-  planeLabel
+  planeLabel,
+  onImportDxf,
+  loadFontBuffer
 }: SketchSurfaceProps): JSX.Element {
   const [activeTool, setActiveTool] = useState<SketchTool>('line')
   const [snapEnabled, setSnapEnabled] = useState(true)
+  // Wave 3f — the Text dialog mounts as an overlay on the surface. Armed by the
+  // `sk_text` ribbon command (auto-open) or the surface's own "Text" button.
+  const [textDialogOpen, setTextDialogOpen] = useState(false)
+  // Guards the Import-DXF button while the host's picker + parse + merge is in
+  // flight, so a double-click can't kick off two overlapping file pickers.
+  const [importingDxf, setImportingDxf] = useState(false)
   // Per-tool parameters so the fillet/chamfer/transform tools are functional.
   const [filletRadiusMm, setFilletRadiusMm] = useState(2)
   const [chamferLengthMm, setChamferLengthMm] = useState(2)
@@ -163,11 +195,31 @@ export function SketchSurface({
     if (t) setActiveTool(t)
   }, [armedToolCommandId])
 
+  // Wave 3f — the Text command has no draw-tool mapping; arming `sk_text` opens
+  // the Text dialog instead. Fires on the transition to `sk_text` so a closed
+  // dialog re-opens if the ribbon arms Text again.
+  useEffect(() => {
+    if (armedToolCommandId === SKETCH_TEXT_COMMAND_ID) setTextDialogOpen(true)
+  }, [armedToolCommandId])
+
   const gridMm = snapEnabled ? SNAP_GRID_MM : SNAP_OFF_GRID_MM
 
   /** Total entity + point count, surfaced as an honest "what's in the sketch" read-out. */
   const entityCount = design.entities.length
   const pointCount = useMemo(() => Object.keys(design.points).length, [design.points])
+
+  // Run the host's DXF import, guarding against overlapping pickers. The host
+  // owns the file-picker → parse → additive-merge → persist chain; this only
+  // toggles the in-flight flag around it. `onImportDxf` may be sync or async.
+  async function handleImportDxfClick(): Promise<void> {
+    if (!onImportDxf || importingDxf) return
+    setImportingDxf(true)
+    try {
+      await onImportDxf()
+    } finally {
+      setImportingDxf(false)
+    }
+  }
 
   // Which contextual param field (if any) the active tool needs.
   const showFilletParam = activeTool === 'fillet'
@@ -233,6 +285,34 @@ export function SketchSurface({
             onClick={() => setSnapEnabled((s) => !s)}
           >
             {snapEnabled ? `Snap ${SNAP_GRID_MM} mm` : 'Snap off'}
+          </button>
+
+          {onImportDxf && (
+            <button
+              type="button"
+              className="sketch-surface__import-dxf"
+              data-testid="sketch-surface-import-dxf"
+              disabled={importingDxf}
+              aria-busy={importingDxf}
+              title="Import DXF vectors directly onto this sketch (machinable text / sign / clipart outlines)"
+              onClick={() => {
+                void handleImportDxfClick()
+              }}
+            >
+              {importingDxf ? 'Importing…' : 'Import DXF'}
+            </button>
+          )}
+
+          {/* Wave 3f — open the Text → machinable-vectors dialog on this surface. */}
+          <button
+            type="button"
+            className="sketch-surface__text-btn"
+            data-testid="sketch-surface-text"
+            aria-pressed={textDialogOpen}
+            title="Insert text as machinable closed contours (sign / lettering vectors)"
+            onClick={() => setTextDialogOpen((open) => !open)}
+          >
+            Text
           </button>
 
           {showFilletParam && (
@@ -320,6 +400,19 @@ export function SketchSurface({
             onSketchHint={onSketchHint}
             planeLabel={planeLabel}
           />
+          {textDialogOpen && (
+            <div className="sketch-surface__text-overlay" data-testid="sketch-surface-text-overlay">
+              <TextDialog
+                design={design}
+                onInsert={(next) => {
+                  onDesignChange(next)
+                }}
+                onClose={() => setTextDialogOpen(false)}
+                onHint={onSketchHint}
+                loadFontBuffer={loadFontBuffer}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

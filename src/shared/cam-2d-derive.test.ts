@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import opentype, { type Font } from 'opentype.js'
 import {
   contourPointSignature,
   deriveContourPointsFromDesign,
@@ -6,6 +9,9 @@ import {
   listContourCandidatesFromDesign
 } from './cam-2d-derive'
 import { emptyDesign, type DesignFileV2 } from './design-schema'
+import { mergeTextVectorsIntoDesign } from './text-to-vectors'
+import { dxfToSketch } from './dxf-to-sketch'
+import { convertDxfToMm, parseDxf } from './dxf-parser'
 
 describe('cam-2d-derive', () => {
   it('derives contour points from first closed profile', () => {
@@ -236,6 +242,93 @@ describe('cam-2d-derive — edge cases', () => {
       points: { a: { x: 0, y: 0 }, b: { x: 5, y: 0 }, c: { x: 5, y: 5 }, d: { x: 0, y: 5 } }
     }
     expect(listContourCandidatesFromDesign(d)).toEqual([])
+  })
+})
+
+/**
+ * Wave 3f integration — Text-inserted AND DXF-imported vectors both land in the
+ * SAME DesignFileV2 sketch model and BOTH feed cam-2d-derive, so each can become
+ * a contour / pocket / V-carve op downstream. This is the load-bearing contract
+ * for "Sign work is impossible without machinable text vectors": the dialog folds
+ * `textToSketchVectors` output into the session model exactly like `dxfToSketch`,
+ * and `deriveContourPointsFromDesign` (the function the 2D CAM derive calls) reads
+ * both indiscriminately.
+ */
+describe('cam-2d-derive — Wave 3f: text + DXF both derive from the shared model', () => {
+  let font: Font
+  beforeAll(() => {
+    // The same bundled Roboto buffer the main process would stream to the
+    // renderer; the engine is pure, so no Electron / network is needed here.
+    const buf = readFileSync(join(process.cwd(), 'resources', 'fonts', 'Roboto-Regular.ttf'))
+    font = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength))
+  })
+
+  it("text 'O' yields 2 rings (outer + counter) that are both contour candidates", () => {
+    const { design, result } = mergeTextVectorsIntoDesign({
+      text: 'O',
+      font,
+      sizeMm: 20,
+      idPrefix: 'txtO'
+    })
+    // The engine classifies one solid outer ring + one hole (the counter).
+    expect(result.contours.filter((c) => !c.isHole)).toHaveLength(1)
+    expect(result.contours.filter((c) => c.isHole)).toHaveLength(1)
+
+    // Both rings are CLOSED polylines in the design, so cam-2d-derive lists two
+    // contour candidates (the exact loops a profile/pocket/V-carve op consumes).
+    const candidates = listContourCandidatesFromDesign(design)
+    expect(candidates).toHaveLength(2)
+    for (const c of candidates) {
+      expect(c.points.length).toBeGreaterThanOrEqual(3)
+      expect(c.signature.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('deriveContourPointsFromDesign returns a usable closed loop for inserted text', () => {
+    const { design } = mergeTextVectorsIntoDesign({ text: 'O', font, sizeMm: 18, idPrefix: 'txtO2' })
+    // The function the 2D CAM derive actually calls returns the first candidate's
+    // points — a closed loop ready to drive a toolpath.
+    const pts = deriveContourPointsFromDesign(design)
+    expect(pts.length).toBeGreaterThanOrEqual(3)
+
+    // And it can target a specific text contour by its source entity id.
+    const candidates = listContourCandidatesFromDesign(design)
+    const second = candidates[1]!
+    const picked = deriveContourPointsFromDesign(design, second.sourceId)
+    expect(picked).toEqual(second.points)
+  })
+
+  it('a DXF import and a text insert coexist + both derive from one model', () => {
+    // 1) Import a closed rectangle from a tiny DXF (the Wave-3d path).
+    const RECT_DXF = [
+      '0', 'SECTION', '2', 'ENTITIES',
+      '0', 'LWPOLYLINE', '8', 'CUT', '90', '4', '70', '1',
+      '10', '0', '20', '0',
+      '10', '60', '20', '0',
+      '10', '60', '20', '40',
+      '10', '0', '20', '40',
+      '0', 'ENDSEC', '0', 'EOF'
+    ].join('\n')
+    const parse = parseDxf(RECT_DXF)
+    convertDxfToMm(parse)
+    const dxfStep = dxfToSketch(parse, emptyDesign(), { idPrefix: 'dxfRect' })
+    expect(dxfStep.importedCount).toBe(1)
+
+    // 2) Insert text 'O' into the SAME model (additive — mirrors the dialog).
+    const { design: combined } = mergeTextVectorsIntoDesign(
+      { text: 'O', font, sizeMm: 16, idPrefix: 'txtCombo' },
+      dxfStep.design
+    )
+
+    // The combined model now holds: the DXF rectangle (1) + the text O's two
+    // rings (2) = 3 closed contour candidates, all derivable.
+    const candidates = listContourCandidatesFromDesign(combined)
+    expect(candidates).toHaveLength(3)
+    for (const c of candidates) {
+      expect(deriveContourPointsFromDesign(combined, c.sourceId).length).toBeGreaterThanOrEqual(3)
+    }
+    // The default derive (no id) still returns a usable loop from the shared model.
+    expect(deriveContourPointsFromDesign(combined).length).toBeGreaterThanOrEqual(3)
   })
 })
 

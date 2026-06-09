@@ -400,6 +400,16 @@ export interface DesignWorkspaceProps {
   /** Apply a sketch edit to the session model. Pairs with {@link sketchDesign}. */
   readonly onSketchDesignChange?: (next: DesignFileV2) => void
   /**
+   * Wave 3f — import machinable DXF vectors directly onto the live Sketch
+   * surface. Forwarded to {@link SketchSurface} as `onImportDxf`; when wired
+   * (the live `DesignWorkspaceHost`) the palette shows an "Import DXF" button
+   * that additive-merges the parsed DXF into the SAME session design model and
+   * persists it — so the imported vectors appear on the mounted canvas at once.
+   * Optional + additive: omitted on the splash preview + render-pin tests (the
+   * button simply does not render), so every existing Sketch-stage pin holds.
+   */
+  readonly onSketchImportDxf?: () => void | Promise<void>
+  /**
    * FG-5 (Wave 2 Integrate) — a request from the ribbon's Solid commands to open
    * a per-feature dialog in the Properties pane. When this changes to a non-null
    * {@link FeatureDialogKind}, the workspace opens that dialog and calls
@@ -512,6 +522,9 @@ function toFeatureRow(entry: CadOperationSummary): FeatureTreeOperation {
  * Pure + module-level so it needs no hook.
  */
 function sketchToolHint(commandId: string): string {
+  // `sk_text` has no draw-tool mapping (it opens the Text dialog on the surface);
+  // give it a friendly read-out instead of the raw catalog id.
+  if (commandId === 'sk_text') return 'text'
   return sketchToolForDesignCommand(commandId) ?? commandId
 }
 
@@ -540,6 +553,7 @@ export function DesignWorkspace({
   armedSketchTool = null,
   sketchDesign,
   onSketchDesignChange,
+  onSketchImportDxf,
   requestedFeatureDialog = null,
   onFeatureDialogConsumed,
   requestedInspect = null,
@@ -1535,6 +1549,7 @@ export function DesignWorkspace({
                 <SketchSurface
                   design={sketchDesign}
                   onDesignChange={onSketchDesignChange}
+                  onImportDxf={onSketchImportDxf}
                   armedToolCommandId={armedSketchTool}
                   onSketchHint={(msg) => onToast?.('ok', msg)}
                   planeLabel={
