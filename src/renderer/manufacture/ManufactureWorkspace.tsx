@@ -661,6 +661,15 @@ type Props = {
    */
   requestedDxfImportNonce?: number
   onRequestedDxfImportHandled?: () => void
+  /**
+   * Wave 3h (Design -> Manufacture STL hand-off) - monotonic reload nonce.
+   * The host bumps this after it writes a freshly-imported part into the
+   * manufacture plan on disk (assets:importMesh -> bind to first plate ->
+   * manufacture:save). When it changes, the workspace re-reads
+   * manufacture.json so the imported part appears in the plate WITHOUT a
+   * remount. Optional - absent / unchanged keeps existing load behavior.
+   */
+  reloadNonce?: number
 }
 
 export function ManufactureWorkspace({
@@ -696,7 +705,8 @@ export function ManufactureWorkspace({
   requestedNewOpKind = null,
   onRequestedNewOpKindHandled,
   requestedDxfImportNonce = 0,
-  onRequestedDxfImportHandled
+  onRequestedDxfImportHandled,
+  reloadNonce = 0
 }: Props) {
   const [mfg, setMfg] = useState<ManufactureFile>(() => emptyManufacture())
   // Gap #7 v1 — active plate id. Initialized lazily so emptyManufacture() always
@@ -829,7 +839,9 @@ export function ManufactureWorkspace({
         setMfg(empty)
         setActivePlateId(empty.plates?.[0]?.id ?? null)
       })
-  }, [fab, projectDir])
+    // reloadNonce is bumped by the host after a Send-to-CAM import writes
+    // the plan to disk, forcing this load effect to re-read manufacture.json.
+  }, [fab, projectDir, reloadNonce])
 
   useEffect(() => {
     if (!projectDir) {

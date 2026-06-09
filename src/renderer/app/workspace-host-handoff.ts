@@ -1,0 +1,296 @@
+/**
+ * workspace-host-handoff — the pure, React-free core of the two
+ * `WorkspaceHost` CAD↔CAM bridges wired in Wave 3h.
+ *
+ * `WorkspaceHost` renders inside React providers (toast, CAM hand-off mailbox,
+ * machine session, project session) and cannot be exercised by the node-env
+ * renderer test suite (no jsdom / no real click — see the sibling
+ * `DesignWorkspaceHost.dxf-import.test.tsx` rationale). So the load-bearing
+ * behavior of the two formerly-stub handlers lives here as plain functions over
+ * INJECTED dependencies, exactly the way `cam-handoff-store` /
+ * `assembly-mate-persist` factor their cores out of the host component. The host
+ * is then a thin adapter that supplies the real `fab()` calls + context setters.
+ *
+ *   1. {@link runSendToCam} — queue the freshly-exported STL into the CAM
+ *      hand-off mailbox, then navigate to Manufacture. `ManufactureHost`'s
+ *      consume-once effect imports the queued STL into the first plate (the
+ *      proven `assets:importMesh` → bind → `manufacture:save` path) and emits
+ *      its own "Part landed in CAM" toast. This function returns the honest
+ *      "sending <name> to <machine>" toast the host shows at the queue point —
+ *      it names the part + the target machine and never claims an import that
+ *      `ManufactureHost` hasn't performed yet.
+ *   2. {@link runPersistMate} — fold a solved Model-B mate into the on-disk
+ *      assembly's Model-C `mateConstraints` and re-save it. Loads the assembly
+ *      (injected `loadAssembly`), runs the pure {@link persistMate} fold, and on
+ *      success writes it back (injected `saveAssembly`). Returns a structured
+ *      result the host turns into a "Mate saved" / failure toast.
+ *
+ * SAFETY: data-only. This module copies a path, edits the assembly data model,
+ * and persists assembly JSON. It emits NO G-code and runs NO toolpath engine —
+ * the actual mesh import is `ManufactureHost`'s job; the mate fold is
+ * additive-only (Safety Rule 2 — `mateConstraints` is `.optional().default([])`,
+ * so a legacy assembly.json with no mates still loads and simply gains the row).
+ */
+
+import type { AssemblyFile } from '../../shared/assembly-schema'
+import {
+  persistMate,
+  type SolvedMateDraftInput,
+  type SolvedMateInput,
+  type SolvedMateKind,
+  type SolvedVec3
+} from '../../shared/assembly-mate-persist'
+import type { SolvedMate } from '../design/AssemblyMatePanel'
+import type { MateFormDraft, VectorDraft } from '../design/assembly-mate-form'
+
+// ── Toast shape (matches ToastContext.pushToast) ─────────────────────────────
+
+/** The kind + message a host toast carries. The host calls `pushToast(kind, message)`. */
+export interface HandoffToast {
+  readonly kind: 'ok' | 'err' | 'warn'
+  readonly message: string
+}
+
+// ── (1) Send-to-CAM hand-off ─────────────────────────────────────────────────
+
+/** A queued CAM import request (mirrors `PendingCamImport`). */
+export interface QueuedCamImport {
+  readonly stlPath: string
+  readonly sourceName?: string
+}
+
+/** Injected dependencies for {@link runSendToCam}. */
+export interface SendToCamDeps {
+  /** Absolute path to the STL the CAD sidecar just exported (`payload.stlPath`). */
+  readonly stlPath: string
+  /** Optional display name for the source part (defaults derived from the STL stem). */
+  readonly sourceName?: string
+  /** Human label of the active machine for the toast (e.g. "K2 Plus"). `null` ⇒ generic "CAM". */
+  readonly machineLabel: string | null
+  /** Queue the import into the CAM hand-off mailbox (`useCamHandoff().setPendingCamImport`). */
+  readonly setPendingCamImport: (req: QueuedCamImport) => void
+  /** Navigate to the Manufacture workspace (`WorkspaceHost.onNavigate`). */
+  readonly navigateToManufacture: () => void
+}
+
+/** Discriminated result of {@link runSendToCam}. */
+export type SendToCamResult =
+  | { readonly ok: true; readonly queued: QueuedCamImport; readonly toast: HandoffToast }
+  | { readonly ok: false; readonly toast: HandoffToast }
+
+/**
+ * Best-effort human label from an absolute STL path: the file stem with the
+ * extension stripped (`…/widget.stl` → `widget`). Returns `null` when no usable
+ * stem can be derived (so the caller can fall back to a generic label).
+ */
+export function deriveSourceNameFromStlPath(stlPath: string): string | null {
+  const base = stlPath.split(/[\\/]/).pop() ?? ''
+  const stem = base.replace(/\.[^.]+$/, '').trim()
+  return stem.length > 0 ? stem : null
+}
+
+/**
+ * Queue the exported STL for CAM import, then navigate to Manufacture.
+ *
+ * Order is load-bearing: the mailbox is set FIRST (so the slot is populated
+ * before `ManufactureHost` mounts and its consume effect runs), THEN we
+ * navigate. A blank `stlPath` is rejected with a clear failure toast and no
+ * navigation — a malformed hand-off must not silently bounce the operator to an
+ * empty Manufacture view.
+ */
+export function runSendToCam(deps: SendToCamDeps): SendToCamResult {
+  const stlPath = typeof deps.stlPath === 'string' ? deps.stlPath.trim() : ''
+  if (stlPath.length === 0) {
+    return {
+      ok: false,
+      toast: {
+        kind: 'err',
+        message: 'Send to CAM failed: the design export produced no STL path.'
+      }
+    }
+  }
+  const sourceName =
+    (typeof deps.sourceName === 'string' && deps.sourceName.trim().length > 0
+      ? deps.sourceName.trim()
+      : deriveSourceNameFromStlPath(stlPath)) ?? undefined
+  const queued: QueuedCamImport =
+    sourceName !== undefined ? { stlPath, sourceName } : { stlPath }
+
+  // Mailbox first, then navigate — see the order note above.
+  deps.setPendingCamImport(queued)
+  deps.navigateToManufacture()
+
+  const partLabel = sourceName ?? 'the part'
+  const target = deps.machineLabel?.trim() || 'CAM'
+  return {
+    ok: true,
+    queued,
+    toast: {
+      kind: 'ok',
+      // Honest: this function queued the import + navigated. `ManufactureHost`
+      // emits the authoritative "Part landed in CAM → <rel>" toast once the STL
+      // is actually bound to the plate.
+      message: `Sending ${partLabel} to ${target}…`
+    }
+  }
+}
+
+// ── (2) Assembly mate persistence ────────────────────────────────────────────
+
+/**
+ * Parse one {@link VectorDraft} (raw `<input type=number>` string cells) into a
+ * finite {@link SolvedVec3}, or `null` if any cell is empty / non-numeric /
+ * non-finite. The `AssemblyMatePanel` keeps its vectors as strings; a SOLVED
+ * mate's draft always parses (the bridge already validated it through
+ * `buildAddMateRequest`), but we re-parse defensively so a malformed draft folds
+ * to a clean rejection instead of an `NaN` constraint.
+ */
+function parseDraftVector(v: VectorDraft | undefined): SolvedVec3 | null {
+  if (!Array.isArray(v) || v.length !== 3) return null
+  const out: [number, number, number] = [0, 0, 0]
+  for (let i = 0; i < 3; i += 1) {
+    const cell = v[i]
+    if (typeof cell !== 'string' || cell.trim().length === 0) return null
+    const n = Number(cell)
+    if (!Number.isFinite(n)) return null
+    out[i] = n
+  }
+  return out as SolvedVec3
+}
+
+/**
+ * Adapt a renderer {@link SolvedMate} (whose `draft` is a {@link MateFormDraft}
+ * with STRING vector cells) onto the shared {@link SolvedMateInput} (NUMBER
+ * 3-vectors) that {@link persistMate} consumes. Only the vectors the mate's
+ * `kind` needs are parsed; an unparseable required cell yields `null` so the
+ * caller rejects the persist rather than writing a degenerate constraint.
+ *
+ * Pure: no React, no IPC. The kind enum is shared 1:1 between the form
+ * (`CadAssemblyMateKind`) and the fold (`SolvedMateKind`).
+ */
+export function solvedMateToInput(mate: SolvedMate): SolvedMateInput | null {
+  const draft: MateFormDraft = mate.draft
+  const kind = draft.kind as SolvedMateKind
+  const base = { kind, part1Id: draft.part1Id, part2Id: draft.part2Id }
+
+  if (kind === 'point') {
+    const point1 = parseDraftVector(draft.point1)
+    const point2 = parseDraftVector(draft.point2)
+    if (!point1 || !point2) return null
+    const adapted: SolvedMateDraftInput = { ...base, point1, point2 }
+    return { id: mate.id, draft: adapted }
+  }
+  if (kind === 'axis') {
+    const axis1 = parseDraftVector(draft.axis1)
+    const axis2 = parseDraftVector(draft.axis2)
+    if (!axis1 || !axis2) return null
+    const adapted: SolvedMateDraftInput = { ...base, axis1, axis2 }
+    return { id: mate.id, draft: adapted }
+  }
+  // plane
+  const point1 = parseDraftVector(draft.point1)
+  const normal1 = parseDraftVector(draft.normal1)
+  const point2 = parseDraftVector(draft.point2)
+  const normal2 = parseDraftVector(draft.normal2)
+  if (!point1 || !normal1 || !point2 || !normal2) return null
+  const adapted: SolvedMateDraftInput = { ...base, point1, normal1, point2, normal2 }
+  return { id: mate.id, draft: adapted }
+}
+
+/** Injected dependencies for {@link runPersistMate}. */
+export interface PersistMateDeps {
+  /** The solved mate handed back by the AssemblyMatePanel. */
+  readonly mate: SolvedMate
+  /** Open project directory, or `null` when none is open. */
+  readonly projectDir: string | null
+  /** Load `<projectDir>/assembly.json` (`fab().assemblyLoad`). */
+  readonly loadAssembly: (projectDir: string) => Promise<AssemblyFile>
+  /** Persist the updated assembly JSON (`fab().assemblySave`). */
+  readonly saveAssembly: (projectDir: string, json: string) => Promise<void>
+}
+
+/** Discriminated result of {@link runPersistMate}. */
+export type PersistMateOutcome =
+  | { readonly ok: true; readonly toast: HandoffToast }
+  | { readonly ok: false; readonly toast: HandoffToast }
+
+/**
+ * Durably persist a solved mate into the project's assembly.
+ *
+ * Steps (all guarded — every failure folds to a toast, never throws):
+ *   1. require an open project (no `projectDir` ⇒ warn toast, no write);
+ *   2. adapt the renderer draft → shared input ({@link solvedMateToInput});
+ *   3. load the on-disk assembly (`loadAssembly`);
+ *   4. run the pure {@link persistMate} fold (point→coincident, axis→concentric,
+ *      plane→flush; idempotent re-persist by id);
+ *   5. on success, re-save the assembly and toast "Mate saved"; on a rejected
+ *      draft, toast the precise reason and DO NOT save.
+ *
+ * The save payload is `JSON.stringify(result.assembly)`; the `assembly:save`
+ * handler re-validates it through `assemblyFileSchema` before writing, so a
+ * corrupt fold can never reach disk.
+ */
+export async function runPersistMate(deps: PersistMateDeps): Promise<PersistMateOutcome> {
+  const { mate, projectDir, loadAssembly, saveAssembly } = deps
+  if (!projectDir) {
+    return {
+      ok: false,
+      toast: {
+        kind: 'warn',
+        message: 'Open a project before saving an assembly mate.'
+      }
+    }
+  }
+  const input = solvedMateToInput(mate)
+  if (!input) {
+    return {
+      ok: false,
+      toast: {
+        kind: 'err',
+        message: 'Mate not saved: the solved mate had malformed feature vectors.'
+      }
+    }
+  }
+
+  let assembly: AssemblyFile
+  try {
+    assembly = await loadAssembly(projectDir)
+  } catch (e) {
+    return {
+      ok: false,
+      toast: {
+        kind: 'err',
+        message: `Mate not saved: could not load assembly.json (${e instanceof Error ? e.message : String(e)}).`
+      }
+    }
+  }
+
+  const result = persistMate(assembly, input)
+  if (!result.ok) {
+    return {
+      ok: false,
+      toast: { kind: 'err', message: `Mate not saved: ${result.reason}` }
+    }
+  }
+
+  try {
+    await saveAssembly(projectDir, JSON.stringify(result.assembly))
+  } catch (e) {
+    return {
+      ok: false,
+      toast: {
+        kind: 'err',
+        message: `Mate solved but failed to save: ${e instanceof Error ? e.message : String(e)}`
+      }
+    }
+  }
+
+  const count = result.assembly.mateConstraints.length
+  return {
+    ok: true,
+    toast: {
+      kind: 'ok',
+      message: `Mate saved (${result.constraint.kind}). ${count} mate${count === 1 ? '' : 's'} on this assembly.`
+    }
+  }
+}

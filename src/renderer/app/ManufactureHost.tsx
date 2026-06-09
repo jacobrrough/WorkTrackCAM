@@ -48,6 +48,8 @@ import { useProjectSession } from './useProjectSession'
 import { runCamForOp } from '../manufacture/run-cam-for-op'
 import { runSliceForOp } from '../manufacture/run-slice-for-op'
 import { getPlates } from '../manufacture/plate-state'
+import { useCamHandoff } from './CamHandoffContext'
+import { importStlIntoFirstPlate, type CamImportEnv } from './import-stl-into-first-plate'
 import type { ManufactureFile, ManufactureOperation } from '../../shared/manufacture-schema'
 import {
   registerCamCommands,
@@ -111,6 +113,10 @@ const DEFAULT_PANEL_TAB: ManufacturePanelTab = 'plan'
 export function ManufactureHost(): ReactElement {
   const { machines, sessionMachine, materials } = useMachineSession()
   const { pushToast } = useToast()
+  // Design → Manufacture STL hand-off mailbox. Design queues a freshly-exported
+  // STL here; the consume effect below imports it into the first plate exactly
+  // once (see {@link useCamHandoff} consume-once semantics).
+  const { pendingCamImport, consumePendingCamImport } = useCamHandoff()
 
   // Project binding (open/create/read lane). `projectDir` from the session is
   // authoritative; the loaded `settings.lastProjectPath` is only a fallback for
@@ -126,6 +132,11 @@ export function ManufactureHost(): ReactElement {
   // Local UI state owned by the host.
   const [panelTab, setPanelTab] = useState<ManufacturePanelTab>(DEFAULT_PANEL_TAB)
   const [importText, setImportText] = useState<string>('')
+  // Monotonic nonce bumped after the host writes a hand-off STL into the
+  // manufacture plan on disk (Design → Manufacture). The workspace re-reads
+  // `manufacture.json` whenever this changes, so the imported part appears in
+  // the plate without remounting the workspace. Session-only.
+  const [reloadNonce, setReloadNonce] = useState<number>(0)
 
   // Wave 3a (Mill-4 ribbon) — one-shot requests the host pushes DOWN into the
   // workspace so the CAM ribbon commands can drive the workflow-stage strip +
@@ -184,6 +195,57 @@ export function ManufactureHost(): ReactElement {
   const projectDir = sessionProjectDir ?? settings?.lastProjectPath ?? null
   const activeMachineId = sessionMachine?.id ?? null
   const pythonPath = settings?.pythonPath ?? DEFAULT_PYTHON_PATH
+
+  // ── Design → Manufacture STL hand-off (consume-once) ──────────────────────
+  // When Design queues an STL (via the CamHandoff mailbox), import it into the
+  // FIRST plate of the manufacture plan. This REUSES the proven mesh-import IPC
+  // (`assets:importMesh` — same path the workspace's "Import mesh" button uses):
+  // it copies the STL into the project's `assets/` and returns a project-
+  // relative path. We then bind that path onto the first plate's first op (or
+  // seed one if the plate is empty) via the pure `importStlIntoFirstPlate`
+  // helper, persist with `manufacture:save`, and bump `reloadNonce` so the
+  // mounted workspace re-reads the plan from disk. SAFETY: no G-code here — STL
+  // copy + plate-data write only. Consume-once: `consumePendingCamImport`
+  // atomically clears the slot, so a re-fired effect (project/machine change,
+  // Strict-Mode double-invoke) sees nothing and no-ops.
+  useEffect(() => {
+    if (!pendingCamImport) return
+    if (!projectDir) {
+      // No project open yet — leave the request queued; the effect re-runs when
+      // a project opens (projectDir flips non-null) and imports it then.
+      return
+    }
+    const req = consumePendingCamImport()
+    if (!req) return
+    const env: CamImportEnv =
+      machines.find((m) => m.id === activeMachineId)?.kind === 'fdm' ? 'fdm' : 'cnc'
+    void (async () => {
+      try {
+        const imp = await fab().assetsImportMesh(projectDir, req.stlPath, pythonPath)
+        if (!imp.ok) {
+          pushToast('err', 'Send to CAM: mesh import failed', imp.detail ?? imp.error)
+          return
+        }
+        let mfg: ManufactureFile
+        try {
+          mfg = await fab().manufactureLoad(projectDir)
+        } catch {
+          pushToast('err', 'Send to CAM: could not load the manufacture plan to place the part.')
+          return
+        }
+        const next = importStlIntoFirstPlate(mfg, imp.relativePath, {
+          env,
+          ...(req.sourceName !== undefined ? { opLabel: req.sourceName } : {})
+        })
+        await fab().manufactureSave(projectDir, JSON.stringify(next))
+        setReloadNonce((n) => n + 1)
+        const rel = imp.relativePath.replace(/\\/g, '/')
+        pushToast('ok', `Part landed in CAM → ${rel}`)
+      } catch (e) {
+        pushToast('err', 'Send to CAM failed', e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [pendingCamImport, projectDir, consumePendingCamImport, machines, activeMachineId, pythonPath, pushToast])
 
   // ── G-code generation handlers (PROVEN engine helpers) ────────────────────
   // CNC toolpath generation. Receives the live manufacture plan + selected op
@@ -487,6 +549,7 @@ export function ManufactureHost(): ReactElement {
         activeMachineId={activeMachineId}
         panelTab={panelTab}
         onPanelTabChange={setPanelTab}
+        reloadNonce={reloadNonce}
         settings={settings}
         project={project}
         sliceOut=""

@@ -15,6 +15,7 @@ import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-
 import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
+import type { AssemblyFile } from '../shared/assembly-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { KernelBuildResult } from '../main/cad/build-kernel-part'
 import type { PartFeaturesFile } from '../shared/part-features-schema'
@@ -217,6 +218,22 @@ export type Api = {
 
   // ── Design/Assembly read-only (CAM reads design data from project files) ─
   designLoad: (projectDir: string) => Promise<DesignFileV2 | null>
+  /**
+   * Load `<projectDir>/assembly.json`, migrated to the canonical v2
+   * {@link AssemblyFile} (legacy / missing-version files are normalized; a
+   * missing file resolves to an empty assembly). Delegates to `assembly:load`.
+   * Used by the Design → Manufacture mate-persistence path (Wave 3h) so a
+   * solved mate is folded onto the on-disk assembly before re-saving.
+   */
+  assemblyLoad: (projectDir: string) => Promise<AssemblyFile>
+  /**
+   * Persist a full {@link AssemblyFile} to `<projectDir>/assembly.json`. The
+   * main handler re-validates the payload through `assemblyFileSchema` before
+   * writing (a malformed assembly rejects rather than corrupting the file).
+   * Delegates to `assembly:save`. SAFETY: data-only — writes assembly JSON,
+   * emits no G-code.
+   */
+  assemblySave: (projectDir: string, json: string) => Promise<void>
   assemblyReadStlBase64: (projectDir: string, meshPath: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
   /**
    * Phase 2 (IPC) + Phase 3 (UI): run the iterative assembly mate solver on the given assembly
@@ -927,6 +944,8 @@ const api: Api = {
 
   // Design/Assembly read-only
   designLoad: (projectDir) => ipcRenderer.invoke('design:load', projectDir),
+  assemblyLoad: (projectDir) => ipcRenderer.invoke('assembly:load', projectDir),
+  assemblySave: (projectDir, json) => ipcRenderer.invoke('assembly:save', projectDir, json),
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),
   assemblySolve: (assemblyInput) => ipcRenderer.invoke('assembly:solve', assemblyInput),
   assemblySimulate: (assemblyInput, sampleCount) => ipcRenderer.invoke('assembly:simulate', assemblyInput, sampleCount),
