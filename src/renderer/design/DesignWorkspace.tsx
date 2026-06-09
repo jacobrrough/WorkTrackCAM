@@ -61,7 +61,9 @@ import { CadQueryEditor } from './CadQueryEditor'
 import { ViewportChrome } from './ViewportChrome'
 import { Viewport3D } from './Viewport3D'
 import { MvpSketchCanvas } from './Sketch2DCanvas'
+import { SketchSurface } from './SketchSurface'
 import { sketchToolForDesignCommand } from './design-command-map'
+import type { DesignFileV2 } from '../../shared/design-schema'
 import { buildViewportGeometry } from './viewport3d-geometry'
 import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
@@ -382,6 +384,22 @@ export interface DesignWorkspaceProps {
    */
   readonly armedSketchTool?: string | null
   /**
+   * Wave 3e (keystone unlock) — the live sketch model the cockpit's Sketch stage
+   * edits. When BOTH this and {@link onSketchDesignChange} are wired (the live
+   * `DesignWorkspaceHost`, which threads `session.design` / `session.onDesignChange`),
+   * the Sketch stage mounts the session-persisted {@link SketchSurface} instead
+   * of the self-contained `MvpSketchCanvas` — so a drawn vector persists into the
+   * design model, survives `manufacture:save` + reload, and is preserved across
+   * Sketch↔Model stage switches.
+   *
+   * Optional + additive: when omitted (the splash preview, the render-pin tests),
+   * the Sketch stage falls back to the self-contained `MvpSketchCanvas` exactly as
+   * before, so every existing Part-view / sketch-mode pin holds.
+   */
+  readonly sketchDesign?: DesignFileV2
+  /** Apply a sketch edit to the session model. Pairs with {@link sketchDesign}. */
+  readonly onSketchDesignChange?: (next: DesignFileV2) => void
+  /**
    * FG-5 (Wave 2 Integrate) — a request from the ribbon's Solid commands to open
    * a per-feature dialog in the Properties pane. When this changes to a non-null
    * {@link FeatureDialogKind}, the workspace opens that dialog and calls
@@ -520,6 +538,8 @@ export function DesignWorkspace({
   onSketchExit,
   onSketchEnter,
   armedSketchTool = null,
+  sketchDesign,
+  onSketchDesignChange,
   requestedFeatureDialog = null,
   onFeatureDialogConsumed,
   requestedInspect = null,
@@ -1475,19 +1495,24 @@ export function DesignWorkspace({
           */}
           {sketchMode ? (
             /*
-              FG-3 — the mounted 2D sketcher. `MvpSketchCanvas` is the
-              self-contained parametric sketch editor: it owns its tool palette,
-              the planegcs/local solver, undo/redo, AND the DOF badge
-              (`selectDofBadgeView` — the honesty contract: "Not solved" → neutral
-              "Solved" after a local solve → the real verdict only when the sidecar
-              supplies an authoritative DOF analysis). We mount it in the cockpit
-              center so operators can draw — the FG-3 "no mounted sketcher" gap.
+              Wave 3e (keystone unlock) — the mounted 2D sketcher.
 
-              HONESTY NOTE: this canvas has no controlled `activeTool` prop — tool
-              selection lives in its OWN palette. The ribbon's `armSketchTool`
-              therefore enters sketch mode and surfaces the armed tool as a HINT
-              (below) rather than driving the canvas's active tool. Wiring a
-              controlled tool needs a new `MvpSketchCanvas` prop; flagged, not faked.
+              When the host threads the live session model (`sketchDesign` +
+              `onSketchDesignChange`, which `DesignWorkspaceHost` fills from
+              `session.design` / `session.onDesignChange`), we mount the
+              SESSION-PERSISTED `SketchSurface`: a drawn vector dispatches into the
+              design model, so it survives `manufacture:save` + reload and a
+              Sketch↔Model stage switch. `SketchSurface` carries its OWN tool
+              palette + snap toggle, and the legacy canvas it wraps brings the
+              numeric dimension popovers — so the ribbon's `armSketchTool` actually
+              pre-selects the matching palette tool (passed as `armedToolCommandId`).
+
+              Without the session props (the splash preview + render-pin tests), we
+              fall back to the self-contained `MvpSketchCanvas`: it owns its tool
+              palette, the planegcs/local solver, undo/redo, AND the DOF badge
+              (`selectDofBadgeView` honesty contract). Its entity state lives in its
+              own reducer (it does NOT persist) — acceptable for the preview, and it
+              keeps every existing FG-3 render-pin holding.
             */
             <div
               className="design-workspace__sketch-host"
@@ -1501,10 +1526,26 @@ export function DesignWorkspace({
                   data-testid="design-workspace-sketch-armed"
                 >
                   Ribbon armed: <strong>{sketchToolHint(armedSketchTool)}</strong>
-                  {' '}— pick the matching tool in the sketcher palette.
+                  {sketchDesign && onSketchDesignChange
+                    ? ' — selected in the sketch palette.'
+                    : ' — pick the matching tool in the sketcher palette.'}
                 </div>
               )}
-              <MvpSketchCanvas />
+              {sketchDesign && onSketchDesignChange ? (
+                <SketchSurface
+                  design={sketchDesign}
+                  onDesignChange={onSketchDesignChange}
+                  armedToolCommandId={armedSketchTool}
+                  onSketchHint={(msg) => onToast?.('ok', msg)}
+                  planeLabel={
+                    sketchFacePlane !== null
+                      ? `Face @ (${sketchFacePlane.origin.map((c) => c.toFixed(0)).join(', ')})`
+                      : 'XY datum'
+                  }
+                />
+              ) : (
+                <MvpSketchCanvas />
+              )}
               {onSketchExit && (
                 <div className="design-workspace__sketch-actions">
                   <button

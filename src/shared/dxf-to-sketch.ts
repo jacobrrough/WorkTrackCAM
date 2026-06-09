@@ -31,8 +31,10 @@
  *   - LWPOLYLINE/POLYLINE → polyline (point-ids, `closed` preserved). The closed
  *                          flag is what V-carve / pocket / contour derive needs —
  *                          a closed loop yields a machinable boundary. Bulge arcs
- *                          are linearised to their straight vertices (the parser
- *                          already drops bulge curvature; a warning is surfaced).
+ *                          (group-42 curvature) are tessellated into intermediate
+ *                          points (chord deviation ≤ BULGE_CHORD_TOLERANCE_MM,
+ *                          ≤ BULGE_MAX_SEGMENTS per arc) so sign-lettering curves
+ *                          survive the import; b == 0 stays a straight segment.
  *   - CIRCLE            → circle entity (cx, cy, r). Feeds BOTH the contour
  *                          candidates (closed loop) AND the drill-point derive
  *                          (`deriveDrillPointsFromDesign` maps circles → points).
@@ -96,11 +98,92 @@ const COINCIDENT_EPS_SQ = 1e-12
 /** How many straight segments approximate one full revolution of a DXF arc. */
 const ARC_SAMPLE_SEGMENTS_PER_TURN = 64
 
+/**
+ * Max chord-to-arc deviation (sagitta of one tessellation segment) allowed before
+ * another segment is added, in mm. 0.05 mm is well below a router/V-bit's practical
+ * surface fidelity, so a bulge arc round-trips as "curved" rather than faceted.
+ */
+const BULGE_CHORD_TOLERANCE_MM = 0.05
+
+/** Hard cap on segments emitted for a single bulge arc (keeps point counts bounded). */
+const BULGE_MAX_SEGMENTS = 64
+
+/** Below this |bulge| a segment is treated as straight (matches the parser's epsilon). */
+const BULGE_STRAIGHT_EPS = 1e-9
+
 /** Squared planar distance between two points. */
 function distSq(a: Point2D, b: Point2D): number {
   const dx = a.x - b.x
   const dy = a.y - b.y
   return dx * dx + dy * dy
+}
+
+/**
+ * Tessellate one DXF bulge arc into intermediate points.
+ *
+ * A DXF bulge `b` on the segment from `p0`→`p1` encodes a circular arc whose
+ * included (signed) sweep is `θ = 4·atan(b)` — `b > 0` sweeps CCW, `b < 0` CW.
+ * `b == 0` is a straight segment (caller handles that and never calls this).
+ *
+ * Geometry (robust, derived from the bulge directly — no chord/radius division
+ * that blows up for half-circles):
+ *   - chord midpoint `m = (p0 + p1) / 2`
+ *   - the arc apex (its midpoint) sits a sagitta `s = b · (|chord| / 2)` off `m`
+ *     along the chord normal; the circle through p0, apex, p1 gives center+radius.
+ *
+ * Returns ONLY the interior points (p0 and p1 are emitted by the caller as the
+ * polyline's own vertices, so this never duplicates an endpoint). The segment
+ * count comes from the {@link BULGE_CHORD_TOLERANCE_MM} chord-deviation budget,
+ * floored at 1 segment (→ 0 interior points) and hard-capped at
+ * {@link BULGE_MAX_SEGMENTS}.
+ */
+export function tessellateBulgeArc(p0: Point2D, p1: Point2D, bulge: number): Point2D[] {
+  if (Math.abs(bulge) <= BULGE_STRAIGHT_EPS) return []
+  const dx = p1.x - p0.x
+  const dy = p1.y - p0.y
+  const chord = Math.hypot(dx, dy)
+  if (!(chord > 0)) return [] // coincident endpoints → no arc to sample
+
+  // Included sweep angle (signed). |θ| ∈ (0, 2π); sign carries CCW/CW.
+  const theta = 4 * Math.atan(bulge)
+  // Radius from the half-angle: r = (chord/2) / sin(θ/2). |sin(θ/2)| > 0 here
+  // because |bulge| > eps ⇒ |θ| > 0.
+  const halfTheta = theta / 2
+  const sinHalf = Math.sin(halfTheta)
+  const radius = chord / 2 / Math.abs(sinHalf)
+
+  // Center: from the chord midpoint, step along the chord-normal by the apothem
+  // distance `d = (chord/2) / tan(θ/2)`. The normal direction is chosen so the
+  // bulge sign yields the correct arc side (left of p0→p1 for b > 0).
+  const mx = (p0.x + p1.x) / 2
+  const my = (p0.y + p1.y) / 2
+  // Unit normal to the chord (left-hand: rotate chord dir +90°).
+  const nx = -dy / chord
+  const ny = dx / chord
+  const apothem = chord / 2 / Math.tan(halfTheta) // signed with θ
+  const cx = mx + nx * apothem
+  const cy = my + ny * apothem
+
+  // Segment count from chord-deviation tolerance. The max segment sagitta is
+  // r·(1 − cos(Δ/2)) for per-segment sweep Δ = |θ|/n; solve n so sagitta ≤ tol.
+  const absTheta = Math.abs(theta)
+  let n = 1
+  const tol = BULGE_CHORD_TOLERANCE_MM
+  if (radius > tol) {
+    const maxDelta = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - tol / radius)))
+    if (maxDelta > 0) n = Math.ceil(absTheta / maxDelta)
+  }
+  n = Math.max(1, Math.min(BULGE_MAX_SEGMENTS, n))
+  if (n <= 1) return []
+
+  // Sample interior points by sweeping the start-angle toward the end-angle.
+  const startAngle = Math.atan2(p0.y - cy, p0.x - cx)
+  const out: Point2D[] = []
+  for (let i = 1; i < n; i++) {
+    const a = startAngle + (theta * i) / n
+    out.push({ x: cx + radius * Math.cos(a), y: cy + radius * Math.sin(a) })
+  }
+  return out
 }
 
 /**
@@ -194,24 +277,76 @@ function convertArc(arc: DxfArc, points: Record<string, SketchPoint>, ids: IdMin
 }
 
 /**
+ * Collapse consecutive coincident (vertex, bulge) pairs in lock-step.
+ *
+ * `bulges[i]` describes the segment LEAVING vertex `i`; when a duplicate vertex is
+ * dropped we keep the *surviving* vertex's outgoing bulge (the dropped vertex had a
+ * zero-length outgoing segment, so its bulge is meaningless). Mirrors
+ * {@link dedupeConsecutive} but threads the parallel bulge array.
+ */
+function dedupeVertsAndBulges(
+  pts: ReadonlyArray<Point2D>,
+  bulges: ReadonlyArray<number>
+): { verts: Point2D[]; bulges: number[] } {
+  const outV: Point2D[] = []
+  const outB: number[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]!
+    const last = outV[outV.length - 1]
+    if (last && distSq(last, p) <= COINCIDENT_EPS_SQ) continue
+    outV.push(p)
+    outB.push(bulges[i] ?? 0)
+  }
+  return { verts: outV, bulges: outB }
+}
+
+/**
  * LWPOLYLINE / POLYLINE → polyline entity (point-ids), `closed` preserved.
+ *
+ * Each segment that carries a non-zero `bulge` is tessellated into a circular arc
+ * (see {@link tessellateBulgeArc}); the interior arc points are inserted between
+ * the two vertices so the emitted path follows the curve within
+ * {@link BULGE_CHORD_TOLERANCE_MM}. A `bulge == 0` segment stays a straight chord.
+ * For a closed polyline the closing segment (last vertex → first vertex) is
+ * tessellated too when it bulges, so rounded-rectangle loops stay closed AND
+ * curved (machinable boundary). Straight-only polylines are byte-for-byte
+ * unchanged from the prior behaviour.
+ *
  * Returns null when fewer than 2 distinct vertices remain after de-duping.
- * `hadBulge` is reported so the caller can surface a "bulge linearised" note.
+ * `hadBulge` is reported so the caller can surface a "bulge tessellated" note.
  */
 function convertPolyline(
   poly: DxfPolyline,
   points: Record<string, SketchPoint>,
   ids: IdMinter
 ): { converted: ConvertedEntity | null; hadBulge: boolean } {
-  const hadBulge = poly.bulges.some((b) => Math.abs(b) > 1e-9)
-  let verts = dedupeConsecutive(poly.points)
+  const hadBulge = poly.bulges.some((b) => Math.abs(b) > BULGE_STRAIGHT_EPS)
+  let { verts, bulges } = dedupeVertsAndBulges(poly.points, poly.bulges)
   // A closed polyline that repeats its first point as the last vertex would
-  // create a zero-length closing segment — drop the trailing dupe.
+  // create a zero-length closing segment — drop the trailing dupe (and its bulge).
   if (poly.closed && verts.length >= 2 && distSq(verts[0]!, verts[verts.length - 1]!) <= COINCIDENT_EPS_SQ) {
     verts = verts.slice(0, -1)
+    bulges = bulges.slice(0, -1)
   }
   if (verts.length < 2) return { converted: null, hadBulge }
-  const pointIds = verts.map((p) => addPoint(points, ids, p))
+
+  // Walk the vertices in order, emitting each vertex then any interior arc points
+  // for the bulge on the segment leaving it. The closing segment (closed only) is
+  // appended last; its end vertex (verts[0]) is NOT re-emitted (already first).
+  const path: Point2D[] = []
+  const lastIdx = verts.length - 1
+  for (let i = 0; i < verts.length; i++) {
+    path.push(verts[i]!)
+    const next = i < lastIdx ? verts[i + 1]! : poly.closed ? verts[0]! : undefined
+    if (next) {
+      const b = bulges[i] ?? 0
+      if (Math.abs(b) > BULGE_STRAIGHT_EPS) {
+        for (const ip of tessellateBulgeArc(verts[i]!, next, b)) path.push(ip)
+      }
+    }
+  }
+
+  const pointIds = path.map((p) => addPoint(points, ids, p))
   return {
     converted: {
       entity: { id: ids.entity('poly'), kind: 'polyline', pointIds, closed: poly.closed },
@@ -230,23 +365,23 @@ function convertEntity(
   e: DxfEntity,
   points: Record<string, SketchPoint>,
   ids: IdMinter
-): { converted: ConvertedEntity | null; bulgeLinearised: boolean } {
+): { converted: ConvertedEntity | null; bulgeTessellated: boolean } {
   switch (e.type) {
     case 'line':
-      return { converted: convertLine(e, points, ids), bulgeLinearised: false }
+      return { converted: convertLine(e, points, ids), bulgeTessellated: false }
     case 'circle':
-      return { converted: convertCircle(e, ids), bulgeLinearised: false }
+      return { converted: convertCircle(e, ids), bulgeTessellated: false }
     case 'arc':
-      return { converted: convertArc(e, points, ids), bulgeLinearised: false }
+      return { converted: convertArc(e, points, ids), bulgeTessellated: false }
     case 'polyline': {
       const { converted, hadBulge } = convertPolyline(e, points, ids)
-      return { converted, bulgeLinearised: hadBulge && converted !== null }
+      return { converted, bulgeTessellated: hadBulge && converted !== null }
     }
     default: {
       // Exhaustive over DxfEntity — a new primitive type would surface here.
       const _never: never = e
       void _never
-      return { converted: null, bulgeLinearised: false }
+      return { converted: null, bulgeTessellated: false }
     }
   }
 }
@@ -282,7 +417,7 @@ export function dxfToSketch(
   let bulgeCount = 0
 
   for (const e of parse.entities) {
-    const { converted, bulgeLinearised } = convertEntity(e, points, ids)
+    const { converted, bulgeTessellated } = convertEntity(e, points, ids)
     if (!converted) {
       skipped++
       continue
@@ -290,7 +425,7 @@ export function dxfToSketch(
     for (const np of converted.newPoints) points[np.id] = np.point
     newEntities.push(converted.entity)
     imported++
-    if (bulgeLinearised) bulgeCount++
+    if (bulgeTessellated) bulgeCount++
   }
 
   if (parse.units === 'inches') {
@@ -302,7 +437,7 @@ export function dxfToSketch(
   }
   if (bulgeCount > 0) {
     notes.push(
-      `${bulgeCount} polyline${bulgeCount === 1 ? '' : 's'} had bulge arcs that were linearised to straight segments.`
+      `${bulgeCount} polyline${bulgeCount === 1 ? '' : 's'} had bulge arcs that were tessellated into curve segments (within ${BULGE_CHORD_TOLERANCE_MM} mm).`
     )
   }
   if (skipped > 0) {

@@ -167,6 +167,20 @@ export function DesignWorkspaceHost({
   // registerStarterCommands wiring).
   useEffect(() => registerDesignCommands(designActions), [designActions])
 
+  // Wave 3e — Save now persists BOTH the script (the host's `onSave` → session
+  // state + toast) AND the live sketch model to `design/sketch.json` via
+  // `session.saveDesign()` (which also re-derives `part/features.json`). Without
+  // this, a vector drawn on the mounted SketchSurface lived only in the in-memory
+  // design reducer and was lost on reload — defeating the round-trip requirement.
+  // `saveDesign` no-ops cleanly when no project is open (`projectDir == null`).
+  const handleSave = useCallback(
+    (script: string) => {
+      onSave(script)
+      void session.saveDesign()
+    },
+    [onSave, session]
+  )
+
   // Forward the combined command surface (selection ∪ sketch mode) DesignWorkspace
   // computes up into the Context Engine. DesignWorkspace stays provider-less; the
   // host (always inside CommandContextProvider) owns the actual push.
@@ -184,7 +198,7 @@ export function DesignWorkspaceHost({
   return (
     <DesignWorkspace
       initialScript={initialScript}
-      onSave={onSave}
+      onSave={handleSave}
       onSendToCam={onSendToCam}
       onToast={onToast}
       initialViewMode={initialViewMode}
@@ -221,6 +235,15 @@ export function DesignWorkspaceHost({
         setArmedSketchTool(null)
       }}
       armedSketchTool={armedSketchTool}
+      // Wave 3e (keystone unlock) — the live session sketch model + its edit sink.
+      // Threading these mounts the SESSION-PERSISTED SketchSurface in the Sketch
+      // stage (instead of the self-contained MvpSketchCanvas), so a drawn vector
+      // persists into `session.design`, survives save + reload, and is preserved
+      // across Sketch↔Model stage switches. `onDesignChange` dispatches an `edit`
+      // into the session's design reducer (the same path `addPresetRect`/`mirrorX`
+      // use); `session.saveDesign` writes it to `design/sketch.json`.
+      sketchDesign={session.design}
+      onSketchDesignChange={session.onDesignChange}
       requestedFeatureDialog={requestedFeatureDialog}
       onFeatureDialogConsumed={() => setRequestedFeatureDialog(null)}
       // FG-5 Inspect — one-shot measure/section request + its ack.
