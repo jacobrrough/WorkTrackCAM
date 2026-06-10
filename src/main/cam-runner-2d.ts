@@ -15,6 +15,7 @@ import {
   generatePocket2dLines,
   generateVCarve2dLines
 } from './cam-local'
+import { generatePocketOffsetSpiralLines } from './cam-pocket-offset'
 import { renderPost } from './post-process'
 import {
   extractPostProcessingOpts,
@@ -47,6 +48,17 @@ function point2dList(v: unknown): [number, number][] {
   for (const item of v) {
     const p = point2d(item)
     if (p) out.push(p)
+  }
+  return out
+}
+
+/** Parse the `islandRings` operation param: an array of >=3-point [x,y] rings (invalid entries dropped). */
+function islandRingsParam(v: unknown): [number, number][][] {
+  if (!Array.isArray(v)) return []
+  const out: [number, number][][] = []
+  for (const ring of v) {
+    const pts = point2dList(ring)
+    if (pts.length >= 3) out.push(pts)
   }
   return out
 }
@@ -123,28 +135,67 @@ export async function dispatch2dStrategy(
         : undefined
     const finishPass = p['finishPass'] !== false
     const finishEachDepth = p['finishEachDepth'] === true
+    // Island + clearing-strategy params (additive -- absent params reproduce the
+    // legacy raster output byte-for-byte).
+    const islandRings = islandRingsParam(p['islandRings'])
+    const pocketStrategy: 'raster' | 'offset_spiral' =
+      p['pocketStrategy'] === 'offset_spiral' ? 'offset_spiral' : 'raster'
+    // G-code safety: pocket depth is HARD-CAPPED to the stock thickness
+    // (job.stockBoxZMm, WCS Z0 = stock top) so the cutter can never pass through
+    // the bottom of the material -- same contract as the cnc_vcarve cap below.
+    // Applies to the clearing passes AND the appended finish contours.
+    const pocketStockThickness =
+      typeof job.stockBoxZMm === 'number' && Number.isFinite(job.stockBoxZMm) && job.stockBoxZMm > 0
+        ? job.stockBoxZMm
+        : undefined
+    const pocketZCapped = pocketStockThickness != null && job.zPassMm < -pocketStockThickness
+    const pocketZPassMm = pocketZCapped && pocketStockThickness != null ? -pocketStockThickness : job.zPassMm
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
-    const pocket = generatePocket2dLines({
-      contourPoints: contour,
-      stepoverMm: job.stepoverMm,
-      zPassMm: job.zPassMm,
-      zStepMm,
-      feedMmMin: job.feedMmMin,
-      plungeMmMin: job.plungeMmMin,
-      safeZMm: job.safeZMm,
-      wallStockMm,
-      finishEachDepth,
-      entryMode,
-      rampMm,
-      rampMaxAngleDeg
-    })
+    const pocket =
+      pocketStrategy === 'offset_spiral'
+        ? generatePocketOffsetSpiralLines({
+            outerRing: contour,
+            islandRings,
+            stepoverMm: job.stepoverMm,
+            zPassMm: pocketZPassMm,
+            zStepMm,
+            feedMmMin: job.feedMmMin,
+            plungeMmMin: job.plungeMmMin,
+            safeZMm: job.safeZMm,
+            wallStockMm,
+            finishEachDepth,
+            entryMode,
+            rampMm,
+            rampMaxAngleDeg
+          })
+        : generatePocket2dLines({
+            contourPoints: contour,
+            islandRings,
+            stepoverMm: job.stepoverMm,
+            zPassMm: pocketZPassMm,
+            zStepMm,
+            feedMmMin: job.feedMmMin,
+            plungeMmMin: job.plungeMmMin,
+            safeZMm: job.safeZMm,
+            wallStockMm,
+            finishEachDepth,
+            entryMode,
+            rampMm,
+            rampMaxAngleDeg
+          })
     lines = pocket.lines
     pocketResultHints = pocket.hints
+    if (pocketZCapped && pocketStockThickness != null) {
+      pocketResultHints = [
+        `Pocket: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${pocketStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
+        ...pocketResultHints
+      ]
+    }
     if (shouldAppendFinalPocketFinishPass({ finishPass, finishEachDepth })) {
       lines.push(
         ...generateContour2dLines({
           contourPoints: contour,
-          zPassMm: job.zPassMm,
+          zPassMm: pocketZPassMm,
           feedMmMin: job.feedMmMin,
           plungeMmMin: job.plungeMmMin,
           safeZMm: job.safeZMm,
@@ -156,12 +207,31 @@ export async function dispatch2dStrategy(
         })
       )
     }
+    if (finishPass && islandRings.length > 0 && lines.length > 0) {
+      // Island WALL finish -- one bare contour pass around each island ring at
+      // the final (capped) depth, for BOTH clearing strategies. No leads: an
+      // arc or tangent lead could swing into the island; each pass begins with
+      // its own safe-Z lift + rapid (generateContour2dLines lifts first), so
+      // island-to-island transitions are never at-depth rapids.
+      for (const ring of islandRings) {
+        lines.push(
+          ...generateContour2dLines({
+            contourPoints: ring,
+            zPassMm: pocketZPassMm,
+            feedMmMin: job.feedMmMin,
+            plungeMmMin: job.plungeMmMin,
+            safeZMm: job.safeZMm,
+            contourSide
+          })
+        )
+      }
+    }
     if (lines.length === 0) {
       return {
         ok: false,
         error: 'Pocket toolpath is empty.',
         hint:
-          'Common causes: tool diameter too large for the pocket, contour too tight for stepover, invalid ramp settings, self-intersecting or open contours, or geometry the offsetter cannot offset. Try smaller toolDiameterMm / stepover or simplify contourPoints.'
+          'Common causes: tool diameter too large for the pocket, contour too tight for stepover, invalid ramp settings, self-intersecting or open contours, islands consuming the whole region, or geometry the offsetter cannot offset. Try smaller toolDiameterMm / stepover or simplify contourPoints.'
       }
     }
   } else if (job.operationKind === 'cnc_chamfer') {
@@ -196,6 +266,11 @@ export async function dispatch2dStrategy(
     // thickness (job.stockBoxZMm, WCS Z0 = stock top) so the V-bit can never
     // plunge past the material (G-code safety: never cut below the stock).
     const ring = point2dList(p['contourPoints'])
+    // Interior hole rings (additive `islandRings` param -- same name as the
+    // pocket family; set by the nested-ring sketch derive). The engine treats
+    // rings even-odd, so the carve runs BETWEEN the outer wall and each hole
+    // wall (letter counters, washers) instead of ploughing across the hole.
+    const vcarveHoleRings = islandRingsParam(p['islandRings'])
     const vBitAngleDeg =
       typeof p['vBitAngleDeg'] === 'number' && Number.isFinite(p['vBitAngleDeg']) && p['vBitAngleDeg'] > 0
         ? p['vBitAngleDeg']
@@ -223,7 +298,7 @@ export async function dispatch2dStrategy(
         ? p['flatBottomClearance']
         : undefined
     const vcarve = generateVCarve2dLines({
-      rings: [ring],
+      rings: [ring, ...vcarveHoleRings],
       vBitAngleDeg,
       maxDepthMm,
       feedMmMin: job.feedMmMin,
@@ -234,6 +309,12 @@ export async function dispatch2dStrategy(
     })
     lines = vcarve.lines
     pocketResultHints = vcarve.hints
+    if (vcarveHoleRings.length > 0) {
+      pocketResultHints = [
+        `V-carve: ${vcarveHoleRings.length} interior hole ring(s) carved around (even-odd with the outer loop).`,
+        ...pocketResultHints
+      ]
+    }
     if (cappedToStock && stockThickness != null) {
       pocketResultHints = [
         `V-carve: depth cap reduced from ${requestedMaxDepth.toFixed(3)} mm to the ${stockThickness.toFixed(3)} mm stock thickness so the V-bit does not plunge past the material.`,

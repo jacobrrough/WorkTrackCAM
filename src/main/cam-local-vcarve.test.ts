@@ -40,6 +40,7 @@ import { describe, expect, it } from 'vitest'
 import { machineProfileSchema, type MachineProfile } from '../shared/machine-schema'
 import {
   generateVCarve2dLines,
+  solveVCarveFlatRegion,
   solveVCarveRidge,
   vCarveDepthPerRadius,
   VCARVE_MAX_GRID_CELLS,
@@ -381,8 +382,8 @@ describe('generateVCarve2dLines -- emitted toolpath body', () => {
     ).toEqual([])
   })
 
-  it('flatBottomClearance is accepted today but surfaces an honest "no separate pass" hint', () => {
-    const { hints } = generateVCarve2dLines({
+  it('flatBottomClearance emits a real flat-bottom clearance pass when the cap binds (hint surfaces it)', () => {
+    const { lines, hints } = generateVCarve2dLines({
       rings: [DIAMOND],
       vBitAngleDeg: 90,
       maxDepthMm: 6,
@@ -391,6 +392,10 @@ describe('generateVCarve2dLines -- emitted toolpath body', () => {
       safeZMm: 6,
       flatBottomClearance: 0.5
     })
+    // DIAMOND's inscribed radius (~14.1 mm) far exceeds the 6 mm cap, so a flat
+    // floor exists and the second chained section must be emitted.
+    expect(lines.some((l) => l.startsWith('; V-carve flat-bottom'))).toBe(true)
+    expect(hints.some((h) => /flat-bottom clearance pass emitted/.test(h))).toBe(true)
     expect(hints.some((h) => /flatBottomClearance/.test(h))).toBe(true)
   })
 })
@@ -608,6 +613,347 @@ describe('cnc_vcarve posted snapshot (Laguna Swift, deterministic small wedge)',
     if (r.ok) {
       // Normalize the operator-visible banner line that carries the machine id
       // (stable) but strip nothing else -- the toolpath body is deterministic.
+      expect(r.gcode).toMatchSnapshot()
+    }
+    await unlink(out).catch(() => {})
+  })
+})
+
+// ── 6. Flat-bottom (prism) clearance pass — Wave 3i ─────────────────────────
+
+/**
+ * A WIDE bar (40 × 16 mm): with a 90° bit and a 2 mm cap the inscribed radius
+ * (up to 8 mm) far exceeds the 2 mm rim inset, so the cap BINDS and the floor
+ * at z = -2 is the bar inset by 2 mm on every side — [2..38] × [2..14].
+ */
+const WIDE_BAR: CamPoint2d[] = [
+  [0, 0],
+  [40, 0],
+  [40, 16],
+  [0, 16]
+]
+
+/** A NARROW bar (30 × 3 mm): max clearance 1.5 mm < the 2 mm inset — no flat floor. */
+const NARROW_BAR: CamPoint2d[] = [
+  [0, 0],
+  [30, 0],
+  [30, 3],
+  [0, 3]
+]
+
+describe('solveVCarveFlatRegion — floor region where the V cut saturates the cap', () => {
+  it('90° bit: rim inset equals the depth cap and the floor is the bar inset by it', () => {
+    const flat = solveVCarveFlatRegion({ rings: [WIDE_BAR], vBitAngleDeg: 90, maxDepthMm: 2 })
+    expect(flat.insetMm).toBeCloseTo(2, 6)
+    expect(flat.rings.length).toBe(1)
+    const xs = flat.rings[0]!.map((p) => p[0])
+    const ys = flat.rings[0]!.map((p) => p[1])
+    expect(Math.min(...xs)).toBeCloseTo(2, 3)
+    expect(Math.max(...xs)).toBeCloseTo(38, 3)
+    expect(Math.min(...ys)).toBeCloseTo(2, 3)
+    expect(Math.max(...ys)).toBeCloseTo(14, 3)
+  })
+
+  it('60° bit: rim inset is cap·tan(30°) — a pointier bit leaves a wider flat floor', () => {
+    const inset60 = 2 * Math.tan((30 * Math.PI) / 180)
+    const flat = solveVCarveFlatRegion({ rings: [WIDE_BAR], vBitAngleDeg: 60, maxDepthMm: 2 })
+    expect(flat.insetMm).toBeCloseTo(inset60, 6)
+    expect(flat.rings.length).toBe(1)
+    const xs = flat.rings[0]!.map((p) => p[0])
+    expect(Math.min(...xs)).toBeCloseTo(inset60, 3)
+    expect(Math.max(...xs)).toBeCloseTo(40 - inset60, 3)
+  })
+
+  it('NARROW shape that never reaches the cap has NO flat floor', () => {
+    const flat = solveVCarveFlatRegion({ rings: [NARROW_BAR], vBitAngleDeg: 90, maxDepthMm: 2 })
+    expect(flat.rings).toEqual([])
+  })
+
+  it('even-odd island: the floor is the outer inset PLUS the island grown by the inset', () => {
+    const outer: CamPoint2d[] = [[0, 0], [40, 0], [40, 40], [0, 40]]
+    const island: CamPoint2d[] = [[16, 16], [24, 16], [24, 24], [16, 24]]
+    const flat = solveVCarveFlatRegion({ rings: [outer, island], vBitAngleDeg: 90, maxDepthMm: 2 })
+    expect(flat.rings.length).toBe(2)
+    const all = flat.rings.flat()
+    // Outer eroded to [2..38]; hole grown to [14..26] (island ± the 2 mm inset).
+    expect(all.some((p) => Math.abs(p[0] - 2) < 0.01)).toBe(true)
+    expect(all.some((p) => Math.abs(p[0] - 14) < 0.01)).toBe(true)
+    expect(all.some((p) => Math.abs(p[0] - 26) < 0.01)).toBe(true)
+    expect(all.some((p) => Math.abs(p[0] - 38) < 0.01)).toBe(true)
+  })
+
+  it('degenerate input yields no region (no crash)', () => {
+    expect(solveVCarveFlatRegion({ rings: [], vBitAngleDeg: 90, maxDepthMm: 2 }).rings).toEqual([])
+    expect(solveVCarveFlatRegion({ rings: [WIDE_BAR], vBitAngleDeg: 90, maxDepthMm: 0 }).rings).toEqual([])
+    expect(
+      solveVCarveFlatRegion({ rings: [[[0, 0], [10, 0]]], vBitAngleDeg: 90, maxDepthMm: 2 }).rings
+    ).toEqual([])
+  })
+})
+
+describe('generateVCarve2dLines — flat-bottom clearance section (Safety Rule 5)', () => {
+  const ENGINE_ARGS = {
+    rings: [WIDE_BAR],
+    vBitAngleDeg: 90,
+    maxDepthMm: 2,
+    feedMmMin: 1500,
+    plungeMmMin: 400,
+    safeZMm: 6,
+    stepoverMm: 2
+  }
+
+  it('WIDE bar with a binding cap: V-walls capped at -cap AND a flat section at exactly -cap', () => {
+    const { lines } = generateVCarve2dLines({ ...ENGINE_ARGS, flatBottomClearance: 2 })
+    const idx = lines.findIndex((l) => l.startsWith('; V-carve flat-bottom'))
+    expect(idx).toBeGreaterThan(0)
+    // (a) V-wall section: the cap binds on a 16 mm-wide bar — deepest Z == -cap.
+    const wall = lines.slice(0, idx)
+    expect(deepestZ(wall)).toBeCloseTo(-2, 6)
+    // (b) Flat section: EVERY cutting Z is exactly -cap (the floor is truly flat).
+    const flat = lines.slice(idx)
+    let cutMoves = 0
+    for (const l of flat) {
+      const m = l.match(/Z(-\d+(?:\.\d+)?)/)
+      if (m) {
+        cutMoves += 1
+        expect(Number.parseFloat(m[1]!)).toBeCloseTo(-2, 6)
+      }
+    }
+    expect(cutMoves).toBeGreaterThan(4)
+    // (c) A safe-Z lift separates the V-wall pass from the flat section.
+    expect(flat[0]!.startsWith('; V-carve flat-bottom')).toBe(true)
+    expect(flat[1]!.trim()).toBe('G0 Z6.000')
+    // Floor coverage: cutting rows span the inset floor [2..14] at ≤ stepover gaps.
+    const ys: number[] = []
+    for (const l of flat) {
+      const m = l.match(/^G1 X-?\d+(?:\.\d+)? Y(-?\d+(?:\.\d+)?) F/)
+      if (m) ys.push(Number.parseFloat(m[1]!))
+    }
+    const sorted = [...new Set(ys)].sort((a, b) => a - b)
+    expect(sorted[0]!).toBeCloseTo(2, 3)
+    expect(sorted[sorted.length - 1]!).toBeCloseTo(14, 3)
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]! - sorted[i - 1]!).toBeLessThanOrEqual(2 + 1e-6)
+    }
+    // (d) No bare XY rapid at cut depth anywhere in the WHOLE body.
+    let atDepth = false
+    for (const l of lines) {
+      const t = l.trim()
+      if (t === 'G0 Z6.000') atDepth = false
+      else if (/^G1 Z-?\d/.test(t)) atDepth = true
+      else if (/^G0 X-?\d/.test(t)) expect(atDepth).toBe(false)
+    }
+  })
+
+  it('rim finish traces the inset boundary so the floor meets the V-walls with no sliver', () => {
+    const { lines } = generateVCarve2dLines({ ...ENGINE_ARGS, flatBottomClearance: 2 })
+    const idx = lines.findIndex((l) => l.startsWith('; V-carve flat-bottom'))
+    const flat = lines.slice(idx)
+    const feedXY = new Set(
+      flat
+        .map((l) => l.match(/^G1 X(-?\d+(?:\.\d+)?) Y(-?\d+(?:\.\d+)?) F/))
+        .filter((m): m is RegExpMatchArray => m != null)
+        .map((m) => Number.parseFloat(m[1]!).toFixed(3) + ',' + Number.parseFloat(m[2]!).toFixed(3))
+    )
+    // All four corners of the 2 mm-inset floor rect are feed targets: the V-bit
+    // tip rides the rim at z = -cap, where its cone exactly meets the V-wall.
+    for (const corner of ['2.000,2.000', '38.000,2.000', '2.000,14.000', '38.000,14.000']) {
+      expect(feedXY.has(corner)).toBe(true)
+    }
+  })
+
+  it('NARROW shape (cap never binds) emits NO flat-bottom section and says so honestly', () => {
+    const { lines, hints } = generateVCarve2dLines({
+      rings: [NARROW_BAR],
+      vBitAngleDeg: 90,
+      maxDepthMm: 2,
+      feedMmMin: 1500,
+      plungeMmMin: 400,
+      safeZMm: 6,
+      stepoverMm: 1,
+      flatBottomClearance: 1
+    })
+    expect(lines.some((l) => l.includes('flat-bottom'))).toBe(false)
+    expect(hints.some((h) => /no flat floor exists/.test(h))).toBe(true)
+  })
+
+  it('flatBottomClearance ABSENT keeps the output byte-identical to the V-walls-only engine', () => {
+    const without = generateVCarve2dLines(ENGINE_ARGS)
+    const withFlat = generateVCarve2dLines({ ...ENGINE_ARGS, flatBottomClearance: 2 })
+    // The with-flat body STARTS with the identical V-wall pass (sans final lift)…
+    expect(withFlat.lines.slice(0, without.lines.length - 1)).toEqual(without.lines.slice(0, -1))
+    // …then APPENDS the flat section and still ends at safe-Z.
+    expect(withFlat.lines.length).toBeGreaterThan(without.lines.length)
+    expect(withFlat.lines[withFlat.lines.length - 1]).toBe('G0 Z6.000')
+    expect(without.lines.some((l) => l.includes('flat-bottom'))).toBe(false)
+  })
+
+  it('disjoint floor strokes around an ISLAND are each entered from safe-Z (no transit at depth)', () => {
+    const outer: CamPoint2d[] = [[0, 0], [40, 0], [40, 40], [0, 40]]
+    const island: CamPoint2d[] = [[16, 16], [24, 16], [24, 24], [16, 24]]
+    const { lines } = generateVCarve2dLines({
+      rings: [outer, island],
+      vBitAngleDeg: 90,
+      maxDepthMm: 2,
+      feedMmMin: 1500,
+      plungeMmMin: 400,
+      safeZMm: 6,
+      stepoverMm: 2,
+      flatBottomClearance: 2
+    })
+    const idx = lines.findIndex((l) => l.startsWith('; V-carve flat-bottom'))
+    expect(idx).toBeGreaterThan(0)
+    const flat = lines.slice(idx)
+    // A raster row through the island band (y = 20) is split into TWO strokes
+    // around the grown hole — each entered by its own rapid after a safe-Z lift.
+    const rowStarts = flat.filter((l) => /^G0 X-?\d+(?:\.\d+)? Y20\.000$/.test(l.trim()))
+    expect(rowStarts.length).toBe(2)
+    // And the at-depth walk holds across the whole flat section.
+    let atDepth = false
+    for (const l of flat) {
+      const t = l.trim()
+      if (t === 'G0 Z6.000') atDepth = false
+      else if (/^G1 Z-?\d/.test(t)) atDepth = true
+      else if (/^G0 X-?\d/.test(t)) expect(atDepth).toBe(false)
+    }
+  })
+})
+
+describe('cnc_vcarve flat-bottom posted through vcarve_mach3.hbs on Laguna Swift 5x10', () => {
+  const FLAT_PARAMS = {
+    contourPoints: WIDE_BAR,
+    vBitAngleDeg: 90,
+    maxDepthMm: 2,
+    stepoverMm: 2,
+    flatBottomClearance: 2
+  }
+
+  async function postFlat(
+    overrides: Partial<CamJobConfig> = {},
+    params: Record<string, unknown> = {}
+  ): Promise<{ gcode: string; out: string }> {
+    const machine = await loadLagunaProfile()
+    const out = tmpGcodePath('flat')
+    const r = await dispatch2dStrategy(
+      buildJob({
+        machine,
+        outputGcodePath: out,
+        operationKind: 'cnc_vcarve',
+        operationParams: { ...FLAT_PARAMS, ...params },
+        ...overrides
+      }),
+      GUARD_HINT,
+      envelopeHint
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error(r.error)
+    return { gcode: r.gcode, out }
+  }
+
+  it('passes the Laguna/RichAuto invariants with the flat section present (tape, header order, warm-up/cool-down, M30 never M2/M4)', async () => {
+    const { gcode, out } = await postFlat()
+    expect(gcode).toContain('; V-carve flat-bottom')
+    const tape = gcode.split('\n').map((l) => l.trim()).filter((l) => l === '%')
+    expect(tape.length).toBe(2)
+    const g21 = gcode.indexOf('G21')
+    const g90 = gcode.indexOf('G90')
+    const g17 = gcode.indexOf('G17')
+    expect(g21).toBeGreaterThan(-1)
+    expect(g90).toBeGreaterThan(g21)
+    expect(g17).toBeGreaterThan(g90)
+    const m3 = gcode.search(/^M3\b/m)
+    const warm = gcode.indexOf('G4 P2.0')
+    const m5 = gcode.search(/^M5\b/m)
+    const cool = gcode.indexOf('G4 P3.0')
+    expect(m3).toBeGreaterThan(-1)
+    expect(warm).toBeGreaterThan(m3)
+    expect(m5).toBeGreaterThan(warm)
+    expect(cool).toBeGreaterThan(m5)
+    expect(gcode).toMatch(/^M30\b/m)
+    expect(gcode).not.toMatch(/^M2\b/m)
+    expect(gcode).not.toMatch(/^M4\b/m)
+    await unlink(out).catch(() => {})
+  })
+
+  it('SAFETY: deepest posted Z is exactly the cap — the flat floor never undercuts it', async () => {
+    const { gcode, out } = await postFlat()
+    const deepest = deepestZ(gcode.split('\n'))
+    expect(deepest).toBeGreaterThanOrEqual(-2 - 1e-6)
+    expect(deepest).toBeLessThanOrEqual(-2 + 1e-6)
+    await unlink(out).catch(() => {})
+  })
+
+  it('SAFETY: stock thinner than maxDepth re-caps the flat floor to the stock thickness', async () => {
+    const { gcode, out } = await postFlat({ stockBoxZMm: 1.5 })
+    expect(deepestZ(gcode.split('\n'))).toBeGreaterThanOrEqual(-1.5 - 1e-6)
+    expect(gcode).toContain('; V-carve flat-bottom')
+    expect(gcode).toContain('floor z -1.500 mm')
+    expect(gcode).not.toContain('Z-2.000')
+    await unlink(out).catch(() => {})
+  })
+
+  it('every X/Y in the flat-bottom program stays inside the Laguna 1524 x 3048 mm bed', async () => {
+    const { gcode, out } = await postFlat()
+    for (const l of gcode.split('\n')) {
+      const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
+      const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
+      if (mx) {
+        const x = Number.parseFloat(mx[1]!)
+        expect(x).toBeGreaterThanOrEqual(0)
+        expect(x).toBeLessThanOrEqual(1524)
+      }
+      if (my) {
+        const y = Number.parseFloat(my[1]!)
+        expect(y).toBeGreaterThanOrEqual(0)
+        expect(y).toBeLessThanOrEqual(3048)
+      }
+    }
+    await unlink(out).catch(() => {})
+  })
+
+  it('the flat-bottom hint reaches the operator through the runner result', async () => {
+    const machine = await loadLagunaProfile()
+    const out = tmpGcodePath('flathint')
+    const r = await dispatch2dStrategy(
+      buildJob({ machine, outputGcodePath: out, operationParams: { ...FLAT_PARAMS } }),
+      GUARD_HINT,
+      envelopeHint
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.hint).toMatch(/flat-bottom clearance pass emitted/)
+      expect(r.hint).toContain('[test-guard]')
+    }
+    await unlink(out).catch(() => {})
+  })
+
+  it('matches the flat-bottom posted-program snapshot (NEW snapshot; the wedge snapshot above is untouched)', async () => {
+    const machine = await loadLagunaProfile()
+    const out = tmpGcodePath('flatsnap')
+    // A small bar + coarse resolutions keep the snapshot compact + deterministic.
+    const smallBar: CamPoint2d[] = [
+      [0, 0],
+      [24, 0],
+      [24, 10],
+      [0, 10]
+    ]
+    const r = await dispatch2dStrategy(
+      buildJob({
+        machine,
+        outputGcodePath: out,
+        operationParams: {
+          contourPoints: smallBar,
+          vBitAngleDeg: 90,
+          maxDepthMm: 2,
+          stepoverMm: 2,
+          flatBottomClearance: 2.5
+        }
+      }),
+      GUARD_HINT,
+      envelopeHint
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) {
       expect(r.gcode).toMatchSnapshot()
     }
     await unlink(out).catch(() => {})

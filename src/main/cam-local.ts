@@ -1,5 +1,7 @@
+import ClipperLib, { type IntPoint } from 'clipper-lib'
 import type { StlBounds, Vec3 } from './stl'
 import { extractToolpathSegmentsFromGcode } from '../shared/cam-gcode-toolpath'
+import { CLIPPER_SCALE } from '../shared/sketch-boolean-offset'
 
 export type ParallelFinishParams = {
   bounds: StlBounds
@@ -541,6 +543,15 @@ export type Contour2dParams = {
 
 export type Pocket2dParams = {
   contourPoints: ReadonlyArray<CamPoint2d>
+  /**
+   * Optional interior ISLAND rings (keep-out polygons inside the pocket).
+   * Raster scanline spans are clipped even-odd across ALL rings, so a row
+   * crossing an island splits into separate cut segments on either side, each
+   * honouring `wallStockMm` clearance from island edges as well as the outer
+   * wall. Absent / empty -> exact legacy single-ring behaviour (byte-identical
+   * output; the original single-ring helper still runs).
+   */
+  islandRings?: ReadonlyArray<ReadonlyArray<CamPoint2d>>
   stepoverMm: number
   zPassMm: number
   /** Optional step-down increment (mm); default single depth at zPassMm. */
@@ -736,6 +747,85 @@ function horizontalSegmentsInsideInsetRing(ring: ReadonlyArray<CamPoint2d>, y: n
       const xm = 0.5 * (x0 + x1)
       if (!pointInRing2d(ring, xm, y)) continue
       const d = minDistanceToRingEdges(ring, xm, y)
+      if (d + 1e-6 < insetMm) continue
+      out.push([x0, x1])
+    }
+  }
+  return out
+}
+
+/**
+ * Even-odd horizontal crossings at `y` across MANY rings, paired into inside
+ * spans -- the multi-ring generalization of {@link horizontalSegmentsInsideRing}
+ * (outer ring + islands). Crossing parity flips at every ring edge, so a span
+ * crossing an island splits into the sub-spans on either side of it.
+ */
+function horizontalSegmentsInsideRings(
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>,
+  y: number
+): Array<[number, number]> {
+  const xs: number[] = []
+  for (const ring of rings) {
+    if (ring.length < 3) continue
+    for (let i = 0; i < ring.length; i++) {
+      const [x1, y1] = ring[i]!
+      const [x2, y2] = ring[(i + 1) % ring.length]!
+      if (Math.abs(y2 - y1) < 1e-9) continue
+      // Half-open to avoid double counting at vertices (same rule as single-ring).
+      const ymin = Math.min(y1, y2)
+      const ymax = Math.max(y1, y2)
+      if (!(y >= ymin && y < ymax)) continue
+      const t = (y - y1) / (y2 - y1)
+      xs.push(x1 + t * (x2 - x1))
+    }
+  }
+  xs.sort((a, b) => a - b)
+  const out: Array<[number, number]> = []
+  for (let i = 0; i + 1 < xs.length; i += 2) {
+    const a = xs[i]!
+    const b = xs[i + 1]!
+    if (b - a > 1e-6) out.push([a, b])
+  }
+  return out
+}
+
+/**
+ * Multi-ring generalization of {@link horizontalSegmentsInsideInsetRing}: spans
+ * of the scanline at `y` lying inside (outer - islands) by even-odd across ALL
+ * rings, with >= `insetMm` TRUE GEOMETRIC clearance to EVERY ring edge (outer
+ * wall AND island walls). Uses the same exact distance root-finding as the
+ * single-ring inset -- no polygonal offset approximation -- so island wall
+ * stock is honoured to the same tolerance as the outer wall.
+ */
+function horizontalSegmentsInsideInsetRings(
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>,
+  y: number,
+  insetMm: number
+): Array<[number, number]> {
+  const base = horizontalSegmentsInsideRings(rings, y)
+  if (base.length === 0 || insetMm <= 1e-9) return base
+  const out: Array<[number, number]> = []
+  for (const [a, b] of base) {
+    const candidates = [a, b]
+    for (const ring of rings) {
+      if (ring.length < 3) continue
+      for (let i = 0; i < ring.length; i++) {
+        const [x1, y1] = ring[i]!
+        const [x2, y2] = ring[(i + 1) % ring.length]!
+        const roots = rootsAtDistanceFromSegmentForY(x1, y1, x2, y2, y, insetMm)
+        for (const x of roots) {
+          if (x > a + 1e-7 && x < b - 1e-7) candidates.push(x)
+        }
+      }
+    }
+    const xs = uniqueSorted(candidates)
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const x0 = xs[i]!
+      const x1 = xs[i + 1]!
+      if (x1 - x0 <= 1e-6) continue
+      const xm = 0.5 * (x0 + x1)
+      if (!pointInsideRings(rings, xm, y)) continue
+      const d = minDistanceToAnyRing(rings, xm, y)
       if (d + 1e-6 < insetMm) continue
       out.push([x0, x1])
     }
@@ -977,6 +1067,10 @@ export function generateContour2dLines(params: Contour2dParams): string[] {
 export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateResult {
   const b = ringBounds(params.contourPoints)
   if (!b || params.stepoverMm <= 0) return { lines: [], hints: [] }
+  // Island-aware raster (additive): with islands present the scanline spans are
+  // clipped even-odd across outer + island rings; without them the original
+  // single-ring helper runs untouched (byte-identical legacy output).
+  const islandRingsClean = (params.islandRings ?? []).filter((r) => r.length >= 3)
   const lines: string[] = []
   const targetZ = params.zPassMm
   const stepDown = Math.max(0.01, Math.abs(params.zStepMm ?? params.zPassMm))
@@ -997,7 +1091,10 @@ export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateR
     let y = b.minY
     let reverseRow = false
     while (y <= b.maxY + 1e-6) {
-      const segs = horizontalSegmentsInsideInsetRing(params.contourPoints, y, stock)
+      const segs =
+        islandRingsClean.length > 0
+          ? horizontalSegmentsInsideInsetRings([params.contourPoints, ...islandRingsClean], y, stock)
+          : horizontalSegmentsInsideInsetRing(params.contourPoints, y, stock)
       if (segs.length > 0) {
         const row = reverseRow ? [...segs].reverse() : segs
         for (let s = 0; s < row.length; s++) {
@@ -1195,9 +1292,14 @@ export type VCarve2dParams = {
    */
   stepoverMm?: number
   /**
-   * Reserved for a future flat-bottom prism floor (an end-mill clearance pass at
-   * this clearance below the carve). Accepted + clamped today; no separate pass
-   * is emitted yet. Present so the schema/param surface is stable.
+   * Flat-bottom (prism) carving — raster stepover (mm) for the floor clearance
+   * pass. When set (> 0) and the carve saturates {@link maxDepthMm} somewhere,
+   * a SECOND chained section clears the FLAT floor at z = -maxDepthMm over the
+   * region where the uncapped V depth exceeds the cap (the input loops inset by
+   * maxDepthMm·tan(vBitAngleDeg/2), see {@link solveVCarveFlatRegion}), then
+   * finishes the inset rim so the floor meets the V-walls with no un-carved
+   * sliver. Absent/0 ⇒ V-walls only (output byte-identical to the engine
+   * without a flat-bottom pass).
    */
   flatBottomClearance?: number
 }
@@ -1343,6 +1445,224 @@ export function solveVCarveRidge(params: {
   return { points, stepMm: step, capMm, clampedResolution }
 }
 
+/** Caps flat-bottom raster rows so a pathological stepover cannot emit a multi-million-line floor pass. */
+export const VCARVE_FLAT_MAX_RASTER_ROWS = 40_000
+
+/**
+ * Arc tolerance (mm) for the rounded rim corners Clipper generates at reflex
+ * boundary vertices during the flat-floor inset. 0.02 mm keeps the rim within a
+ * couple hundredths of the true distance-field boundary without exploding the
+ * vertex count (the raster scanline is O(rows × rim vertices)).
+ */
+const VCARVE_FLAT_ARC_TOLERANCE_MM = 0.02
+
+/** The flat-bottom (prism) floor region of a capped V-carve (see {@link solveVCarveFlatRegion}). */
+export type VCarveFlatRegion = {
+  /**
+   * Floor-boundary rings (mm) at z = -maxDepthMm: the input loops inset by
+   * {@link insetMm}. Clipper-normalised polygon-with-holes — outer boundaries
+   * CCW (positive area), holes CW — the same winding contract as
+   * `sketch-boolean-offset`. Empty when the cap never binds (no flat floor).
+   */
+  rings: CamPoint2d[][]
+  /** Rim inset distance (mm): maxDepthMm · tan(vBitAngleDeg / 2). */
+  insetMm: number
+}
+
+/**
+ * Solve the flat-bottom (prism) floor region for a capped V-carve.
+ *
+ * The V-bit saturates the depth cap wherever the clearance radius `r` exceeds
+ * `cap · tan(half)` (uncapped depth `r / tan(half)` > cap), so the floor at
+ * z = -cap is the even-odd region of the input rings ERODED by that radius.
+ * Computed with Clipper (the Wave-3g offset/boolean engine, `CLIPPER_SCALE`
+ * mm→int convention): an even-odd union first normalises arbitrary ring
+ * winding/nesting into outer-CCW / hole-CW rings, then a negative round-join
+ * offset erodes by the rim inset (round joins reproduce the distance-field's
+ * circular rim arcs at reflex corners). Returns no rings when the inset
+ * swallows the shape — narrow geometry that never reaches the cap has no flat
+ * floor and needs no clearance pass.
+ */
+export function solveVCarveFlatRegion(params: {
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>
+  vBitAngleDeg: number
+  maxDepthMm: number
+}): VCarveFlatRegion {
+  const capMm = Math.max(0, params.maxDepthMm)
+  const insetMm = capMm / vCarveDepthPerRadius(params.vBitAngleDeg)
+  const rings = params.rings.filter((r) => r.length >= 3)
+  if (rings.length === 0 || !(capMm > 0) || !(insetMm > 0)) {
+    return { rings: [], insetMm }
+  }
+
+  // mm → Clipper integer paths (shared CLIPPER_SCALE convention: 1e4 ⇒ 0.1 µm
+  // resolution; the Laguna's 3048 mm bed maps far inside Clipper's safe range).
+  const subject = rings.map((ring) =>
+    ring.map((p): IntPoint => ({ X: Math.round(p[0] * CLIPPER_SCALE), Y: Math.round(p[1] * CLIPPER_SCALE) }))
+  )
+
+  // 1) Even-odd union normalises the rings (matches VCarve2dParams island
+  //    semantics) into outer-CCW / hole-CW polygon-with-holes form.
+  const clipper = new ClipperLib.Clipper()
+  clipper.AddPaths(subject, ClipperLib.PolyType.ptSubject, true)
+  const normalized: IntPoint[][] = []
+  clipper.Execute(
+    ClipperLib.ClipType.ctUnion,
+    normalized,
+    ClipperLib.PolyFillType.pftEvenOdd,
+    ClipperLib.PolyFillType.pftEvenOdd
+  )
+  if (normalized.length === 0) return { rings: [], insetMm }
+
+  // 2) Erode by the rim inset: a negative delta shrinks outers and grows holes.
+  const offsetter = new ClipperLib.ClipperOffset(2, VCARVE_FLAT_ARC_TOLERANCE_MM * CLIPPER_SCALE)
+  offsetter.AddPaths(normalized, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon)
+  const eroded: IntPoint[][] = []
+  offsetter.Execute(eroded, -insetMm * CLIPPER_SCALE)
+
+  const out: CamPoint2d[][] = []
+  for (const path of eroded) {
+    if (path.length < 3) continue
+    out.push(path.map((ip): CamPoint2d => [ip.X / CLIPPER_SCALE, ip.Y / CLIPPER_SCALE]))
+  }
+  return { rings: out, insetMm }
+}
+
+/**
+ * Even-odd horizontal scanline across MANY rings (the flat-floor variant of the
+ * single-ring `horizontalSegmentsInsideRing`): crossings from every ring are
+ * pooled, sorted, and paired, so holes punched by inner rings are skipped and
+ * disjoint floor islands yield separate segments.
+ */
+function horizontalSegmentsInsideRingsEvenOdd(
+  rings: ReadonlyArray<ReadonlyArray<CamPoint2d>>,
+  y: number
+): Array<[number, number]> {
+  const xs: number[] = []
+  for (const ring of rings) {
+    if (ring.length < 3) continue
+    for (let i = 0; i < ring.length; i++) {
+      const [x1, y1] = ring[i]!
+      const [x2, y2] = ring[(i + 1) % ring.length]!
+      if (Math.abs(y2 - y1) < 1e-9) continue
+      // Half-open to avoid double counting at shared vertices.
+      const ymin = Math.min(y1, y2)
+      const ymax = Math.max(y1, y2)
+      if (!(y >= ymin && y < ymax)) continue
+      const t = (y - y1) / (y2 - y1)
+      xs.push(x1 + t * (x2 - x1))
+    }
+  }
+  xs.sort((a, b) => a - b)
+  const out: Array<[number, number]> = []
+  for (let i = 0; i + 1 < xs.length; i += 2) {
+    const a = xs[i]!
+    const b = xs[i + 1]!
+    if (b - a > 1e-6) out.push([a, b])
+  }
+  return out
+}
+
+/**
+ * Emit the flat-bottom clearance section: a raster zig-zag over the floor
+ * region plus a rim finish trace along every floor ring, all at exactly
+ * z = -capMm. Mirrors the pocket-raster safety convention — EVERY stroke
+ * (row or rim) begins with a safe-Z lift + XY rapid + plunge, so no XY rapid
+ * ever happens at cut depth and disjoint floor islands are always separated
+ * by a lift. The rim finish is the wall/floor join: the V-bit tip riding the
+ * inset boundary at z = -cap puts the bit's cone exactly against the V-wall
+ * (cone radius at the surface = capMm · tan(half) = the rim inset), so the
+ * floor meets the walls with no un-carved sliver.
+ */
+function emitVCarveFlatBottomLines(opts: {
+  region: VCarveFlatRegion
+  capMm: number
+  /** Requested raster stepover (mm) — `flatBottomClearance` from the op params. */
+  stepoverMm: number
+  feedMmMin: number
+  plungeMmMin: number
+  safeZMm: number
+}): { lines: string[]; rasterRowCount: number; stepMm: number; clampedStepover: boolean } {
+  const rings = opts.region.rings
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const ring of rings) {
+    for (const [, yv] of ring) {
+      minY = Math.min(minY, yv)
+      maxY = Math.max(maxY, yv)
+    }
+  }
+  if (!(maxY >= minY)) {
+    return { lines: [], rasterRowCount: 0, stepMm: opts.stepoverMm, clampedStepover: false }
+  }
+
+  // Row cap (main-process safety, mirrors PARALLEL_FINISH_MAX_Y_PASSES): lift
+  // the stepover until the row count fits, growing in a bounded loop so the
+  // ceil() rounding can never tip the invariant.
+  const spanY = maxY - minY
+  let step = Math.max(0.05, opts.stepoverMm)
+  let clampedStepover = false
+  const rowsAt = (s: number): number => Math.ceil(spanY / s) + 1
+  if (rowsAt(step) > VCARVE_FLAT_MAX_RASTER_ROWS) {
+    step = Math.max(step, spanY / Math.max(1, VCARVE_FLAT_MAX_RASTER_ROWS - 1))
+    let guard = 0
+    while (rowsAt(step) > VCARVE_FLAT_MAX_RASTER_ROWS && guard < 1000) {
+      step *= 1.02
+      guard += 1
+    }
+    clampedStepover = true
+  }
+
+  const zCut = (-opts.capMm).toFixed(3)
+  const safe = opts.safeZMm.toFixed(3)
+  const feed = opts.feedMmMin.toFixed(0)
+  const plunge = opts.plungeMmMin.toFixed(0)
+  const lines: string[] = []
+  lines.push(
+    `; V-carve flat-bottom — ${rings.length} floor ring(s), rim inset ${opts.region.insetMm.toFixed(3)} mm, floor z ${zCut} mm, stepover ${step.toFixed(3)} mm`
+  )
+
+  // 1) Raster zig-zag floor fill (safe-Z lift before every stroke — pocket precedent).
+  let rasterRowCount = 0
+  let y = minY
+  let reverseRow = false
+  while (y <= maxY + 1e-6) {
+    const segs = horizontalSegmentsInsideRingsEvenOdd(rings, y)
+    if (segs.length > 0) {
+      const row = reverseRow ? [...segs].reverse() : segs
+      for (const seg of row) {
+        const [a, b] = seg
+        if (b - a <= 1e-6) continue
+        const x0 = reverseRow ? b : a
+        const x1 = reverseRow ? a : b
+        lines.push(`G0 Z${safe}`)
+        lines.push(`G0 X${x0.toFixed(3)} Y${y.toFixed(3)}`)
+        lines.push(`G1 Z${zCut} F${plunge}`)
+        lines.push(`G1 X${x1.toFixed(3)} Y${y.toFixed(3)} F${feed}`)
+        rasterRowCount += 1
+      }
+      reverseRow = !reverseRow
+    }
+    y += step
+  }
+
+  // 2) Rim finish — trace every floor ring at z = -cap (the wall/floor join).
+  for (const ring of rings) {
+    if (ring.length < 3) continue
+    const [sx, sy] = ring[0]!
+    lines.push(`G0 Z${safe}`)
+    lines.push(`G0 X${sx.toFixed(3)} Y${sy.toFixed(3)}`)
+    lines.push(`G1 Z${zCut} F${plunge}`)
+    for (let i = 1; i < ring.length; i++) {
+      const [px, py] = ring[i]!
+      lines.push(`G1 X${px.toFixed(3)} Y${py.toFixed(3)} F${feed}`)
+    }
+    lines.push(`G1 X${sx.toFixed(3)} Y${sy.toFixed(3)} F${feed}`)
+  }
+
+  return { lines, rasterRowCount, stepMm: step, clampedStepover }
+}
+
 /**
  * Generate a V-carve toolpath from closed vector(s). Emits XYZ feed polylines
  * (z = -depth) along the medial-axis ridge with safe-Z lifts between disjoint
@@ -1352,6 +1672,12 @@ export function solveVCarveRidge(params: {
  *
  * Caller MUST pass `maxDepthMm` already clamped to the stock thickness / Z
  * envelope (see `dispatch2dStrategy`) so the cap honours the material.
+ *
+ * With `flatBottomClearance` set, a SECOND chained section follows the V-wall
+ * pass: the flat floor (where the uncapped V depth would exceed the cap) is
+ * cleared at z = -maxDepthMm — raster rows at the flatBottomClearance stepover
+ * plus a rim finish along the inset boundary — with a safe-Z lift before every
+ * disjoint stroke (see `solveVCarveFlatRegion`).
  */
 export function generateVCarve2dLines(params: VCarve2dParams): VCarve2dGenerateResult {
   const hints: string[] = []
@@ -1412,6 +1738,50 @@ export function generateVCarve2dLines(params: VCarve2dParams): VCarve2dGenerateR
       lines.push(`G1 X${pn.x.toFixed(3)} Y${pn.y.toFixed(3)} Z${(-pn.depthMm).toFixed(3)} F${feed.toFixed(0)}`)
     }
   }
+  // ── Flat-bottom (prism) clearance pass ────────────────────────────────────
+  // Where the UNCAPPED depth r·depthPerR exceeds the cap, the V-bit bottoms out
+  // at z = -cap and the floor between the V-walls is FLAT. With
+  // flatBottomClearance set, chain a SECOND section that clears that floor
+  // (raster + rim finish at exactly z = -cap); every stroke starts with its own
+  // safe-Z lift, so the section is always separated from the V-wall pass (and
+  // from disjoint floor islands) by a lift. Without the param the body above is
+  // byte-identical to the V-walls-only engine.
+  const flatHints: string[] = []
+  if (
+    typeof params.flatBottomClearance === 'number' &&
+    Number.isFinite(params.flatBottomClearance) &&
+    params.flatBottomClearance > 0
+  ) {
+    const flat = solveVCarveFlatRegion({
+      rings: params.rings,
+      vBitAngleDeg: params.vBitAngleDeg,
+      maxDepthMm: capMm
+    })
+    if (flat.rings.length === 0) {
+      flatHints.push(
+        `V-carve: flatBottomClearance is set but the carve never saturates the ${capMm.toFixed(3)} mm depth cap anywhere, so no flat floor exists — no flat-bottom pass emitted (the V-walls cover the full carve).`
+      )
+    } else {
+      const floor = emitVCarveFlatBottomLines({
+        region: flat,
+        capMm,
+        stepoverMm: params.flatBottomClearance,
+        feedMmMin: feed,
+        plungeMmMin: plunge,
+        safeZMm: safeZ
+      })
+      lines.push(...floor.lines)
+      if (floor.clampedStepover) {
+        flatHints.push(
+          `V-carve: flat-bottom raster stepover was coarsened to ${floor.stepMm.toFixed(3)} mm to keep the floor pass under ${VCARVE_FLAT_MAX_RASTER_ROWS.toLocaleString()} rows for this region size.`
+        )
+      }
+      flatHints.push(
+        `V-carve: flat-bottom clearance pass emitted — floor cleared at z=${(-capMm).toFixed(3)} mm across ${flat.rings.length} floor ring(s) (rim inset ${flat.insetMm.toFixed(3)} mm where the V cut saturates the depth cap): ${floor.rasterRowCount} raster row(s) at the ${floor.stepMm.toFixed(3)} mm flatBottomClearance stepover + a rim finish pass joining floor to V-walls.`
+      )
+    }
+  }
+
   // Final safe-Z so the post's cool-down/retract starts from clearance.
   lines.push(`G0 Z${safeZ.toFixed(3)}`)
 
@@ -1420,11 +1790,7 @@ export function generateVCarve2dLines(params: VCarve2dParams): VCarve2dGenerateR
       `V-carve: sampling resolution was coarsened to ${stepMm.toFixed(3)} mm to keep the medial-axis grid under ${VCARVE_MAX_GRID_CELLS.toLocaleString()} cells for this shape size — pass a larger stepoverMm for an explicit resolution.`
     )
   }
-  if (typeof params.flatBottomClearance === 'number' && params.flatBottomClearance > 0) {
-    hints.push(
-      'V-carve: flatBottomClearance is accepted but a separate flat-bottom clearance pass is not emitted yet (V-walls only this release).'
-    )
-  }
+  hints.push(...flatHints)
   hints.push(
     'V-carve depth is a distance-field medial-axis approximation (deepest at the widest span, capped to stock); verify against your V-bit angle + stock thickness before cutting.'
   )

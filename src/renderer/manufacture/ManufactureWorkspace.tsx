@@ -7,6 +7,7 @@ import {
   listContourCandidatesFromDesign,
   type DerivedContourCandidate
 } from '../../shared/cam-2d-derive'
+import { deriveContourRingGroupFromDesign } from '../../shared/cam-2d-nesting'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import { emptyDesign, type DesignFileV2 } from '../../shared/design-schema'
@@ -1537,6 +1538,22 @@ export function ManufactureWorkspace({
         return
       }
       base.contourPoints = contour
+      // Nested rings (Wave 3i): pocket + V-carve ops machine AROUND interior
+      // hole loops (letter counters, washers). The grouped derive collects every
+      // loop whose innermost container is the picked outer (even-odd containment)
+      // into `islandRings`; a re-derive that finds no holes CLEARS stale rings.
+      // Contour ops cut a single loop and never get islands.
+      let holeRingCount = 0
+      if (op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve') {
+        const group = deriveContourRingGroupFromDesign(d, sourceId)
+        const holes = group?.holes ?? []
+        if (holes.length > 0) {
+          base.islandRings = holes.map((h) => h.points)
+          holeRingCount = holes.length
+        } else {
+          delete base.islandRings
+        }
+      }
       if (selected) {
         base.contourSourceLabel = selected.label
         base.contourSourceSignature = selected.signature
@@ -1546,7 +1563,11 @@ export function ManufactureWorkspace({
       }
       base.contourDerivedAt = new Date().toISOString()
       updateOp(i, { params: base })
-      onStatus?.(`Derived contourPoints (${contour.length} vertices) from selected sketch profile.`)
+      onStatus?.(
+        holeRingCount > 0
+          ? `Derived contourPoints (${contour.length} vertices) + ${holeRingCount} interior hole ring(s) from sketch.`
+          : `Derived contourPoints (${contour.length} vertices) from selected sketch profile.`
+      )
       return
     }
     if (op.kind === 'cnc_drill') {

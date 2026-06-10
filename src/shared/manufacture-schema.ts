@@ -319,12 +319,18 @@ export const manufactureOperationSchema = z.object({
      * Routes through the SAME 2D dispatch + post as the other `cnc_*` 2D ops
      * (`vcarve_mach3.hbs` for the Laguna Swift); the generic XYZ emitter posts it unchanged.
      * Params: `contourPoints: [x,y][]` (closed loop in setup WCS, mm),
+     *   optional `islandRings: Array<Array<[xMm, yMm]>>` (interior HOLE loops, even-odd with
+     *     the outer loop — the carve runs BETWEEN outer wall and hole wall, e.g. the counter
+     *     of a letter 'O'; auto-set by the nested-ring sketch derive when the picked profile
+     *     encloses other closed loops),
      *   `vBitAngleDeg` (FULL included angle of the V-bit, e.g. 60 or 90; default 90),
      *   `maxDepthMm` (HARD depth cap, mm — the carve never plunges past this; further
      *     capped to stock thickness via the runner's `stockBoxZMm` so the V-bit cannot
      *     drive past the material),
-     *   optional `flatBottomClearance` (mm — reserved for a future flat-bottom prism floor;
-     *     accepted + clamped today, no separate clearance pass yet),
+     *   optional `flatBottomClearance` (mm — flat-bottom / prism carving: where the carve
+     *     saturates the depth cap a SECOND chained section clears the flat floor at
+     *     z = -maxDepthMm using this raster stepover plus a rim finish along the inset
+     *     boundary, so wide regions get a true flat prism floor; absent ⇒ V-walls only),
      *   optional `stepoverMm` (mm — medial-axis sampling resolution; smaller = finer ridge),
      *   plus the shared `feedMmMin`, `plungeMmMin`, `safeZMm`.
      */
@@ -466,6 +472,14 @@ export const manufactureOperationSchema = z.object({
    *   `rampMm`, optional `rampMaxAngleDeg` (default 45: max ramp angle from horizontal; XY run may grow),
    *   `wallStockMm` (rough stock to leave), `finishPass` (boolean, default true), and
    *   `finishEachDepth` (boolean, default false).
+   *   Pocket islands + clearing strategy (additive): `islandRings: Array<Array<[xMm, yMm]>>`
+   *   (interior keep-out islands subtracted from the clearable region -- raster rows split
+   *   around them, the offset strategy grows them by the inset, and island walls get a
+   *   final-depth finish contour when `finishPass` is on) and `pocketStrategy`
+   *   ('raster'|'offset_spiral', default 'raster' -- 'offset_spiral' clears with successive
+   *   concentric insets of (outer - islands) at `wallStockMm + k*stepover`, traced inside-out
+   *   with a safe-Z lift between every loop). Pocket depth is hard-capped to the stock
+   *   thickness when `stockBoxZMm` is known (clearing passes AND finish contours).
    * - drill: `drillPoints: Array<[xMm, yMm]>`, optional `retractMm`, `peckMm`, `dwellMs`,
    *   `drillCycle` ('expanded'|'g73'|'g81'|'g82'|'g83')
    *   and `drillDerivedAt` (ISO timestamp)
@@ -478,8 +492,12 @@ export const manufactureOperationSchema = z.object({
    *   `chamferDepthMm` (how far below surface to reach full width), `toolDiameterMm`, `feedMmMin`.
    * - vcarve (`cnc_vcarve`): `contourPoints: [x,y][]` (closed loop), `vBitAngleDeg` (FULL included
    *   V-bit angle, default 90), `maxDepthMm` (hard depth cap; also capped to stock thickness),
-   *   optional `flatBottomClearance` (mm, reserved for a future flat-bottom pass), optional
-   *   `stepoverMm` (medial-axis sampling resolution), `feedMmMin`, `plungeMmMin`, `safeZMm`.
+   *   optional `islandRings: Array<Array<[xMm, yMm]>>` (interior hole loops, even-odd with the
+   *   outer — the ridge runs between outer wall and hole wall; auto-set by the nested-ring
+   *   sketch derive), optional `flatBottomClearance` (mm, flat-bottom prism floor: raster
+   *   stepover for the chained floor-clearance section emitted where the carve saturates the
+   *   cap), optional `stepoverMm` (medial-axis sampling resolution), `feedMmMin`, `plungeMmMin`,
+   *   `safeZMm`.
    * - laser (`cnc_laser`): `laserMode` ('vector'|'raster'|'fill'), `laserPower` (0–100),
    *   `laserSpeed` mm/min, `passes`, `contourPoints` for vector/fill.
    * See `resolveCamCutParams` / `resolveCamToolDiameterMm` for defaults.

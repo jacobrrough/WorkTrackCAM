@@ -95,9 +95,37 @@ invariant above still holds. The engine owns only the cut body; its safety rules
   to zero at the tip).
 - **The clearance raster is bounded** by `VCARVE_MAX_GRID_CELLS` so a full-sheet 1524×3048 job
   cannot exhaust the main process.
+- **Flat-bottom (prism) clearance pass (`flatBottomClearance`, added 2026-06-10).** Where the
+  uncapped depth `r / tan(half)` exceeds the cap, the floor at z = −cap is FLAT: the engine erodes
+  the input loops by `cap·tan(half)` (`solveVCarveFlatRegion`, Clipper round-join inset) and chains
+  a SECOND section after the V-wall pass — raster rows at the `flatBottomClearance` stepover plus a
+  rim finish along the inset boundary, ALL at exactly z = −cap (the same stock-clamped cap; the
+  floor can never undercut the material guard). Every stroke starts with its own `G0 Z<safeZ>`
+  lift (pocket-raster convention), so there is NO XY transit at depth between the two sections,
+  between rows, or across floor islands. Raster rows are bounded by `VCARVE_FLAT_MAX_RASTER_ROWS`.
+  The rim finish is the wall/floor join: the V-bit riding the inset boundary at z = −cap touches
+  the original vector at z = 0, so floor meets V-wall with no un-carved sliver. Absent
+  `flatBottomClearance` the body is byte-identical to the V-walls-only engine (pinned).
+- **Interior hole rings (`islandRings`, added 2026-06-10).** The dispatcher passes the outer
+  loop PLUS every derived hole loop to the engine as `rings: [outer, ...islandRings]`
+  (even-odd), so a letter counter or washer hole reshapes the medial axis: the ridge runs
+  BETWEEN the outer wall and the hole wall and NO ridge point falls inside a hole. The same
+  rings flow into the flat-bottom floor solve. The pocket family reads the same `islandRings`
+  param (raster rows split even-odd around islands, the offset spiral subtracts them from the
+  clearable region, island walls get a final-depth finish trace), and EVERY island/segment
+  transition is a safe-Z lift. Degenerate (<3 point) rings are dropped -- the program is then
+  byte-identical to the no-hole carve. The `Derive from sketch` button groups nested sketch
+  loops automatically (`src/shared/cam-2d-nesting.ts`, innermost-container even-odd rule).
 
 Pinned by `src/main/cam-local-vcarve.test.ts` (real wedge / letter-V / diamond fixtures + the posted
 `vcarve_mach3.hbs` G-code: `%`, G21→G90→G17, M3+G4 P2.0, M5+G4 P3.0, M30-not-M2, capped depth).
+Flat-bottom coverage: §6 of the same file — wide-bar binding-cap fixture (flat section at exactly
+−cap), even-odd island floor with split rows, stock-thinner-than-cap re-clamp, posted Laguna
+invariants with the flat section present, and a second (additive) posted snapshot.
+Nested-ring coverage: `src/main/cam-nested-rings.integration.test.ts` -- a derived rect-plate +
+circle-hole fixture posted end-to-end (segment-distance walk proves no pocket cut enters the
+hole for raster AND offset-spiral; V-carve deepest sits in the band between rect edge and
+circle, never the centre; stock re-cap holds with holes present; one additive posted snapshot).
 
 ---
 

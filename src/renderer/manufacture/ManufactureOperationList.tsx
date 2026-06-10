@@ -1020,6 +1020,20 @@ export function ManufactureOperationList({
                     placeholder="= Z pass depth"
                   />
                 </label>
+                <label title="Clearing pattern. Raster: parallel zig-zag rows (legacy default). Offset spiral: successive concentric insets of (outer - islands) traced inside-out, with a safe-Z lift between every loop.">
+                  Clearing strategy
+                  <select
+                    value={op.params?.['pocketStrategy'] === 'offset_spiral' ? 'offset_spiral' : 'raster'}
+                    onChange={(e) => {
+                      const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                      base.pocketStrategy = e.target.value === 'offset_spiral' ? 'offset_spiral' : 'raster'
+                      onUpdateOp(i, { params: base })
+                    }}
+                  >
+                    <option value="raster">Raster (zig-zag)</option>
+                    <option value="offset_spiral">Offset spiral (concentric)</option>
+                  </select>
+                </label>
                 <label>
                   Entry mode
                   <select
@@ -1184,7 +1198,7 @@ export function ManufactureOperationList({
                     placeholder="auto"
                   />
                 </label>
-                <label title="Reserved: a future flat-bottom prism floor (end-mill clearance pass at this clearance below the carve). Accepted + clamped today; no separate pass is emitted yet.">
+                <label title="Flat-bottom (prism) carving: where the carve saturates Max depth, a second chained pass clears the flat floor at -Max depth using this raster stepover (mm), plus a rim finish joining floor to V-walls. Leave empty for V-walls only.">
                   Flat-bottom clearance (mm)
                   <input
                     type="number"
