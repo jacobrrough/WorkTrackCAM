@@ -843,8 +843,8 @@ describe('[ID-0215] setup-sheet source-text whitelist (Cycle 140)', () => {
     expect(matches?.length ?? 0).toBe(1)
   })
 
-  it('"Unified Fab Studio" footer brand string is present (em-dash separator)', () => {
-    expect(SRC).toContain('Unified Fab Studio — Setup Sheet')
+  it('"WorkTrack3D" footer brand string is present (em-dash separator)', () => {
+    expect(SRC).toContain('WorkTrack3D — Setup Sheet')
   })
 
   it('em-dash glyph U+2014 is used (NOT en-dash U+2013) for separator literals', () => {

@@ -125,7 +125,7 @@ export function buildTitleBlockHtml(opts: {
 }): string {
   const title = escapeHtml(opts.projectTitle)
   const when = escapeHtml(opts.generatedAtIso)
-  const app = escapeHtml(opts.appLabel ?? 'Unified Fab Studio')
+  const app = escapeHtml(opts.appLabel ?? 'WorkTrack3D')
   const sheetLine =
     opts.sheetTitle != null && opts.sheetTitle.trim() !== ''
       ? escapeHtml(opts.sheetTitle.trim()) + (opts.sheetScale?.trim() ? ` · scale ${escapeHtml(opts.sheetScale.trim())}` : '')

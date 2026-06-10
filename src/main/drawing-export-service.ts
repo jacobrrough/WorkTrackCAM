@@ -166,7 +166,7 @@ export async function runDrawingExport(
     const html = buildTitleBlockHtml({
       projectTitle,
       generatedAtIso: now,
-      appLabel: 'Unified Fab Studio',
+      appLabel: 'WorkTrack3D',
       sheetTitle,
       sheetScale,
       viewPlaceholders,

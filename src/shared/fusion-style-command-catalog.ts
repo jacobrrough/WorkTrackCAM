@@ -1,5 +1,5 @@
 /**
- * Fusion-style command inventory for Unified Fab Studio.
+ * Fusion-style command inventory for WorkTrack3D.
  * Names mirror common CAD/Fusion workflows; this is not Autodesk software and does not ship proprietary assets.
  * Status reflects this codebase today — most modeling commands remain planned until OCCT/history integration.
  */

@@ -396,7 +396,7 @@ export function generateSetupSheet(opts: {
   }
 
   <footer>
-    Unified Fab Studio — Setup Sheet &nbsp;|&nbsp; ${job.name} &nbsp;|&nbsp; ${now}
+    WorkTrack3D — Setup Sheet &nbsp;|&nbsp; ${job.name} &nbsp;|&nbsp; ${now}
     <br>Always verify G-code, work offsets, and tool lengths before running. The operator is responsible for machine safety.
   </footer>
 </div>
