@@ -312,9 +312,16 @@ export declare const window: Window & {
       | { ok: false; error: string; hint?: string }
     >
     /**
-     * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md): Laguna true-shape nesting v1.
-     * Returns placements that the renderer writes back onto each cnc_contour
-     * op's `params.placement` field. No G-code is emitted by this call.
+     * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md) + Wave 3j NFP v2: Laguna
+     * true-shape nesting. Returns placements that the renderer writes back
+     * onto each cnc_contour op's scalar placement* params. No G-code is
+     * emitted by this call. `opts.engine` defaults to 'nfp' (true-shape
+     * No-Fit-Polygon with multi-sheet overflow); 'blf' selects the v1
+     * bounding-box fallback. The result is a field-for-field superset of
+     * the v1 shape — `sheetIndex` / `sheetsUsed` / `nestVersion` /
+     * `engineUsed` are additive OPTIONAL fields; nothing was removed or
+     * renamed. Mirrors NestPolygonsWireOptions / NestPolygonsWireResult in
+     * src/main/ipc-fabrication.ts.
      */
     nestingNestPolygons: (payload: {
       parts: ReadonlyArray<{ id: string; points: ReadonlyArray<readonly [number, number]> }>
@@ -322,17 +329,29 @@ export declare const window: Window & {
       opts?: {
         snapMm?: number
         partMarginMm?: number
-        allowedRotations?: ReadonlyArray<0 | 90 | 180 | 270>
+        allowedRotations?: ReadonlyArray<number>
+        engine?: 'nfp' | 'blf'
+        rotationStepDeg?: number
+        maxSheets?: number
       }
     }) => Promise<
       | {
           ok: true
           result: {
-            placements: Array<{ partId: string; xMm: number; yMm: number; rotationDeg: 0 | 90 | 180 | 270 }>
+            placements: Array<{
+              partId: string
+              xMm: number
+              yMm: number
+              rotationDeg: number
+              sheetIndex?: number
+            }>
             unplaced: string[]
             utilizationPct: number
             sheetUsedAreaMm2: number
             totalPartAreaMm2: number
+            sheetsUsed?: number
+            nestVersion?: 'v1' | 'nfp-v2'
+            engineUsed?: 'nfp' | 'blf'
           }
         }
       | { ok: false; error: string; hint?: string }

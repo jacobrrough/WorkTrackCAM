@@ -1342,30 +1342,45 @@ export function ManufactureWorkspace({
   }
 
   /**
-   * Gap #9 — Laguna nesting: apply the placements returned from the
-   * `nesting:nest-polygons` handler back onto each matching cnc_contour op.
+   * Gap #9 + Wave 3j — Laguna nesting: apply the placements returned
+   * from the `nesting:nest-polygons` handler back onto each matching
+   * cnc_contour op.
    *
    * Schema constraint: `op.params` values must be `JsonSafeValue`
    * (number | string | boolean | null | JsonSafeValue[]) — no plain objects.
    * To stay additive (existing saved projects parse cleanly), the placement
-   * is stored as four scalar fields on `params`:
+   * is stored as scalar fields on `params`:
    *
-   *   placementXMm:        number     — sheet-coordinate X offset (mm)
-   *   placementYMm:        number     — sheet-coordinate Y offset (mm)
-   *   placementRotationDeg: number    — 0 | 90 | 180 | 270
-   *   placementNestVersion: string    — 'v1' (lets v2 layouts diff later)
+   *   placementXMm:          number — sheet-coordinate X offset (mm)
+   *   placementYMm:          number — sheet-coordinate Y offset (mm)
+   *   placementRotationDeg:  number — CCW degrees (NFP may emit non-cardinal)
+   *   placementNestVersion:  string — 'v1' (BLF) | 'nfp-v2' (NFP true-shape)
+   *   placementSheetIndex:   number — always 0 (only sheet-0 placements apply)
+   *
+   * Multi-sheet honesty (Wave 3j): the scalar placement params describe
+   * coordinates on ONE physical 5x10 sheet. Placements with sheetIndex > 0
+   * are therefore NOT applied — writing sheet-2 coordinates onto ops that
+   * post alongside sheet-1 ops would stack two sheets' layouts into one
+   * program and cut overlapping parts (scrapping the sheet). Instead, any
+   * STALE placement* params on overflow ops are removed so the operator can
+   * re-nest the remainder as a separate job; the LagunaNestingPanel surfaces
+   * the same exclusion in its apply status message.
    *
    * Downstream CAM runners + post-processors can read these fields to offset
    * the contour toolpath; ops without these fields are emitted at origin as
    * before. Safety Rule 1: no G-code is emitted here — placements only.
    * Only cnc_contour ops are touched; other op kinds pass through unchanged.
    */
-  function applyNestingPlacements(placements: ReadonlyArray<{
-    partId: string
-    xMm: number
-    yMm: number
-    rotationDeg: 0 | 90 | 180 | 270
-  }>): void {
+  function applyNestingPlacements(
+    placements: ReadonlyArray<{
+      partId: string
+      xMm: number
+      yMm: number
+      rotationDeg: number
+      sheetIndex?: number
+    }>,
+    nestVersion?: string
+  ): void {
     setMfg((m) =>
       updateActivePlate(m, activePlateId, (plate) => {
         const byId = new Map(placements.map((pl) => [pl.partId, pl]))
@@ -1374,10 +1389,22 @@ export function ManufactureWorkspace({
           if (!pl) return op
           if (op.kind !== 'cnc_contour') return op
           const baseParams: Record<string, unknown> = { ...(op.params ?? {}) }
+          if ((pl.sheetIndex ?? 0) > 0) {
+            // Overflow sheet: never write another sheet's coordinates onto a
+            // sheet-1 program — strip any stale placement instead so the
+            // op honestly reads "not placed on this sheet".
+            delete baseParams.placementXMm
+            delete baseParams.placementYMm
+            delete baseParams.placementRotationDeg
+            delete baseParams.placementNestVersion
+            delete baseParams.placementSheetIndex
+            return { ...op, params: baseParams }
+          }
           baseParams.placementXMm = pl.xMm
           baseParams.placementYMm = pl.yMm
           baseParams.placementRotationDeg = pl.rotationDeg
-          baseParams.placementNestVersion = 'v1'
+          baseParams.placementNestVersion = nestVersion === 'nfp-v2' ? 'nfp-v2' : 'v1'
+          baseParams.placementSheetIndex = 0
           return { ...op, params: baseParams }
         })
         return { ...plate, operations: ops }

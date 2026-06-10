@@ -17978,3 +17978,45 @@ Derive-from-sketch; non-ASCII em-dashes in body comments are a pre-existing conv
 RichAuto firmware revs may dislike (candidate cleanup).
 
 **Next:** NFP nesting upgrade or shell polish; the hands-on Electron pass remains owed.
+
+## Cycle 238 — Wave 3j: true-shape NFP nesting swapped in behind the v1 contract (2026-06-10)
+
+**Focus:** the VCarve audit's Nesting rows (P1 "bounding-box BLF, not polygon NFP" + P2
+"Multi-sheet nesting") — INTEGRATE step: route the already-built NFP engine
+(`src/main/nesting/true-shape-nfp.ts`, Clipper MinkowskiSum NFP + exact zero-overlap commit
+gate + multi-sheet overflow) behind the existing `nesting:nest-polygons` IPC.
+
+**Baseline → result:** 15,720 → **15,745 pass / 1 skip / 0 fail**; tsc clean both ends;
+targeted scope (src/main/nesting + src/renderer/manufacture + ipc-fabrication.test) 475 → 485.
+
+**What landed:** (1) IPC routing — `nesting:nest-polygons` now defaults to the NFP engine;
+additive-only wire contract (`NestPolygonsWireOptions` gains OPTIONAL engine:'nfp'|'blf',
+rotationStepDeg, maxSheets; result placements gain OPTIONAL sheetIndex; result gains OPTIONAL
+sheetsUsed / nestVersion / engineUsed — superset ENFORCED by `extends Omit<NestResult,
+'placements'>`). BLF v1 stays selectable (engine:'blf'), its non-cardinal rotations rejected as
+`nesting_failed`. (2) LagunaNestingPanel — rotation-set selector (0/90 · cardinal · 45° · 15° steps;
+step modes NFP-only and disabled+coerced under the new "BLF fallback (v1 bounding-box)"
+checkbox), engine + sheets readout, per-sheet utilization line, per-part "sheet N" tags.
+(3) Multi-sheet honesty — `applyNestingPlacements` applies SHEET-0 placements only; overflow
+parts (sheetIndex > 0) get their stale placement* params STRIPPED (never sheet-2 coords into a
+sheet-1 program), `placementNestVersion` stamps 'nfp-v2'|'v1' from the engine result, new
+`placementSheetIndex: 0` scalar; the panel says "N part(s) ... were NOT applied — cut sheet 1,
+then re-nest" instead of silently stacking sheets. (4) Pins — laguna-nesting-pin D6 updated
+ONLY at the engine-identity stamp (INTENDED DRIFT documented in-test), new E1-E5 section pins
+default-nfp routing, additive wire fields, the engine's commit gate, the panel knobs, and the
+sheet-0-only apply; 5 new ipc-fabrication.test cases (default-nfp fields, blf selectable,
+blf 45° rejection, 2-sheet overflow instead of overlap, maxSheets cap → honest unplaced).
+
+**G-code safety:** no G-code emitted anywhere in this wave (placements only; toolpaths
+regenerate through the existing gcode-safe pipeline). The load-bearing safety property —
+parts never overlap / never exceed the sheet — is enforced IN-ENGINE by the exact Clipper
+intersection commit gate and re-asserted by the engine suite's pairwise zero-area checks.
+resources/posts/** + resources/machines/** + src/main/cam-* untouched (hard no-touch held).
+
+**Honest residuals:** multi-sheet apply is sheet-1-only by design (scalar placement params
+describe one physical sheet; per-sheet program emission is future work); per-sheet utilization
+is computed renderer-side from part areas; downstream CAM consumption of placement* params is
+still the pre-existing follow-up (params are written, not yet read by run-cam-for-op).
+
+**Next:** wire placement* params into the 2D CAM emit path, or shell polish; the hands-on
+Electron pass remains owed.

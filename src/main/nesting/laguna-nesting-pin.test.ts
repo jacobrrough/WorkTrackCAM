@@ -1,5 +1,5 @@
 /**
- * Pin tests for the Laguna nesting UI/IPC wiring (Gap #9 v1).
+ * Pin tests for the Laguna nesting UI/IPC wiring (Gap #9 v1 + Wave 3j NFP v2).
  *
  * These tests read the source files directly and assert the load-bearing
  * lines stay in place. They catch regressions in:
@@ -156,8 +156,15 @@ describe('D. LagunaNestingPanel renderer wiring', () => {
     expect(WORKSPACE_SRC).toMatch(/placementXMm/)
     expect(WORKSPACE_SRC).toMatch(/placementYMm/)
     expect(WORKSPACE_SRC).toMatch(/placementRotationDeg/)
-    // The v1 nest version stamp lets future v2 layouts diff cleanly.
-    expect(WORKSPACE_SRC).toMatch(/placementNestVersion\s*=\s*['"]v1['"]/)
+    // INTENDED DRIFT (Wave 3j): this pin previously required the literal
+    // stamp `placementNestVersion = 'v1'` — correct while the BLF engine
+    // was the only engine. The NFP v2 rollout stamps the version from the
+    // engine result instead ('nfp-v2' default, 'v1' for the BLF fallback),
+    // which is exactly the diffing hook the original "lets future v2
+    // layouts diff cleanly" comment reserved the field for.
+    expect(WORKSPACE_SRC).toMatch(
+      /placementNestVersion\s*=\s*nestVersion\s*===\s*['"]nfp-v2['"]\s*\?\s*['"]nfp-v2['"]\s*:\s*['"]v1['"]/
+    )
     // Must only mutate cnc_contour ops (Safety Rule 1: don't touch other op kinds).
     expect(WORKSPACE_SRC).toMatch(/op\.kind\s*!==?\s*['"]cnc_contour['"]/)
   })
@@ -166,5 +173,52 @@ describe('D. LagunaNestingPanel renderer wiring', () => {
     expect(WORKSPACE_SRC).toContain('lagunaSheetSizeMm')
     expect(WORKSPACE_SRC).toMatch(/sheetWidthMm=\{lagunaSheetSizeMm\.widthMm\}/)
     expect(WORKSPACE_SRC).toMatch(/sheetHeightMm=\{lagunaSheetSizeMm\.heightMm\}/)
+  })
+})
+
+describe('E. NFP v2 engine routing (Wave 3j — additive wire contract)', () => {
+  const NFP_SRC = readFileSync(
+    resolve(REPO_ROOT, 'src', 'main', 'nesting', 'true-shape-nfp.ts'),
+    'utf-8'
+  )
+
+  it('E1: IPC imports the NFP engine and defaults engine routing to nfp', () => {
+    expect(IPC_SRC).toContain("from './nesting/true-shape-nfp'")
+    expect(IPC_SRC).toContain('nestPolygonsNfp')
+    // Only an explicit engine: 'blf' selects the fallback — everything
+    // else (absent, undefined, unknown value) routes to the NFP engine.
+    expect(IPC_SRC).toMatch(
+      /payload\.opts\?\.engine\s*===\s*['"]blf['"]\s*\?\s*['"]blf['"]\s*:\s*['"]nfp['"]/
+    )
+  })
+
+  it('E2: wire result is an enforced field-for-field superset of v1 (additive optional fields)', () => {
+    expect(IPC_SRC).toMatch(/interface\s+NestPolygonsWireResult\s+extends\s+Omit<NestResult,\s*['"]placements['"]>/)
+    expect(IPC_SRC).toMatch(/sheetsUsed\?:/)
+    expect(IPC_SRC).toMatch(/nestVersion\?:/)
+    expect(IPC_SRC).toMatch(/engineUsed\?:/)
+    expect(IPC_SRC).toMatch(/sheetIndex\?:/)
+  })
+
+  it('E3: NFP engine module ships the zero-overlap commit gate + nfp-v2 marker', () => {
+    expect(NFP_SRC).toMatch(/export\s+function\s+nestPolygonsNfp\b/)
+    expect(NFP_SRC).toContain("nestVersion: 'nfp-v2'")
+    expect(NFP_SRC).toContain('intersectionAreaIntUnits2')
+  })
+
+  it('E4: panel surfaces the rotation set, BLF fallback toggle, and per-sheet readout', () => {
+    expect(PANEL_SRC).toContain('rotationStepDeg')
+    expect(PANEL_SRC).toContain("'blf'")
+    expect(PANEL_SRC).toContain('sheetsUsed')
+    expect(PANEL_SRC).toContain('sheetIndex')
+    expect(PANEL_SRC).toContain('BLF fallback')
+  })
+
+  it('E5: multi-sheet honesty — workspace applies sheet 0 only and strips stale params on overflow ops', () => {
+    expect(WORKSPACE_SRC).toMatch(/\(pl\.sheetIndex\s*\?\?\s*0\)\s*>\s*0/)
+    expect(WORKSPACE_SRC).toMatch(/delete\s+baseParams\.placementXMm/)
+    expect(WORKSPACE_SRC).toMatch(/delete\s+baseParams\.placementNestVersion/)
+    // And the panel tells the operator instead of silently stacking sheets.
+    expect(PANEL_SRC).toMatch(/NOT applied/)
   })
 })

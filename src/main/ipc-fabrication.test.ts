@@ -467,6 +467,124 @@ describe('ipc-fabrication', () => {
     }
   })
 
+  it('nesting:nest-polygons routes to the NFP engine by default (additive v2 fields)', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const result = await handler(
+      {},
+      {
+        parts: [{ id: 'p1', points: [[-20, -20], [20, -20], [20, 20], [-20, 20]] }],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { partMarginMm: 0 }
+      }
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      // v1 fields keep their names + meaning (wire back-compat).
+      expect(result.result.placements).toHaveLength(1)
+      expect(result.result.placements[0].partId).toBe('p1')
+      expect(result.result.unplaced).toEqual([])
+      expect(result.result.utilizationPct).toBeCloseTo(16, 5)
+      expect(result.result.sheetUsedAreaMm2).toBeCloseTo(10000, 5)
+      expect(result.result.totalPartAreaMm2).toBeCloseTo(1600, 5)
+      // Additive v2 fields (the wire shape gains OPTIONAL fields only).
+      expect(result.result.nestVersion).toBe('nfp-v2')
+      expect(result.result.engineUsed).toBe('nfp')
+      expect(result.result.sheetsUsed).toBe(1)
+      expect(result.result.placements[0].sheetIndex).toBe(0)
+    }
+  })
+
+  it('nesting:nest-polygons keeps the BLF v1 engine selectable via opts.engine', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const result = await handler(
+      {},
+      {
+        parts: [{ id: 'p1', points: [[-20, -20], [20, -20], [20, 20], [-20, 20]] }],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { engine: 'blf', partMarginMm: 0, snapMm: 5 }
+      }
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.placements).toHaveLength(1)
+      expect(result.result.utilizationPct).toBeCloseTo(16, 5)
+      expect(result.result.nestVersion).toBe('v1')
+      expect(result.result.engineUsed).toBe('blf')
+      expect(result.result.sheetsUsed).toBe(1)
+      // The BLF engine has no multi-sheet concept — sheetIndex stays absent.
+      expect(result.result.placements[0].sheetIndex).toBeUndefined()
+    }
+  })
+
+  it('nesting:nest-polygons blf fallback rejects non-cardinal rotations as nesting_failed', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const result = await handler(
+      {},
+      {
+        parts: [{ id: 'p1', points: [[0, 0], [10, 0], [10, 10], [0, 10]] }],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { engine: 'blf', allowedRotations: [45] }
+      }
+    )
+    expect(result).toMatchObject({ ok: false, error: 'nesting_failed' })
+  })
+
+  it('nesting:nest-polygons NFP overflows onto a second sheet instead of overlapping', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    // Two 90x90 squares cannot share a 100x100 sheet. Multi-sheet overflow
+    // places one per sheet rather than overlapping them — an overlapping
+    // nest is the exact failure mode the NFP commit gate forbids.
+    const result = await handler(
+      {},
+      {
+        parts: [
+          { id: 'p1', points: [[0, 0], [90, 0], [90, 90], [0, 90]] },
+          { id: 'p2', points: [[0, 0], [90, 0], [90, 90], [0, 90]] }
+        ],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { partMarginMm: 0, maxSheets: 2 }
+      }
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.placements).toHaveLength(2)
+      expect(result.result.unplaced).toEqual([])
+      const sheets = result.result.placements
+        .map((p: { sheetIndex?: number }) => p.sheetIndex ?? 0)
+        .sort()
+      expect(sheets).toEqual([0, 1])
+      expect(result.result.sheetsUsed).toBe(2)
+      expect(result.result.sheetUsedAreaMm2).toBeCloseTo(20000, 5)
+      expect(result.result.utilizationPct).toBeCloseTo(81, 5)
+    }
+  })
+
+  it('nesting:nest-polygons NFP maxSheets caps overflow (extra part honestly unplaced)', async () => {
+    registerFabricationIpc(createMockContext())
+    const handler = handlers.get('nesting:nest-polygons')!
+    const result = await handler(
+      {},
+      {
+        parts: [
+          { id: 'p1', points: [[0, 0], [90, 0], [90, 90], [0, 90]] },
+          { id: 'p2', points: [[0, 0], [90, 0], [90, 90], [0, 90]] }
+        ],
+        sheet: { widthMm: 100, heightMm: 100 },
+        opts: { partMarginMm: 0, maxSheets: 1 }
+      }
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.placements).toHaveLength(1)
+      expect(result.result.unplaced).toHaveLength(1)
+      expect(result.result.sheetsUsed).toBe(1)
+    }
+  })
+
   it('fabrication:camSourceStaleVersusOutput flags meshes newer than cam.nc', async () => {
     registerFabricationIpc(createMockContext())
     const handler = handlers.get('fabrication:camSourceStaleVersusOutput')!

@@ -3,8 +3,9 @@
  * Boost Software License — a permissive MIT/BSD-class license per docs/SECURITY.md
  * dependency policy). The package ships as a UMD/CommonJS module
  * (`module.exports = ClipperLib`) with NO bundled `.d.ts`, so this file types
- * exactly the surface `src/shared/sketch-boolean-offset.ts` consumes — nothing
- * more — to keep the offset + boolean engine fully typed (no `any`).
+ * exactly the surface `src/shared/sketch-boolean-offset.ts` and the NFP nesting
+ * engine `src/main/nesting/true-shape-nfp.ts` consume — nothing more — to keep
+ * the offset + boolean + Minkowski/NFP geometry fully typed (no `any`).
  *
  * IMPORT SHAPE (Wave-3f build lesson): because the package is CommonJS with a
  * single `module.exports = <object>`, the value lands on `.default` under both
@@ -26,9 +27,9 @@ declare module 'clipper-lib' {
   }
 
   /** One closed/open path = an ordered list of integer points. */
-  type Path = IntPoint[]
+  export type Path = IntPoint[]
   /** A set of paths (Clipper's `Paths`). */
-  type Paths = Path[]
+  export type Paths = Path[]
 
   /** Boolean clip operation selector. */
   interface ClipTypeEnum {
@@ -70,12 +71,24 @@ declare module 'clipper-lib' {
 
   /**
    * Boolean clipper: add subject/clip paths, then `Execute` a boolean op.
-   * Also exposes a static `Area(path)` (signed area in Clipper int units²).
+   * The constructor value also carries Clipper's static geometry helpers
+   * (`Area`, `MinkowskiSum`) used by the NFP nesting engine.
    */
   interface ClipperCtor {
     new (initOptions?: number): ClipperInstance
     /** Signed area of one path (Clipper int units²); sign encodes winding. */
     Area(path: Path): number
+    /**
+     * Minkowski sum of `pattern` with each closed path in `paths`, unioned
+     * (NonZero) into result `Paths`.
+     *
+     * NFP correctness note (verified against clipper.js 6.4.2 source): ONLY
+     * this `Paths` overload adds the `TranslatePath(paths[i], pattern[0])`
+     * fill that closes the spurious interior hole of the swept quad band, so
+     * NFP callers MUST pass the fixed polygon wrapped in an array and the
+     * NEGATED moving polygon as `pattern` — `NFP(A, B) = MinkowskiSum(-B, [A])`.
+     */
+    MinkowskiSum(pattern: Path, paths: Paths, pathIsClosed: boolean): Paths
   }
 
   interface ClipperInstance {
@@ -107,7 +120,8 @@ declare module 'clipper-lib' {
   }
 
   interface ClipperLibStatic {
-    Clipper: typeof Clipper
+    /** Constructor + static helpers (`Area`, `MinkowskiSum`). */
+    Clipper: ClipperCtor
     ClipperOffset: typeof ClipperOffset
     ClipType: ClipTypeEnum
     PolyType: PolyTypeEnum
@@ -115,8 +129,6 @@ declare module 'clipper-lib' {
     JoinType: JoinTypeEnum
     EndType: EndTypeEnum
     JS: ClipperJS
-    /** Static signed area of a path (Clipper int units²). */
-    Clipper: typeof Clipper & { Area(path: Path): number }
   }
 
   const ClipperLib: ClipperLibStatic

@@ -39,12 +39,11 @@ import type {
   WizardReadCadSampleResult
 } from '../shared/first-launch-wizard-contract'
 import type { ReadBundledFontRequest, ReadBundledFontResult } from '../shared/bundled-font-contract'
+import type { Polygon as NestPolygon, SheetSpec } from '../main/nesting/true-shape-v1'
 import type {
-  NestOptions,
-  NestResult,
-  Polygon as NestPolygon,
-  SheetSpec
-} from '../main/nesting/true-shape-v1'
+  NestPolygonsWireOptions,
+  NestPolygonsWireResult
+} from '../main/ipc-fabrication'
 import type {
   CadCreateAssemblyPayload,
   CadCreateAssemblyResponse,
@@ -610,17 +609,24 @@ export type Api = {
   >
 
   /**
-   * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md): Laguna true-shape nesting v1.
-   * Pure planning call — no G-code is emitted. The renderer collects polygons
-   * from cnc_contour ops, calls this with the sheet spec, then writes the
-   * resulting placements back onto each op's `params.placement` field for the
-   * post-processor to consume. Laguna-only in the UI.
+   * Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md) + Wave 3j NFP v2: Laguna
+   * true-shape nesting. Pure planning call — no G-code is emitted. The
+   * renderer collects polygons from cnc_contour ops, calls this with the
+   * sheet spec, then writes the resulting placements back onto each op's
+   * scalar placement* params for the post-processor to consume. Laguna-only
+   * in the UI. `opts.engine` defaults to 'nfp' (true-shape No-Fit-Polygon,
+   * multi-sheet overflow); 'blf' selects the v1 bounding-box fallback. The
+   * result is a field-for-field superset of the v1 shape — additive
+   * OPTIONAL fields `sheetIndex` / `sheetsUsed` / `nestVersion` /
+   * `engineUsed`; no existing field is removed or renamed.
    */
   nestingNestPolygons: (payload: {
     parts: ReadonlyArray<NestPolygon>
     sheet: SheetSpec
-    opts?: NestOptions
-  }) => Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }>
+    opts?: NestPolygonsWireOptions
+  }) => Promise<
+    { ok: true; result: NestPolygonsWireResult } | { ok: false; error: string; hint?: string }
+  >
 
   // ── Machine control (Workflow F: AppHeader STOP button) ─────────────────
   /**

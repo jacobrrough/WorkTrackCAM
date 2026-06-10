@@ -97,10 +97,92 @@ import {
   type NestOptions,
   type NestResult,
   type Polygon,
+  type Rotation,
   type SheetSpec
 } from './nesting/true-shape-v1'
+import { nestPolygonsNfp, type NfpNestOptions } from './nesting/true-shape-nfp'
 
 export type { MainIpcWindowContext } from './ipc-context'
+
+// ── nesting:nest-polygons wire contract (Wave 3j: NFP v2 default + BLF fallback) ──
+//
+// Additive-only versus the original v1 wire shape (the renderer + the
+// laguna-nesting-pin tests depend on the existing field names):
+//   request opts — gains OPTIONAL `engine` ('nfp' default | 'blf' fallback),
+//                   `rotationStepDeg`, `maxSheets`; `allowedRotations` widens to
+//                   any finite degrees (the BLF path still validates that every
+//                   entry is cardinal and reports `nesting_failed` otherwise).
+//   result       — placements gain OPTIONAL `sheetIndex` (multi-sheet); the
+//                   result gains OPTIONAL `sheetsUsed` / `nestVersion` /
+//                   `engineUsed`. No field is removed or renamed.
+
+/** Wire request options for `nesting:nest-polygons`: superset of v1 NestOptions + NFP v2 knobs. */
+export interface NestPolygonsWireOptions {
+  /** BLF-only: snap grid in mm (ignored by the NFP engine). */
+  snapMm?: number
+  /** Inter-part clearance in mm (both engines; default 3). */
+  partMarginMm?: number
+  /**
+   * Allowed rotations in degrees. The NFP engine accepts any finite values;
+   * the BLF fallback accepts only 0 / 90 / 180 / 270 and rejects others.
+   */
+  allowedRotations?: ReadonlyArray<number>
+  /** Engine selector (additive). Default 'nfp' — true-shape No-Fit-Polygon, multi-sheet. */
+  engine?: 'nfp' | 'blf'
+  /** NFP-only: candidate rotations 0, step, 2·step, … < 360 (valid range 1..360). */
+  rotationStepDeg?: number
+  /** NFP-only: multi-sheet overflow cap (default 8, hard cap 16). */
+  maxSheets?: number
+}
+
+/** Wire placement: the v1 triple + OPTIONAL additive `sheetIndex` (NFP multi-sheet). */
+export interface NestPolygonsWirePlacement {
+  partId: string
+  xMm: number
+  yMm: number
+  /** CCW degrees. BLF emits only 0/90/180/270; NFP may emit any allowed rotation. */
+  rotationDeg: number
+  /** 0-based sheet this part landed on (NFP only). Absent = sheet 0 (v1 BLF shape). */
+  sheetIndex?: number
+}
+
+/**
+ * Wire result: field-for-field superset of the v1 NestResult. Enforced via
+ * `extends Omit<NestResult, 'placements'>` so renaming/removing a v1 field
+ * becomes a compile error here, not a silent renderer break.
+ */
+export interface NestPolygonsWireResult extends Omit<NestResult, 'placements'> {
+  placements: NestPolygonsWirePlacement[]
+  /** Sheets that received >= 1 part. The BLF path reports 1 (0 when nothing placed). */
+  sheetsUsed?: number
+  /** Engine marker for layout diffing: 'v1' (BLF) | 'nfp-v2'. */
+  nestVersion?: 'v1' | 'nfp-v2'
+  /** Which engine actually ran (the request `engine` is optional, default 'nfp'). */
+  engineUsed?: 'nfp' | 'blf'
+}
+
+/**
+ * Narrow wire options to the v1 BLF engine's NestOptions. Throws on a
+ * non-cardinal rotation — surfaced to the caller as `nesting_failed`,
+ * matching the v1 engine's own validation contract.
+ */
+function toBlfNestOptions(opts: NestPolygonsWireOptions | undefined): NestOptions | undefined {
+  if (!opts) return undefined
+  const out: NestOptions = {}
+  if (opts.snapMm !== undefined) out.snapMm = opts.snapMm
+  if (opts.partMarginMm !== undefined) out.partMarginMm = opts.partMarginMm
+  if (opts.allowedRotations !== undefined) {
+    const rotations: Rotation[] = []
+    for (const r of opts.allowedRotations) {
+      if (r !== 0 && r !== 90 && r !== 180 && r !== 270) {
+        throw new Error(`Invalid rotation ${r}; the blf fallback engine supports only 0, 90, 180, 270`)
+      }
+      rotations.push(r)
+    }
+    out.allowedRotations = rotations
+  }
+  return out
+}
 
 /**
  * Migration pipeline for manufacture.json files.
@@ -1264,16 +1346,23 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
     }
   )
 
-  // ── True-shape nesting (v1, Laguna only) ─────────────────────────────────
-  // Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md). The renderer's "Nest parts on
-  // stock" button (Laguna-only) calls this with an array of closed 2D
-  // polygons (one per cnc_contour op) and the sheet spec from the Laguna
-  // stock. Returns Placement[] which the renderer then writes back onto
-  // each op's `params.placement` field.
+  // ── True-shape nesting (Laguna only) — NFP v2 default + BLF v1 fallback ──
+  // Gap #9 (docs/COMPETITIVE-GAP-ANALYSIS.md) + Wave 3j
+  // (docs/plans/catalog/vcarve-laguna.md — polygon-NFP P1 + multi-sheet P2).
+  // The renderer's "Nest parts on stock" button (Laguna-only) calls this
+  // with an array of closed 2D polygons (one per cnc_contour op) and the
+  // sheet spec from the Laguna stock. Routing is additive: `opts.engine`
+  // defaults to 'nfp' (true-shape no-fit-polygon with multi-sheet overflow);
+  // 'blf' keeps the original nestPolygonsOnSheet bounding-box engine
+  // selectable as the fallback. The response is a field-for-field superset
+  // of the v1 shape — see NestPolygonsWireResult above.
   //
   // Safety Rule 1 (G-code is sacred): this handler returns placements only.
   // It does NOT emit G-code; the existing CAM runner + post-processors
-  // consume the placement when generating the toolpath.
+  // consume the placement when generating the toolpath. The NFP engine
+  // additionally commits a placement only after an exact zero-overlap
+  // intersection gate, so a returned layout can never overlap parts or
+  // exceed the sheet — a bad nest scraps a full 5x10 sheet of stock.
   ipcMain.handle(
     'nesting:nest-polygons',
     async (
@@ -1281,9 +1370,11 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       payload: {
         parts: ReadonlyArray<Polygon>
         sheet: SheetSpec
-        opts?: NestOptions
+        opts?: NestPolygonsWireOptions
       }
-    ): Promise<{ ok: true; result: NestResult } | { ok: false; error: string; hint?: string }> => {
+    ): Promise<
+      { ok: true; result: NestPolygonsWireResult } | { ok: false; error: string; hint?: string }
+    > => {
       if (!payload || typeof payload !== 'object') {
         return { ok: false as const, error: 'invalid_payload', hint: 'nesting:nest-polygons requires { parts, sheet, opts? }' }
       }
@@ -1293,9 +1384,27 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       if (!payload.sheet || typeof payload.sheet !== 'object') {
         return { ok: false as const, error: 'invalid_sheet', hint: 'sheet must be { widthMm, heightMm, marginMm? }' }
       }
+      const engine: 'nfp' | 'blf' = payload.opts?.engine === 'blf' ? 'blf' : 'nfp'
       try {
-        const result = nestPolygonsOnSheet(payload.parts, payload.sheet, payload.opts)
-        return { ok: true as const, result }
+        if (engine === 'blf') {
+          const result = nestPolygonsOnSheet(payload.parts, payload.sheet, toBlfNestOptions(payload.opts))
+          return {
+            ok: true as const,
+            result: {
+              ...result,
+              sheetsUsed: result.placements.length > 0 ? 1 : 0,
+              nestVersion: 'v1' as const,
+              engineUsed: 'blf' as const
+            }
+          }
+        }
+        const nfpOpts: NfpNestOptions = {}
+        if (payload.opts?.partMarginMm !== undefined) nfpOpts.partMarginMm = payload.opts.partMarginMm
+        if (payload.opts?.allowedRotations !== undefined) nfpOpts.allowedRotations = payload.opts.allowedRotations
+        if (payload.opts?.rotationStepDeg !== undefined) nfpOpts.rotationStepDeg = payload.opts.rotationStepDeg
+        if (payload.opts?.maxSheets !== undefined) nfpOpts.maxSheets = payload.opts.maxSheets
+        const result = nestPolygonsNfp(payload.parts, payload.sheet, nfpOpts)
+        return { ok: true as const, result: { ...result, engineUsed: 'nfp' as const } }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         return { ok: false as const, error: 'nesting_failed', hint: msg }
