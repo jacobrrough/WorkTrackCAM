@@ -330,3 +330,224 @@ describe('rigidTransformForPlacement / applyRigidTransform2d — composition san
     expect(rigidTransformForPlacement([], { xMm: 0, yMm: 0, rotationDeg: 0 })).toBeNull()
   })
 })
+
+describe('Wave 3l — companion anchor override (placementAnchorMinXMm / placementAnchorMinYMm)', () => {
+  /** Part outline the nest placed (the contour op's geometry). */
+  const PART_OUTLINE: [number, number][] = [
+    [0, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100]
+  ]
+  /** A pocket interior to the part — its OWN bbox differs from the part's. */
+  const POCKET: [number, number][] = [
+    [20, 20],
+    [40, 20],
+    [40, 40],
+    [20, 40]
+  ]
+  const PLACEMENT = { xMm: 500, yMm: 700 }
+
+  function rotatedMin(points: [number, number][], deg: number): [number, number] {
+    let mx = Infinity
+    let my = Infinity
+    for (const [x, y] of points) {
+      const [rx, ry] = rotatePointCcwDeg(x, y, deg)
+      if (rx < mx) mx = rx
+      if (ry < my) my = ry
+    }
+    return [mx, my]
+  }
+
+  it.each([0, 90, 180, 45])(
+    'rotation %d°: an anchored companion gets the EXACT contour transform (relative layout survives)',
+    (rot) => {
+      // Contour op: own-bbox path (no anchor — its outline IS the anchor).
+      const contourParams: Record<string, unknown> = {
+        contourPoints: PART_OUTLINE.map((p) => [...p]),
+        placementXMm: PLACEMENT.xMm,
+        placementYMm: PLACEMENT.yMm,
+        placementRotationDeg: rot,
+        placementSheetIndex: 0
+      }
+      // Companion pocket op: same placement + the part outline's rotated
+      // bbox-min anchor, exactly as planNestingPlacementStamps writes it.
+      const [aMinX, aMinY] = rotatedMin(PART_OUTLINE, rot)
+      const pocketParams: Record<string, unknown> = {
+        contourPoints: POCKET.map((p) => [...p]),
+        placementXMm: PLACEMENT.xMm,
+        placementYMm: PLACEMENT.yMm,
+        placementRotationDeg: rot,
+        placementSheetIndex: 0,
+        placementAnchorMinXMm: aMinX,
+        placementAnchorMinYMm: aMinY
+      }
+      const contourOut = applyPlacementToOperationParams2d(contourParams)!
+      const pocketOut = applyPlacementToOperationParams2d(pocketParams)!
+      const oc = contourOut['contourPoints'] as [number, number][]
+      const op = pocketOut['contourPoints'] as [number, number][]
+      // Shared rigid transform T: for every pocket vertex p and the contour
+      // anchor vertex q0, T(p) - T(q0) must equal R(p - q0).
+      const q0 = PART_OUTLINE[0]!
+      const tq0 = oc[0]!
+      POCKET.forEach((p, i) => {
+        const [ex, ey] = rotatePointCcwDeg(p[0] - q0[0], p[1] - q0[1], rot)
+        expect(op[i]![0] - tq0[0]).toBeCloseTo(ex, 9)
+        expect(op[i]![1] - tq0[1]).toBeCloseTo(ey, 9)
+      })
+      // WITHOUT the anchor the pocket would park its OWN bbox at (xMm, yMm)
+      // — the scrap case Wave 3l exists to prevent. Prove the anchor changed
+      // the outcome (the pocket's bbox-min must NOT land on the placement).
+      const noAnchor: Record<string, unknown> = { ...pocketParams }
+      delete noAnchor['placementAnchorMinXMm']
+      delete noAnchor['placementAnchorMinYMm']
+      const ownOut = applyPlacementToOperationParams2d(noAnchor)!
+      const own = ownOut['contourPoints'] as [number, number][]
+      const ownMinX = Math.min(...own.map((p) => p[0]))
+      const ownMinY = Math.min(...own.map((p) => p[1]))
+      expect(ownMinX).toBeCloseTo(PLACEMENT.xMm, 9)
+      expect(ownMinY).toBeCloseTo(PLACEMENT.yMm, 9)
+      const anchoredMinX = Math.min(...op.map((p) => p[0]))
+      const anchoredMinY = Math.min(...op.map((p) => p[1]))
+      expect(Math.hypot(anchoredMinX - ownMinX, anchoredMinY - ownMinY)).toBeGreaterThan(1)
+    }
+  )
+
+  it('drill-only companion: the anchor overrides the drill-pattern-bbox fallback', () => {
+    const params: Record<string, unknown> = {
+      drillPoints: [
+        [50, 50],
+        [60, 60]
+      ],
+      placementXMm: 200,
+      placementYMm: 300,
+      placementRotationDeg: 0,
+      placementAnchorMinXMm: 0, // part outline bbox-min at rotation 0
+      placementAnchorMinYMm: 0
+    }
+    const out = applyPlacementToOperationParams2d(params)!
+    // Translation = (200 - 0, 300 - 0): holes keep their part-relative spot,
+    // NOT corner-parked at (200, 300) like the own-bbox fallback would.
+    expect(out['drillPoints']).toEqual([
+      [250, 350],
+      [260, 360]
+    ])
+  })
+
+  it('half-written anchor (X only) is IDENTITY — same object reference back', () => {
+    const params: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementAnchorMinXMm: 12.5
+    }
+    expect(applyPlacementToOperationParams2d(params)).toBe(params)
+  })
+
+  it('half-written anchor (Y only) is IDENTITY too', () => {
+    const params: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementAnchorMinYMm: -3
+    }
+    expect(applyPlacementToOperationParams2d(params)).toBe(params)
+  })
+
+  it('non-finite or non-numeric anchor components are IDENTITY', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, '12' as unknown]) {
+      const params: Record<string, unknown> = {
+        contourPoints: POCKET.map((p) => [...p]),
+        placementXMm: 500,
+        placementYMm: 700,
+        placementRotationDeg: 0,
+        placementAnchorMinXMm: bad,
+        placementAnchorMinYMm: 0
+      }
+      expect(applyPlacementToOperationParams2d(params)).toBe(params)
+    }
+  })
+
+  it('null + number anchor is IDENTITY (mixed half-write); null + null is legacy own-bbox', () => {
+    const mixed: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementAnchorMinXMm: null,
+      placementAnchorMinYMm: 7
+    }
+    expect(applyPlacementToOperationParams2d(mixed)).toBe(mixed)
+
+    const bothNull: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementAnchorMinXMm: null,
+      placementAnchorMinYMm: null
+    }
+    const out = applyPlacementToOperationParams2d(bothNull)!
+    expect(out).not.toBe(bothNull)
+    const pts = out['contourPoints'] as [number, number][]
+    expect(Math.min(...pts.map((p) => p[0]))).toBeCloseTo(500, 9)
+    expect(Math.min(...pts.map((p) => p[1]))).toBeCloseTo(700, 9)
+  })
+
+  it('valid anchor + overflow sheetIndex stays IDENTITY (multi-sheet honesty wins)', () => {
+    const params: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementSheetIndex: 2,
+      placementAnchorMinXMm: 0,
+      placementAnchorMinYMm: 0
+    }
+    expect(applyPlacementToOperationParams2d(params)).toBe(params)
+  })
+
+  it('valid anchor WITHOUT a complete placement triple stays IDENTITY', () => {
+    const params: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementAnchorMinXMm: 0,
+      placementAnchorMinYMm: 0
+    }
+    expect(applyPlacementToOperationParams2d(params)).toBe(params)
+  })
+
+  it('valid anchor with NO valid outer geometry (islands only) stays IDENTITY on both paths', () => {
+    const params: Record<string, unknown> = {
+      islandRings: [
+        [
+          [1, 1],
+          [2, 1],
+          [2, 2]
+        ]
+      ],
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 0,
+      placementAnchorMinXMm: 0,
+      placementAnchorMinYMm: 0
+    }
+    expect(applyPlacementToOperationParams2d(params)).toBe(params)
+  })
+
+  it('anchor params are carried through untouched on the output (bookkeeping honesty)', () => {
+    const params: Record<string, unknown> = {
+      contourPoints: POCKET.map((p) => [...p]),
+      placementXMm: 500,
+      placementYMm: 700,
+      placementRotationDeg: 90,
+      placementAnchorMinXMm: -100,
+      placementAnchorMinYMm: 0
+    }
+    const out = applyPlacementToOperationParams2d(params)!
+    expect(out['placementAnchorMinXMm']).toBe(-100)
+    expect(out['placementAnchorMinYMm']).toBe(0)
+  })
+})

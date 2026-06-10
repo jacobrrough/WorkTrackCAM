@@ -66,6 +66,7 @@ import { ManufactureSetupList } from './ManufactureSetupList'
 import { ManufacturePlanToolbar } from './ManufacturePlanToolbar'
 import { ManufactureSetupTab } from './ManufactureSetupTab'
 import { LagunaNestingPanel } from './LagunaNestingPanel'
+import { planNestingPlacementStamps } from '../../shared/cam-placement-siblings'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
 import { ProbeCyclePanel } from './ProbeCyclePanel'
 import { ProfileStack } from './ProfileStack'
@@ -1342,9 +1343,9 @@ export function ManufactureWorkspace({
   }
 
   /**
-   * Gap #9 + Wave 3j — Laguna nesting: apply the placements returned
-   * from the `nesting:nest-polygons` handler back onto each matching
-   * cnc_contour op.
+   * Gap #9 + Wave 3j + Wave 3l — Laguna nesting: apply the placements
+   * returned from the `nesting:nest-polygons` handler back onto the
+   * matching operations.
    *
    * Schema constraint: `op.params` values must be `JsonSafeValue`
    * (number | string | boolean | null | JsonSafeValue[]) — no plain objects.
@@ -1356,6 +1357,24 @@ export function ManufactureWorkspace({
    *   placementRotationDeg:  number — CCW degrees (NFP may emit non-cardinal)
    *   placementNestVersion:  string — 'v1' (BLF) | 'nfp-v2' (NFP true-shape)
    *   placementSheetIndex:   number — always 0 (only sheet-0 placements apply)
+   *   placementAnchorMinXMm: number — companion ops only (Wave 3l): rotated
+   *   placementAnchorMinYMm: number — bbox-min of the PART outline so the
+   *                          companion inherits the part's exact rigid
+   *                          transform downstream (cam-placement-transform)
+   *
+   * Wave 3l — companion stamping: the nest places only `cnc_contour`
+   * outlines (one op per nested polygon), but a physical part is usually
+   * cut by SEVERAL 2D ops (pocket / v-carve / chamfer / drill inside the
+   * same outline). `planNestingPlacementStamps`
+   * (src/shared/cam-placement-siblings.ts — the documented ASSOCIATION RULE
+   * lives in that module header) expands each contour placement onto the
+   * companion ops that provably machine the same part: same setup, every
+   * 2D point inside-or-on the nested outline in the shared sketch frame,
+   * and exactly ONE containing outline (ambiguity is never guessed).
+   * Direct placements still land ONLY on cnc_contour ops — a placement
+   * keyed to any other op id is ignored (op.kind !== 'cnc_contour' guard
+   * below). Ops the planner refuses keep cutting at the un-nested origin
+   * exactly as they did before Wave 3l.
    *
    * Multi-sheet honesty (Wave 3j): the scalar placement params describe
    * coordinates on ONE physical 5x10 sheet. Placements with sheetIndex > 0
@@ -1363,13 +1382,16 @@ export function ManufactureWorkspace({
    * post alongside sheet-1 ops would stack two sheets' layouts into one
    * program and cut overlapping parts (scrapping the sheet). Instead, any
    * STALE placement* params on overflow ops are removed so the operator can
-   * re-nest the remainder as a separate job; the LagunaNestingPanel surfaces
-   * the same exclusion in its apply status message.
+   * re-nest the remainder as a separate job; companion ops of an overflow
+   * part are stripped the same way. The LagunaNestingPanel surfaces the
+   * same exclusion in its apply status message.
    *
-   * Downstream CAM runners + post-processors can read these fields to offset
-   * the contour toolpath; ops without these fields are emitted at origin as
+   * Downstream CAM runners + post-processors read these fields to offset
+   * the toolpaths; ops without these fields are emitted at origin as
    * before. Safety Rule 1: no G-code is emitted here — placements only.
-   * Only cnc_contour ops are touched; other op kinds pass through unchanged.
+   *
+   * Returns the number of sheet-0 COMPANION stamps planned, so the panel's
+   * apply status can report them alongside its own contour count.
    */
   function applyNestingPlacements(
     placements: ReadonlyArray<{
@@ -1380,24 +1402,40 @@ export function ManufactureWorkspace({
       sheetIndex?: number
     }>,
     nestVersion?: string
-  ): void {
+  ): number {
+    const planForCount = planNestingPlacementStamps(
+      getActivePlate(mfg, activePlateId).operations,
+      placements
+    )
+    let companionStampCount = 0
+    for (const entry of planForCount.values()) {
+      if (entry.viaSibling && (entry.placement.sheetIndex ?? 0) === 0) companionStampCount++
+    }
     setMfg((m) =>
       updateActivePlate(m, activePlateId, (plate) => {
         const byId = new Map(placements.map((pl) => [pl.partId, pl]))
+        const plan = planNestingPlacementStamps(plate.operations, placements)
         const ops = plate.operations.map((op) => {
-          const pl = byId.get(op.id)
-          if (!pl) return op
-          if (op.kind !== 'cnc_contour') return op
+          // The nest only places contour outlines: a DIRECT placement keyed
+          // to a non-contour op id is never applied (companion ops are
+          // reached through the planner's association rule instead).
+          if (byId.has(op.id) && op.kind !== 'cnc_contour') return op
+          const entry = plan.get(op.id)
+          if (!entry) return op
+          const pl = entry.placement
           const baseParams: Record<string, unknown> = { ...(op.params ?? {}) }
           if ((pl.sheetIndex ?? 0) > 0) {
             // Overflow sheet: never write another sheet's coordinates onto a
             // sheet-1 program — strip any stale placement instead so the
-            // op honestly reads "not placed on this sheet".
+            // op honestly reads "not placed on this sheet". Companion ops
+            // of an overflow part are stripped identically.
             delete baseParams.placementXMm
             delete baseParams.placementYMm
             delete baseParams.placementRotationDeg
             delete baseParams.placementNestVersion
             delete baseParams.placementSheetIndex
+            delete baseParams.placementAnchorMinXMm
+            delete baseParams.placementAnchorMinYMm
             return { ...op, params: baseParams }
           }
           baseParams.placementXMm = pl.xMm
@@ -1405,11 +1443,27 @@ export function ManufactureWorkspace({
           baseParams.placementRotationDeg = pl.rotationDeg
           baseParams.placementNestVersion = nestVersion === 'nfp-v2' ? 'nfp-v2' : 'v1'
           baseParams.placementSheetIndex = 0
+          if (
+            entry.viaSibling &&
+            entry.anchorMinXMm !== undefined &&
+            entry.anchorMinYMm !== undefined
+          ) {
+            // Companion op: anchor the translation to the PART outline's
+            // rotated bbox so it shares the contour op's exact transform.
+            baseParams.placementAnchorMinXMm = entry.anchorMinXMm
+            baseParams.placementAnchorMinYMm = entry.anchorMinYMm
+          } else {
+            // Contour ops derive the anchor from their own outline — and a
+            // stale companion anchor must never survive a re-nest.
+            delete baseParams.placementAnchorMinXMm
+            delete baseParams.placementAnchorMinYMm
+          }
           return { ...op, params: baseParams }
         })
         return { ...plate, operations: ops }
       })
     )
+    return companionStampCount
   }
 
   function moveOpUp(i: number): void {

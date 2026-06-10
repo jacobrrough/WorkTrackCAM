@@ -18097,3 +18097,39 @@ program emission for multi-sheet nests remains future work (sheet-0-only apply, 
 **Next:** stamp placements onto the other 2D Laguna op kinds in `applyNestingPlacements`
 (pocket/vcarve/drill share one part outline), or surface placed-vs-origin in the toolpath
 preview; the hands-on Electron pass remains owed.
+
+## Cycle 240 — Wave 3l: companion placement stamps + the hard bed-envelope export gate (2026-06-10)
+
+**Focus:** the two finishers flagged by the 3j/3k verifies. One commit.
+
+**Baseline → result:** 15,784 → **15,849 pass / 1 skip / 0 fail** (+65); tsc clean; zero
+snapshot drift; resources/** byte-identical (gate logic only — no emitter change).
+
+**What landed:** (1) **Companion stamps** — new `cam-placement-siblings.ts` plans placement
+stamps for ALL 2D op kinds of a nested part (pocket/vcarve/chamfer/drill) under a documented,
+honest association rule: same setup + every parseable 2D point inside-or-on exactly ONE nested
+outline; ambiguity/cross-part REFUSES (cut at un-nested origin — never a guessed position into
+a neighboring part). Companions translate from the PART outline's rotated-bbox anchor (new
+additive `placementAnchorMinXMm/YMm` params honored by the shared transform), proven rigid-body
+across op kinds through the LIVE dispatch at 0/90/180/45°. Overflow strip + other-setup
+isolation pinned. (2) **Hard envelope gate** — `assessGcodeForExportSafety` gains optional
+`workAreaMm`; provable X/Y over-travel appends BLOCKING errors naming axis + overshoot
+(requiredTravel = max − min(min,0) vs axis travel, so no work-origin shift can fit it);
+G90-required, per-axis degrade, never a false block without dims; Laguna/Carvera/K2 fixtures
+pinned (N1–N15).
+
+**G-code safety:** no post/profile/emitter change (byte-identical); the transform change is
+inert without the new anchor params; every refusal degrades to pre-3l behavior. gcode-safety
+skill walked (Laguna primary; Carvera 3-axis shared dispatch; K2 gate-input only).
+
+**CRITICAL FINDING (next cycle, Wave 3m):** `assessGcodeForExportSafety` has ZERO live call
+sites — its three ShopApp callers died in the P5 cutover, so the new shell ships NO export-time
+G-code safety messaging at all (the hard gate is implemented + pinned but dormant). Wiring it
+into the live send/export surfaces (ProfileStack send, export panels, Moonraker push) is the
+immediate follow-up. Also noted: the G91 caveat for FDM output (the segment parser is
+absolute-only — the future K2 caller must not pass mixed-G91 programs without handling).
+
+**Honest residuals:** companion stamps share the 3j staleness class (re-Apply refreshes);
+refused companions are counted but not enumerated per-op; a companion-kind op that is a part's
+ONLY op still can't nest (candidate-set widening deferred); stale pin-test header references
+the deleted ShopApp call sites.

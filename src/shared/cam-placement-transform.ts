@@ -64,6 +64,20 @@
  *     (length ≥ 2, Number() coercion, finite check); entries the dispatcher
  *     would reject are preserved VERBATIM so validation messages and
  *     drop-invalid behavior are unchanged by placement.
+ *
+ * Wave 3l — COMPANION-OP ANCHOR OVERRIDE (placementAnchorMinXMm / ...YMm):
+ *   A nested part is usually cut by SEVERAL ops (contour + pocket + v-carve
+ *   + chamfer + drill). The nest places only the part OUTLINE (the contour
+ *   op), so a companion op stamped with the same (xMm, yMm, rotationDeg)
+ *   must NOT derive its translation from its OWN bbox — that would park the
+ *   pocket at the part's corner position. The stamp planner
+ *   (cam-placement-siblings.ts) therefore also writes
+ *   `placementAnchorMinXMm` / `placementAnchorMinYMm` — the PART outline's
+ *   rotated-bbox min-corner — and this module derives the translation from
+ *   that anchor instead, giving every member op of the part the IDENTICAL
+ *   rigid transform. Anchor params present but not BOTH finite numbers ⇒
+ *   identity (a half-written anchor must never park geometry at a wrong
+ *   corner). Both absent ⇒ the pre-Wave-3l own-bbox behavior, byte-for-byte.
  */
 
 /** The three scalar placement params the nesting flow writes onto op params. */
@@ -142,6 +156,37 @@ export function resolveCamPlacement2dFromParams(
   const sheetIndex = params['placementSheetIndex']
   if (sheetIndex !== undefined && sheetIndex !== null && sheetIndex !== 0) return null
   return { xMm: x, yMm: y, rotationDeg: rot }
+}
+
+/** Wave 3l anchor-override resolution states (see the module header). */
+type PlacementAnchorMinResolution =
+  | { kind: 'absent' }
+  | { kind: 'valid'; minXMm: number; minYMm: number }
+  | { kind: 'invalid' }
+
+/**
+ * Resolve the optional companion-op anchor override
+ * (`placementAnchorMinXMm` / `placementAnchorMinYMm`, written by
+ * planNestingPlacementStamps).
+ *
+ *   - `absent`  — neither param present (undefined/null): legacy own-bbox
+ *     path, byte-identical to Wave 3k.
+ *   - `valid`   — BOTH params are finite numbers: translate from the part
+ *     outline's rotated bbox min instead of this op's own geometry.
+ *   - `invalid` — half-written or non-finite pair: the caller returns
+ *     IDENTITY, mirroring the placement triple's "never a half-transform"
+ *     guard. A wrong-anchor translation would cut inside a NEIGHBORING
+ *     nested part, so refusing to move is the only safe degrade.
+ */
+function resolvePlacementAnchorMin(params: Record<string, unknown>): PlacementAnchorMinResolution {
+  const x = params['placementAnchorMinXMm']
+  const y = params['placementAnchorMinYMm']
+  const xAbsent = x === undefined || x === null
+  const yAbsent = y === undefined || y === null
+  if (xAbsent && yAbsent) return { kind: 'absent' }
+  if (typeof x !== 'number' || !Number.isFinite(x)) return { kind: 'invalid' }
+  if (typeof y !== 'number' || !Number.isFinite(y)) return { kind: 'invalid' }
+  return { kind: 'valid', minXMm: x, minYMm: y }
 }
 
 /**
@@ -227,6 +272,8 @@ export function applyPlacementToOperationParams2d(
   if (!params) return params
   const placement = resolveCamPlacement2dFromParams(params)
   if (!placement) return params
+  const anchorMin = resolvePlacementAnchorMin(params)
+  if (anchorMin.kind === 'invalid') return params // half-written anchor: identity, never a wrong-corner move
 
   const rawContour = params['contourPoints']
   const rawIslands = params['islandRings']
@@ -243,7 +290,18 @@ export function applyPlacementToOperationParams2d(
   // fall back to the drill pattern's own bbox — the only outline the nesting
   // engine could have measured for them.
   const bboxSource = contourValid.length > 0 ? contourValid : drillValid
-  const t = rigidTransformForPlacement(bboxSource, placement)
+  // Wave 3l: companion ops translate from the PART outline's rotated bbox
+  // (the stamped anchor) so they share the contour op's exact transform —
+  // see the module header. No valid outer geometry stays identity on BOTH
+  // paths (an islands-only op never transforms, anchored or not).
+  const t: Rigid2dTransform | null =
+    anchorMin.kind === 'valid' && bboxSource.length > 0
+      ? {
+          rotationDeg: placement.rotationDeg,
+          dxMm: placement.xMm - anchorMin.minXMm,
+          dyMm: placement.yMm - anchorMin.minYMm
+        }
+      : rigidTransformForPlacement(bboxSource, placement)
   if (!t) return params // no transformable geometry — identity
 
   const out: Record<string, unknown> = { ...params }

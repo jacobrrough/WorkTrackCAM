@@ -2,9 +2,10 @@
  * gcode-export-safety-pin.test.ts -- [ID-0242] Cycle 170 ui-polish paired-pin
  *
  * Co-located paired-pin contract for `src/renderer/src/gcode-export-safety.ts`
- * (44 lines / 1683 bytes; 1 exported pure function
+ * (1 exported pure function
  * `assessGcodeForExportSafety` + 1 type-only export
- * `GcodeExportSafetyAssessment`). The helper is the renderer-side
+ * `GcodeExportSafetyAssessment`; Wave 3l added a module-private
+ * machine-envelope helper -- the runtime export inventory is unchanged). The helper is the renderer-side
  * pre-flight gate the export / send / Moonraker-upload buttons in
  * `ShopApp.tsx` (3 production call-sites at lines 1186, 1294, 1340)
  * consult BEFORE the user is allowed to ship a posted G-code file
@@ -80,6 +81,12 @@
  *       call, plain-object return prototype.
  *   (L) Edge cases -- empty string, whitespace-only, comment-only,
  *       very long programs, mixed line endings.
+ *   (N) Wave 3l INTENDED DRIFT -- machine work-area hard gate: OPTIONAL
+ *       `workAreaMm` on the options object turns provable X/Y
+ *       over-travel into BLOCKING errors (axis + overshoot named).
+ *       Absent dims = byte-identical legacy behavior (never a false
+ *       block). Z stays advisory-only. See the (N) section banner for
+ *       the full drift rationale.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -1185,5 +1192,262 @@ describe('[ID-0242] (M) regex-contract surface', () => {
       safeRetractZMm: 100
     })
     expect(r.warnings).toContain('Safe retract to machine max Z (G0 Z100) not found.')
+  })
+})
+
+// ===========================================================================
+// (N) Wave 3l INTENDED DRIFT -- machine work-area hard gate
+// ===========================================================================
+//
+// INTENDED DRIFT (Wave 3l): `assessGcodeForExportSafety` ADDITIVELY accepts
+// the machine profile's `workAreaMm` on its single options object. Arity
+// stays 1, the runtime export inventory stays exactly
+// ['assessGcodeForExportSafety'], and the return shape stays
+// { blockingErrors, warnings } -- sections (A)-(C) above keep pinning all of
+// that unchanged. What changed: when `workAreaMm` IS provided, posted X/Y
+// extents that PROVABLY exceed the machine travel append BLOCKING errors
+// naming the axis + overshoot (parsed with the same shared helpers as the
+// in-app advisory hint -- extractToolpathSegmentsFromGcode +
+// computeToolpathBoundsFromSegments). When absent, behavior is
+// byte-identical to the pre-Wave-3l contract (pinned by N4 deep equality),
+// so dims-less callers can never be false-blocked. The gate is provability-
+// conservative: Z is advisory-only (cut depths are WCS-relative), a program
+// that never declares G90 is not hard-gated (the parser assumes absolute
+// coordinates), and a below-origin extent only blocks when the total span
+// exceeds the axis travel (no work-origin shift could fit it).
+
+describe('[ID-0242] (N) Wave 3l -- machine work-area hard gate', () => {
+  /** Real bundled profile dims (resources/machines/*.json). */
+  const LAGUNA = { x: 1524, y: 3048, z: 203 }
+  const CARVERA = { x: 360, y: 240, z: 140 }
+  const K2_PLUS = { x: 350, y: 350, z: 350 }
+
+  function programWithMoves(moves: string[]): string {
+    return ['G21', 'G90', 'G17', 'M3 S18000', ...moves, 'M5', 'G0 Z100', 'M30'].join('\n')
+  }
+
+  it('N1: Laguna Y overshoot blocks with axis + exact overshoot text', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X100 Y3100 Z-3 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    const msg = r.blockingErrors.find((e) => e.includes('machine Y work area'))
+    expect(msg).toBeDefined()
+    expect(msg).toContain('Y3100.0 mm')
+    expect(msg).toContain('3048 mm')
+    expect(msg).toContain('52.0 mm past the limit')
+  })
+
+  it('N2: Laguna X overshoot blocks (1600 on a 1524 mm axis = 76.0 mm over)', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X1600 Y100 Z-3 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(
+      r.blockingErrors.some(
+        (e) => e.includes('machine X work area') && e.includes('76.0 mm past the limit')
+      )
+    ).toBe(true)
+  })
+
+  it('N3: a full-sheet Laguna program inside 1524x3048 passes with zero blockers', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X1500 Y3000 Z-3 F2000', 'G1 X10 Y10 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(r.blockingErrors).toEqual([])
+  })
+
+  it('N4: ABSENT workAreaMm is byte-identical legacy behavior (deep-equal result)', () => {
+    const gcode = programWithMoves(['G1 X9000 Y9000 Z-3 F2000'])
+    const withoutDims = assessGcodeForExportSafety({
+      gcode,
+      dialect: 'mach3',
+      safeRetractZMm: 100
+    })
+    // Even 9 meters off the bed cannot block without machine dims.
+    expect(withoutDims.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+    // And for an in-bed program the entire result is identical with dims.
+    const inBed = programWithMoves(['G1 X100 Y100 Z-3 F2000'])
+    const a = assessGcodeForExportSafety({ gcode: inBed, dialect: 'mach3', safeRetractZMm: 100 })
+    const b = assessGcodeForExportSafety({
+      gcode: inBed,
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(b).toEqual(a)
+  })
+
+  it('N5: below-origin extents block ONLY when the total span is unfittable', () => {
+    // Span -100..1500 = 1600 mm on a 1524 mm axis: no origin shift fits it.
+    const over = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X-100 Y100 Z-3 F2000', 'G1 X1500 Y100 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    const msg = over.blockingErrors.find((e) => e.includes('machine X work area'))
+    expect(msg).toBeDefined()
+    expect(msg).toContain('No work-origin shift can make this fit')
+    expect(msg).toContain('76.0 mm more than the axis can move')
+    // Span -100..1300 = 1400 mm fits with a shifted origin: advisory
+    // territory, NEVER a hard block.
+    const fits = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X-100 Y100 Z-3 F2000', 'G1 X1300 Y100 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(fits.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+  })
+
+  it('N6: Z is advisory-only -- deep cuts and tall retracts never trip the hard gate', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X100 Y100 Z-50 F600', 'G0 Z300']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA // z: 203 -- both Z-50 and Z300 are outside [0, 203]
+    })
+    expect(r.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+  })
+
+  it('N7: a program that never declares G90 is not hard-gated (parser assumes absolute)', () => {
+    const noG90 = ['G21', 'G17', 'M3 S18000', 'G1 X2000 Y100 Z-3 F2000', 'M5', 'M30'].join('\n')
+    const r = assessGcodeForExportSafety({
+      gcode: noG90,
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(r.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+    // The existing G90 warning still surfaces the gap.
+    expect(r.warnings).toContain('Absolute distance mode (G90) is not present in the posted file.')
+  })
+
+  it('N8: non-positive / non-finite work-area dims are skipped per-axis (never a false block)', () => {
+    const gcode = programWithMoves(['G1 X1600 Y3100 Z-3 F2000'])
+    const zeroX = assessGcodeForExportSafety({
+      gcode,
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: { x: 0, y: Number.NaN, z: 203 }
+    })
+    expect(zeroX.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+  })
+
+  it('N9: both axes over -> two messages, X before Y', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: programWithMoves(['G1 X1600 Y3100 Z-3 F2000']),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    const xIdx = r.blockingErrors.findIndex((e) => e.includes('machine X work area'))
+    const yIdx = r.blockingErrors.findIndex((e) => e.includes('machine Y work area'))
+    expect(xIdx).toBeGreaterThanOrEqual(0)
+    expect(yIdx).toBeGreaterThan(xIdx)
+  })
+
+  it('N10: envelope blockers are APPENDED after the M5/M30 blockers (stable order)', () => {
+    const r = assessGcodeForExportSafety({
+      gcode: ['G21', 'G90', 'M3', 'G1 X1600 Y100 Z-3 F2000'].join('\n'),
+      dialect: 'mach3',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    const m30Idx = r.blockingErrors.indexOf('Missing program end (M2/M30).')
+    const envIdx = r.blockingErrors.findIndex((e) => e.includes('machine X work area'))
+    expect(m30Idx).toBeGreaterThanOrEqual(0)
+    expect(envIdx).toBeGreaterThan(m30Idx)
+  })
+
+  it('N11: K2 Plus 350-cube realism -- in-volume Klipper-flavored output is not envelope-blocked', () => {
+    const k2 = [
+      ';FLAVOR:Marlin',
+      'G21',
+      'G90',
+      'M82',
+      'G28',
+      'G1 Z0.2 F600',
+      'G1 X340 Y340 E5 F1500',
+      'M104 S0',
+      'M84'
+    ].join('\n')
+    const r = assessGcodeForExportSafety({
+      gcode: k2,
+      dialect: 'grbl',
+      safeRetractZMm: 350,
+      workAreaMm: K2_PLUS
+    })
+    expect(r.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+  })
+
+  it('N12: Carvera realism -- X400 on the 360 mm bed is blocked with the overshoot named', () => {
+    const carvera = [
+      'G21',
+      'G90',
+      'G17',
+      'G54',
+      'M3 S15000',
+      'G1 X400 Y100 Z-1 F800',
+      'M5',
+      'G0 Z90',
+      'M30'
+    ].join('\n')
+    const r = assessGcodeForExportSafety({
+      gcode: carvera,
+      dialect: 'smoothieware',
+      safeRetractZMm: 90,
+      workAreaMm: CARVERA
+    })
+    expect(
+      r.blockingErrors.some(
+        (e) => e.includes('machine X work area') && e.includes('40.0 mm past the limit')
+      )
+    ).toBe(true)
+  })
+
+  it('N13: contract surfaces unchanged -- arity 1, sole runtime export, 2-key return', () => {
+    expect(assessGcodeForExportSafety.length).toBe(1)
+    expect(Object.keys(mod).sort()).toEqual(['assessGcodeForExportSafety'])
+    const r = assessGcodeForExportSafety({
+      gcode: HAPPY_GRBL_GCODE,
+      dialect: 'grbl',
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    })
+    expect(Object.keys(r).sort()).toEqual(['blockingErrors', 'warnings'])
+  })
+
+  it('N14: empty / motion-less programs with dims produce no envelope blockers', () => {
+    for (const gcode of ['', '   \n\t  \n', ['G21', 'G90', 'M3', 'M5', 'M30'].join('\n')]) {
+      const r = assessGcodeForExportSafety({
+        gcode,
+        dialect: 'grbl',
+        safeRetractZMm: 100,
+        workAreaMm: LAGUNA
+      })
+      expect(r.blockingErrors.some((e) => e.includes('work area'))).toBe(false)
+    }
+  })
+
+  it('N15: the hard gate is idempotent and allocation-fresh like the rest of the contract', () => {
+    const args = {
+      gcode: programWithMoves(['G1 X1600 Y100 Z-3 F2000']),
+      dialect: 'mach3' as const,
+      safeRetractZMm: 100,
+      workAreaMm: LAGUNA
+    }
+    const a = assessGcodeForExportSafety(args)
+    const b = assessGcodeForExportSafety(args)
+    expect(b).toEqual(a)
+    expect(b.blockingErrors).not.toBe(a.blockingErrors)
   })
 })

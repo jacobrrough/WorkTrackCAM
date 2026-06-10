@@ -43,6 +43,10 @@ interface Props {
    * sheet-0 placements only and strips stale placement params from parts
    * that overflowed to other sheets. `nestVersion` stamps
    * params.placementNestVersion ('v1' | 'nfp-v2') for layout diffing.
+   * Wave 3l: may return the number of COMPANION 2D ops (pocket/v-carve/
+   * chamfer/drill of the same nested parts) that also received the
+   * placement, so the apply status can report them honestly. A void
+   * return is treated as zero companions (older callers stay valid).
    */
   onApplyPlacements: (
     placements: ReadonlyArray<{
@@ -53,7 +57,7 @@ interface Props {
       sheetIndex?: number
     }>,
     nestVersion?: string
-  ) => void
+  ) => number | void
   /** Status toast hook. */
   onStatus?: (msg: string) => void
 }
@@ -241,11 +245,17 @@ export function LagunaNestingPanel({
   function applyLayout(): void {
     if (!preview || preview.placements.length === 0) return
     const sheetOneCount = preview.placements.length - overflowCount
-    onApplyPlacements(preview.placements, preview.nestVersion)
+    // Wave 3l: the workspace returns how many companion 2D ops (pocket/
+    // v-carve/chamfer/drill of the same nested parts) were stamped too.
+    const companionStamps = onApplyPlacements(preview.placements, preview.nestVersion)
+    const companionNote =
+      typeof companionStamps === 'number' && companionStamps > 0
+        ? ` + ${companionStamps} companion 2D op(s) of the same part(s)`
+        : ''
     onStatus?.(
       overflowCount > 0
-        ? `Applied sheet 1 placements to ${sheetOneCount} contour operation(s). ${overflowCount} part(s) overflowed to sheets 2+ and were NOT applied — cut sheet 1, then re-nest the remaining parts as a separate job.`
-        : `Applied nesting layout to ${sheetOneCount} contour operation(s).`
+        ? `Applied sheet 1 placements to ${sheetOneCount} contour operation(s)${companionNote}. ${overflowCount} part(s) overflowed to sheets 2+ and were NOT applied — cut sheet 1, then re-nest the remaining parts as a separate job.`
+        : `Applied nesting layout to ${sheetOneCount} contour operation(s)${companionNote}.`
     )
   }
 
