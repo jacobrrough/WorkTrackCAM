@@ -17941,3 +17941,40 @@ tolerance from the pick file (no LOD); hands-on Electron verification still owed
 **Next:** Laguna 2.5D CAM depth (pocket islands + offset-spiral clearing + the v-carve
 flat-bottom clearance pass — gcode-safety-gated), then NFP nesting, shell polish, text-on-path,
 and the parked CAM Stacks B/C/D.
+
+## Cycle 237 — Wave 3i: Laguna 2.5D depth — pocket islands, offset-spiral, v-carve flat-bottom (2026-06-09)
+
+**Focus:** the VCarve audit's remaining engine-quality rows. One commit `57cfa9a`.
+
+**Baseline → result:** 15,648 → **15,720 pass / 1 skip / 0 fail**; tsc clean; zero existing
+snapshot keys touched (the new behavior is strictly opt-in); `vcarve_mach3.hbs` + the Laguna
+profile byte-identical.
+
+**What landed:** (1) island-aware pockets — `islandRings` even-odd subtraction in BOTH the
+raster (exact root-finding off island edges) and the new opt-in `pocketStrategy:
+'offset_spiral'` (successive ClipperOffset insets, inside-out, every disjoint-loop transition a
+safe-Z lift, POCKET_OFFSET_MAX_LEVELS bound); the cnc_pocket depth is now hard-capped to
+min(requested, stockBoxZMm) like v-carve. (2) the v-carve flat-bottom pass — where the cap
+binds, `solveVCarveFlatRegion` (Clipper round-join erode by cap·tan(half), matching the
+distance field's rim arcs) chains a raster floor + rim finish at exactly −cap; absent the
+param, byte-identical output (pinned). (3) nested-ring derivation — new `cam-2d-nesting.ts`
+(sibling module; cam-2d-derive's exports are pinned) groups loops into outer+holes and feeds
+BOTH cnc_vcarve (the medial ridge respects letter counters) and cnc_pocket from one derive.
+
+**G-code safety:** machines covered — Laguna Swift (primary; note: Carvera 3-axis shares
+`dispatch2dStrategy`, so the opt-ins are silently available there; all Carvera snapshots green,
+a Carvera-specific island fixture is a follow-up). Pipeline tests: cam-pocket-offset-islands
+(31), cam-local-vcarve (47), cam-nested-rings.integration, the Laguna contract/richauto suites
+(158 total on the final tree). New invariants asserted: per-island/loop/row safe-Z lifts
+(modal-state walk, zero XY rapids at depth — independently re-verified by a non-repo walker,
+64/64), pocket stock-depth cap, floor-at-exactly-−cap. Known-good: ONE new snapshot key added,
+zero existing keys changed. The tracked living reference `references/laguna-swift.md` gained
+the flat-bottom + islandRings sections (its readFileSync contract-pin re-ran green).
+
+**Honest residuals:** single-tool flat floor (the V-bit clears its own floor — separate
+end-mill clearance is VCarve-Pro-parity future work); offset-spiral retracts every loop
+(stay-down linking deferred); one outer group per op; islandRings authored only via
+Derive-from-sketch; non-ASCII em-dashes in body comments are a pre-existing convention some
+RichAuto firmware revs may dislike (candidate cleanup).
+
+**Next:** NFP nesting upgrade or shell polish; the hands-on Electron pass remains owed.
