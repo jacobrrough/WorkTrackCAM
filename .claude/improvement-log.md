@@ -18020,3 +18020,80 @@ still the pre-existing follow-up (params are written, not yet read by run-cam-fo
 
 **Next:** wire placement* params into the 2D CAM emit path, or shell polish; the hands-on
 Electron pass remains owed.
+
+## Cycle 239 — Wave 3k: placement-aware 2D CAM — nested ops cut where they were placed (2026-06-10)
+
+**Focus:** the Wave-3j verify's flagged gap — `applyNestingPlacements` writes `placementXMm` /
+`placementYMm` / `placementRotationDeg` / `placementNestVersion` onto cnc_contour op params but
+NOTHING in the CAM emit chain read them: toolpaths emitted at the un-nested origin, so a nest
+never moved the cuts. This cycle makes the 2D emit path CONSUME the placements.
+
+**Baseline → result:** 15,745 pass / 1 skip / 0 fail → **15,784 pass / 1 skip / 0 fail**
+(446 → 448 files; +39 tests, all new); `tsc --noEmit` clean both ends. Zero existing
+snapshots or test files modified (`git status`: 1 modified source file + 3 new files only).
+
+**The ONE authoritative transform spot (flow traced first):** renderer
+`run-cam-for-op.ts` forwards op params VERBATIM over `cam:run` → `cam-domain.ts` →
+`runCamPipeline` → `dispatch2dStrategy` (cam-runner-2d.ts), where ALL 2D geometry
+(`contourPoints`, `islandRings`, `drillPoints`) is parsed for every 2D op kind exactly once.
+The transform is applied THERE, at the top of `dispatch2dStrategy`, before validation and
+generation — never renderer-side as well (double-transform forbidden; the only other
+`generateContour2dLines` references are upstream authoring helpers outside the emit chain).
+The posted-gcode machine-envelope check then sees PLACED coordinates automatically.
+
+**What landed:**
+(1) NEW `src/shared/cam-placement-transform.ts` — pure contract implementation:
+`rotatePointCcwDeg` (exact cardinal branches, bit-parity with true-shape-nfp's
+rotatePointsDeg), `resolveCamPlacement2dFromParams` (guard: ALL THREE params present+finite
+else identity; `placementSheetIndex` ≠ 0 ⇒ identity — multi-sheet honesty backstop),
+`rigidTransformForPlacement` (rotation about LOCAL ORIGIN + rotated-OUTER-bbox-min →
+(xMm,yMm) translation — the EXACT Wave-3j convention), `applyPlacementToPoints`
+(single-array contract form), and `applyPlacementToOperationParams2d` (the wiring entry:
+ONE rigid transform derived from the OUTER contour — drill-only ops fall back to the drill
+pattern's own bbox — applied uniformly to contour + every island ring + drills; identity
+returns the SAME params object reference; entry parsing mirrors the dispatcher's `point2d`
+Number()-coercion semantics, invalid entries preserved verbatim so validation behavior is
+placement-independent).
+(2) `src/main/cam-runner-2d.ts` — `applyPlacementToOperationParams2d(job.operationParams)`
+once at the top of `dispatch2dStrategy`; validation + all generators consume the placed
+params; module doc declares the single-spot rule.
+(3) NEW `src/shared/cam-placement-transform.test.ts` (24 tests) — guard rules
+(missing/partial/non-finite/overflow-sheet ⇒ identity, same-reference pins), hand-computed
+contract fixtures (rot 0/90/180 exact, 45° bbox+rigidity), rigid-body island+drill relative
+offsets under 45/90/180 anchored to the rotated outer, input non-mutation, dispatcher-parse
+mirroring (coercible strings transformed, junk preserved by reference).
+(4) NEW `src/main/cam-runner-2d-placement.test.ts` (15 tests) — (a) identity pins: posted
+no-placement vs self-placement (own bbox-min, rot 0) BYTE-IDENTICAL; partial placement and
+sheetIndex-1 overflow BYTE-IDENTICAL to base; (b) contract parity: `applyPlacementToPoints`
+vs the NFP engine's own `placedRawPointsMm` to 1e-9 on cardinal placements, within the 0.1 µm
+grid on 45°, plus a REAL `nestPolygonsNfp` run cross-validated placement-by-placement;
+(c) rigid-body through the dispatcher: placed pocket(outer+island, rot 90) and placed Carvera
+drill pattern post BYTE-IDENTICAL to the same ops with pre-transformed geometry — proving one
+uniform transform; (d) translate-only posted parity: every differing Laguna line differs ONLY
+in X/Y words by EXACTLY (dx,dy)=(50.5,100.25), Z-word multiset identical; placed rot-90
+program holds EVERY Laguna invariant (%, G21→G90→G17→G94, M3+G4 P2.0, M5+G4 P3.0, G0 Z203,
+park, ^M30 command, no ^M2) and cuts at the hand-computed placed coordinates with the
+un-placed origin coords gone; (e) bed bounds through the REAL `runCamPipeline`: 100 mm part
+placed at X=1500 → X1600 emitted AND the existing "Machine work volume warning … X past work
+volume max" hint fires; the same part at X=1400 (in-bed) raises no X/Y violation.
+
+**G-code safety (gcode-safety skill run; Laguna primary, Carvera 3-axis shares dispatch):**
+placement is a pure XY input transform applied before generation — header/footer structure,
+dwells, depth caps, per-branch safe-Z lifts and terminators are emission-side and pinned
+unchanged (M30-not-M2 asserted as COMMAND lines, since template comments mention the other
+terminator). Ops without placement params return the same params reference ⇒ byte-identical
+posted output (pinned 3 ways + zero snapshot drift in git). K2 Plus untouched; Carvera
+4-axis untouched (cam-axis4 branch runs before the 2D dispatch; placements only ever target
+cnc_contour). HARD NO-TOUCH held: resources/posts/**, resources/machines/**,
+src/main/cam-axis4/**, src/main/slicer/**, engines/**, src/renderer/design/**,
+src/main/nesting/** (consumed, not modified).
+
+**Honest residuals:** the renderer toolpath PREVIEW reflects placement only after a
+re-generate (it parses posted gcode, so it is consistent by construction — but a stale
+preview from before the nest still shows origin paths until regenerated); v-carve/chamfer
+ops are transform-capable but the nest writer still only stamps cnc_contour ops; per-sheet
+program emission for multi-sheet nests remains future work (sheet-0-only apply, unchanged).
+
+**Next:** stamp placements onto the other 2D Laguna op kinds in `applyNestingPlacements`
+(pocket/vcarve/drill share one part outline), or surface placed-vs-origin in the toolpath
+preview; the hands-on Electron pass remains owed.

@@ -4,9 +4,26 @@
  * Extracted from the monolithic `runCamPipeline()` to isolate contour, pocket,
  * drill, chamfer, and PCB toolpath generation. The caller in `cam-runner.ts`
  * invokes `dispatch2dStrategy()` when the operation kind matches a 2D family.
+ *
+ * Wave 3k — THE ONE AUTHORITATIVE NESTING-PLACEMENT SPOT: this dispatcher is
+ * the single place the scalar `placementXMm` / `placementYMm` /
+ * `placementRotationDeg` params (written by the renderer's
+ * `applyNestingPlacements`) are consumed. `applyPlacementToOperationParams2d`
+ * runs ONCE at the top of `dispatch2dStrategy`, before any geometry is
+ * parsed, so contour, pocket(+islands), chamfer, v-carve(+hole rings), PCB,
+ * and drill geometry all receive the SAME rigid transform (CCW rotation
+ * about the local origin, then rotated-OUTER-bbox-min translated to
+ * (xMm, yMm) — the exact Wave-3j nesting contract). Do NOT also transform in
+ * the renderer or in the generators — that would double-transform. Ops
+ * without placement params keep the original params object reference, so
+ * their posted bytes are untouched. The placed coordinates then flow into
+ * the posted program, where the existing machine-envelope check
+ * (`postedGcodeEnvelopeHint`) still catches placements that push the
+ * toolpath past the bed.
  */
 import { writeFile } from 'node:fs/promises'
 import type { MachineProfile } from '../shared/machine-schema'
+import { applyPlacementToOperationParams2d } from '../shared/cam-placement-transform'
 import {
   computeNegativeZDepthPasses,
   generateChamfer2dLines,
@@ -78,12 +95,18 @@ export async function dispatch2dStrategy(
   guardHint: string,
   postedGcodeEnvelopeHint: (machine: MachineProfile, gcode: string) => string
 ): Promise<CamRunResult> {
-  const valid = validate2dOperationGeometry(job.operationKind, job.operationParams)
+  // Wave 3k: consume nesting placement params (identity — same object
+  // reference — when absent/partial, so un-nested ops post byte-identically).
+  // Validation runs on the PLACED geometry; the rigid transform preserves
+  // point counts and entry validity, so validation outcomes are
+  // placement-independent by construction.
+  const placedParams = applyPlacementToOperationParams2d(job.operationParams)
+  const valid = validate2dOperationGeometry(job.operationKind, placedParams)
   if (!valid.ok) {
     return { ok: false, error: valid.error, hint: valid.hint }
   }
 
-  const p = job.operationParams ?? {}
+  const p = placedParams ?? {}
   let lines: string[] = []
   let pocketResultHints: string[] = []
   let drillResultHints: string[] = []
