@@ -158,4 +158,33 @@ describe('DesignWorkspace — no-code build→render', () => {
     expect(html).toContain('data-testid="design-workspace-feature-pick-datum_axis"')
     expect(html).toContain('data-testid="design-workspace-feature-pick-datum_point"')
   })
+
+  // task_f76b39b3 — picking gates on CAPABILITY, not source: a pick-tagged
+  // no-code kernel mesh (rebuilt from output/kernel-part.pick.json) gets the
+  // Faces/Edges selection-mode toggle; a legacy untagged kernel STL does not.
+  it('shows the selection-mode toggle for a PICK-TAGGED kernel geometry', () => {
+    const tagged = makeBoxGeometry()
+    tagged.userData = {
+      faceIds: [0],
+      faceOcctIds: ['f:abc'],
+      pickableEdges: [{ edgeId: 0, occtId: 'e:001', positions: new Float32Array(6) }]
+    }
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# no-code model with pick data',
+        kernelViewportGeometry: tagged
+      })
+    )
+    expect(html).toContain('data-testid="design-workspace-selection-mode"')
+  })
+
+  it('does NOT show the selection-mode toggle for an untagged kernel STL', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: '# legacy untagged kernel mesh',
+        kernelViewportGeometry: makeBoxGeometry()
+      })
+    )
+    expect(html).not.toContain('data-testid="design-workspace-selection-mode"')
+  })
 })

@@ -41,6 +41,10 @@
  */
 
 import * as THREE from 'three'
+import {
+  applyPickPlacementToTessellation,
+  type KernelPickFile,
+} from '../../shared/kernel-pick-file'
 import type {
   CadEdgePolyline,
   CadTessellateWithIdsResult,
@@ -214,6 +218,29 @@ export function buildViewportGeometry(
   }
 
   return geometry
+}
+
+/**
+ * task_f76b39b3 · Build a PICKABLE viewport geometry for the NO-CODE body from
+ * the persisted kernel pick file (`output/kernel-part.pick.json`).
+ *
+ * The tessellation's stable ids were hashed on build_part.py's PRE-placement
+ * body — the exact space its `fillet_select`/`chamfer_select`/`shell_inward`
+ * ops resolve `picked*Ids` against — so a pick taken from this geometry
+ * round-trips to the same OCCT edge/face at the next build. The DISPLAYED
+ * vertices/edge polylines are moved into world space (where the exported STL
+ * lives) by the recorded placement basis; the ids stay pre-placement.
+ *
+ * Returns `null` for an unusable file — the caller falls back to the untagged
+ * STL parse (display works; picking stays honestly off).
+ */
+export function buildKernelPickGeometry(
+  pick: KernelPickFile | null | undefined,
+): THREE.BufferGeometry | null {
+  if (!pick) return null
+  return buildViewportGeometry(
+    applyPickPlacementToTessellation(pick.tessellation, pick.placement),
+  )
 }
 
 /**

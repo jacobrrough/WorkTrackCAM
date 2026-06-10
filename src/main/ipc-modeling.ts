@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { isPythonPathSafe } from './path-security'
 import { buildAssemblyInterferenceReport, safeProjectMeshPath } from './assembly-mesh-interference'
 import { buildKernelPartFromProject } from './cad/build-kernel-part'
+import { coerceKernelPickFile, type KernelPickFile } from '../shared/kernel-pick-file'
 import { comparePlacementParityFromBounds } from './cad/kernel-placement-parity'
 import { importStepToProjectStl, runPythonJson } from './cad/occt-import'
 import { runDrawingExport, type DrawingExportPayload } from './drawing-export-service'
@@ -244,6 +245,29 @@ export function registerModelingIpc(ctx: MainIpcWindowContext): void {
         const buf = await readFile(p)
         if (isLikelyAsciiStl(buf)) return { ok: false, error: 'ascii_stl_not_supported_in_viewport' }
         return { ok: true, base64: buf.toString('base64') }
+      } catch {
+        return { ok: false, error: 'read_failed' }
+      }
+    }
+  )
+
+  // task_f76b39b3: serve the persisted pick tessellation (pre-placement ids +
+  // canonical->world basis) build-kernel-part.ts wrote next to the STL, so the
+  // renderer can rebuild a pickable no-code viewport mesh on project open.
+  // Absence / parse failure is a clean { ok: false } -- the viewport falls back
+  // to the untagged STL (display works, picking honestly off).
+  ipcMain.handle(
+    'design:readKernelPickJson',
+    async (
+      _e,
+      projectDir: string
+    ): Promise<{ ok: true; pick: KernelPickFile } | { ok: false; error: string }> => {
+      const p = join(projectDir, 'output', 'kernel-part.pick.json')
+      try {
+        const raw = await readFile(p, 'utf-8')
+        const pick = coerceKernelPickFile(JSON.parse(raw) as unknown)
+        if (!pick) return { ok: false, error: 'invalid_pick_file' }
+        return { ok: true, pick }
       } catch {
         return { ok: false, error: 'read_failed' }
       }

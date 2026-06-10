@@ -17,6 +17,7 @@ import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdow
 import type { DesignFileV2 } from '../shared/design-schema'
 import type { AssemblyFile } from '../shared/assembly-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
+import type { KernelPickFile } from '../shared/kernel-pick-file'
 import type { KernelBuildResult } from '../main/cad/build-kernel-part'
 import type { PartFeaturesFile } from '../shared/part-features-schema'
 import type { CamProgressEvent } from '../shared/cam-progress'
@@ -285,6 +286,11 @@ export type Api = {
   designSave: (projectDir: string, json: string) => Promise<void>
   designReadKernelManifest: (projectDir: string) => Promise<KernelManifest | null>
   designReadKernelStlBase64: (projectDir: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
+  /** Pick tessellation persisted by the kernel build (task_f76b39b3): pre-placement
+   * stable-id mesh + canonical->world basis, for pickable no-code viewport geometry. */
+  designReadKernelPickJson: (
+    projectDir: string
+  ) => Promise<{ ok: true; pick: KernelPickFile } | { ok: false; error: string }>
   /**
    * Run the no-code kernel build: `design/sketch.json` + `part/features.json`
    * (kernelOps timeline) → CadQuery `build_part.py` → `output/kernel-part.step`
@@ -955,6 +961,7 @@ const api: Api = {
   designSave: (projectDir, json) => ipcRenderer.invoke('design:save', projectDir, json),
   designReadKernelManifest: (projectDir) => ipcRenderer.invoke('design:readKernelManifest', projectDir),
   designReadKernelStlBase64: (projectDir) => ipcRenderer.invoke('design:readKernelStlBase64', projectDir),
+  designReadKernelPickJson: (projectDir) => ipcRenderer.invoke('design:readKernelPickJson', projectDir),
   kernelBuild: (projectDir, pythonPath) => ipcRenderer.invoke('cad:kernelBuild', projectDir, pythonPath),
   modelExportStl: (projectDir, filename, base64) => ipcRenderer.invoke('model:exportStl', { projectDir, filename, base64 }),
 

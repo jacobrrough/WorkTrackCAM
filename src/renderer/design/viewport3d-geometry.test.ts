@@ -9,11 +9,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildFaceOcctIds,
+  buildKernelPickGeometry,
   buildPickableEdges,
   buildViewportGeometry,
   readGeometryPickableEdges,
   sanitizeFaceIds,
 } from './viewport3d-geometry'
+import type { KernelPickFile } from '../../shared/kernel-pick-file'
 import { readGeometryFaceIds, readGeometryFaceOcctIds } from './Viewport3D'
 import type {
   CadEdgePolyline,
@@ -247,5 +249,71 @@ describe('readGeometryPickableEdges', () => {
   it('returns null for a null / undefined geometry', () => {
     expect(readGeometryPickableEdges(null)).toBeNull()
     expect(readGeometryPickableEdges(undefined)).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// task_f76b39b3 — buildKernelPickGeometry: the no-code pick bridge. A geometry
+// built from the persisted kernel pick file must (a) display in WORLD space
+// (vertices moved by the placement basis) while (b) carrying the PRE-placement
+// stable ids in userData — exactly what build_part's op resolver re-hashes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function kernelPickFixture(): KernelPickFile {
+  return {
+    tessellation: {
+      vertices: [0, 0, 0, 10, 0, 0, 0, 5, 0],
+      indices: [0, 1, 2],
+      faceIds: [0],
+      triangleCount: 1,
+      bbox: { min: [0, 0, 0], max: [10, 5, 0] },
+      faceMap: { '0': { kind: 'face', occtHash: 0, occtId: 'f:abc', area: 25 } },
+      edgeMap: { 'e:001': { kind: 'edge', occtId: 'e:001', occtHash: 0, length: 10 } },
+      edges: [
+        {
+          id: 'e:001',
+          points: [
+            [0, 0, 0],
+            [0, 5, 0],
+          ],
+        },
+      ],
+    },
+    // The datum-XY basis build_part emits: (x, y, z) → (x, z, −y).
+    placement: { u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0], origin: [0, 0, 0] },
+  }
+}
+
+describe('buildKernelPickGeometry — pickable no-code kernel mesh', () => {
+  it('builds a world-space geometry carrying pre-placement pick userData', () => {
+    const geometry = buildKernelPickGeometry(kernelPickFixture())
+    expect(geometry).not.toBeNull()
+
+    // (a) DISPLAY is world-space: vertex (0,5,0) → (0,0,−5) under datum XY.
+    const pos = geometry!.getAttribute('position')
+    expect(pos.count).toBe(3)
+    expect([pos.getX(2), pos.getY(2), pos.getZ(2)]).toEqual([0, 0, -5])
+
+    // (b) PICK ids are the untouched pre-placement stable handles.
+    const ud = geometry!.userData as Record<string, unknown>
+    expect(ud.faceIds).toEqual([0])
+    expect(ud.faceOcctIds).toEqual(['f:abc'])
+    const edges = readGeometryPickableEdges(geometry)
+    expect(edges).not.toBeNull()
+    expect(edges![0]!.occtId).toBe('e:001')
+    // The edge polyline is ALSO world-space: (0,5,0) → (0,0,−5).
+    expect(Array.from(edges![0]!.positions.slice(3, 6))).toEqual([0, 0, -5])
+  })
+
+  it('identity placement (null) leaves coordinates canonical', () => {
+    const pick = { ...kernelPickFixture(), placement: null }
+    const geometry = buildKernelPickGeometry(pick)
+    const pos = geometry!.getAttribute('position')
+    expect([pos.getX(2), pos.getY(2), pos.getZ(2)]).toEqual([0, 5, 0])
+  })
+
+  it('returns null for a null pick file (caller falls back to the untagged STL)', () => {
+    expect(buildKernelPickGeometry(null)).toBeNull()
+    expect(buildKernelPickGeometry(undefined)).toBeNull()
   })
 })

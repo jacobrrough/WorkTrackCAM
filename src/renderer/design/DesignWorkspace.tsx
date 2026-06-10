@@ -1169,13 +1169,21 @@ export function DesignWorkspace({
    * (`kernelViewportGeometry`) so adding a no-code feature actually displays the
    * model. `null` → the empty-state shows (no model built yet either way).
    *
-   * Face-pick (`onSelect` / `highlightedFaceId`) is wired ONLY for the
-   * script-path geometry; the kernel STL has no faceIds parallel array, so we do
-   * not fake a selectable surface against it.
+   * Face/edge picking gates on CAPABILITY, not source (task_f76b39b3): a
+   * script tessellation AND a pick-tagged no-code kernel mesh (rebuilt from
+   * `output/kernel-part.pick.json`) both carry `faceIds` / `pickableEdges`
+   * userData; a legacy untagged kernel STL stays honestly unpickable.
    */
-  const scriptGeometryActive = viewportGeometry !== null
   const displayedViewportGeometry: BufferGeometry | null =
     viewportGeometry ?? kernelViewportGeometry
+  const displayedPickUserData = displayedViewportGeometry?.userData as
+    | Record<string, unknown>
+    | undefined
+  const pickableGeometryActive = Boolean(
+    displayedPickUserData &&
+      (Array.isArray(displayedPickUserData.faceIds) ||
+        Array.isArray(displayedPickUserData.pickableEdges))
+  )
 
   /**
    * FG-5 Inspect — the world-Y plane the section clip cuts at when
@@ -1584,7 +1592,7 @@ export function DesignWorkspace({
               // face click is consumed by `onPickFace` (sketch-on-face), so we
               // suppress `onSelect` to avoid double-handling the same click.
               onSelect={
-                scriptGeometryActive && !facePickForSketchActive
+                pickableGeometryActive && !facePickForSketchActive
                   ? handleViewportSelect
                   : undefined
               }
@@ -1600,12 +1608,12 @@ export function DesignWorkspace({
               onMeasureActiveChange={setMeasureActive}
               sectionClipY={sectionClipY}
               highlightedFaceId={
-                scriptGeometryActive && selection?.kind === 'face'
+                pickableGeometryActive && selection?.kind === 'face'
                   ? selection.faceId
                   : null
               }
               highlightedEdgeId={
-                scriptGeometryActive && selection?.kind === 'edge'
+                pickableGeometryActive && selection?.kind === 'edge'
                   ? selection.faceId
                   : null
               }
@@ -1636,11 +1644,11 @@ export function DesignWorkspace({
           {/*
             FG-5 — face/edge selection-mode toggle. Picks what a plain viewport
             click selects: faces (shell / sketch-on-face) or edges (fillet /
-            chamfer). Only shown when a pickable script geometry is mounted (the
-            no-code kernel STL carries no faceIds / edge polylines). Anchored
+            chamfer). Shown whenever the mounted geometry carries pick data --
+            a script tessellation OR a pick-tagged no-code kernel mesh. Anchored
             top-center so it never fights the bottom-center selection chip.
           */}
-          {scriptGeometryActive && !sketchMode && (
+          {pickableGeometryActive && !sketchMode && (
             <div
               className="design-workspace__selection-mode"
               role="group"

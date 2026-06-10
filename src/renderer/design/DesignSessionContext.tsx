@@ -27,6 +27,7 @@ import { derivePartFeatures } from './derive-features'
 import { meshToStlBase64 } from './export-stl'
 import { sketchPreviewPlacementMatrix } from './sketch-preview-placement'
 import { buildExtrudedGeometry } from './sketch-mesh'
+import { buildKernelPickGeometry } from './viewport3d-geometry'
 import { computeKernelDesignHashWeb, computeKernelFeaturesHashWeb } from './kernel-inspect-web-hash'
 import { cloneDesign, sketchResidualReport, solveSketch } from './solver2d'
 
@@ -326,6 +327,24 @@ export function DesignSessionProvider({
       }
       setKernelInspectGeometry(null)
       return
+    }
+    // task_f76b39b3: prefer the PICKABLE tessellation the kernel build persisted
+    // (stable PRE-placement ids + world-space display) so the no-code body
+    // supports face/edge picking whose ids resolve at the next build. Falls back
+    // to the untagged STL when absent/invalid (display works, picking honestly off).
+    try {
+      const pickRes = await fab.designReadKernelPickJson(projectDir)
+      if (pickRes.ok) {
+        const tagged = buildKernelPickGeometry(pickRes.pick)
+        if (tagged) {
+          kernelGeomRef.current?.dispose()
+          kernelGeomRef.current = tagged
+          setKernelInspectGeometry(tagged)
+          return
+        }
+      }
+    } catch {
+      // Non-fatal -- fall through to the plain-STL load below.
     }
     const r = await fab.designReadKernelStlBase64(projectDir)
     if (!r.ok) {

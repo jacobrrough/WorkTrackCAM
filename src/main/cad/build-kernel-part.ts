@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { coerceKernelPickFile } from '../../shared/kernel-pick-file'
 import { attachKernelPostOpsToPayload, buildKernelBuildPayload } from '../../shared/sketch-profile'
 import { partFeaturesFileSchema, type PartFeaturesFile } from '../../shared/part-features-schema'
 import { designFileSchemaV2, normalizeDesign } from '../../shared/design-schema'
@@ -208,6 +209,30 @@ export async function buildKernelPartFromProject(params: {
   }
   kernelManifestSchema.parse(manifest)
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
+
+  // task_f76b39b3: persist the pre-placement pick tessellation (+ the
+  // canonical→world basis) next to the STL so the renderer can rebuild a
+  // PICKABLE no-code viewport mesh on any later project open — picked ids from
+  // it resolve at the next build (same hash space as the op resolver). The pair
+  // is write-or-DELETE per successful build: when this build carried no usable
+  // pick data (best-effort tessellation failed), a stale file from an earlier
+  // build must not overlay outdated pick geometry on the new STL. Best-effort
+  // throughout — pick persistence must never fail an otherwise-good build.
+  const pickPath = join(outputDir, `${base}.pick.json`)
+  const pick = coerceKernelPickFile({
+    tessellation: json?.pickTessellation ?? null,
+    placement: json?.pickPlacement ?? null
+  })
+  try {
+    if (pick) {
+      await writeFile(pickPath, JSON.stringify(pick), 'utf-8')
+    } else {
+      await unlink(pickPath).catch(() => undefined)
+    }
+  } catch {
+    // Non-fatal: the viewport falls back to the untagged STL (display works,
+    // picking stays honestly off) — exactly the pre-pick-file behavior.
+  }
 
   const warnings = parseWarnings(json?.warnings)
   return warnings ? { ok: true, stepPath, stlPath, manifest, warnings } : { ok: true, stepPath, stlPath, manifest }
