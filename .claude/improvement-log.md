@@ -17882,3 +17882,62 @@ recommend a hands-on Electron pass (memory `feedback-ui-needs-hands-on-verificat
 **Next:** Text/TrueType machinable vectors; an Import-DXF button on the Design sketch surface;
 vector editing (offset/boolean/array/node-edit); Assemble + Drawings workspace wiring; shell polish
 (StatusBar cursor coords, marking menu); then the parked CAM Stacks B/C/D (adaptive/rest).
+
+## Cycle 236 — CAD↔CAM bridge + the cross-path picked-edge fix, end-to-end (2026-06-09)
+
+**Focus:** close the two reported defects (the opentype production-build break's loose ends;
+the coordinate-space mismatch silently defeating no-code picks) and land the CAD↔CAM bridge.
+
+**Baseline → result:** 15,567 → **15,648 pass / 1 skip / 0 fail**; `tsc` clean; npm audit
+(runtime) 0; production build green with the bundled font landing in the package.
+
+**Commits:**
+- `2b4cbc2` — **Wave 3h CAD↔CAM bridge**: Send-to-CAM now actually imports the exported STL
+  into the first plate (consume-once CamHandoffContext → ManufactureHost →
+  importStlIntoFirstPlate via the existing assets:importMesh path); solved assembly mates
+  persist to assembly.mateConstraints (additive — the field already defaulted `[]`; legacy
+  assemblies still load) and round-trip solver-consumable. Fixed an untyped vi.fn mock that
+  made tsc red while vitest (esbuild type-stripping) stayed green.
+- `045ad5b` — **opentype namespace-import consistency + the ESM import-shape pin**: the 3 test
+  files dropped the default-import smell; NEW src/shared/esm-import-shape-pin.test.ts fails on
+  a default import of any named-only-ESM module so the Rollup-vs-esbuild regression is caught
+  in `vitest run`, not a manual build. (Inverse trap documented: clipper-lib is CJS and NEEDS a
+  default import.)
+- `7563b04` — **DXF 180° bulge end-to-end test**: a closed LWPOLYLINE with bulge=1 (D-shape)
+  through dxfToSketch — points on the r=5 circle, contour extent reaches the arc apex (y≈5)
+  not the chord (y=0). (Bulge tessellation itself shipped Waves 3e/3f.)
+- `091b7ac` — **fix(cad) Python half of task_f76b39b3**: stable ids are geometry-coordinate
+  hashes, so a script-space pick never resolved against the differently-spaced build_part body
+  (safe axis-bucket fallback — the operator's pick was silently ignored). build_part now emits
+  `pickTessellation` (its OWN pre-placement body — the exact space its ops re-resolve) +
+  `pickPlacement` (the canonical→world basis) via a new additive
+  `tessellate_body_with_face_ids` (reuses the sacred tessellation core unchanged). cadquery
+  venv 35/35: picking build_part's own id fillets ONLY that edge (¼ of the bucket, no
+  fallback) under a non-identity placement; the old centered-space id provably mismatches +
+  falls back. The prior fixture had MASKED the bug by hand-building the id in build_part's
+  own space.
+- `bd4c593` — **feat(cad) renderer half**: build-kernel-part persists the pair to
+  `output/kernel-part.pick.json` (write-or-DELETE per successful build so stale pick data
+  never overlays a newer STL); design:readKernelPickJson IPC; DesignSessionContext prefers the
+  pick-tagged world-space mesh (buildKernelPickGeometry — display transformed by
+  world = u·x+v·y+n·z+origin, ids untouched/pre-placement) over the untagged STL parse, so
+  picking also works on plain project REOPEN; DesignWorkspace's gate is now CAPABILITY-based
+  (pickableGeometryActive: the displayed geometry carries faceIds/pickableEdges) instead of
+  script-source-based. Cross-language contract check: a REAL venv build_part payload
+  (filleted box, 48 edges/26 faces) ran through the actual TS coercer/transform — exact
+  world extents, every e:<hex> id preserved.
+
+**The closed loop:** viewport pick on the no-code body → stable id → FilletDialog
+pickedEdgeIds → features.json → build_part resolve_picked_edges → only that edge fillets.
+
+**G-code safety:** no machine-facing change this cycle (CAD/bridge/test work only); the posts,
+CAM engines, and machine profiles are untouched.
+
+**Honest residuals:** the Send-to-CAM hand-off targets the first plate's first op (active-plate
+targeting + add-as-new-op deferred); no mate edit/delete UI; the pick geometry displays at STL
+tolerance from the pick file (no LOD); hands-on Electron verification still owed
+(memory `feedback-ui-needs-hands-on-verification`).
+
+**Next:** Laguna 2.5D CAM depth (pocket islands + offset-spiral clearing + the v-carve
+flat-bottom clearance pass — gcode-safety-gated), then NFP nesting, shell polish, text-on-path,
+and the parked CAM Stacks B/C/D.
