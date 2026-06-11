@@ -97,7 +97,7 @@ This matrix enumerates the meaningful tools/buttons/commands the reference apps 
 | Toolpaths·Pocket | Per-depth finish | Finish contour at each Z step | `have` | `finishEachDepth` (cam-local.ts:1032) | Manufacture op params | P2 |
 | Toolpaths·Pocket | Islands / pocket-with-holes | Respect interior islands inside the pocket | `missing` | none — single outer ring only (`ringBounds`/even-odd on one ring) | Multi-ring pocket (outer + island vectors) | P1 |
 | Toolpaths·Pocket | Adaptive / trochoidal clearing (HSM) | Constant-engagement high-feed clearing | `partial` | Stack B v1 (2026-06-11): `cnc_adaptive`/`cnc_trochoidal_hsm` with `contourPoints` route to `generateAdaptiveClearing2dLines` (capped radial engagement over offset levels + trochoidal relief, G1 polyline arcs only); `cnc_adaptive` is in VCARVE_PRO_OPS; trochoidal HSM = same engine, 20% default cap | v2: G2/G3 arc output, helix entries, level-0 wall relief | P1 |
-| Toolpaths·Pocket | Rest machining (2nd tool) | Clear only what a bigger tool left | `missing` | none for 2D (3D rest exists via raster rest stock only) | 2D rest-area from prior tool | P2 |
+| Toolpaths·Pocket | Rest machining (2nd tool) | Clear only what a bigger tool left | `have` (2D) | Stack C v1 (2026-06-11): `restPrevToolDiameterMm` on the pocket family — `solveRestRegion` (clipper opening by the previous tool radius) feeds ONLY the unreachable lobes/channels to the chosen generator; wall/island finish suppressed in rest mode; honest validation + empty-rest errors. Mesh/3D ops still raster-rest only | v2: IPW-stock-aware rest, rest-of-rest chains (12→6→3) | P2 |
 
 ## Toolpaths — V-Carving / Engraving / Prism (the headline gap)
 

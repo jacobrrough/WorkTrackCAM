@@ -18310,3 +18310,37 @@ dispatch branch gates the finish pass on it — suppressed finishes push an hone
 (clear the remainder, then run a separate contour finish). Pinned by two new dispatch tests
 (the leaking islands fixture now suppresses + hints; the clean fixture still finishes).
 Full suite 16,006 / 0 fail.
+
+## Cycle 244 — Stacks C + D: 2D rest machining + the CAM-stacks close-out (2026-06-11)
+
+**Focus:** finish the original CAM-phase quartet. Stack C committed `c2af226`; Stack D is this
+docs/honesty close-out commit.
+
+**Baseline → result:** 16,006 → **16,062 pass / 1 skip / 0 fail** (+56); tsc clean; zero
+snapshot drift; resources/** byte-identical; ops without the new param byte-identical by
+construction.
+
+**Stack C v1 (c2af226):** `restPrevToolDiameterMm` on the pocket family — `solveRestRegion`
+(clipper morphological opening by the previous tool radius; StrictlySimple discovered necessary
+to split lobes joined through zero-width corridors; dual dust floors) feeds ONLY the
+provably-unreachable lobes to the chosen generator, once per region, on the PLACED geometry
+(composes with the 3k transform). Analytic truth: corner lobes within 0.15 mm² of the exact
+(1−π/4)·prevR²; sweep-coverage ≤0.02 mm² stranded per lobe; zero cuts in the open center
+(independently re-derived by the verifier's own clipper probe). Wall/island finish suppressed in
+rest mode (+hint); honest validation (prev ≤ current = error; empty rest = honest error).
+Composes with Stack B: the engagement cap holds on rest regions; adaptive's cusped-lobe skips
+carry the adaptiveClearedToWalls gate through.
+
+**Stack D (this commit):** living gcode-safety reference gains the "Adaptive clearing + rest
+machining invariants" section (engagement-cap contract, the finish-pass gate — do not remove —,
+rest-only-clears semantics, bounded-work rules); the catalog's rest-machining row flipped to
+`have (2D)` with honest v2 deferrals (IPW-stock-aware rest, rest-of-rest chains); the Carvera
+S12000-below-profile-floor pre-existing observation lives as chip task_feef69e0.
+
+**G-code safety:** machines covered — Laguna Swift (primary) + Carvera 3-axis (shared 2D
+dispatch); posted-output suites with the real posts/profiles at two layers (repo tests + the
+verifier's independent modal walkers); K2 + 4-axis unreachable from these diffs.
+
+**The CAM-stacks quartet is closed:** A in-process stock model (c99a284, 2026-06-08) · B
+adaptive clearing (887c273) · C rest machining (c2af226) · D this close-out. Honest v2 frontier
+recorded in the catalog: G2/G3 arcs, feed modulation, helical entry, IPW-aware rest, 3D rest.

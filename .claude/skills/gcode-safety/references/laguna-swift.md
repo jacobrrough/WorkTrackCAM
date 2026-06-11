@@ -129,6 +129,34 @@ circle, never the centre; stock re-cap holds with holes present; one additive po
 
 ---
 
+## Adaptive clearing + rest machining invariants (`cnc_adaptive` / `restPrevToolDiameterMm`, added 2026-06-11)
+
+Stack B v1 (`generateAdaptiveClearing2dLines` in `src/main/cam-adaptive-clearing.ts`) and
+Stack C v1 (`solveRestRegion` in `src/main/cam-rest-region.ts`) both post through the
+UNCHANGED `vcarve_mach3.hbs` emitter (Carvera 3-axis shares the dispatch), so every
+header/footer invariant above holds. Engine-owned safety rules:
+
+- **Capped radial engagement is the contract.** Adaptive clearing must never let the
+  per-segment frontier advance exceed `maxEngagementMm` (default 40% of tool diameter).
+  Where it cannot relieve a spike (level-0 wall runs, unrelievable narrow regions, trochoid
+  budget exhausted) it SKIPS at safe Z — material left + a loud hint — never a buried slot.
+  Pinned by frontier audits in `cam-adaptive-clearing.test.ts` / `cam-runner-2d-adaptive.test.ts`.
+- **The finish pass is gated on `adaptiveClearedToWalls`.** A wall finish over SKIPPED
+  geometry would cut full-burial into stock the roughing never cleared (the measured leak was
+  a 27 mm full-burial advance). The dispatcher suppresses the finish + hints whenever the
+  engine reports skips/truncation. **Do not remove this gate.**
+- **Rest mode clears ONLY the rest region.** With `restPrevToolDiameterMm`, the dispatcher
+  solves rest = region − opening(region, prevR) on the PLACED geometry and feeds only those
+  lobes to the generator; the outer-wall + island finish traces are suppressed (the previous
+  tool's op already finished those walls). Validation is honest: a previous tool ≤ the
+  current tool is an error, an empty rest is "the previous tool left nothing this tool can
+  reach" — never an empty-but-ok program. Pinned by containment/coverage audits in
+  `cam-rest-region.test.ts` / `cam-runner-2d-rest.test.ts`.
+- **Bounded work everywhere**: trochoid budget (2000 circles/pass), level caps, dust floors
+  (0.01 mm² / 0.05 mm) — a pathological region degrades to skips + hints, never a hang.
+
+---
+
 ## Anti-patterns (forbidden emissions)
 
 - **M2 in the footer** -- That's Carvera's terminator, not Mach3's. Will leave the RichAuto controller in an undefined state. Always emit `M30`.
