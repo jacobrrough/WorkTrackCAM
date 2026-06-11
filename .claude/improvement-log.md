@@ -18230,3 +18230,83 @@ session-scoped like before.
 **Roadmap status:** the user-approved sequence (vector editing → CAD↔CAM bridge → shell
 polish) is COMPLETE. Next frontier: the parked CAM Stacks B/C/D (adaptive/HSM roughing,
 rest machining).
+
+## Cycle 243 — Stack B v1: adaptive / trochoidal HSM-lite 2D clearing, built + wired (2026-06-11)
+
+**Focus:** the first parked CAM stack — `cnc_adaptive` / `cnc_trochoidal_hsm` existed in the
+schema with NO 2D engine (routed to OCL/Python or parallel fallback; flagged P1 in
+docs/plans/catalog/vcarve-laguna.md). Build phase delivered the engine; this wire phase
+routed, surfaced, and documented it.
+
+**Baseline -> result:** 15,942 -> **16,004 pass / 1 skip / 0 fail** (+62: 38 engine + 24
+dispatch); tsc clean; existing snapshots byte-identical (two NEW snapshot files only);
+resources/posts/** + resources/machines/** + all NO-TOUCH surfaces untouched.
+
+**What landed:**
+- **Engine (build phase):** `src/main/cam-adaptive-clearing.ts` —
+  `generateAdaptiveClearing2dLines`: capped RADIAL ENGAGEMENT over the Wave-3i offset-level
+  region model. Steady state = the 3i spiral; spikes (concave corners, narrow arms) detected
+  by sampled clearance vs the previous inset level; relief = trochoid circles as fine G1
+  chords (NO G2/G3 in v1); channels narrower than ~tool dia + stepover cleared fully
+  trochoidally via a binary-eroded spine; level-0 wall spikes + unrelievable regions SKIPPED
+  with material left + loud hints (never slotted above the cap). Bounds:
+  POCKET_OFFSET_MAX_LEVELS + ADAPTIVE_MAX_TROCHOID_CIRCLES (2000/depth) + sample caps.
+  Deterministic, collapse-safe.
+- **Routing (`cam-runner.ts`):** the two kinds route to `dispatch2dStrategy` ONLY when the op
+  carries `contourPoints` (`adaptive2dGeometry` gate); mesh ops keep the legacy OCL
+  AdaptiveWaterline -> parallel-finish chain byte-identically (existing pipeline test green).
+  Both kinds added to the contour family in `validate2dOperationGeometry`.
+- **Dispatch (`cam-runner-2d.ts`):** new branch mirroring cnc_pocket — placement transform,
+  islandRings, stock-thickness depth HARD-CAP (+hint), zStepMm multi-depth, finish-contour
+  reuse (outer + island walls; INTENTIONALLY gated on a non-empty clearing body so an empty
+  adaptive result can never degrade to a fully-buried finish-only slot).
+  `cnc_trochoidal_hsm` = same engine with a 20%-of-tool-dia default cap (vs 40%); explicit
+  `maxEngagementMm` always wins.
+- **Surfacing:** `cnc_adaptive` added to VCARVE_PRO_OPS (Laguna router env; already present
+  in MAKERA sets + OPS_BY_MODE); registry pin updated to the 6-op set. Op editor: contour
+  derive/paste rows extended to both kinds; new Max engagement / Trochoid radius / Trochoid
+  step fields; honest adaptive-lite copy (G1 polyline arcs, buried entry loops, skip
+  semantics, per-kind defaults); Kind dropdown labels updated.
+- **Docs:** manufacture-schema JSDoc (two-mode kind docs + adaptive param family);
+  vcarve-laguna catalog row stub -> partial with v2 follow-ups (G2/G3, helix entry, level-0
+  wall relief).
+
+**Machines covered (gcode-safety skill run):** Laguna Swift 5x10 (primary; vcarve_mach3.hbs)
+and Makera Carvera 3-axis (shared 2D dispatch; carvera_3axis.hbs). K2 untouched; 4-axis
+untouched.
+
+**Tests added:** `cam-adaptive-clearing.test.ts` (38, build phase) — engagement AUDIT walk
+(no measured bite above the cap on the L-pocket; the plain spiral audits >10x cap on the same
+geometry), channel containment, island + trochoid-chord wall-stock margins, comb-region
+truncation bound, determinism, posted Laguna + Carvera invariants + NEW engine snapshot.
+`cam-runner-2d-adaptive.test.ts` (24, this phase) — runCamPipeline routing gate (with/without
+contourPoints + trochoidal alias), per-kind engagement-cap defaults + override +
+job.toolDiameterMm flow, depth-cap hint through CamRunResult, island clearance on the POSTED
+body, finish-pass on/off, geometry-validation errors, collapse error, Wave-3k placement
+rigid-translation walk, hint suffix parity, full Laguna invariant walk (% x2, G21->G90->G17,
+M3+G4 P2.0, M5+G4 P3.0, M30-never-M2, no M4, no rapid-at-depth, relief comment present) +
+Carvera walk (ATC M6 T1 -> G43 H1, G4 P2, M5->G49->M9->M2-never-M30, no %, no A-words, feeds
+<= 2400) + NEW dispatch snapshot.
+
+**Honest residuals (v1 scope):** no G2/G3 arc output (posts emit G1 chords); region-core
+entry loops cut fully buried (ramp recommended, hinted); level-0 wall-engagement spikes are
+skipped (material left) rather than relieved; trochoid feed is not modulated by engagement;
+`cnc_trochoidal_hsm` without contourPoints still falls back to parallel finish (schema doc
+now says so). run-cam-for-op still requires a sourceMesh on the op even for pure-2D runs
+(pre-existing gate, same as cnc_pocket).
+
+**Next cycle recommendation:** Stack C (rest machining) per the campaign plan; or v2 of this
+engine (G2/G3 arcs for the Laguna + helix entries) if the operator wants production HSM
+sooner.
+
+**Post-verify leak fix (main loop, same commit):** the adversarial verifier found the one real
+composition leak — the dispatcher's default-ON finish pass traced the FULL wall contour even
+when the engine had SKIPPED geometry (spike runs / unrelievable narrow regions / trochoid-budget
+truncation), advancing 27.32 mm full-burial into never-cleared comb teeth (4.29 mm on the
+islands fixture) — silently undoing the engine's never-slot promise. Fixed: the engine now
+exposes `adaptiveClearedToWalls` (true only when skippedWallRunCount == 0 AND
+unrelievableNarrowCount == 0 AND !truncatedByBudget) on its result, and the cnc_adaptive
+dispatch branch gates the finish pass on it — suppressed finishes push an honest operator hint
+(clear the remainder, then run a separate contour finish). Pinned by two new dispatch tests
+(the leaking islands fixture now suppresses + hints; the clean fixture still finishes).
+Full suite 16,006 / 0 fail.

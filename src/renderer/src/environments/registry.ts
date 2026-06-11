@@ -55,7 +55,10 @@ export const VCARVE_PRO_OPS: readonly ManufactureOperationKind[] = [
   'cnc_contour',
   'cnc_vcarve',
   'cnc_drill',
-  'cnc_chamfer'
+  'cnc_chamfer',
+  // Stack B v1: 2D adaptive clearing (capped radial engagement + trochoidal
+  // relief) — sketch-contour mode of `cnc_adaptive`, Laguna-first HSM-lite.
+  'cnc_adaptive'
 ] as const
 
 /** FDM slicing + STL export for the Creality K2 Plus. */

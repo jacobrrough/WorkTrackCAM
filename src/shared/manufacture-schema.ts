@@ -240,7 +240,27 @@ export const manufactureOperationSchema = z.object({
     'cnc_contour',
     'cnc_pocket',
     'cnc_drill',
-    /** Adaptive clearing — OpenCAMLib `AdaptiveWaterline` when available; else built-in parallel finish from STL bounds (CAM run reports fallback reason). */
+    /**
+     * Adaptive clearing — TWO modes keyed on geometry (Stack B v1, additive):
+     * - **2D contour mode** (when `contourPoints` is set): capped-radial-engagement
+     *   clearing over the offset-level region model (`generateAdaptiveClearing2dLines`).
+     *   Same base loops as the pocket `offset_spiral` strategy; where the local
+     *   engagement would exceed `maxEngagementMm` (default 40% of tool diameter)
+     *   the engine inserts trochoidal relief loops, and channels narrower than
+     *   ~tool Ø + stepover are cleared fully trochoidally. Honest v1 limits:
+     *   arcs are emitted as fine G1 polylines (NO G2/G3), region-core entry
+     *   loops are cut fully buried (use `entryMode: 'ramp'`), and wall-level
+     *   spikes the engine cannot relieve are SKIPPED with a hint (material
+     *   left — never slotted above the cap). Depth is hard-capped to stock
+     *   thickness. Params: `contourPoints`, optional `islandRings`,
+     *   `maxEngagementMm`, `trochoidRadiusMm` (default cap/2),
+     *   `trochoidStepMm` (default cap/4), plus the pocket family
+     *   (`stepoverMm`, `wallStockMm`, `zStepMm`, `entryMode`, `rampMm`,
+     *   `rampMaxAngleDeg`, `finishPass`).
+     * - **Mesh mode** (no `contourPoints`): OpenCAMLib `AdaptiveWaterline` when
+     *   available; else built-in parallel finish from STL bounds (CAM run
+     *   reports fallback reason). Unchanged legacy path.
+     */
     'cnc_adaptive',
     /** Z-level waterline — OpenCAMLib `Waterline` when `pip install opencamlib` works for your Python; else built-in parallel finish (CAM run reports fallback reason). */
     'cnc_waterline',
@@ -379,9 +399,18 @@ export const manufactureOperationSchema = z.object({
      */
     'cnc_morphing_finish',
     /**
-     * Trochoidal HSM — constant chip-load trochoidal slot clearing for high-speed
+     * Trochoidal HSM — constant chip-load trochoidal clearing for high-speed
      * machining. Reduces tool wear and heat in slotting operations.
-     * Requires Python toolpath engine. Routes to `trochoidal_hsm` strategy.
+     * - **2D contour mode** (when `contourPoints` is set, Stack B v1): alias of
+     *   the `cnc_adaptive` 2D engine with a trochoid-heavy default engagement
+     *   cap (20% of tool diameter instead of 40%) so relief triggers sooner and
+     *   the derived trochoid radius/step shrink with it. Same params + honest
+     *   v1 limits as `cnc_adaptive` 2D mode (G1 polyline arcs, no G2/G3); an
+     *   explicit `maxEngagementMm` always overrides the default.
+     * - **Mesh mode** (no `contourPoints`): the Python `trochoidal_hsm`
+     *   toolpath_engine this kind originally targeted was DELETED in the
+     *   2026-05-27 pivot — mesh jobs fall through to the built-in parallel
+     *   finish (the CAM run reports the fallback). Prefer the 2D contour mode.
      * Params: `toolDiameterMm`, `stepoverMm`, `feedMmMin`, `plungeMmMin`, `safeZMm`, `zPassMm`.
      */
     'cnc_trochoidal_hsm',
@@ -480,6 +509,19 @@ export const manufactureOperationSchema = z.object({
    *   concentric insets of (outer - islands) at `wallStockMm + k*stepover`, traced inside-out
    *   with a safe-Z lift between every loop). Pocket depth is hard-capped to the stock
    *   thickness when `stockBoxZMm` is known (clearing passes AND finish contours).
+   * - adaptive clearing (`cnc_adaptive` / `cnc_trochoidal_hsm` in 2D contour mode, Stack B v1):
+   *   `contourPoints` + optional `islandRings` exactly like pocket, plus
+   *   `maxEngagementMm` (radial engagement cap, mm; default 40% of tool Ø for `cnc_adaptive`,
+   *   20% for `cnc_trochoidal_hsm` -- cut runs whose local bite would exceed the cap get
+   *   trochoidal relief; narrow channels are cleared fully trochoidally),
+   *   `trochoidRadiusMm` (relief circle radius, default cap/2, clamped to 0.8*cap) and
+   *   `trochoidStepMm` (advance per relief circle, default cap/4, clamped to the radius).
+   *   Shares the pocket param family (`stepoverMm`, `wallStockMm`, `zStepMm`, `entryMode`,
+   *   `rampMm`, `rampMaxAngleDeg`, `finishPass`) and the stock-thickness depth hard-cap.
+   *   v1 honesty: relief arcs are fine G1 polylines (no G2/G3); unrelievable geometry is
+   *   skipped with material left + a hint, never slotted above the cap. WITHOUT
+   *   `contourPoints` both kinds keep their legacy mesh path (OCL AdaptiveWaterline /
+   *   parallel-finish fallback).
    * - drill: `drillPoints: Array<[xMm, yMm]>`, optional `retractMm`, `peckMm`, `dwellMs`,
    *   `drillCycle` ('expanded'|'g73'|'g81'|'g82'|'g83')
    *   and `drillDerivedAt` (ISO timestamp)

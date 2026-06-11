@@ -578,6 +578,15 @@ export type Pocket2dGenerateResult = {
   lines: string[]
   /** User-facing CAM notes (e.g. ramp geometry limits). */
   hints: string[]
+  /**
+   * Adaptive clearing only: `true` when the engine cleared every region to its
+   * wall-stock boundary (no skipped spike runs, no unrelievable narrow regions,
+   * no trochoid-budget truncation). The dispatcher gates the wall finish pass on
+   * this -- a finish contour over SKIPPED geometry would cut full-burial into
+   * material the roughing never cleared, exactly the above-the-cap cut the
+   * engine refuses. Absent on the non-adaptive generators.
+   */
+  adaptiveClearedToWalls?: boolean
 }
 
 /** Minimum XY run (mm) for a ramp from `safeZ` to target Z so incline is ≤ `maxAngleDeg` from horizontal. */

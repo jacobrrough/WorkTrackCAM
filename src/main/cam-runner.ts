@@ -446,6 +446,11 @@ function rawPointArrayLength(v: unknown): number {
 /**
  * Validates 2D op geometry before generating toolpaths. Returns user-facing
  * `error` + optional `hint` (also sent over `cam:run` on failure).
+ *
+ * `cnc_adaptive` / `cnc_trochoidal_hsm` sit in the contour family because the
+ * 2D dispatch only ever receives them WITH a `contourPoints` param (the
+ * `runCamPipeline` routing gate); their mesh mode never reaches this
+ * validator, so "geometry missing" here always means a malformed 2D op.
  */
 export function validate2dOperationGeometry(
   operationKind: string | undefined,
@@ -457,6 +462,8 @@ export function validate2dOperationGeometry(
     operationKind === 'cnc_pocket' ||
     operationKind === 'cnc_chamfer' ||
     operationKind === 'cnc_vcarve' ||
+    operationKind === 'cnc_adaptive' ||
+    operationKind === 'cnc_trochoidal_hsm' ||
     operationKind === 'cnc_pcb_isolation' ||
     operationKind === 'cnc_pcb_contour'
   ) {
@@ -983,6 +990,8 @@ export function normalizeAxis4RadialZPassMm(zPassMm: number): number {
 
 /**
  * CAM pipeline: for `cnc_waterline` / `cnc_adaptive` / `cnc_raster` / `cnc_pencil`, try OpenCAMLib → toolpath lines → post.
+ * Stack B v1: `cnc_adaptive` / `cnc_trochoidal_hsm` ops that carry `contourPoints` are routed to the 2D dispatch
+ * (`dispatch2dStrategy` → `generateAdaptiveClearing2dLines`) instead — capped-engagement 2D clearing, no Python.
  * `cnc_pencil` uses the **raster** OCL strategy with a tighter stepover (`resolvePencilStepoverMm`).
  * 4-axis operations are dispatched to `runAxis4` from `./cam-axis4`.
  * Fallbacks: parallel finish (waterline/adaptive) or mesh / ortho raster (raster + pencil); other kinds use parallel finish.
@@ -1056,7 +1065,17 @@ export async function runCamPipeline(initialJob: CamJobConfig): Promise<CamRunRe
       hint: result.hint + guardSuffix
     }
   }
+  // Stack B v1 -- `cnc_adaptive` / `cnc_trochoidal_hsm` route to the 2D
+  // dispatch ONLY when the op carries sketch-derived `contourPoints` (the
+  // honest adaptive-lite engine in `cam-adaptive-clearing.ts`, dispatched by
+  // `cam-runner-2d.ts`). Mesh ops (no contour geometry) fall through to the
+  // legacy OCL AdaptiveWaterline -> parallel-finish chain below, posting
+  // byte-identically to pre-Stack-B output.
+  const adaptive2dGeometry =
+    (job.operationKind === 'cnc_adaptive' || job.operationKind === 'cnc_trochoidal_hsm') &&
+    rawPointArrayLength(job.operationParams?.['contourPoints']) > 0
   if (
+    adaptive2dGeometry ||
     job.operationKind === 'cnc_contour' ||
     job.operationKind === 'cnc_pocket' ||
     job.operationKind === 'cnc_drill' ||

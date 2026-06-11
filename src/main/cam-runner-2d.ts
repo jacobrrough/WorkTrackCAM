@@ -24,6 +24,7 @@
 import { writeFile } from 'node:fs/promises'
 import type { MachineProfile } from '../shared/machine-schema'
 import { applyPlacementToOperationParams2d } from '../shared/cam-placement-transform'
+import { generateAdaptiveClearing2dLines } from './cam-adaptive-clearing'
 import {
   computeNegativeZDepthPasses,
   generateChamfer2dLines,
@@ -80,6 +81,21 @@ function islandRingsParam(v: unknown): [number, number][][] {
   return out
 }
 
+/** Finite positive number param, else undefined (adaptive tuning params). */
+function positiveParamNumber(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
+}
+
+/**
+ * Stack B v1 -- trochoid-heavy default engagement cap for `cnc_trochoidal_hsm`
+ * as a fraction of tool diameter (vs the engine's 0.4 `cnc_adaptive` default).
+ * A tighter cap makes relief trigger sooner AND shrinks the derived trochoid
+ * radius/step defaults (cap/2, cap/4) -- the honest v1 reading of "constant
+ * chip-load trochoidal clearing" now that the Python toolpath_engine the
+ * schema once promised is gone (deleted in the 2026-05-27 pivot).
+ */
+const TROCHOIDAL_HSM_ENGAGEMENT_FRACTION = 0.2
+
 // ---------------------------------------------------------------------------
 // Public dispatch
 // ---------------------------------------------------------------------------
@@ -88,7 +104,10 @@ function islandRingsParam(v: unknown): [number, number][][] {
  * Generate, post-process, and write G-code for a 2D CNC operation.
  *
  * Handles: `cnc_contour`, `cnc_pocket`, `cnc_drill`, `cnc_chamfer`,
- * `cnc_pcb_isolation`, `cnc_pcb_contour`, `cnc_pcb_drill`.
+ * `cnc_vcarve`, `cnc_adaptive` / `cnc_trochoidal_hsm` (contour-geometry mode
+ * only -- `runCamPipeline` routes those two here ONLY when the op carries
+ * `contourPoints`; mesh ops keep the legacy OCL chain), `cnc_pcb_isolation`,
+ * `cnc_pcb_contour`, `cnc_pcb_drill`.
  */
 export async function dispatch2dStrategy(
   job: CamJobConfig,
@@ -255,6 +274,132 @@ export async function dispatch2dStrategy(
         error: 'Pocket toolpath is empty.',
         hint:
           'Common causes: tool diameter too large for the pocket, contour too tight for stepover, invalid ramp settings, self-intersecting or open contours, islands consuming the whole region, or geometry the offsetter cannot offset. Try smaller toolDiameterMm / stepover or simplify contourPoints.'
+      }
+    }
+  } else if (job.operationKind === 'cnc_adaptive' || job.operationKind === 'cnc_trochoidal_hsm') {
+    // Stack B v1 -- ADAPTIVE CLEARING (capped radial engagement) over the
+    // Wave-3i offset-level region model, with trochoidal relief where the
+    // local bite would exceed the engagement cap. `runCamPipeline` routes
+    // these two kinds here ONLY when the op carries sketch-derived
+    // `contourPoints`; mesh-driven ops keep the legacy OCL AdaptiveWaterline
+    // chain untouched. Mirrors the cnc_pocket contract: placement transform
+    // (already applied above), islandRings, stock depth hard-cap, multi-depth
+    // via zStepMm, and the cheap final finish-contour reuse.
+    const contour = point2dList(p['contourPoints'])
+    const islandRings = islandRingsParam(p['islandRings'])
+    const wallStockMm = typeof p['wallStockMm'] === 'number' && Number.isFinite(p['wallStockMm']) ? Math.max(0, p['wallStockMm']) : 0
+    const zStepMm = typeof p['zStepMm'] === 'number' && Number.isFinite(p['zStepMm']) ? Math.max(0.01, p['zStepMm']) : undefined
+    const entryMode = p['entryMode'] === 'ramp' ? 'ramp' : 'plunge'
+    const rampMm = typeof p['rampMm'] === 'number' && Number.isFinite(p['rampMm']) ? Math.max(0.01, p['rampMm']) : undefined
+    const rampMaxAngleDeg =
+      typeof p['rampMaxAngleDeg'] === 'number' && Number.isFinite(p['rampMaxAngleDeg'])
+        ? p['rampMaxAngleDeg']
+        : undefined
+    const finishPass = p['finishPass'] !== false
+    // Same fallback diameter the OCL config writer uses for tool-less jobs.
+    const toolDiameterMm = job.toolDiameterMm ?? 6
+    // `cnc_trochoidal_hsm` is the SAME engine with a trochoid-heavy default
+    // cap (TROCHOIDAL_HSM_ENGAGEMENT_FRACTION of tool diameter); an explicit
+    // `maxEngagementMm` param always wins for both kinds.
+    const maxEngagementMm =
+      positiveParamNumber(p['maxEngagementMm']) ??
+      (job.operationKind === 'cnc_trochoidal_hsm'
+        ? TROCHOIDAL_HSM_ENGAGEMENT_FRACTION * toolDiameterMm
+        : undefined)
+    const trochoidRadiusMm = positiveParamNumber(p['trochoidRadiusMm'])
+    const trochoidStepMm = positiveParamNumber(p['trochoidStepMm'])
+    // G-code safety: depth HARD-CAPPED to the stock thickness (WCS Z0 = stock
+    // top) -- the same contract as cnc_pocket / cnc_vcarve. stockBoxZMm is
+    // ALSO forwarded to the engine (belt + braces; after this pre-cap the
+    // engine's own cap is a no-op and emits no duplicate hint).
+    const adaptiveStockThickness =
+      typeof job.stockBoxZMm === 'number' && Number.isFinite(job.stockBoxZMm) && job.stockBoxZMm > 0
+        ? job.stockBoxZMm
+        : undefined
+    const adaptiveZCapped = adaptiveStockThickness != null && job.zPassMm < -adaptiveStockThickness
+    const adaptiveZPassMm = adaptiveZCapped && adaptiveStockThickness != null ? -adaptiveStockThickness : job.zPassMm
+    const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
+    const adaptive = generateAdaptiveClearing2dLines({
+      outerRing: contour,
+      islandRings,
+      toolDiameterMm,
+      stepoverMm: job.stepoverMm,
+      maxEngagementMm,
+      trochoidRadiusMm,
+      trochoidStepMm,
+      zPassMm: adaptiveZPassMm,
+      zStepMm,
+      feedMmMin: job.feedMmMin,
+      plungeMmMin: job.plungeMmMin,
+      safeZMm: job.safeZMm,
+      wallStockMm,
+      entryMode,
+      rampMm,
+      rampMaxAngleDeg,
+      stockBoxZMm: adaptiveStockThickness
+    })
+    lines = adaptive.lines
+    pocketResultHints = adaptive.hints
+    if (adaptiveZCapped && adaptiveStockThickness != null) {
+      pocketResultHints = [
+        `Adaptive clearing: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${adaptiveStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
+        ...pocketResultHints
+      ]
+    }
+    if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls !== true) {
+      // The engine SKIPPED or TRUNCATED some geometry (spike runs, unrelievable
+      // narrow regions, or the trochoid budget) -- material was deliberately
+      // left at the walls there. A finish contour would trace the FULL wall at
+      // final depth, cutting full-burial into that uncleared stock: exactly the
+      // above-the-cap slot the engine refuses to make. Suppress it honestly.
+      pocketResultHints = [
+        ...pocketResultHints,
+        'Finish pass suppressed: adaptive clearing left material in skipped/truncated regions, so the wall trace would cut full-burial into uncleared stock. Clear the remainder (smaller tool, larger trochoid budget, or a dedicated narrow-channel pass), then run a separate contour finish.'
+      ]
+    }
+    if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls === true) {
+      // Cheap finish reuse (cnc_pocket contract): one wall contour at the
+      // final (capped) depth, then a bare trace around each island ring.
+      // Every pass begins with its own safe-Z lift (generateContour2dLines
+      // lifts first), so pass transitions are never at-depth rapids.
+      // INTENTIONAL differences from cnc_pocket: the finish is gated on a
+      // non-empty clearing body AND on the engine's adaptiveClearedToWalls
+      // flag -- when anything was skipped/truncated, the wall trace would be
+      // a fully-buried slot at depth, the exact above-the-cap cut this engine
+      // exists to prevent (see the suppression branch above).
+      lines.push(
+        ...generateContour2dLines({
+          contourPoints: contour,
+          zPassMm: adaptiveZPassMm,
+          feedMmMin: job.feedMmMin,
+          plungeMmMin: job.plungeMmMin,
+          safeZMm: job.safeZMm,
+          contourSide,
+          leadInMm,
+          leadOutMm,
+          leadInMode,
+          leadOutMode
+        })
+      )
+      for (const ring of islandRings) {
+        lines.push(
+          ...generateContour2dLines({
+            contourPoints: ring,
+            zPassMm: adaptiveZPassMm,
+            feedMmMin: job.feedMmMin,
+            plungeMmMin: job.plungeMmMin,
+            safeZMm: job.safeZMm,
+            contourSide
+          })
+        )
+      }
+    }
+    if (lines.length === 0) {
+      return {
+        ok: false,
+        error: 'Adaptive clearing toolpath is empty.',
+        hint:
+          'Common causes: tool diameter or stepover too large for the region, wall stock consuming the whole pocket, islands covering the clearable area, or open/self-intersecting contourPoints. Reduce stepoverMm / wallStockMm, use a smaller tool, or simplify the loop.'
       }
     }
   } else if (job.operationKind === 'cnc_chamfer') {

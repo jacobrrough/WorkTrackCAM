@@ -400,7 +400,7 @@ export function ManufactureOperationList({
                   Mesh &gt; G-code
                 </span>
               ) : null}
-              {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
+              {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
                 <span
                   className={`status-chip status-chip--${
                     contourDriftState(op, contourCandidates) === 'changed' || contourDriftState(op, contourCandidates) === 'missing'
@@ -432,13 +432,13 @@ export function ManufactureOperationList({
                   <option value="cnc_pocket">CNC pocket</option>
                   <option value="cnc_vcarve">CNC V-carve (medial-axis, variable depth)</option>
                   <option value="cnc_drill">CNC drill</option>
-                  <option value="cnc_adaptive">CNC adaptive (OCL AdaptiveWaterline or fallback)</option>
+                  <option value="cnc_adaptive">CNC adaptive clearing (2D trochoidal-relief or OCL 3D)</option>
                   <option value="cnc_waterline">CNC waterline (OCL Z-level or fallback)</option>
                   <option value="cnc_raster">CNC raster (OCL or mesh / bounds)</option>
                   <option value="cnc_pencil">CNC pencil (tight OCL raster / rest cleanup)</option>
                   <option value="cnc_spiral_finish">CNC spiral finish</option>
                   <option value="cnc_morphing_finish">CNC morphing finish</option>
-                  <option value="cnc_trochoidal_hsm">CNC trochoidal HSM</option>
+                  <option value="cnc_trochoidal_hsm">CNC trochoidal HSM (2D trochoid-heavy or fallback)</option>
                   <option value="cnc_steep_shallow">CNC steep &amp; shallow</option>
                   <option value="cnc_scallop_finish">CNC scallop finish</option>
                   <option value="cnc_4axis_roughing">4-axis roughing (rotary)</option>
@@ -875,12 +875,65 @@ export function ManufactureOperationList({
                 </label>
               </div>
             ) : null}
-            {op.kind === 'cnc_adaptive' ? (
+            {op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
+              <div className="row row--mt-xs">
+                <label title="Radial engagement cap (mm). Cut runs whose local bite into uncleared material would exceed this get trochoidal relief loops; channels narrower than ~tool diameter + stepover are cleared fully trochoidally. Default 40% of tool diameter (20% for trochoidal HSM).">
+                  Max engagement (mm)
+                  <input
+                    type="number"
+                    min={0.05}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'maxEngagementMm')}
+                    onChange={(e) => onSetCutParam(i, 'maxEngagementMm', e.target.value, 'positive')}
+                    placeholder={op.kind === 'cnc_trochoidal_hsm' ? '20% of tool diameter' : '40% of tool diameter'}
+                  />
+                </label>
+                <label title="Trochoid relief circle radius (mm). Default cap/2; clamped to 80% of the engagement cap so relief passes stay under the cap.">
+                  Trochoid radius (mm)
+                  <input
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'trochoidRadiusMm')}
+                    onChange={(e) => onSetCutParam(i, 'trochoidRadiusMm', e.target.value, 'positive')}
+                    placeholder="cap / 2"
+                  />
+                </label>
+                <label title="Forward advance per trochoid relief circle (mm). Default cap/4; clamped to the trochoid radius. Smaller = gentler bite, longer program.">
+                  Trochoid step (mm)
+                  <input
+                    type="number"
+                    min={0.05}
+                    step={0.05}
+                    value={cutParamFieldValue(op, 'trochoidStepMm')}
+                    onChange={(e) => onSetCutParam(i, 'trochoidStepMm', e.target.value, 'positive')}
+                    placeholder="cap / 4"
+                  />
+                </label>
+              </div>
+            ) : null}
+            {op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               <p className="msg manufacture-op-hint">
-                With <strong>OpenCAMLib</strong> installed for your Python, <strong>Generate CAM</strong> runs{' '}
-                <strong>AdaptiveWaterline</strong> on the STL and posts through your machine template; otherwise it
-                falls back to the built-in parallel finish from mesh bounds. G-code is{' '}
-                <strong>unverified</strong> until you check post, units, and clearances (<code>docs/MACHINES.md</code>).
+                <strong>Adaptive clearing (adaptive-lite v1):</strong> with <strong>contourPoints</strong> set (derive
+                from sketch below), the 2D engine clears concentric offset levels and inserts <strong>trochoidal
+                relief</strong> wherever the radial engagement would exceed the cap; over-narrow channels are cut fully
+                trochoidally. Relief arcs are emitted as fine <strong>G1 line segments</strong> &mdash; no G2/G3 in v1
+                &mdash; region-core entry loops are cut fully buried (prefer ramp entry), and unrelievable spots are{' '}
+                <strong>skipped with material left</strong> + a hint, never slotted above the cap. Depth is hard-capped
+                to stock thickness; Stepover (mm) above sets the steady-state engagement.{' '}
+                {op.kind === 'cnc_trochoidal_hsm' ? (
+                  <>
+                    Trochoidal HSM is the same engine with a tighter <strong>20%</strong> default cap; without
+                    contourPoints it falls back to the built-in parallel finish (the Python engine it once targeted was
+                    removed).
+                  </>
+                ) : (
+                  <>
+                    Without contourPoints the op runs the legacy STL path (OpenCAMLib <strong>AdaptiveWaterline</strong>{' '}
+                    or the parallel-finish fallback).
+                  </>
+                )}{' '}
+                G-code is <strong>unverified</strong> until post/machine checks (<code>docs/MACHINES.md</code>).
               </p>
             ) : null}
             {op.kind === 'cnc_waterline' ? (
@@ -1221,7 +1274,7 @@ export function ManufactureOperationList({
                 <code>docs/MACHINES.md</code>).
               </p>
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               <div className="row">
                 <label className="label--wide-420">
                   contourPoints JSON (Array of [x,y] mm)
@@ -1258,13 +1311,13 @@ export function ManufactureOperationList({
                 </button>
               </div>
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               (() => {
                 const s = contourPointsStats(op.params?.['contourPoints'])
                 return s ? <p className="msg msg--muted">{s}</p> : null
               })()
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               (() => {
                 const sourceId = typeof op.params?.['contourSourceId'] === 'string' ? op.params['contourSourceId'] : ''
                 const sig = typeof op.params?.['contourSourceSignature'] === 'string' ? op.params['contourSourceSignature'] : ''
@@ -1293,7 +1346,7 @@ export function ManufactureOperationList({
                 return null
               })()
             ) : null}
-            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' ? (
+            {op.kind === 'cnc_contour' || op.kind === 'cnc_pocket' || op.kind === 'cnc_vcarve' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               (() => {
                 const derivedAt = typeof op.params?.['contourDerivedAt'] === 'string' ? op.params['contourDerivedAt'] : ''
                 if (!derivedAt) return null

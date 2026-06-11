@@ -22,8 +22,9 @@
  * Three-machine relevance:
  *   - **Laguna Swift 5x10** (DIRECT): registered as the only `vcarve_pro`
  *     machine; default machine for the wood-routing workflow; ops set is
- *     `cnc_pocket / cnc_contour / cnc_drill / cnc_chamfer` only -- the
- *     2D/2.5D Laguna sweet spot.
+ *     `cnc_pocket / cnc_contour / cnc_vcarve / cnc_drill / cnc_chamfer /
+ *     cnc_adaptive` only -- the 2D/2.5D Laguna sweet spot (Stack B added the
+ *     2D adaptive-clearing mode of `cnc_adaptive`).
  *   - **Creality K2 Plus** (DIRECT): registered as the only `creality_print`
  *     machine; ops set is `fdm_slice / export_stl` only; flagged as
  *     `requiresCuraEngine: true` so the splash gates CuraEngine availability.
@@ -284,9 +285,9 @@ describe('D. ENVIRONMENT_LIST -- ordering and completeness', () => {
 // E. Op-kind invariants per environment
 // ---------------------------------------------------------------------------
 describe('E. Op-kind sets per environment', () => {
-  it('VCARVE_PRO_OPS is the 5-op Laguna 2D/2.5D set (incl. true V-carve)', () => {
+  it('VCARVE_PRO_OPS is the 6-op Laguna 2D/2.5D set (incl. true V-carve + Stack B adaptive clearing)', () => {
     expect([...VCARVE_PRO_OPS].sort()).toEqual(
-      ['cnc_pocket', 'cnc_contour', 'cnc_vcarve', 'cnc_drill', 'cnc_chamfer'].sort()
+      ['cnc_pocket', 'cnc_contour', 'cnc_vcarve', 'cnc_drill', 'cnc_chamfer', 'cnc_adaptive'].sort()
     )
   })
 
