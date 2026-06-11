@@ -30,6 +30,7 @@ import {
   type SketchTrimEdgeRef
 } from '../../shared/sketch-profile'
 import { niceStepMm, screenToWorld } from './sketch2d-canvas-coords'
+import { entityOutlineWorld } from './sketch2d-hit-test'
 import type { SketchTool } from './Sketch2DCanvas'
 
 const CANVAS_SLOT_SEGMENTS = 24
@@ -73,6 +74,12 @@ export interface DrawSketch2DParams {
   splineCpDraft: [number, number][]
   xformDraft: [number, number][]
   xformSelectionIds: string[]
+
+  // Sketch S1 — select-tool rendering (optional + additive; absent = no change)
+  /** Ids of selected entities — re-stroked with the selection highlight. */
+  selectedEntityIds?: ReadonlySet<string>
+  /** Live grid-snapped drag offset (mm) — selected outlines ghost at this offset. */
+  selectionGhostOffsetMm?: [number, number] | null
 
   // Drag state
   drag:
@@ -128,6 +135,8 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     splineCpDraft,
     xformDraft,
     xformSelectionIds,
+    selectedEntityIds,
+    selectionGhostOffsetMm,
     drag,
     constraintPickActive,
     constraintSegmentPickActive,
@@ -577,6 +586,40 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     }
     ctx.strokeStyle = '#9333ea'
     ctx.lineWidth = 2
+  }
+
+  // ── Sketch S1 — selected-entity highlight + drag-move ghost (select tool) ──
+  // Mirrors the existing highlight idiom: solid re-stroke in the selection
+  // green (same #4ade80 the xform vertex selection uses, cutter-weight 3 px);
+  // the drag ghost re-strokes the SAME outlines dashed at the snapped offset,
+  // so the preview always lands exactly where the committed move will.
+  if (selectedEntityIds && selectedEntityIds.size > 0) {
+    ctx.save()
+    ctx.lineWidth = 3
+    ctx.strokeStyle = '#4ade80'
+    ctx.fillStyle = 'transparent'
+    for (const e of entities) {
+      if (!selectedEntityIds.has(e.id)) continue
+      const outline = entityOutlineWorld(e, points)
+      if (!outline) continue
+      drawShape(outline.pts, outline.closed)
+    }
+    const ghost = selectionGhostOffsetMm
+    if (ghost && (ghost[0] !== 0 || ghost[1] !== 0)) {
+      ctx.setLineDash([4, 4])
+      ctx.strokeStyle = '#86efac'
+      for (const e of entities) {
+        if (!selectedEntityIds.has(e.id)) continue
+        const outline = entityOutlineWorld(e, points)
+        if (!outline) continue
+        drawShape(
+          outline.pts.map(([gx, gy]) => [gx + ghost[0], gy + ghost[1]] as [number, number]),
+          outline.closed
+        )
+      }
+      ctx.setLineDash([])
+    }
+    ctx.restore()
   }
 
   ctx.fillStyle = '#c4b5fd'

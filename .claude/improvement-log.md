@@ -18378,3 +18378,40 @@ comment cannot silently disappear); stale "6000–15000 band" prose fixed in bot
 **G-code safety:** skill walked — machines covered: Carvera 3-axis (the change), Carvera
 4-axis + Laguna + K2 (proven unchanged); resources/** byte-identical; the living
 carvera-3axis.md reference gains the default-resolution note.
+
+## Cycle 246 — Sketch S1: direct-manipulation core (USER PRIORITY: sketching) (2026-06-11)
+
+**Focus:** the user's test-drive steer — "looks and feels good BUT we need to prioritize
+sketching." Audit showed the feel gap is direct manipulation, not missing tools: no canvas
+click-select (checkbox list only), no Delete/drag-move, NO undo/redo on the live path, grid
+snap only. S1 closes the first three. One commit.
+
+**Baseline → result:** 16,070 → **16,172 pass / 1 skip / 0 fail** (+102); tsc clean; the
+absent-props canvas markup is BYTE-IDENTICAL (string-equality pinned); MvpSketchCanvas
+untouched; the 3e draw/persist round-trip + 3n cursor-coords pins all green.
+
+**What landed:** (1) **Click-to-select** — new pure `sketch2d-hit-test.ts` (nearest-outline
+pick over every entity kind via the SAME sketch-profile tessellation CAM derives from;
+outline-not-fill; ties → topmost; 8px aperture scaled by zoom), a new default 'select' tool,
+Fusion/Figma gesture model (press-unselected picks immediately; press-selected defers so
+drag-the-group keeps selection; Shift additive; Shift-over-empty still pans). Selected
+entities re-stroke with the xform highlight idiom. (2) **Delete + drag-move** — Delete/
+Backspace (canvas-focused) delete with orphan-point cleanup; drags ghost at the SAME
+`snappedDragDelta` the commit uses and emit ONE move per drag; shared points move exactly
+once (pinned). (3) **Real undo/redo** — pure `sketch-history.ts` snapshot ring (limit 100,
+branch truncation, coalescing) owned by SketchSurface; EVERY mutation path (draw, Text, DXF,
+offset/boolean/array, delete, move) records; Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z + buttons with
+disabled states. (4) Canvas selection is now the source of truth feeding the
+Offset/Boolean/Array dialogs; the checkbox list remains as a mirror readout.
+
+**Verification:** independent hit-test probe 23/23 (deleted after); shared-point integrity
+semantic decided + pinned (shared points move WITH the selection, applied exactly once);
+e2e draw→pick→move→undo→redo→delete→undo data round-trip with reference-identity checks.
+
+**Honest residuals (S2/S3 backlog + small fixes):** DXF-import undo push can be skipped by a
+React flush race (import itself unaffected — fix in S2); history ring is per-mount (stage
+switch drops it); two quick drags of the same selection within 1500 ms coalesce to one undo
+step (pinned, deliberate); pointer-leave cancels an in-flight drag (no pointer capture);
+marquee select, node/vertex editing, object snaps (endpoint/midpoint/center/intersection),
+and tool hotkeys are S2/S3 by design. Hands-on pass owed: the pick/drag FEEL needs the
+operator's hands (node-SSR cannot click).

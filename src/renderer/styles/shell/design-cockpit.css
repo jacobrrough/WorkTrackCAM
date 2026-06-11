@@ -637,6 +637,32 @@
   background: var(--accent);
   color: var(--on-accent, #fff);
 }
+/* Sketch S1 -- Undo / Redo / Delete history controls. Neutral chips (the accent
+   stays on the create/edit launchers); disabled = nothing to step to / nothing
+   selected, dimmed without layout shift. */
+.sketch-surface__history-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg1);
+  color: var(--txt0);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sketch-surface__history-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.sketch-surface__history-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sketch-surface__history-btn--delete:not(:disabled) {
+  border-color: var(--danger, #c0392b);
+  color: var(--danger, #c0392b);
+}
 /* The edit (offset/boolean/array) overlay floats over the top-RIGHT of the canvas
    so it doesn't collide with the top-left Text dialog. It stacks the closed-loop
    selection list above the active dialog. */

@@ -6,6 +6,12 @@ import {
   type SketchTrimEdgeRef
 } from '../../shared/sketch-profile'
 import { clientToCanvasLocal, distSqPointSegment, screenToWorld, snap } from './sketch2d-canvas-coords'
+import {
+  dragExceedsThreshold,
+  hitTestSketchEntities,
+  selectPickToleranceMm,
+  snappedDragDelta
+} from './sketch2d-hit-test'
 import { drawSketch2D, type ConstraintPickHit } from './sketch2d-draw'
 import {
   categoriseSolveResult,
@@ -59,6 +65,7 @@ import {
 } from './sketch2d-event-handlers'
 
 export type SketchTool =
+  | 'select'
   | 'point'
   | 'polygon'
   | 'polyline'
@@ -125,6 +132,23 @@ type Props = {
   sketchScaleFactor?: number
   /** Shown at top-left (e.g. sketch plane name). */
   planeLabel?: string
+  /**
+   * Sketch S1 — ids of the currently-selected entities (owned upstream by the
+   * surface/session). The canvas re-strokes them with the selection highlight
+   * and ghosts them during a drag-move. Optional + additive: absent keeps
+   * every legacy mount byte-identical.
+   */
+  selectedEntityIds?: ReadonlySet<string>
+  /**
+   * Sketch S1 — select-tool pick. `id` is the hit entity (topmost within the
+   * ~8 px aperture) or `null` for an empty click; `additive` is Shift. The
+   * canvas never mutates selection state itself.
+   */
+  onEntityPick?: (id: string | null, additive: boolean) => void
+  /** Sketch S1 — ONE grid-snapped (dx, dy) per completed drag-move of the selection. */
+  onMoveSelected?: (dxMm: number, dyMm: number) => void
+  /** Sketch S1 — Delete/Backspace pressed with a non-empty selection (canvas focused). */
+  onDeleteSelected?: () => void
 }
 
 const CROSSHAIR_TOOLS: ReadonlySet<SketchTool> = new Set([
@@ -139,8 +163,15 @@ function getCanvasCursor(
   constraintHover: ConstraintPickHit | null,
   constraintEntityPickActive: boolean,
   onConstraintEntityPick: ((entityId: string) => void) | undefined,
-  entityHoverId: string | null
+  entityHoverId: string | null,
+  selectActive: boolean,
+  selectHoverId: string | null,
+  selectDragging: boolean
 ): string | undefined {
+  if (selectActive) {
+    if (selectDragging) return 'grabbing'
+    return selectHoverId ? 'move' : 'default'
+  }
   if (CROSSHAIR_TOOLS.has(activeTool)) return 'crosshair'
   if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
     return constraintHover ? 'pointer' : 'crosshair'
@@ -172,7 +203,11 @@ export function Sketch2DCanvas({
   onCursorWorld,
   sketchRotateDeg = 0,
   sketchScaleFactor = 1,
-  planeLabel
+  planeLabel,
+  selectedEntityIds,
+  onEntityPick,
+  onMoveSelected,
+  onDeleteSelected
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const { entities, points } = design
@@ -234,6 +269,70 @@ export function Sketch2DCanvas({
   const panRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const [constraintHover, setConstraintHover] = useState<ConstraintPickHit | null>(null)
   const [entityHoverId, setEntityHoverId] = useState<string | null>(null)
+
+  // ── Sketch S1 — select-tool state (interactions only run when the pick props are wired) ──
+  /** In-flight press/drag gesture on the selection (select tool). */
+  const selectDragRef = useRef<{
+    startWorld: [number, number]
+    pickedId: string
+    additive: boolean
+    /** Pick already emitted on press (fresh pick) — release without movement emits nothing more. */
+    pickedOnDown: boolean
+    moved: boolean
+  } | null>(null)
+  /** Live grid-snapped ghost offset while drag-moving the selection (render-only). */
+  const [selectGhostOffset, setSelectGhostOffset] = useState<[number, number] | null>(null)
+  /** Entity under the cursor in select mode (cursor affordance only). */
+  const [selectHoverId, setSelectHoverId] = useState<string | null>(null)
+  const selectedCount = selectedEntityIds?.size ?? 0
+
+  useEffect(() => {
+    if (activeTool !== 'select') {
+      selectDragRef.current = null
+      setSelectGhostOffset(null)
+      setSelectHoverId(null)
+    }
+  }, [activeTool])
+
+  /** Press on an entity in select mode: emit the pick when it changes the selection, and arm a drag. */
+  const beginSelectGesture = (entityId: string, startWorld: [number, number], additive: boolean): void => {
+    const alreadySelected = !!selectedEntityIds?.has(entityId)
+    let pickedOnDown = false
+    if (!alreadySelected) {
+      onEntityPick?.(entityId, additive)
+      pickedOnDown = true
+    }
+    selectDragRef.current = { startWorld, pickedId: entityId, additive, pickedOnDown, moved: false }
+    setSelectGhostOffset(null)
+  }
+
+  /** Select-mode keys — bound to the CANVAS element (focus-scoped), never to window. */
+  const onSelectKeyDown = (ev: React.KeyboardEvent<HTMLCanvasElement>): void => {
+    if (ev.key === 'Escape') {
+      if (selectDragRef.current) {
+        // Cancel an in-flight drag without emitting a move.
+        selectDragRef.current = null
+        setSelectGhostOffset(null)
+        ev.preventDefault()
+        ev.stopPropagation()
+        return
+      }
+      if (selectedCount > 0) {
+        onEntityPick?.(null, false)
+        ev.preventDefault()
+        ev.stopPropagation()
+      }
+      return
+    }
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedCount > 0) {
+      // stopPropagation: the surface ALSO listens for Delete at window level
+      // (its history wiring); a focused canvas owns the keystroke so the two
+      // paths never double-dispatch. Unhandled keys (Ctrl+Z/Y) still bubble.
+      onDeleteSelected?.()
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+  }
 
   const viewportSize = useCallback((): { w: number; h: number } => {
     const c = ref.current
@@ -461,6 +560,8 @@ export function Sketch2DCanvas({
       splineCpDraft,
       xformDraft,
       xformSelectionIds,
+      selectedEntityIds,
+      selectionGhostOffsetMm: selectGhostOffset,
       drag,
       constraintPickActive,
       constraintSegmentPickActive,
@@ -501,6 +602,8 @@ export function Sketch2DCanvas({
     splineCpDraft,
     xformDraft,
     xformSelectionIds,
+    selectedEntityIds,
+    selectGhostOffset,
     sketchRotateDeg,
     sketchScaleFactor,
     planeLabel,
@@ -637,6 +740,23 @@ export function Sketch2DCanvas({
     const c = ref.current
     if (!c) return
     if (ev.button === 1 || (ev.button === 0 && ev.shiftKey)) {
+      // Sketch S1 — in select mode, Shift+left over an entity is an ADDITIVE
+      // pick (CAD convention), not a pan. Shift+left on empty canvas still
+      // pans, and middle-drag always pans.
+      if (activeTool === 'select' && onEntityPick && ev.button === 0) {
+        const [slx, sly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
+        const sdpr = Math.max(1, window.devicePixelRatio || 1)
+        const sraw = screenToWorld(slx, sly, c.width, c.height, scale * sdpr, ox, oy)
+        const sHit = hitTestSketchEntities({
+          design,
+          worldPoint: sraw,
+          toleranceMm: selectPickToleranceMm(scale)
+        })
+        if (sHit) {
+          beginSelectGesture(sHit.entityId, [sraw[0], sraw[1]], true)
+          return
+        }
+      }
       panRef.current = { sx: ev.clientX, sy: ev.clientY, ox, oy }
       return
     }
@@ -662,6 +782,25 @@ export function Sketch2DCanvas({
       const action = handleConstraintPickClick(design, raw[0], raw[1], scale, 'entity', probeConstraintPick, false, false)
       if (action.tag === 'entityPick') onConstraintEntityPick(action.entityId)
       else onConstraintPickMiss?.()
+      return
+    }
+
+    // Sketch S1 — select tool: resolve the pick at the RAW (unsnapped) click
+    // location (picks are exact, like constraint picks); a press on an entity
+    // arms a drag-move of the selection. Empty click clears (Shift handled in
+    // the pan arm above). Unwired mounts do nothing.
+    if (activeTool === 'select') {
+      if (!onEntityPick) return
+      const hit = hitTestSketchEntities({
+        design,
+        worldPoint: raw,
+        toleranceMm: selectPickToleranceMm(scale)
+      })
+      if (hit) {
+        beginSelectGesture(hit.entityId, [raw[0], raw[1]], false)
+      } else {
+        onEntityPick(null, false)
+      }
       return
     }
 
@@ -924,6 +1063,28 @@ export function Sketch2DCanvas({
     // up to the shell StatusBar (pass-through only; nothing recomputed).
     onCursorWorld?.(p)
 
+    // Sketch S1 — live drag-move of the selection (select tool): track the
+    // grid-snapped ghost offset locally; the single onMoveSelected emit
+    // happens on release. Hover bookkeeping is suppressed mid-drag.
+    const sd = selectDragRef.current
+    if (sd) {
+      if (!sd.moved && dragExceedsThreshold(sd.startWorld, raw, scale)) sd.moved = true
+      if (sd.moved) {
+        setSelectGhostOffset(snappedDragDelta(sd.startWorld, raw, gridMm))
+      }
+      return
+    }
+    if (activeTool === 'select' && onEntityPick) {
+      const hover = hitTestSketchEntities({
+        design,
+        worldPoint: raw,
+        toleranceMm: selectPickToleranceMm(scale)
+      })
+      setSelectHoverId(hover?.entityId ?? null)
+    } else {
+      setSelectHoverId((prev) => (prev === null ? prev : null))
+    }
+
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
       setConstraintHover(probeConstraintPick(raw[0], raw[1]))
     } else {
@@ -974,6 +1135,25 @@ export function Sketch2DCanvas({
       panRef.current = null
     }
     if (ev.button !== 0) return
+    // Sketch S1 — finish a select gesture: a real drag emits ONE grid-snapped
+    // move (a single undoable step upstream); an in-place release on an
+    // already-selected entity emits the toggle/replace pick instead.
+    const sd = selectDragRef.current
+    if (sd) {
+      selectDragRef.current = null
+      setSelectGhostOffset(null)
+      const c = ref.current
+      if (sd.moved && c) {
+        const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
+        const dpr = Math.max(1, window.devicePixelRatio || 1)
+        const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
+        const [dxMm, dyMm] = snappedDragDelta(sd.startWorld, raw, gridMm)
+        if (dxMm !== 0 || dyMm !== 0) onMoveSelected?.(dxMm, dyMm)
+      } else if (!sd.moved && !sd.pickedOnDown) {
+        onEntityPick?.(sd.pickedId, sd.additive)
+      }
+      return
+    }
     if (drag?.kind === 'rect') {
       finalizeRectDrag()
     }
@@ -1107,6 +1287,8 @@ export function Sketch2DCanvas({
         width={width}
         height={height}
         className="sketch-canvas"
+        tabIndex={activeTool === 'select' && onEntityPick ? 0 : undefined}
+        onKeyDown={activeTool === 'select' && onEntityPick ? onSelectKeyDown : undefined}
         style={{
           cursor: getCanvasCursor(
             activeTool,
@@ -1116,7 +1298,10 @@ export function Sketch2DCanvas({
             constraintHover,
             constraintEntityPickActive,
             onConstraintEntityPick,
-            entityHoverId
+            entityHoverId,
+            activeTool === 'select' && !!onEntityPick,
+            selectHoverId,
+            selectGhostOffset !== null
           )
         }}
         onWheel={onWheel}
@@ -1127,6 +1312,10 @@ export function Sketch2DCanvas({
           panRef.current = null
           // Wave 3n — the source goes inactive; blank the StatusBar read-out.
           onCursorWorld?.(null)
+          // Sketch S1 — cancel any in-flight select drag (no move emitted).
+          selectDragRef.current = null
+          setSelectGhostOffset(null)
+          setSelectHoverId(null)
           setArcHover(null)
           setLineHover(null)
           setCircle2ptHover(null)
@@ -1282,6 +1471,37 @@ export function Sketch2DCanvas({
           </label>
           <button type="button" className="primary sketch-numeric-popover__apply" onClick={finalizeCircleDrag}>
             Place
+          </button>
+        </div>
+      )}
+      {activeTool === 'select' && onEntityPick && (
+        <div
+          className="sketch-toolbar sketch-select-toolbar"
+          data-testid="sketch-select-toolbar"
+          data-selected-count={selectedCount}
+        >
+          <span className="msg">
+            {selectedCount > 0
+              ? `${selectedCount} selected · drag to move · Shift+click adds · Delete removes · Esc clears`
+              : 'Select: click an entity · Shift+click adds · drag a selected entity to move it.'}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            data-testid="sketch-select-delete"
+            onClick={() => onDeleteSelected?.()}
+            disabled={selectedCount === 0}
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            data-testid="sketch-select-clear"
+            onClick={() => onEntityPick(null, false)}
+            disabled={selectedCount === 0}
+          >
+            Clear selection
           </button>
         </div>
       )}

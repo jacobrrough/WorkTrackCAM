@@ -43,8 +43,19 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import type { DesignFileV2, SketchEntity } from '../../shared/design-schema'
+import {
+  isTypableKeyboardTarget,
+  matchesRedo,
+  matchesUndo
+} from '../../shared/app-keyboard-shortcuts'
 import { Sketch2DCanvas, type SketchTool } from './Sketch2DCanvas'
 import { sketchToolForDesignCommand } from './design-command-map'
+import {
+  createSketchHistory,
+  deleteSelectedSketchEntities,
+  translateSelectedSketchEntities,
+  type SketchHistory
+} from './sketch-history'
 import { TextDialog, type FontBufferLoader } from './feature-dialogs/TextDialog'
 import {
   ArraySketchDialog,
@@ -57,6 +68,38 @@ import { closedLoopEntityIds } from '../../shared/sketch-boolean-offset'
 
 /** Catalog id of the Text command — arming it opens the Text dialog on this surface. */
 export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
+
+/**
+ * Sketch S1 — the selection bridge this surface supplies to the canvas.
+ *
+ * INTERFACE CONTRACT with the direct-manipulation `Sketch2DCanvas` work: the
+ * canvas (a) consumes `selectedEntityIds` to highlight selected vectors,
+ * (b) emits `onEntityPick(id, additive)` from its click hit-test (`null` id =
+ * clicked empty space → clear), (c) emits `onMoveSelected(dxMm, dyMm)` while
+ * dragging the selection (the surface applies the delta + coalesces history),
+ * and (d) emits `onDeleteSelected()` for its own delete gesture. The props are
+ * passed via an object spread, so this surface stays compilable (and the
+ * extras inert at runtime) until the canvas declares them — the prop NAMES
+ * below are the contract and are pinned by the S1 history test.
+ */
+export interface SketchSurfaceCanvasBridge {
+  /** Source of truth lives in SketchSurface (`selectedEntityIds` state). */
+  readonly selectedEntityIds: ReadonlySet<string>
+  /** Click hit-test result. `additive` = Ctrl/Shift pick (toggle). `null` clears. */
+  readonly onEntityPick: (id: string | null, additive: boolean) => void
+  /** Drag delta in sketch-plane mm, applied to the live selection. */
+  readonly onMoveSelected: (dxMm: number, dyMm: number) => void
+  /** Canvas-side delete gesture for the current selection. */
+  readonly onDeleteSelected: () => void
+}
+
+/** The exact prop names {@link SketchSurfaceCanvasBridge} spreads onto the canvas. */
+export const SKETCH_CANVAS_BRIDGE_PROP_NAMES = [
+  'selectedEntityIds',
+  'onEntityPick',
+  'onMoveSelected',
+  'onDeleteSelected'
+] as const
 
 /**
  * A short human label for a closed-loop entity, surfaced in the selection list
@@ -91,7 +134,7 @@ function entityLabel(e: SketchEntity): string {
 interface SketchSurfaceToolDef {
   readonly id: SketchTool
   readonly label: string
-  readonly group: 'Create' | 'Modify' | 'Transform'
+  readonly group: 'Select' | 'Create' | 'Modify' | 'Transform'
 }
 
 /**
@@ -102,6 +145,9 @@ interface SketchSurfaceToolDef {
  * test can assert one button per entry without re-deriving the list.
  */
 export const SKETCH_SURFACE_TOOLS: readonly SketchSurfaceToolDef[] = [
+  // Sketch S1 — the direct-manipulation tool: click-pick (Ctrl/Shift additive),
+  // drag-move, Delete. The DEFAULT tool, matching MvpSketchCanvas + Fusion.
+  { id: 'select', label: 'Select', group: 'Select' },
   { id: 'line', label: 'Line', group: 'Create' },
   { id: 'polyline', label: 'Polyline', group: 'Create' },
   { id: 'rect', label: 'Rectangle', group: 'Create' },
@@ -131,7 +177,12 @@ export const SKETCH_SURFACE_TOOLS: readonly SketchSurfaceToolDef[] = [
 ]
 
 /** Ordered group headings for the palette render. */
-const TOOL_GROUPS: ReadonlyArray<SketchSurfaceToolDef['group']> = ['Create', 'Modify', 'Transform']
+const TOOL_GROUPS: ReadonlyArray<SketchSurfaceToolDef['group']> = [
+  'Select',
+  'Create',
+  'Modify',
+  'Transform'
+]
 
 /** Grid pitch (mm) used when snap is ON. Matches the cockpit's other 5 mm grids. */
 const SNAP_GRID_MM = 5
@@ -221,7 +272,10 @@ export function SketchSurface({
   loadFontBuffer,
   onCursorWorld
 }: SketchSurfaceProps): JSX.Element {
-  const [activeTool, setActiveTool] = useState<SketchTool>('line')
+  // Sketch S1 — direct manipulation is the resting state (matches the MVP
+  // variant + Fusion): the operator picks/moves/deletes by default and arms a
+  // draw tool explicitly (palette click or ribbon command).
+  const [activeTool, setActiveTool] = useState<SketchTool>('select')
   const [snapEnabled, setSnapEnabled] = useState(true)
   // Wave 3n — blank the StatusBar coordinate read-out when this surface
   // unmounts (Sketch->Model stage switch / sketch exit): the canvas can only
@@ -244,7 +298,28 @@ export function SketchSurface({
   // Wave 3g — the closed loops the operator has picked as the op's inputs. A Set
   // of entity ids from the live design; toggled in the selection list. Stale ids
   // (an entity deleted out from under the selection) are filtered at read time.
+  // Sketch S1 lifted this into the surface-wide selection source of truth: the
+  // canvas's click hit-test (onEntityPick) and the loop checkbox list both
+  // read+write THIS state, and the edit dialogs consume the same selection.
   const [selectedEntityIds, setSelectedEntityIds] = useState<ReadonlySet<string>>(new Set())
+
+  // ── Sketch S1 — surface-owned undo/redo history (the mutation seam) ────────
+  // One bounded snapshot ring per mounted surface. EVERY design mutation this
+  // surface controls pushes the PRE-mutation state BEFORE applying via
+  // onDesignChange; undo/redo re-apply snapshots through the SAME path, so the
+  // session reducer + Save-persistence are untouched.
+  const historyRef = useRef<SketchHistory | null>(null)
+  if (historyRef.current === null) historyRef.current = createSketchHistory()
+  const history = historyRef.current
+  // Bumped after every history-affecting op so the Undo/Redo disabled states
+  // (read from the ring at render time) stay current. Surfaced as a root data-
+  // attribute so it is genuinely consumed (and test-visible).
+  const [historyRevision, setHistoryRevision] = useState(0)
+  // The freshest design — the prop, OR the `next` just applied when several
+  // mutations land between React renders (drag bursts). Pushing from this ref
+  // (never the render closure) keeps every snapshot an accurate pre-state.
+  const liveDesignRef = useRef(design)
+  liveDesignRef.current = design
   // Guards the Import-DXF button while the host's picker + parse + merge is in
   // flight, so a double-click can't kick off two overlapping file pickers.
   const [importingDxf, setImportingDxf] = useState(false)
@@ -294,8 +369,44 @@ export function SketchSurface({
     return [...selectedEntityIds].filter((id) => live.has(id))
   }, [design.entities, selectedEntityIds])
 
-  function toggleSelected(id: string): void {
+  // ── Sketch S1 — the history-recorded mutation paths ────────────────────────
+
+  /**
+   * Route EVERY surface-controlled design mutation through the history seam:
+   * record the pre-mutation state, then apply via the session's onDesignChange.
+   * Draw commits (canvas), Text inserts, and Offset/Boolean/Array applies all
+   * call this instead of the raw prop.
+   */
+  function applyDesignEdit(next: DesignFileV2): void {
+    history.push(liveDesignRef.current)
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+  }
+
+  function performUndo(): void {
+    const prev = history.undo(liveDesignRef.current)
+    if (prev === null) return
+    liveDesignRef.current = prev
+    onDesignChange(prev)
+    setHistoryRevision((v) => v + 1)
+    onSketchHint?.('Undo.')
+  }
+
+  function performRedo(): void {
+    const next = history.redo(liveDesignRef.current)
+    if (next === null) return
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+    onSketchHint?.('Redo.')
+  }
+
+  /** Canvas click hit-test → selection. `null` = empty-space click (clear). */
+  function handleEntityPick(id: string | null, additive: boolean): void {
     setSelectedEntityIds((prev) => {
+      if (id === null) return prev.size === 0 ? prev : new Set<string>()
+      if (!additive) return new Set([id])
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -303,16 +414,111 @@ export function SketchSurface({
     })
   }
 
+  /** The loop-list checkboxes are an additive toggle over the SAME state. */
+  function toggleSelected(id: string): void {
+    handleEntityPick(id, true)
+  }
+
+  /**
+   * Canvas drag delta → translate the live selection. Coalesced per selection
+   * (the tag), so a drag's stream of deltas undoes in ONE step back to the
+   * pre-drag state.
+   */
+  function handleMoveSelected(dxMm: number, dyMm: number): void {
+    const cur = liveDesignRef.current
+    const ids = new Set(
+      [...selectedEntityIds].filter((id) => cur.entities.some((e) => e.id === id))
+    )
+    if (ids.size === 0) return
+    const next = translateSelectedSketchEntities(cur, ids, dxMm, dyMm)
+    if (next === cur) return
+    history.pushCoalesced(cur, `move:${[...ids].sort().join('|')}`)
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+  }
+
+  /** Delete the live selection — ONE history step, selection pruned after. */
+  function handleDeleteSelected(): void {
+    const cur = liveDesignRef.current
+    const result = deleteSelectedSketchEntities(cur, selectedEntityIds)
+    if (result.removedEntityIds.length === 0) return
+    history.push(cur)
+    liveDesignRef.current = result.design
+    onDesignChange(result.design)
+    setSelectedEntityIds((prev) => {
+      const next = new Set(prev)
+      for (const id of result.removedEntityIds) next.delete(id)
+      return next
+    })
+    setHistoryRevision((v) => v + 1)
+    onSketchHint?.(
+      result.removedEntityIds.length === 1
+        ? 'Deleted 1 vector.'
+        : `Deleted ${result.removedEntityIds.length} vectors.`
+    )
+  }
+
+  // Surface-level keyboard seam: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z via the central
+  // shortcut catalog matchers, plus Delete for the selection. Window-level so it
+  // works regardless of which child has focus; gated off while typing in an
+  // input/textarea/select/contentEditable (e.target check) and removed when the
+  // surface unmounts (the mounted-surface gate). Latest-handler ref so the
+  // once-only listener never goes stale.
+  const keyHandlersRef = useRef({ performUndo, performRedo, handleDeleteSelected })
+  keyHandlersRef.current = { performUndo, performRedo, handleDeleteSelected }
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (isTypableKeyboardTarget(e.target)) return
+      if (matchesUndo(e)) {
+        e.preventDefault()
+        keyHandlersRef.current.performUndo()
+        return
+      }
+      if (matchesRedo(e)) {
+        e.preventDefault()
+        keyHandlersRef.current.performRedo()
+        return
+      }
+      if (e.key === 'Delete' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        keyHandlersRef.current.handleDeleteSelected()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
+  // variable so this compiles before the canvas declares the props; extra props
+  // are inert at runtime until the canvas's hit-test half lands.
+  const canvasSelectionBridge: SketchSurfaceCanvasBridge = {
+    selectedEntityIds,
+    onEntityPick: handleEntityPick,
+    onMoveSelected: handleMoveSelected,
+    onDeleteSelected: handleDeleteSelected
+  }
+
   // Run the host's DXF import, guarding against overlapping pickers. The host
   // owns the file-picker → parse → additive-merge → persist chain; this only
   // toggles the in-flight flag around it. `onImportDxf` may be sync or async.
+  // S1: the host merges via the session's onDesignChange directly (bypassing
+  // this surface's wrapper), so once the import settles we record the
+  // PRE-import state as ONE undo step — and only when the model actually
+  // changed (a cancelled picker records nothing). Push order doesn't matter
+  // here: the snapshot is the pre-state either way.
   async function handleImportDxfClick(): Promise<void> {
     if (!onImportDxf || importingDxf) return
     setImportingDxf(true)
+    const before = liveDesignRef.current
     try {
       await onImportDxf()
     } finally {
       setImportingDxf(false)
+      if (liveDesignRef.current !== before) {
+        history.push(before)
+        setHistoryRevision((v) => v + 1)
+      }
     }
   }
 
@@ -322,8 +528,16 @@ export function SketchSurface({
   const showRotateParam = activeTool === 'rotate_sk'
   const showScaleParam = activeTool === 'scale_sk'
 
+  const canUndo = history.canUndo()
+  const canRedo = history.canRedo()
+
   return (
-    <div className="sketch-surface" data-testid="sketch-surface" data-active-tool={activeTool}>
+    <div
+      className="sketch-surface"
+      data-testid="sketch-surface"
+      data-active-tool={activeTool}
+      data-history-revision={historyRevision}
+    >
       {/* ── Tool palette (internal — drives the canvas activeTool) ───────── */}
       <div
         className="sketch-surface__palette"
@@ -380,6 +594,43 @@ export function SketchSurface({
             onClick={() => setSnapEnabled((s) => !s)}
           >
             {snapEnabled ? `Snap ${SNAP_GRID_MM} mm` : 'Snap off'}
+          </button>
+
+          {/* Sketch S1 — the history seam's visible controls. Disabled states
+              mirror the snapshot ring; keyboard twins are Ctrl+Z / Ctrl+Y /
+              Ctrl+Shift+Z (catalog matchers) and Delete for the selection. */}
+          <button
+            type="button"
+            className="sketch-surface__history-btn"
+            data-testid="sketch-surface-undo"
+            disabled={!canUndo}
+            aria-keyshortcuts="Control+Z"
+            title="Undo (Ctrl+Z)"
+            onClick={performUndo}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="sketch-surface__history-btn"
+            data-testid="sketch-surface-redo"
+            disabled={!canRedo}
+            aria-keyshortcuts="Control+Y Control+Shift+Z"
+            title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+            onClick={performRedo}
+          >
+            Redo
+          </button>
+          <button
+            type="button"
+            className="sketch-surface__history-btn sketch-surface__history-btn--delete"
+            data-testid="sketch-surface-delete-selected"
+            disabled={selectedIds.length === 0}
+            aria-keyshortcuts="Delete"
+            title="Delete the selected vectors (Delete)"
+            onClick={handleDeleteSelected}
+          >
+            {selectedIds.length > 0 ? `Delete (${selectedIds.length})` : 'Delete'}
           </button>
 
           {onImportDxf && (
@@ -515,10 +766,11 @@ export function SketchSurface({
 
         <div className="sketch-surface__canvas-host" data-testid="sketch-surface-canvas-host">
           <Sketch2DCanvas
+            {...canvasSelectionBridge}
             width={CANVAS_BITMAP_W}
             height={CANVAS_BITMAP_H}
             design={design}
-            onDesignChange={onDesignChange}
+            onDesignChange={applyDesignEdit}
             activeTool={activeTool}
             filletRadiusMm={filletRadiusMm}
             chamferLengthMm={chamferLengthMm}
@@ -534,7 +786,7 @@ export function SketchSurface({
               <TextDialog
                 design={design}
                 onInsert={(next) => {
-                  onDesignChange(next)
+                  applyDesignEdit(next)
                 }}
                 onClose={() => setTextDialogOpen(false)}
                 onHint={onSketchHint}
@@ -592,7 +844,7 @@ export function SketchSurface({
                 <OffsetSketchDialog
                   design={design}
                   selectedIds={selectedIds}
-                  onApply={(next) => onDesignChange(next)}
+                  onApply={(next) => applyDesignEdit(next)}
                   onClose={() => setEditDialog(null)}
                   onHint={onSketchHint}
                 />
@@ -601,7 +853,7 @@ export function SketchSurface({
                 <BooleanSketchDialog
                   design={design}
                   selectedIds={selectedIds}
-                  onApply={(next) => onDesignChange(next)}
+                  onApply={(next) => applyDesignEdit(next)}
                   onClose={() => setEditDialog(null)}
                   onHint={onSketchHint}
                 />
@@ -610,7 +862,7 @@ export function SketchSurface({
                 <ArraySketchDialog
                   design={design}
                   selectedIds={selectedIds}
-                  onApply={(next) => onDesignChange(next)}
+                  onApply={(next) => applyDesignEdit(next)}
                   onClose={() => setEditDialog(null)}
                   onHint={onSketchHint}
                 />

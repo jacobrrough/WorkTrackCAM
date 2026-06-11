@@ -87,11 +87,14 @@ describe('SketchSurface — render contract', () => {
     expect(html).toContain('data-snap="on"')
   })
 
-  it('defaults the active tool to "line" and pre-selects the ribbon-armed tool', () => {
+  it('defaults the active tool to "select" (S1 direct manipulation) and pre-selects the ribbon-armed tool', () => {
+    // Sketch S1 flipped the resting tool from 'line' to 'select' so the canvas
+    // hit-test (click-pick / drag-move / Delete) is the default interaction,
+    // matching MvpSketchCanvas + Fusion. Draw tools are armed explicitly.
     const def = renderToStaticMarkup(
       createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
     )
-    expect(def).toContain('data-active-tool="line"')
+    expect(def).toContain('data-active-tool="select"')
 
     // armedToolCommandId is applied in an effect; SSR cannot flush it, so the
     // default still wins on the static render. We assert the prop is ACCEPTED
