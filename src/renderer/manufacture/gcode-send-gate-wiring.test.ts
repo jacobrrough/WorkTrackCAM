@@ -118,3 +118,48 @@ describe('Wave 3m honesty pins -- K2 hard gate stays in the main process', () =>
     expect(SEAM).toContain('workAreaMm: input.machine.workAreaMm')
   })
 })
+
+describe('Wave 3n wiring -- lifted Carvera connection picker', () => {
+  it('the workspace owns the lifted picker state', () => {
+    expect(WORKSPACE).toContain(
+      "const [carveraConn, setCarveraConn] = useState<'auto' | 'wifi' | 'usb'>('auto')"
+    )
+    expect(WORKSPACE).toContain("const [carveraDevice, setCarveraDevice] = useState('')")
+  })
+
+  it('the ProfileStack Carvera send dispatches with the picker state (no hardcoded auto)', () => {
+    expect(WORKSPACE).toMatch(
+      /async function sendPostedProgramToCarvera\(\): Promise<void> \{[\s\S]*?connection: carveraConn,/
+    )
+    expect(WORKSPACE).toContain('device: carveraDevice.trim() || undefined,')
+    expect(WORKSPACE).not.toContain("connection: 'auto',")
+  })
+
+  it('the workspace threads the lifted picker into the aux panels bundle', () => {
+    expect(WORKSPACE).toContain('onCarveraConnChange: setCarveraConn,')
+    expect(WORKSPACE).toContain('onCarveraDeviceChange: setCarveraDevice')
+  })
+
+  it('CamManufacturePanel honors the lifted state when provided (controlled mode)', () => {
+    expect(AUX).toContain('const carveraConn = p.carveraConn ?? localCarveraConn')
+    expect(AUX).toContain('const setCarveraConn = p.onCarveraConnChange ?? setLocalCarveraConn')
+    expect(AUX).toContain('const carveraDevice = p.carveraDevice ?? localCarveraDevice')
+    expect(AUX).toContain('const setCarveraDevice = p.onCarveraDeviceChange ?? setLocalCarveraDevice')
+  })
+})
+
+describe('Wave 3n honesty pins -- FDM advisory de-noise stays in the seam', () => {
+  it('the de-noise filter lives in gcode-send-gate.ts, scoped to the FDM path', () => {
+    expect(SEAM).toContain('FDM_NOISE_ADVISORY_PATTERN')
+    expect(SEAM).toMatch(
+      /adviseFdmProgramForPush[\s\S]*?warnings: assessment\.warnings\.filter\(\(w\) => !FDM_NOISE_ADVISORY_PATTERN\.test\(w\)\)/
+    )
+  })
+
+  it('the PINNED shared assessor still emits the advisory (CNC surfaces keep it)', () => {
+    const ASSESSOR = here('../src/gcode-export-safety.ts')
+    expect(ASSESSOR).toContain('Safe retract to machine max Z')
+    // The CNC gate result carries the assessor warnings UNFILTERED.
+    expect(SEAM).toMatch(/gateCncProgramForSend[\s\S]*?warnings: assessment\.warnings\s*\}/)
+  })
+})

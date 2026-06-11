@@ -135,6 +135,14 @@ type Props = {
    */
   onSelect?: (selection: Selection) => void
   /**
+   * Wave 3n — fires with the raycast intersection's WORLD point (mm) for the
+   * exact click that produced an {@link onSelect} face/edge pick. Feeds the
+   * shell StatusBar's last-pick X/Y/Z read-out. A per-frame hover raycast was
+   * deliberately rejected (too heavy); the honest scope is the LAST PICK.
+   * Optional + additive — omitted, nothing changes.
+   */
+  onPickPoint?: (pointMm: { x: number; y: number; z: number }) => void
+  /**
    * Currently-highlighted face id. When non-null, the viewport renders
    * a wire-outline overlay along the boundary triangles of that face
    * so the operator gets clear visual feedback for the active
@@ -395,7 +403,7 @@ const PickableEdgeLine = memo(function PickableEdgeLine({
 }: {
   edge: PickableEdge
   highlighted: boolean
-  onPick: (edge: PickableEdge) => void
+  onPick: (edge: PickableEdge, pointMm: { x: number; y: number; z: number }) => void
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -420,7 +428,9 @@ const PickableEdgeLine = memo(function PickableEdgeLine({
       renderOrder={highlighted ? 4 : 3}
       onClick={(e) => {
         e.stopPropagation()
-        onPick(edge)
+        // Wave 3n — the raycast point rides along so the parent can report
+        // the pick location (StatusBar last-pick read-out).
+        onPick(edge, { x: e.point.x, y: e.point.y, z: e.point.z })
       }}
     >
       <lineBasicMaterial
@@ -451,7 +461,7 @@ const PickableEdges = memo(function PickableEdges({
   geometry: THREE.BufferGeometry
   active: boolean
   highlightedEdgeId?: number | null
-  onPickEdge: (edge: PickableEdge) => void
+  onPickEdge: (edge: PickableEdge, pointMm: { x: number; y: number; z: number }) => void
   clipPlane?: THREE.Plane | null
 }) {
   const edges = useMemo(() => readGeometryPickableEdges(geometry), [geometry])
@@ -498,6 +508,7 @@ const Solid = memo(function Solid({
   layOnFaceMode,
   onLayOnFace,
   onSelect,
+  onPickPoint,
   selectionMode,
   highlightedFaceId,
   highlightedEdgeId,
@@ -513,6 +524,8 @@ const Solid = memo(function Solid({
   layOnFaceMode?: boolean
   onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
   onSelect?: (selection: Selection) => void
+  /** Wave 3n — world point (mm) of a registered face/edge pick. */
+  onPickPoint?: (pointMm: { x: number; y: number; z: number }) => void
   selectionMode?: SelectionKind
   highlightedFaceId?: number | null
   highlightedEdgeId?: number | null
@@ -574,11 +587,13 @@ const Solid = memo(function Solid({
    * `PickableEdges` lines render at all.
    */
   const handleEdgePick = useCallback(
-    (edge: PickableEdge): void => {
+    (edge: PickableEdge, pointMm: { x: number; y: number; z: number }): void => {
       if (!onSelect) return
       onSelect(makeEdgeSelection(edge.edgeId, edge.occtId))
+      // Wave 3n — report the pick location only when the pick registered.
+      onPickPoint?.(pointMm)
     },
-    [onSelect],
+    [onSelect, onPickPoint],
   )
 
   const edgePickActive = selectionMode === 'edge' && !!onSelect
@@ -637,6 +652,8 @@ const Solid = memo(function Solid({
             if (next === null) return
             e.stopPropagation()
             onSelect(next)
+            // Wave 3n — the resolved pick registered; report its world point.
+            onPickPoint?.({ x: e.point.x, y: e.point.y, z: e.point.z })
           }
         }}
       >
@@ -1004,6 +1021,7 @@ export function Viewport3D({
   onCenterOnBed,
   onSnapToBed,
   onSelect,
+  onPickPoint,
   selectionMode = 'face',
   highlightedFaceId = null,
   highlightedEdgeId = null
@@ -1122,6 +1140,7 @@ export function Viewport3D({
               layOnFaceMode={layOnFaceActive}
               onLayOnFace={onLayOnFace ? (n) => { setLayOnFaceInternal(false); onLayOnFace(n) } : undefined}
               onSelect={onSelect}
+              onPickPoint={onPickPoint}
               selectionMode={selectionMode}
               highlightedFaceId={highlightedFaceId}
               highlightedEdgeId={highlightedEdgeId}

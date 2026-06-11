@@ -76,6 +76,15 @@
  *      would brick the K2 daily workflow; surfacing them as warnings would
  *      train the operator to ignore the warning channel. Only the gate's
  *      advisory `warnings` flow out of `runFdmPushPreflight`.
+ *   3. Wave 3n de-noise: the `Safe retract to machine max Z (G0 Z350) not
+ *      found` advisory is a CNC posting-convention check (every bundled CNC
+ *      post emits `G0 Z{{machine.workAreaMm.z}}`); OrcaSlicer output ends in
+ *      its own park/cooldown sequence and legitimately never contains that
+ *      line, so the advisory fired on essentially EVERY correct K2 print --
+ *      persistent noise on the one channel that must stay meaningful. The
+ *      FDM path filters exactly that advisory (see
+ *      `FDM_NOISE_ADVISORY_PATTERN`); every other advisory and every CNC
+ *      surface still carries it.
  * The K2's REAL hard gate is unchanged: the pre-upload temperature
  * validator inside `src/main/moonraker-push.ts` (`validateGcodeFileTemps`)
  * still rejects heater targets above the machine ceilings with zero bytes
@@ -168,11 +177,31 @@ export function gateCncProgramForSend(input: {
 }
 
 /**
+ * Wave 3n — FDM advisory de-noise pattern. The assessor
+ * (`src/renderer/src/gcode-export-safety.ts` — PINNED, shared with the CNC
+ * surfaces, deliberately not touched) emits warnings as plain strings with
+ * no machine-readable codes, so the one advisory we drop is matched against
+ * the EXACT template it builds:
+ *
+ *   `Safe retract to machine max Z (G0 Z${safeRetractZMm}) not found.`
+ *
+ * The numeric threshold is matched flexibly (`350` today, from the K2's
+ * `workAreaMm.z`) so a profile-height change cannot silently re-introduce
+ * the noise, while the anchored prefix/suffix keep the filter from ever
+ * swallowing a different advisory. Scope: the FDM path ONLY — the missing
+ * machine-max retract is real signal on a CNC posted program (the bundled
+ * posts all emit it), so `gateCncProgramForSend` still surfaces it.
+ */
+const FDM_NOISE_ADVISORY_PATTERN = /^Safe retract to machine max Z \(G0 Z[0-9]+(?:\.[0-9]+)?\) not found\.$/
+
+/**
  * FDM (K2 Plus) push pre-flight: the gate runs WITHOUT `workAreaMm` — see
  * the module-header caveat for the two documented reasons (G91-mixing
  * OrcaSlicer output vs. the absolute-only segment parser; CNC-only M5/M30
  * blockers on every legitimate print). Only the advisory `warnings` are
- * returned; the result has no blocking channel AT ALL, so no caller can
+ * returned — minus the always-on safe-retract advisory (Wave 3n de-noise,
+ * reason 3 in the module header; see {@link FDM_NOISE_ADVISORY_PATTERN}) —
+ * and the result has no blocking channel AT ALL, so no caller can
  * accidentally turn this surface into a hard gate.
  */
 export function adviseFdmProgramForPush(input: {
@@ -186,7 +215,11 @@ export function adviseFdmProgramForPush(input: {
     // workAreaMm DELIBERATELY omitted — envelope blocking must be
     // impossible on the FDM path (pin (N4): absent dims ⇒ legacy-identical).
   })
-  return { warnings: assessment.warnings }
+  // Wave 3n — drop the advisory that fires on every legitimate OrcaSlicer
+  // print (see FDM_NOISE_ADVISORY_PATTERN); all other advisories flow.
+  return {
+    warnings: assessment.warnings.filter((w) => !FDM_NOISE_ADVISORY_PATTERN.test(w))
+  }
 }
 
 // ─── Operator-message formatting ─────────────────────────────────────────────

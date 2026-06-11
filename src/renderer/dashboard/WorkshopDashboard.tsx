@@ -36,9 +36,13 @@
  * Safety:
  *   - The dashboard EMITS no G-code and POSTS to no endpoint on its
  *     own. The "Send latest slice" / "Send to Carvera" / "Open setup
- *     sheet" actions delegate to the parent's existing handlers, which
- *     run the same safety gates (`assessGcodeForExportSafety`,
- *     `validateGcodeFileTemps`) the Send buttons in ShopApp use today.
+ *     sheet" actions delegate to whatever handlers the parent passes in.
+ *     In the current shell (`WorkshopHost.tsx`) those handlers are
+ *     advisory toasts ONLY — no G-code dispatch happens from this
+ *     dashboard; they point the operator at the Manufacture workspace,
+ *     whose live send/export surfaces run the real safety gates (the
+ *     `gcode-send-gate.ts` seam for CNC sends/exports plus the
+ *     main-process `validateGcodeFileTemps` hard gate for K2 pushes).
  *   - No `any` types. Polling errors are swallowed; the card falls
  *     back to job-derived status (Safety Rule: "graceful network
  *     degradation — never crash the dashboard if the K2 is off").

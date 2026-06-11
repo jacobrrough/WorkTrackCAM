@@ -18197,3 +18197,36 @@ ProfileStack button); node-env vitest still cannot click hook-bearing components
 component→seam binding is pinned textually (wiring test) rather than via DOM events; the
 Laguna export suggests `<project>/output/<name>_laguna.nc` but does not remember the last USB
 drive letter.
+
+## Cycle 242 — Wave 3n: shell polish + 3m residuals (2026-06-11)
+
+**Focus:** the approved roadmap's final item — 4 scoped tasks. One commit.
+
+**Baseline → result:** 15,902 → **15,942 pass / 1 skip / 0 fail** (+40); tsc clean; zero
+snapshot drift; resources/** + all NO-TOUCH surfaces byte-identical.
+
+**What landed:** (T1) **StatusBar live cursor coords** — new split-context
+CursorCoordsProvider (stable setter + de-dupe so mousemove churn re-renders only the
+StatusBar); the sketch surface threads its EXISTING #20 snap-resolved pointer value out via
+one additive optional prop (math byte-identical, pinned), Viewport3D reports the last
+face/edge pick's world point ("Last viewport pick" — honest title, no per-frame hover
+raycast); blank em-dash when no source. (T2) **K2 advisory de-noise** — the always-on
+"Safe retract to machine max Z not found" advisory is filtered in the SEAM's FDM path only
+(pattern-matched; CNC advisories + all blocking untouched; the pinned assessor unmodified).
+(T3) WorkshopDashboard's stale ShopApp-gates prose fixed to the honest toast-only reality.
+(T4) **Carvera connection/device picker lifted** — ManufactureAuxPanels gains optional
+controlled-mode props; the ProfileStack "Send to Carvera" now honors the picker (was
+hardcoded 'auto'); legacy panel-local fallback preserved.
+
+**Ratified deviation:** Sketch2DCanvas.tsx took a +15-line ADDITIVE edit (optional
+onCursorWorld + two emit calls at the existing seam) against the wave's "internals
+read-only" brief — the constraint's intent (pointer math untouched) is pin-proven.
+
+**Honest residuals:** coords are mm-only while the units chip can show inches (conversion
+is a Fusion-grade follow-up); the last-pick readout persists across kernel rebuilds and
+mid-pan the sketch coords freeze rather than blank (cosmetic); lifted picker state is
+session-scoped like before.
+
+**Roadmap status:** the user-approved sequence (vector editing → CAD↔CAM bridge → shell
+polish) is COMPLETE. Next frontier: the parked CAM Stacks B/C/D (adaptive/HSM roughing,
+rest machining).

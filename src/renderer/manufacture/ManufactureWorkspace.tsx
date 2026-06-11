@@ -749,6 +749,17 @@ export function ManufactureWorkspace({
   // upload / Laguna export). While a send is in flight the button renders
   // disabled (onSend becomes null) so a double-click cannot dispatch twice.
   const [profileStackSendBusy, setProfileStackSendBusy] = useState(false)
+  // Wave 3n — LIFTED Carvera connection picker (was local useState inside
+  // CamManufacturePanel, which made the ProfileStack "Send to Carvera"
+  // hardcode connection 'auto' and ignore the operator's pick). The workspace
+  // now owns the state and threads it BOTH ways: down into CamManufacturePanel
+  // (the visible Connection/Device picker on the CAM tab + CNC Send stage) and
+  // into `sendPostedProgramToCarvera` below, so the panel's "Upload to
+  // Carvera" and the ProfileStack's "Send to Carvera" dispatch with the SAME
+  // connection mode + device. Session-scoped (not persisted) — same lifetime
+  // the panel-local state had, just shared.
+  const [carveraConn, setCarveraConn] = useState<'auto' | 'wifi' | 'usb'>('auto')
+  const [carveraDevice, setCarveraDevice] = useState('')
 
   // CAD V1.5 — TRUE per-layer breakdown of the most recent slice, fetched
   // from the streaming main-process parser via `fab.sliceLayerBreakdown`.
@@ -2040,7 +2051,14 @@ export function ManufactureWorkspace({
     onStatus,
     onExportSetupSheet: exportManufactureSetupSheet,
     camStaleMeshRelativePaths,
-    lastSliceGcodePath
+    lastSliceGcodePath,
+    // Wave 3n — lifted Carvera picker: CamManufacturePanel renders these as
+    // its Connection/Device controls; the same values feed the ProfileStack
+    // "Send to Carvera" dispatch (sendPostedProgramToCarvera).
+    carveraConn,
+    onCarveraConnChange: setCarveraConn,
+    carveraDevice,
+    onCarveraDeviceChange: setCarveraDevice
   }
 
   // ── Plan body (the main "Plan" sub-tab) ───────────────────────────────────────
@@ -2350,8 +2368,11 @@ export function ManufactureWorkspace({
       await runCarveraUploadSurface({
         gcodePath: postedProgramPath,
         gateMachine: activeCncSendTarget,
-        connection: 'auto',
-        device: undefined,
+        // Wave 3n — honor the lifted Connection/Device picker (rendered by
+        // CamManufacturePanel directly above this ProfileStack in the CNC
+        // Send stage) instead of the old hardcoded 'auto'.
+        connection: carveraConn,
+        device: carveraDevice.trim() || undefined,
         timeoutMs: 120_000,
         io: sendGateIo,
         carveraUpload: (payload) => fab.carveraUpload(payload),

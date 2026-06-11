@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import { fab } from '../src/shop-types'
 import type { WorkspaceId } from './useWorkspaceRouter'
+import { useCursorCoords } from './CursorCoordsContext'
 
 const WORKSPACE_LABEL: Record<WorkspaceId, string> = {
   design: 'Design',
@@ -123,11 +124,19 @@ const SIDECAR_DOT_STYLE: Record<SidecarHealth, CSSProperties> = {
 }
 
 /**
- * Honest placeholder for a cursor/selection coordinate. There is no live
- * viewport cursor source in the shell yet (the functional `Viewport3D` is
- * mounted in FG-2), so we render an em dash rather than a faked `0.00`.
+ * Honest placeholder for a cursor/selection coordinate slot whose source is
+ * not active. Wave 3n wired the LIVE sources — the Design sketch canvas's
+ * pointer→world value and the viewport's last face/edge pick (via
+ * `CursorCoordsContext`) — so the dash now means exactly "no live source
+ * right now" (no sketch hover, no pick yet, or a non-Design workspace),
+ * never a faked `0.00`.
  */
 const NO_COORD = '—'
+
+/** Fixed two-decimal mm read-out, matching the in-canvas sketch readout. */
+function formatCoordMm(v: number): string {
+  return v.toFixed(2)
+}
 
 export function StatusBar({
   machineName,
@@ -140,6 +149,10 @@ export function StatusBar({
 }): ReactElement {
   const sidecar = useSidecarHealth()
   const displayUnits = useDisplayUnits(units)
+  // Wave 3n — live cursor world-coordinates (sketch cursor / last viewport
+  // pick), or null when no source is active. Null without a provider too, so
+  // the bare render-pin mounts keep the honest em-dash placeholders.
+  const cursorCoords = useCursorCoords()
 
   const sidecarTitle =
     sidecar === 'ready'
@@ -147,6 +160,13 @@ export function StatusBar({
       : sidecar === 'error'
         ? 'Python sidecar unreachable or a required dependency is missing'
         : 'Checking the Python sidecar…'
+
+  const coordsTitle =
+    cursorCoords === null
+      ? 'No live coordinate source — hover the Design sketch or pick a face/edge in the viewport'
+      : cursorCoords.kind === 'sketch2d'
+        ? 'Sketch cursor (sketch-plane mm)'
+        : 'Last viewport pick (world mm)'
 
   return (
     <footer className="wt-status" role="contentinfo">
@@ -161,14 +181,15 @@ export function StatusBar({
         Workspace <b>{WORKSPACE_LABEL[activeWorkspace]}</b>
       </span>
       <span className="wt-status__spacer" />
-      <span className="wt-status__item">
-        X <b>{NO_COORD}</b>
+      <span className="wt-status__item" title={coordsTitle} data-testid="status-coord-x">
+        X <b>{cursorCoords !== null ? formatCoordMm(cursorCoords.xMm) : NO_COORD}</b>
       </span>
-      <span className="wt-status__item">
-        Y <b>{NO_COORD}</b>
+      <span className="wt-status__item" title={coordsTitle} data-testid="status-coord-y">
+        Y <b>{cursorCoords !== null ? formatCoordMm(cursorCoords.yMm) : NO_COORD}</b>
       </span>
-      <span className="wt-status__item">
-        Z <b>{NO_COORD}</b>
+      {/* Z is only known for a 3D pick — the sketch value is plane-local. */}
+      <span className="wt-status__item" title={coordsTitle} data-testid="status-coord-z">
+        Z <b>{cursorCoords?.kind === 'pick3d' ? formatCoordMm(cursorCoords.zMm) : NO_COORD}</b>
       </span>
       <span className="wt-status__item wt-status__item--machine">{machineName ?? 'No machine'}</span>
     </footer>

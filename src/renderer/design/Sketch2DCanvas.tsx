@@ -110,6 +110,15 @@ type Props = {
   constraintEntityPickActive?: boolean
   onConstraintEntityPick?: (entityId: string) => void
   onSketchHint?: (msg: string) => void
+  /**
+   * Wave 3n — pass-through OUTPUT of the canvas's own pointer->world value:
+   * the snap-resolved point `p` that onMouseMove already computes for the
+   * placement/crosshair logic (clientToCanvasLocal -> screenToWorld -> snap),
+   * in sketch-plane mm. Fired on every tracked move; fired with `null` when
+   * the pointer leaves the canvas. Threaded (NEVER recomputed) up to the
+   * shell StatusBar's X/Y read-out. Optional + additive.
+   */
+  onCursorWorld?: (xyMm: readonly [number, number] | null) => void
   /** Degrees for rotate_sk (ribbon). */
   sketchRotateDeg?: number
   /** Factor for scale_sk (ribbon). */
@@ -160,6 +169,7 @@ export function Sketch2DCanvas({
   constraintEntityPickActive = false,
   onConstraintEntityPick,
   onSketchHint,
+  onCursorWorld,
   sketchRotateDeg = 0,
   sketchScaleFactor = 1,
   planeLabel
@@ -910,6 +920,9 @@ export function Sketch2DCanvas({
     const dpr = Math.max(1, window.devicePixelRatio || 1)
     const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
     const p: [number, number] = [snap(raw[0], gridMm), snap(raw[1], gridMm)]
+    // Wave 3n — thread the SAME snap-resolved value the placement logic uses
+    // up to the shell StatusBar (pass-through only; nothing recomputed).
+    onCursorWorld?.(p)
 
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
       setConstraintHover(probeConstraintPick(raw[0], raw[1]))
@@ -1112,6 +1125,8 @@ export function Sketch2DCanvas({
         onMouseUp={onMouseUp}
         onMouseLeave={() => {
           panRef.current = null
+          // Wave 3n — the source goes inactive; blank the StatusBar read-out.
+          onCursorWorld?.(null)
           setArcHover(null)
           setLineHover(null)
           setCircle2ptHover(null)

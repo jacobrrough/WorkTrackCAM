@@ -7,6 +7,7 @@ import {
   useOptionalCommandSurface,
   type DesignCommandActions
 } from '../commands'
+import { useOptionalSetCursorCoords } from './CursorCoordsContext'
 import {
   FEATURE_DIALOG_COMMAND_ID,
   type FeatureDialogKind
@@ -279,6 +280,35 @@ export function DesignWorkspaceHost({
     [pushSurface]
   )
 
+  // Wave 3n — publish the Design coordinate sources to the shell StatusBar via
+  // CursorCoordsContext. Provider-tolerant (stable no-op under the SSR pins,
+  // same rationale as useOptionalCommandSurface). Two sources, both THREADED
+  // from where they are already computed — never recomputed here:
+  //   - sketch2d: the mounted canvas's own snap-resolved pointer→world value
+  //     (null on pointer-leave / surface unmount → read-out blanks);
+  //   - pick3d: the viewport's last registered face/edge pick point.
+  const setCursorCoords = useOptionalSetCursorCoords()
+  const handleSketchCursorWorld = useCallback(
+    (xyMm: readonly [number, number] | null): void => {
+      setCursorCoords(xyMm === null ? null : { kind: 'sketch2d', xMm: xyMm[0], yMm: xyMm[1] })
+    },
+    [setCursorCoords]
+  )
+  const handleViewportPickPoint = useCallback(
+    (pointMm: { readonly x: number; readonly y: number; readonly z: number }): void => {
+      setCursorCoords({ kind: 'pick3d', xMm: pointMm.x, yMm: pointMm.y, zMm: pointMm.z })
+    },
+    [setCursorCoords]
+  )
+  // Route switch unmounts this host (WorkspaceHost renders exactly one
+  // workspace): blank the read-out so the StatusBar never shows coordinates
+  // from a workspace that is no longer mounted.
+  useEffect(() => {
+    return () => {
+      setCursorCoords(null)
+    }
+  }, [setCursorCoords])
+
   return (
     <DesignWorkspace
       initialScript={initialScript}
@@ -344,6 +374,9 @@ export function DesignWorkspaceHost({
         setSketchPlanePickArmed(false)
       }}
       onCommandSurface={handleCommandSurface}
+      // Wave 3n — live cursor / last-pick coordinates for the shell StatusBar.
+      onSketchCursorWorld={handleSketchCursorWorld}
+      onViewportPickPoint={handleViewportPickPoint}
       // No-code build→render: the session maintains the kernel-built solid's
       // geometry (rebuilt automatically when the feature timeline changes) and a
       // build-in-flight flag. Threading them here is what makes "add a no-code

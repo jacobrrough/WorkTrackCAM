@@ -97,6 +97,21 @@ export type ManufactureAuxPanelsProps = {
    * upload boundary.
    */
   lastSliceGcodePath?: string | null
+  /**
+   * Wave 3n — LIFTED Carvera connection picker (controlled mode). When the
+   * host (`ManufactureWorkspace`) supplies these, the `CamManufacturePanel`
+   * Connection/Device controls read + write the WORKSPACE-owned state — the
+   * exact values the ProfileStack "Send to Carvera" dispatch
+   * (`sendPostedProgramToCarvera`) sends with — so the operator's pick is
+   * honored by every Carvera send surface, not just this panel's own
+   * "Upload to Carvera" button. All four are optional: when omitted
+   * (standalone mounts / render-pin tests) the panel falls back to its
+   * legacy panel-local state and behaves exactly as before.
+   */
+  carveraConn?: 'auto' | 'wifi' | 'usb'
+  onCarveraConnChange?: (conn: 'auto' | 'wifi' | 'usb') => void
+  carveraDevice?: string
+  onCarveraDeviceChange?: (device: string) => void
 }
 
 /**
@@ -317,8 +332,16 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   })
   const [camPreviewTick, setCamPreviewTick] = useState(0)
   const [camPreview, setCamPreview] = useState(() => buildCamSimulationPreview(''))
-  const [carveraConn, setCarveraConn] = useState<'auto' | 'wifi' | 'usb'>('auto')
-  const [carveraDevice, setCarveraDevice] = useState('')
+  // Wave 3n — the Carvera picker is CONTROLLED by the workspace when the
+  // lifted props are supplied (so the ProfileStack "Send to Carvera" and this
+  // panel's "Upload to Carvera" dispatch with the SAME connection + device),
+  // with the legacy panel-local state as the standalone-mount fallback.
+  const [localCarveraConn, setLocalCarveraConn] = useState<'auto' | 'wifi' | 'usb'>('auto')
+  const [localCarveraDevice, setLocalCarveraDevice] = useState('')
+  const carveraConn = p.carveraConn ?? localCarveraConn
+  const setCarveraConn = p.onCarveraConnChange ?? setLocalCarveraConn
+  const carveraDevice = p.carveraDevice ?? localCarveraDevice
+  const setCarveraDevice = p.onCarveraDeviceChange ?? setLocalCarveraDevice
   const [carveraBusy, setCarveraBusy] = useState(false)
 
   // Detect if the active machine is a Carvera (show zeroing/setup panel)

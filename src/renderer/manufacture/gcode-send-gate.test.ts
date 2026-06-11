@@ -199,6 +199,41 @@ describe('adviseFdmProgramForPush -- advisory-only by construction', () => {
     const r = adviseFdmProgramForPush({ gcode: ORCA_K2_GCODE, machine: K2_PLUS })
     expect(r.warnings.some((w) => w.includes('M5') || w.includes('M2/M30'))).toBe(false)
   })
+
+  // -- Wave 3n de-noise: the always-on safe-retract advisory ------------------
+  // OrcaSlicer output legitimately never contains the CNC posting-convention
+  // `G0 Z350` machine-max retract, so before Wave 3n this advisory fired on
+  // essentially EVERY correct K2 print -- noise that trains the operator to
+  // ignore the one warning channel that must stay meaningful.
+
+  it('Wave 3n: the safe-retract advisory is filtered from the FDM path', () => {
+    // ORCA_K2_GCODE has G21 + G90 but no `G0 Z350` -- pre-3n this produced
+    // exactly the safe-retract advisory. Post-3n the advisory set is clean.
+    const r = adviseFdmProgramForPush({ gcode: ORCA_K2_GCODE, machine: K2_PLUS })
+    expect(r.warnings.some((w) => w.includes('Safe retract to machine max Z'))).toBe(false)
+    expect(r.warnings).toEqual([])
+  })
+
+  it('Wave 3n: every OTHER advisory still flows (missing G90 is real signal)', () => {
+    const noG90 = ORCA_K2_GCODE.split('\n')
+      .filter((line) => line.trim() !== 'G90')
+      .join('\n')
+    const r = adviseFdmProgramForPush({ gcode: noG90, machine: K2_PLUS })
+    expect(r.warnings.some((w) => w.includes('Absolute distance mode (G90)'))).toBe(true)
+    // ... while the de-noised advisory stays gone on the same program.
+    expect(r.warnings.some((w) => w.includes('Safe retract to machine max Z'))).toBe(false)
+  })
+
+  it('Wave 3n: the CNC gate still surfaces the safe-retract advisory (filter is FDM-only)', () => {
+    // A Laguna program missing its `G0 Z25` retract: on the CNC path the
+    // advisory is real signal (every bundled post emits the machine-max
+    // retract) and MUST keep flowing to the operator.
+    const gate = gateCncProgramForSend({
+      gcode: ['G21', 'G90', 'G17', 'M3 S18000', 'G1 X10 Y10 Z-3 F600', 'M5', 'M30'].join('\n'),
+      machine: LAGUNA
+    })
+    expect(gate.warnings.some((w) => w.includes('Safe retract to machine max Z (G0 Z25)'))).toBe(true)
+  })
 })
 
 // === (E) runGatedCncSendFlow -- the shared CNC flow ==========================

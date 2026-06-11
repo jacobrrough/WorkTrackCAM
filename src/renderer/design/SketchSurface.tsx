@@ -41,7 +41,7 @@
  * `DesignSessionProvider`.
  */
 
-import { useEffect, useMemo, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import type { DesignFileV2, SketchEntity } from '../../shared/design-schema'
 import { Sketch2DCanvas, type SketchTool } from './Sketch2DCanvas'
 import { sketchToolForDesignCommand } from './design-command-map'
@@ -192,6 +192,14 @@ export interface SketchSurfaceProps {
    * without Electron. Optional.
    */
   readonly loadFontBuffer?: FontBufferLoader
+  /**
+   * Wave 3n — pass-through of the canvas's own pointer->world output
+   * (`Sketch2DCanvas.onCursorWorld`: the snap-resolved sketch-plane mm the
+   * placement logic uses; `null` on pointer-leave). This surface adds exactly
+   * one behavior: it fires `null` on unmount, so the shell StatusBar read-out
+   * blanks when the operator leaves the Sketch stage. Optional + additive.
+   */
+  readonly onCursorWorld?: (xyMm: readonly [number, number] | null) => void
 }
 
 /**
@@ -210,10 +218,22 @@ export function SketchSurface({
   onSketchHint,
   planeLabel,
   onImportDxf,
-  loadFontBuffer
+  loadFontBuffer,
+  onCursorWorld
 }: SketchSurfaceProps): JSX.Element {
   const [activeTool, setActiveTool] = useState<SketchTool>('line')
   const [snapEnabled, setSnapEnabled] = useState(true)
+  // Wave 3n — blank the StatusBar coordinate read-out when this surface
+  // unmounts (Sketch->Model stage switch / sketch exit): the canvas can only
+  // report pointer-leave, not its own teardown. Latest-callback ref so the
+  // once-only cleanup never re-runs on a prop identity change.
+  const onCursorWorldRef = useRef(onCursorWorld)
+  onCursorWorldRef.current = onCursorWorld
+  useEffect(() => {
+    return () => {
+      onCursorWorldRef.current?.(null)
+    }
+  }, [])
   // Wave 3f — the Text dialog mounts as an overlay on the surface. Armed by the
   // `sk_text` ribbon command (auto-open) or the surface's own "Text" button.
   const [textDialogOpen, setTextDialogOpen] = useState(false)
@@ -506,6 +526,7 @@ export function SketchSurface({
             sketchScaleFactor={scaleFactor}
             gridMm={gridMm}
             onSketchHint={onSketchHint}
+            onCursorWorld={onCursorWorld}
             planeLabel={planeLabel}
           />
           {textDialogOpen && (

@@ -465,6 +465,24 @@ export interface DesignWorkspaceProps {
    */
   readonly onCommandSurface?: (surface: SelectionSurface & { readonly sketchMode: boolean }) => void
   /**
+   * Wave 3n — pass-through of the mounted sketch surface's pointer→world
+   * output (`SketchSurface.onCursorWorld` ← the canvas's own snap-resolved
+   * sketch-plane mm; `null` on pointer-leave/unmount). The host feeds it into
+   * the shell `CursorCoordsContext` so the StatusBar shows live X/Y. The
+   * workspace stays provider-less — it only threads the callback. Optional.
+   */
+  readonly onSketchCursorWorld?: (xyMm: readonly [number, number] | null) => void
+  /**
+   * Wave 3n — pass-through of the viewport's last face/edge PICK point
+   * (`Viewport3D.onPickPoint`, world mm — fires only when a pick registers;
+   * hover is deliberately not raycast). Same StatusBar destination. Optional.
+   */
+  readonly onViewportPickPoint?: (pointMm: {
+    readonly x: number
+    readonly y: number
+    readonly z: number
+  }) => void
+  /**
    * No-code build→render: the live `THREE.BufferGeometry` of the kernel-built
    * solid (or sketch-preview / imported asset) the host's
    * `DesignSessionContext` maintains. When the operator builds a model with the
@@ -561,6 +579,8 @@ export function DesignWorkspace({
   sketchPlanePickArmed = false,
   onSketchPlanePicked,
   onCommandSurface,
+  onSketchCursorWorld,
+  onViewportPickPoint,
   kernelViewportGeometry = null,
   kernelBuilding = false,
 }: DesignWorkspaceProps): JSX.Element {
@@ -1560,6 +1580,7 @@ export function DesignWorkspace({
                   onImportDxf={onSketchImportDxf}
                   armedToolCommandId={armedSketchTool}
                   onSketchHint={(msg) => onToast?.('ok', msg)}
+                  onCursorWorld={onSketchCursorWorld}
                   planeLabel={
                     sketchFacePlane !== null
                       ? `Face @ (${sketchFacePlane.origin.map((c) => c.toFixed(0)).join(', ')})`
@@ -1596,6 +1617,10 @@ export function DesignWorkspace({
                   ? handleViewportSelect
                   : undefined
               }
+              // Wave 3n — the viewport reports the raycast point ONLY for a
+              // registered pick (gated inside Viewport3D on onSelect), so this
+              // can be threaded unconditionally.
+              onPickPoint={onViewportPickPoint}
               selectionMode={selectionMode}
               // Construct sketch-on-face: a plain face click chooses the sketch
               // plane (origin/normal/xAxis) while armed via `sk_choose_plane`.
