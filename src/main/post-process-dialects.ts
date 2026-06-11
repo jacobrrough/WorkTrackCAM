@@ -18,8 +18,12 @@ export function resolveDialectSnippets(dialect: MachineProfile['dialect']): Post
       return { on: 'M3 S12000', off: 'M5', units: 'G21' }
     case 'smoothieware':
       // [ID-0160] Cycle 68 — Smoothieware-family (Makera Carvera 3-axis)
-      // shares the GRBL-flavored M3/M5 spindle convention. The 12000 RPM
-      // default sits in the middle of the Carvera's 6000–15000 RPM band.
+      // shares the GRBL-flavored M3/M5 spindle convention. NOTE (Cycle 245,
+      // task_feef69e0): this raw S12000 constant is a DIALECT default, not the
+      // emitted value — renderPost resolves it against the machine profile's
+      // [minSpindleRpm, maxSpindleRpm] window when no explicit RPM is given
+      // (the bundled Carvera 3-axis floor is 13,000 RPM, so its posted
+      // default is S13000; the 4-axis profile's 6,000 floor leaves S12000).
       return { on: 'M3 S12000', off: 'M5', units: 'G21' }
     case 'fanuc_4axis':
       return { on: 'M3 S10000', off: 'M5', units: 'G21' }

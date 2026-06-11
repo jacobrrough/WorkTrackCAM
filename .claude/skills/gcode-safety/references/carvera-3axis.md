@@ -38,6 +38,16 @@ The Post template `carvera_3axis.hbs` and the profile `makera-carvera-3axis.json
 
 **Reminder**: don't copy Laguna feeds into Carvera jobs. The Laguna Swift's 12000 mm/min ceiling will sail through a Carvera schema check (the profile gate is local to the machine) but will instantly stall the 200 W spindle. Stay inside 2400 mm/min on the Carvera.
 
+**Default spindle RPM resolves against this window (Cycle 245, task_feef69e0).** The
+Smoothieware dialect's raw `M3 S12000` constant used to post verbatim when no explicit RPM
+was set — below the 13,000 RPM floor. `renderPost` now resolves the dialect default against
+`[minSpindleRpm, maxSpindleRpm]`, so the Carvera 3-axis posted default is `M3 S13000`
+(silently — a system default being corrected, not an operator input; an explicit below-floor
+RPM still clamps WITH a warning). The 4-axis profile's 6,000 floor leaves its `S12000`
+default unchanged, and Mach3's bare `M3` (Laguna — pendant-controlled RPM) never gains an
+S-word. Pinned by `post-process-spindle.test.ts` + the contract suite's
+default-spindle-on tests.
+
 ---
 
 ## Header invariants (in order)

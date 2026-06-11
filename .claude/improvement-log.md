@@ -18344,3 +18344,37 @@ verifier's independent modal walkers); K2 + 4-axis unreachable from these diffs.
 **The CAM-stacks quartet is closed:** A in-process stock model (c99a284, 2026-06-08) · B
 adaptive clearing (887c273) · C rest machining (c2af226) · D this close-out. Honest v2 frontier
 recorded in the catalog: G2/G3 arcs, feed modulation, helical entry, IPW-aware rest, 3D rest.
+
+## Cycle 245 — the dialect default S-word now respects the machine spindle window (2026-06-11)
+
+**Focus:** task_feef69e0 — posted Carvera 3-axis G-code defaulted to `M3 S12000`, BELOW the
+200 W spindle's rated 13,000 RPM floor (`minSpindleRpm`; sub-13k risks spindle damage).
+`clampSpindleRpm` existed but only ran for an EXPLICIT `opts.spindleRpm` — the dialect's
+hard-coded default bypassed it entirely.
+
+**Baseline → result:** 16,062 → **16,070 pass / 1 skip / 0 fail** (+8); tsc clean.
+
+**Fix (src/main/post-process.ts):** when no explicit RPM is provided, renderPost parses the
+dialect default's S-word and resolves it through `clampSpindleRpm` against the machine's
+`[minSpindleRpm, maxSpindleRpm]` window — SILENTLY (the system choosing a correct default,
+not an operator input being adjusted; an always-on warning would be the advisory-noise trap).
+An explicit below-floor RPM still clamps WITH the warning. Dialect constants unchanged
+(post-process-dialects.ts only gained an honest comment — its raw-snippet pins still hold).
+
+**Posted-byte changes (reviewed regeneration):** Carvera 3-axis default `M3 S12000 → M3
+S13000`. Exactly TWO snapshot lines changed across the repo (cam-rest-region +
+cam-runner-2d-rest Carvera programs), verified by diff to be the S-word ONLY. All other 30
+snapshot occurrences of S12000 are synthetic-machine programs without a 13k floor — untouched.
+**Unchanged by proof:** Carvera 4-axis (floor 6,000 → S12000 legal; carvera-pipeline 17/17
+green), Laguna (bare Mach3 `M3` gains NO S-word — pinned), K2 (no spindle path).
+
+**Tests:** +5 default-resolution units (floor-raise silent, in-window untouched,
+ceiling-lower silent, bare-M3 untouched, explicit-still-warns) in post-process-spindle.test.ts;
++3 real-profile contract pins (posted default `^M3 S13000$`, explicit 12000 clamps+warns,
+in-window 14000 verbatim) in post-process-carvera-3axis-contract.test.ts; the dialects-pin
+source-text whitelist updated per intended-drift (now pins the resolution note so the safety
+comment cannot silently disappear); stale "6000–15000 band" prose fixed in both test headers.
+
+**G-code safety:** skill walked — machines covered: Carvera 3-axis (the change), Carvera
+4-axis + Laguna + K2 (proven unchanged); resources/** byte-identical; the living
+carvera-3axis.md reference gains the default-resolution note.

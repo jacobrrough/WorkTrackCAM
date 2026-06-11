@@ -121,3 +121,61 @@ describe('renderPost with spindleRpm', () => {
     expect(sw[0]).toContain('6000')
   })
 })
+
+// --- default S-word resolution (no explicit spindleRpm) ----------------------
+// task_feef69e0 / Cycle 245: the dialect's hard-coded default S-word used to
+// bypass clampSpindleRpm entirely — the Smoothieware `M3 S12000` default ran
+// the Carvera 3-axis 200 W spindle below its rated 13,000 RPM floor. With no
+// explicit spindleRpm, renderPost now resolves the dialect default against the
+// machine's [minSpindleRpm, maxSpindleRpm] window. SILENTLY: the system is
+// choosing a correct default, not adjusting an operator input — no warning
+// (an always-on warning would be the advisory-noise trap).
+describe('renderPost default S-word resolution against the machine window', () => {
+  const spindleWarnings = (warnings: string[]): string[] =>
+    warnings.filter(w => !/^\[(HEADER_|END_)/.test(w))
+
+  it('default below the machine floor is raised to minSpindleRpm — silently', async () => {
+    const machineMin13k: MachineProfile = { ...machine, minSpindleRpm: 13000, maxSpindleRpm: 15000 }
+    const { gcode: g, warnings } = await renderPost(resourcesRoot, machineMin13k, ['G0 X1 Y1'])
+    expect(g).toContain('M3 S13000')
+    expect(g).not.toContain('S12000')
+    expect(spindleWarnings(warnings)).toEqual([])
+  })
+
+  it('default inside the window is untouched (Carvera-4-axis-style 6000 floor)', async () => {
+    const machineMin6k: MachineProfile = { ...machine, minSpindleRpm: 6000, maxSpindleRpm: 15000 }
+    const { gcode: g, warnings } = await renderPost(resourcesRoot, machineMin6k, ['G0 X1 Y1'])
+    expect(g).toContain('M3 S12000')
+    expect(spindleWarnings(warnings)).toEqual([])
+  })
+
+  it('default above the machine ceiling is lowered to maxSpindleRpm — silently', async () => {
+    const machineMax10k: MachineProfile = { ...machine, maxSpindleRpm: 10000 }
+    const { gcode: g, warnings } = await renderPost(resourcesRoot, machineMax10k, ['G0 X1 Y1'])
+    expect(g).toContain('M3 S10000')
+    expect(g).not.toContain('S12000')
+    expect(spindleWarnings(warnings)).toEqual([])
+  })
+
+  it('a bare-M3 dialect (mach3 — the Laguna pendant owns RPM) gains NO S-word', async () => {
+    const lagunaStyle: MachineProfile = {
+      ...machine,
+      dialect: 'mach3',
+      postTemplate: 'vcarve_mach3.hbs',
+      minSpindleRpm: 6000,
+      maxSpindleRpm: 24000
+    }
+    const { gcode: g } = await renderPost(resourcesRoot, lagunaStyle, ['G0 X1 Y1'])
+    expect(g).toMatch(/^M3$/m)
+    expect(g).not.toMatch(/^M3 S\d+/m)
+  })
+
+  it('an EXPLICIT below-floor RPM still clamps WITH the warning (operator input adjusted)', async () => {
+    const machineMin13k: MachineProfile = { ...machine, minSpindleRpm: 13000, maxSpindleRpm: 15000 }
+    const { gcode: g, warnings } = await renderPost(resourcesRoot, machineMin13k, ['G0 X1 Y1'], { spindleRpm: 12000 })
+    expect(g).toContain('M3 S13000')
+    const sw = spindleWarnings(warnings)
+    expect(sw).toHaveLength(1)
+    expect(sw[0]).toContain('13000')
+  })
+})

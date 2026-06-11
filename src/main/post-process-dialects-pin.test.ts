@@ -19,9 +19,14 @@
  *     ONLY case in the entire switch without an S-word literal -- if a future
  *     refactor accidentally normalizes it to `M3 S<n>` the Laguna posts will
  *     emit a wrong spindle command. This pin catches that drift.
- *   - **Makera Carvera 3-axis**: `smoothieware` -> `M3 S12000`. The 12000 RPM
- *     value sits in the middle of Carvera's documented 6000-15000 RPM band per
- *     the [ID-0160] Cycle 68 source-comment provenance.
+ *   - **Makera Carvera 3-axis**: `smoothieware` -> `M3 S12000` as the RAW
+ *     dialect constant. Since Cycle 245 (task_feef69e0) renderPost resolves
+ *     that default against the machine profile's [minSpindleRpm,
+ *     maxSpindleRpm] window when no explicit RPM is given — the bundled
+ *     3-axis profile's 13,000 RPM floor posts `M3 S13000`; the 4-axis
+ *     profile's 6,000 floor leaves `S12000`. This file pins the CONSTANTS;
+ *     the resolution behavior is pinned in post-process-spindle.test.ts and
+ *     the Carvera 3-axis contract suite.
  *   - **Makera Carvera 4-axis** (community firmware): one of the `*_4axis`
  *     branches depending on which post-template its profile points at.
  *
@@ -419,9 +424,17 @@ describe('H: source-text whitelist', () => {
   })
 
   it('keeps the [ID-0160] Cycle 68 Smoothieware provenance comment', () => {
+    // INTENDED DRIFT (Cycle 245, task_feef69e0): the old comment claimed the
+    // raw S12000 "sits in the middle of the Carvera's 6000–15000 RPM band" —
+    // stale (the bundled 3-axis profile floor is 13,000 RPM) and the constant
+    // is no longer what posts. The comment now documents the render-time
+    // resolution against the profile window; pin THAT so the safety note
+    // cannot silently disappear.
     expect(SRC).toMatch(/\[ID-0160\] Cycle 68/)
     expect(SRC).toMatch(/Smoothieware-family \(Makera Carvera 3-axis\)/)
-    expect(SRC).toMatch(/12000 RPM\s+\/\/ default sits in the middle of the Carvera's 6000.15000 RPM band/)
+    expect(SRC).toMatch(/DIALECT default, not the\s+\/\/ emitted value/)
+    expect(SRC).toMatch(/\[minSpindleRpm, maxSpindleRpm\] window/)
+    expect(SRC).toMatch(/Carvera 3-axis floor is 13,000 RPM/)
   })
 
   it('encodes the work-offset arithmetic literally as `53 + index`', () => {

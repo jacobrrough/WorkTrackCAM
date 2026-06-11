@@ -30,7 +30,9 @@
  *   the GENERIC invariants. This file pins the Carvera-3-axis-SPECIFIC
  *   contract: ATC slot semantics (T0=probe, T-1=no tool, T1–T6=cutters),
  *   the Smoothieware "M30 may delete file" gotcha, the 2400 mm/min feed
- *   ceiling, and the 6000–15000 RPM spindle band. The two layers complement.
+ *   ceiling, and the 13,000–15,000 RPM spindle band (the 200 W spindle's
+ *   rated window — sub-13k risks spindle damage; Cycle 245 made the posted
+ *   DEFAULT S-word resolve against this window). The two layers complement.
  */
 
 import { readFileSync } from 'node:fs'
@@ -377,6 +379,35 @@ describe('carvera-3axis contract: machine scope (My-Shop-Only Mode)', () => {
     const m = loadCarvera3AxisProfile()
     expect(m.minSpindleRpm).toBe(13000)
     expect(m.maxSpindleRpm).toBe(15000)
+  })
+
+  it('runtime: the posted DEFAULT spindle-on line respects the 13,000 RPM floor (task_feef69e0)', async () => {
+    // Cycle 245: the Smoothieware dialect's raw `M3 S12000` default used to
+    // bypass clampSpindleRpm and run the 200 W spindle below its rated floor.
+    // With no explicit spindleRpm, renderPost now resolves the dialect default
+    // against THIS profile's [13000, 15000] window — silently (a system
+    // default being corrected, not an operator input being adjusted).
+    const m = loadCarvera3AxisProfile()
+    const { gcode } = await renderPost(RESOURCES_ROOT, m, SAMPLE_3AXIS_TOOLPATH)
+    expect(gcode).toMatch(/^M3 S13000$/m)
+    expect(gcode).not.toContain('S12000')
+  })
+
+  it('runtime: an EXPLICIT below-floor RPM still clamps WITH a warning', async () => {
+    const m = loadCarvera3AxisProfile()
+    const { gcode, warnings } = await renderPost(RESOURCES_ROOT, m, SAMPLE_3AXIS_TOOLPATH, {
+      spindleRpm: 12000
+    })
+    expect(gcode).toMatch(/^M3 S13000$/m)
+    expect(warnings.some((w) => w.includes('below machine minimum 13000'))).toBe(true)
+  })
+
+  it('runtime: an in-window EXPLICIT RPM posts verbatim (14000)', async () => {
+    const m = loadCarvera3AxisProfile()
+    const { gcode } = await renderPost(RESOURCES_ROOT, m, SAMPLE_3AXIS_TOOLPATH, {
+      spindleRpm: 14000
+    })
+    expect(gcode).toMatch(/^M3 S14000$/m)
   })
 
   it('runtime: profile work envelope matches Carvera 3-axis spec (360×240×140 mm)', () => {

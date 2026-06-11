@@ -1023,6 +1023,27 @@ export async function renderPost(
     const clamped = clampSpindleRpm(opts.spindleRpm, machine)
     spindleOn = applySpindleRpm(on, clamped.rpm)
     spindleWarning = clamped.warning
+  } else {
+    // task_feef69e0: the dialect's hard-coded default S-word used to bypass
+    // clampSpindleRpm entirely -- the Smoothieware default `M3 S12000` ran the
+    // Carvera 3-axis 200 W spindle BELOW its rated 13,000 RPM floor
+    // (`minSpindleRpm`; sub-13k risks spindle damage per the gcode-safety
+    // reference). When no explicit RPM is provided, resolve the dialect
+    // default against the machine's rated window instead of emitting the raw
+    // constant. SILENT by design: this is the system choosing a correct
+    // default, not an operator input being adjusted -- a warning here would
+    // fire on every legitimate program (the advisory-noise trap). Dialects
+    // whose default has no S-word (Mach3's bare `M3` -- the Laguna pendant
+    // owns RPM) and machines whose window already contains the default
+    // (Carvera 4-axis, floor 6000) are byte-untouched.
+    const defaultSWord = on.match(/S(\d+)/)
+    if (defaultSWord) {
+      const defaultRpm = Number.parseInt(defaultSWord[1]!, 10)
+      const resolved = clampSpindleRpm(defaultRpm, machine)
+      if (resolved.rpm !== defaultRpm) {
+        spindleOn = applySpindleRpm(on, resolved.rpm)
+      }
+    }
   }
 
   // ── Arc fitting: convert G1 sequences to G2/G3 arcs where possible ──

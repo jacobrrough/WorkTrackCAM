@@ -35,7 +35,7 @@ G43 H1           ; apply tool length compensation for tool 1
 
 ; Safe retract and spindle start
 G0 Z140 ; safe Z retract
-M3 S12000
+M3 S13000
 G4 P2            ; dwell 2s for spindle to reach speed
 
 ; --- Toolpath ---
