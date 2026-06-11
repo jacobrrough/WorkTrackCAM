@@ -7,6 +7,10 @@
  *   > Carvera CLI is in a Makera panel, Laguna's setup sheet is a
  *   > button. Pro apps consolidate "what is each machine doing right now".
  *
+ *   (Historical quote — ShopApp.tsx was retired in the P5 cutover; the live
+ *   send/export surfaces now live in the Manufacture workspace behind the
+ *   `gcode-send-gate.ts` seam. See the Safety section below.)
+ *
  * Layout: three machine status cards (Laguna Swift 5x10 / Creality K2
  * Plus / Makera Carvera) in a grid that mirrors the brand-bar env
  * switcher order (VCarve Pro → Creality Print → Makera CAM).
