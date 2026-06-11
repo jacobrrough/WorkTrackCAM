@@ -1,0 +1,274 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dispatch2dStrategy -- cnc_pocket rest mode on Laguna Swift 5x10 (offset_spiral) > matches the NEW posted-program snapshot (rest-op shape) 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 24000 RPM
+; Operation: Rest pass -- 60x40 corner lobes (prev 12 mm, tool 6 mm)
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+; Rest region 1/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X5.583 Y0.015
+G1 Z-3.000 F400
+G1 X4.896 Y0.102 F1500
+G1 X4.224 Y0.269 F1500
+G1 X3.576 Y0.512 F1500
+G1 X2.959 Y0.828 F1500
+G1 X2.384 Y1.212 F1500
+G1 X1.856 Y1.661 F1500
+G1 X1.384 Y2.167 F1500
+G1 X0.973 Y2.725 F1500
+G1 X0.629 Y3.326 F1500
+G1 X0.356 Y3.963 F1500
+G1 X0.159 Y4.627 F1500
+G1 X0.040 Y5.309 F1500
+G1 X0.000 Y6.000 F1500
+G1 X0.000 Y0.000 F1500
+G1 X6.000 Y0.000 F1500
+G1 X5.583 Y0.015 F1500
+G0 Z6.000
+; Rest region 2/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X0.015 Y34.416
+G1 Z-3.000 F400
+G1 X0.102 Y35.103 F1500
+G1 X0.269 Y35.776 F1500
+G1 X0.512 Y36.424 F1500
+G1 X0.828 Y37.041 F1500
+G1 X1.212 Y37.616 F1500
+G1 X1.661 Y38.144 F1500
+G1 X2.167 Y38.616 F1500
+G1 X2.725 Y39.027 F1500
+G1 X3.326 Y39.371 F1500
+G1 X3.963 Y39.644 F1500
+G1 X4.627 Y39.841 F1500
+G1 X5.309 Y39.960 F1500
+G1 X6.000 Y40.000 F1500
+G1 X0.000 Y40.000 F1500
+G1 X0.000 Y34.000 F1500
+G1 X0.015 Y34.416 F1500
+G0 Z6.000
+; Rest region 3/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X60.000 Y6.000
+G1 Z-3.000 F400
+G1 X59.986 Y5.583 F1500
+G1 X59.898 Y4.896 F1500
+G1 X59.731 Y4.224 F1500
+G1 X59.488 Y3.576 F1500
+G1 X59.172 Y2.959 F1500
+G1 X58.788 Y2.384 F1500
+G1 X58.339 Y1.856 F1500
+G1 X57.833 Y1.384 F1500
+G1 X57.275 Y0.973 F1500
+G1 X56.674 Y0.629 F1500
+G1 X56.037 Y0.356 F1500
+G1 X55.373 Y0.159 F1500
+G1 X54.691 Y0.040 F1500
+G1 X54.000 Y0.000 F1500
+G1 X60.000 Y0.000 F1500
+G1 X60.000 Y6.000 F1500
+G0 Z6.000
+; Rest region 4/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X60.000 Y40.000
+G1 Z-3.000 F400
+G1 X54.000 Y40.000 F1500
+G1 X54.416 Y39.986 F1500
+G1 X55.103 Y39.898 F1500
+G1 X55.776 Y39.731 F1500
+G1 X56.424 Y39.488 F1500
+G1 X57.041 Y39.172 F1500
+G1 X57.616 Y38.788 F1500
+G1 X58.144 Y38.339 F1500
+G1 X58.616 Y37.833 F1500
+G1 X59.027 Y37.275 F1500
+G1 X59.371 Y36.674 F1500
+G1 X59.644 Y36.037 F1500
+G1 X59.841 Y35.373 F1500
+G1 X59.960 Y34.691 F1500
+G1 X60.000 Y34.000 F1500
+G1 X60.000 Y40.000 F1500
+G0 Z6.000
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;
+
+exports[`dispatch2dStrategy -- cnc_pocket rest mode on Makera Carvera 3-axis (shared dispatch) > matches the NEW posted-program snapshot (rest-op shape, Carvera dialect) 1`] = `
+"; Makera Carvera — 3-Axis G-code
+; Machine: Makera Carvera (3-Axis) — makera-carvera-3axis
+; Operation: Rest pass -- 60x40 corner lobes (prev 12 mm, tool 6 mm)
+; ---------------------------------------------------------------------------
+; SAFETY CHECKLIST:
+; [1] Workpiece securely clamped to table
+; [2] Correct tool loaded in ATC slot (T1–T6)
+; [3] Work coordinate system (WCS) zeroed — use G10 L20 P1 or controller UI
+; [4] Air-cut first: spindle off, Z raised, 10% feed override
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Carvera firmware docs
+; before running on the machine.
+; Before production: dry run — spindle off, Z high, feed reduced.
+; Compare a short program to a known-good file from Makera CAM.
+; See docs/MACHINES.md — safe Z, WCS, units, spindle M-codes.
+; ---------------------------------------------------------------------------
+; ATC: Carvera 6-slot auto tool changer (T1–T6). T0 = probe, T-1 = no tool.
+; After M6, the machine automatically probes tool length.
+; G43 H(tool#) applies tool length compensation.
+; G49 cancels tool length compensation at program end.
+; ---------------------------------------------------------------------------
+; Work area (mm): 360 x 240 x 140
+; Spindle range: 13000–15000 RPM
+; ---------------------------------------------------------------------------
+G21              ; millimeters
+G90              ; absolute positioning
+G17              ; XY plane
+; --- Tool change (ATC) ---
+; Verify tool number matches the slot loaded in the Carvera ATC.
+M6 T1            ; select tool 1 and execute tool change (auto-probes length)
+G43 H1           ; apply tool length compensation for tool 1
+
+; Safe retract and spindle start
+G0 Z140 ; safe Z retract
+M3 S12000
+G4 P2            ; dwell 2s for spindle to reach speed
+
+; --- Toolpath ---
+; Rest region 1/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X5.583 Y0.015
+G1 Z-3.000 F400
+G1 X4.896 Y0.102 F1500
+G1 X4.224 Y0.269 F1500
+G1 X3.576 Y0.512 F1500
+G1 X2.959 Y0.828 F1500
+G1 X2.384 Y1.212 F1500
+G1 X1.856 Y1.661 F1500
+G1 X1.384 Y2.167 F1500
+G1 X0.973 Y2.725 F1500
+G1 X0.629 Y3.326 F1500
+G1 X0.356 Y3.963 F1500
+G1 X0.159 Y4.627 F1500
+G1 X0.040 Y5.309 F1500
+G1 X0.000 Y6.000 F1500
+G1 X0.000 Y0.000 F1500
+G1 X6.000 Y0.000 F1500
+G1 X5.583 Y0.015 F1500
+G0 Z6.000
+; Rest region 2/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X0.015 Y34.416
+G1 Z-3.000 F400
+G1 X0.102 Y35.103 F1500
+G1 X0.269 Y35.776 F1500
+G1 X0.512 Y36.424 F1500
+G1 X0.828 Y37.041 F1500
+G1 X1.212 Y37.616 F1500
+G1 X1.661 Y38.144 F1500
+G1 X2.167 Y38.616 F1500
+G1 X2.725 Y39.027 F1500
+G1 X3.326 Y39.371 F1500
+G1 X3.963 Y39.644 F1500
+G1 X4.627 Y39.841 F1500
+G1 X5.309 Y39.960 F1500
+G1 X6.000 Y40.000 F1500
+G1 X0.000 Y40.000 F1500
+G1 X0.000 Y34.000 F1500
+G1 X0.015 Y34.416 F1500
+G0 Z6.000
+; Rest region 3/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X60.000 Y6.000
+G1 Z-3.000 F400
+G1 X59.986 Y5.583 F1500
+G1 X59.898 Y4.896 F1500
+G1 X59.731 Y4.224 F1500
+G1 X59.488 Y3.576 F1500
+G1 X59.172 Y2.959 F1500
+G1 X58.788 Y2.384 F1500
+G1 X58.339 Y1.856 F1500
+G1 X57.833 Y1.384 F1500
+G1 X57.275 Y0.973 F1500
+G1 X56.674 Y0.629 F1500
+G1 X56.037 Y0.356 F1500
+G1 X55.373 Y0.159 F1500
+G1 X54.691 Y0.040 F1500
+G1 X54.000 Y0.000 F1500
+G1 X60.000 Y0.000 F1500
+G1 X60.000 Y6.000 F1500
+G0 Z6.000
+; Rest region 4/4 (previous tool 12.000 mm)
+; Pocket offset-spiral -- 1 inset level(s), 1 loop(s), inside-out, stepover 2.400 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X60.000 Y40.000
+G1 Z-3.000 F400
+G1 X54.000 Y40.000 F1500
+G1 X54.416 Y39.986 F1500
+G1 X55.103 Y39.898 F1500
+G1 X55.776 Y39.731 F1500
+G1 X56.424 Y39.488 F1500
+G1 X57.041 Y39.172 F1500
+G1 X57.616 Y38.788 F1500
+G1 X58.144 Y38.339 F1500
+G1 X58.616 Y37.833 F1500
+G1 X59.027 Y37.275 F1500
+G1 X59.371 Y36.674 F1500
+G1 X59.644 Y36.037 F1500
+G1 X59.841 Y35.373 F1500
+G1 X59.960 Y34.691 F1500
+G1 X60.000 Y34.000 F1500
+G1 X60.000 Y40.000 F1500
+G0 Z6.000
+; --- end toolpath ---
+
+; --- End ---
+M5
+G49              ; cancel tool length compensation
+G0 Z140 ; retract Z
+G0 X0 Y0        ; park X Y
+M9               ; coolant/vacuum off
+M2               ; program end (NOT M30 — M30 may delete file on Smoothieware)
+"
+`;

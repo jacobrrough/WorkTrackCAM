@@ -256,7 +256,8 @@ export const manufactureOperationSchema = z.object({
      *   `maxEngagementMm`, `trochoidRadiusMm` (default cap/2),
      *   `trochoidStepMm` (default cap/4), plus the pocket family
      *   (`stepoverMm`, `wallStockMm`, `zStepMm`, `entryMode`, `rampMm`,
-     *   `rampMaxAngleDeg`, `finishPass`).
+     *   `rampMaxAngleDeg`, `finishPass`), and rest machining via
+     *   `restPrevToolDiameterMm` (clear only what a previous, larger tool left).
      * - **Mesh mode** (no `contourPoints`): OpenCAMLib `AdaptiveWaterline` when
      *   available; else built-in parallel finish from STL bounds (CAM run
      *   reports fallback reason). Unchanged legacy path.
@@ -509,6 +510,18 @@ export const manufactureOperationSchema = z.object({
    *   concentric insets of (outer - islands) at `wallStockMm + k*stepover`, traced inside-out
    *   with a safe-Z lift between every loop). Pocket depth is hard-capped to the stock
    *   thickness when `stockBoxZMm` is known (clearing passes AND finish contours).
+   *   Rest machining (Stack C v1, additive): `restPrevToolDiameterMm` (mm) opts the pocket
+   *   family (`cnc_pocket`, and `cnc_adaptive` / `cnc_trochoidal_hsm` in 2D contour mode) into
+   *   clearing ONLY the REST REGION -- the material a PREVIOUS, larger tool of that diameter
+   *   provably could not reach (square corners, narrow channels): reachable = morphological
+   *   opening of the pocket region by the previous tool radius (clipper erode + dilate, round
+   *   joins); rest = region minus reachable. The value must be finite and LARGER than this
+   *   op's tool diameter or the run fails with an honest validation error; an empty rest (the
+   *   previous tool reached everything) is an honest error too, never a crash. In rest mode
+   *   the outer-wall AND island finish traces are SUPPRESSED (the previous tool's op already
+   *   finished those walls -- re-tracing wastes air / burnishes the wall) and `wallStockMm` is
+   *   folded into the rest solve instead of the clearing generator. Ops WITHOUT the param are
+   *   untouched (byte-identical output).
    * - adaptive clearing (`cnc_adaptive` / `cnc_trochoidal_hsm` in 2D contour mode, Stack B v1):
    *   `contourPoints` + optional `islandRings` exactly like pocket, plus
    *   `maxEngagementMm` (radial engagement cap, mm; default 40% of tool Ø for `cnc_adaptive`,
@@ -518,6 +531,9 @@ export const manufactureOperationSchema = z.object({
    *   `trochoidStepMm` (advance per relief circle, default cap/4, clamped to the radius).
    *   Shares the pocket param family (`stepoverMm`, `wallStockMm`, `zStepMm`, `entryMode`,
    *   `rampMm`, `rampMaxAngleDeg`, `finishPass`) and the stock-thickness depth hard-cap.
+   *   The adaptive family honors `restPrevToolDiameterMm` too (see the pocket rest-machining
+   *   paragraph above) -- note the Stack-B engine SKIPS cusped corner-lobe rest regions with a
+   *   hint (use cnc_pocket for those); channel-shaped rest regions cut normally.
    *   v1 honesty: relief arcs are fine G1 polylines (no G2/G3); unrelievable geometry is
    *   skipped with material left + a hint, never slotted above the cap. WITHOUT
    *   `contourPoints` both kinds keep their legacy mesh path (OCL AdaptiveWaterline /

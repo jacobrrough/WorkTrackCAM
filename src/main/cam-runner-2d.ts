@@ -31,9 +31,11 @@ import {
   generateContour2dLines,
   generateDrill2dLines,
   generatePocket2dLines,
-  generateVCarve2dLines
+  generateVCarve2dLines,
+  type CamPoint2d
 } from './cam-local'
 import { generatePocketOffsetSpiralLines } from './cam-pocket-offset'
+import { solveRestRegion } from './cam-rest-region'
 import { renderPost } from './post-process'
 import {
   extractPostProcessingOpts,
@@ -87,6 +89,57 @@ function positiveParamNumber(v: unknown): number | undefined {
 }
 
 /**
+ * Stack C v1 -- resolved rest-machining mode for the pocket family
+ * (`cnc_pocket`, `cnc_adaptive`, `cnc_trochoidal_hsm` in 2D contour mode).
+ *
+ * `restPrevToolDiameterMm` opts an op into REST MACHINING: instead of clearing
+ * the whole pocket region, the op clears ONLY the rest region -- the material a
+ * PREVIOUS, larger tool of that diameter provably could not reach (square
+ * corners, narrow channels). Absent param = normal full-region pass, and the
+ * whole rest path is skipped BY CONSTRUCTION (ops without the param post
+ * byte-identically to pre-Stack-C output).
+ */
+type RestMachiningMode =
+  | { kind: 'off' }
+  | { kind: 'rest'; prevToolDiameterMm: number }
+  | { kind: 'invalid'; error: string; hint: string }
+
+/**
+ * Parse + validate `restPrevToolDiameterMm`. The param must be a positive,
+ * finite number STRICTLY larger than the current tool diameter (when the
+ * current diameter is known) -- an equal or smaller previous tool left nothing
+ * only this tool can reach, so the honest answer is a validation error, not an
+ * empty program.
+ */
+function resolveRestMachiningMode(
+  p: Record<string, unknown>,
+  currentToolDiameterMm: number | undefined
+): RestMachiningMode {
+  const raw = p['restPrevToolDiameterMm']
+  if (raw == null) return { kind: 'off' }
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return {
+      kind: 'invalid',
+      error: 'Rest machining parameter invalid.',
+      hint: `restPrevToolDiameterMm must be a positive, finite diameter in mm (the PREVIOUS, larger tool that already roughed this region); got ${typeof raw === 'string' ? `'${raw}'` : String(raw)}. Remove the param to run a normal full-region pass.`
+    }
+  }
+  if (
+    typeof currentToolDiameterMm === 'number' &&
+    Number.isFinite(currentToolDiameterMm) &&
+    currentToolDiameterMm > 0 &&
+    raw <= currentToolDiameterMm
+  ) {
+    return {
+      kind: 'invalid',
+      error: 'Rest machining requires a larger previous tool.',
+      hint: `restPrevToolDiameterMm (${raw.toFixed(3)} mm) must exceed this operation's tool diameter (${currentToolDiameterMm.toFixed(3)} mm) -- an equal or smaller previous tool left nothing only this tool can reach. Set it to the roughing tool's diameter, or remove it for a normal pass.`
+    }
+  }
+  return { kind: 'rest', prevToolDiameterMm: raw }
+}
+
+/**
  * Stack B v1 -- trochoid-heavy default engagement cap for `cnc_trochoidal_hsm`
  * as a fraction of tool diameter (vs the engine's 0.4 `cnc_adaptive` default).
  * A tighter cap makes relief trigger sooner AND shrinks the derived trochoid
@@ -108,6 +161,17 @@ const TROCHOIDAL_HSM_ENGAGEMENT_FRACTION = 0.2
  * only -- `runCamPipeline` routes those two here ONLY when the op carries
  * `contourPoints`; mesh ops keep the legacy OCL chain), `cnc_pcb_isolation`,
  * `cnc_pcb_contour`, `cnc_pcb_drill`.
+ *
+ * Stack C v1 -- REST MACHINING: when a pocket-family op (`cnc_pocket`,
+ * `cnc_adaptive`, `cnc_trochoidal_hsm`) carries `restPrevToolDiameterMm`
+ * (must be finite and LARGER than the current tool diameter, else an honest
+ * validation error), `solveRestRegion` runs FIRST on the placed geometry and
+ * the selected clearing generator runs ONCE PER rest region (regions chain
+ * through safe-Z by construction). Rest mode suppresses the outer-wall AND
+ * island finish traces (the previous, larger tool's op already finished those
+ * walls). An empty rest is an honest `ok: false` ("the previous tool left
+ * nothing this tool can reach"), never a crash. Ops WITHOUT the param take
+ * the pre-Stack-C code path unchanged and post byte-identically.
  */
 export async function dispatch2dStrategy(
   job: CamJobConfig,
@@ -193,47 +257,111 @@ export async function dispatch2dStrategy(
     const pocketZCapped = pocketStockThickness != null && job.zPassMm < -pocketStockThickness
     const pocketZPassMm = pocketZCapped && pocketStockThickness != null ? -pocketStockThickness : job.zPassMm
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
-    const pocket =
+    // Stack C v1 -- REST MACHINING (`restPrevToolDiameterMm`): clear ONLY the
+    // material a previous, larger tool could not reach. PLACEMENT NOTE
+    // (verified): `applyPlacementToOperationParams2d` already ran at the top of
+    // this dispatcher, so `contour` / `islandRings` are in PLACED coordinates
+    // and the rest solve below happens in placed space automatically. A rigid
+    // placement (rotation + translation) preserves distances, so it COMMUTES
+    // with the morphological opening -- solving after placement is exactly
+    // equivalent to solving in local coordinates and transforming the rest
+    // regions; nothing is double-transformed.
+    const restMode = resolveRestMachiningMode(p, job.toolDiameterMm)
+    if (restMode.kind === 'invalid') {
+      return { ok: false, error: restMode.error, hint: restMode.hint }
+    }
+    // One clearing run over one region (the whole pocket in normal mode; one
+    // rest polygon per call in rest mode). Both strategies emit a safe-Z lift
+    // before EVERY loop/segment entry and end their body at safe Z, so
+    // concatenated per-region bodies are chained through safe-Z by
+    // construction (no XY transit at depth between rest regions).
+    const runPocketRegion = (
+      regionOuter: ReadonlyArray<CamPoint2d>,
+      regionIslands: ReadonlyArray<ReadonlyArray<CamPoint2d>>,
+      regionWallStockMm: number
+    ): { lines: string[]; hints: string[] } =>
       pocketStrategy === 'offset_spiral'
         ? generatePocketOffsetSpiralLines({
-            outerRing: contour,
-            islandRings,
+            outerRing: regionOuter,
+            islandRings: regionIslands,
             stepoverMm: job.stepoverMm,
             zPassMm: pocketZPassMm,
             zStepMm,
             feedMmMin: job.feedMmMin,
             plungeMmMin: job.plungeMmMin,
             safeZMm: job.safeZMm,
-            wallStockMm,
+            wallStockMm: regionWallStockMm,
             finishEachDepth,
             entryMode,
             rampMm,
             rampMaxAngleDeg
           })
         : generatePocket2dLines({
-            contourPoints: contour,
-            islandRings,
+            contourPoints: regionOuter,
+            islandRings: regionIslands,
             stepoverMm: job.stepoverMm,
             zPassMm: pocketZPassMm,
             zStepMm,
             feedMmMin: job.feedMmMin,
             plungeMmMin: job.plungeMmMin,
             safeZMm: job.safeZMm,
-            wallStockMm,
+            wallStockMm: regionWallStockMm,
             finishEachDepth,
             entryMode,
             rampMm,
             rampMaxAngleDeg
           })
-    lines = pocket.lines
-    pocketResultHints = pocket.hints
+    if (restMode.kind === 'rest') {
+      // `wallStockMm` is applied INSIDE the rest solve (the region is inset by
+      // it before the opening), so each rest region is cleared with wall stock
+      // 0 -- re-applying it would double-inset and can annihilate corner lobes.
+      const rest = solveRestRegion({
+        outerRing: contour,
+        islandRings,
+        wallStockMm,
+        prevToolDiameterMm: restMode.prevToolDiameterMm,
+        ...(typeof job.toolDiameterMm === 'number' && Number.isFinite(job.toolDiameterMm) && job.toolDiameterMm > 0
+          ? { toolDiameterMm: job.toolDiameterMm }
+          : {})
+      })
+      if (rest.regions.length === 0) {
+        return {
+          ok: false,
+          error: 'Rest machining: the previous tool left nothing this tool can reach.',
+          hint: rest.hints.join(' ')
+        }
+      }
+      const restLines: string[] = []
+      const restHints: string[] = [...rest.hints]
+      rest.regions.forEach((region, idx) => {
+        const r = runPocketRegion(region.outerRing, region.islandRings, 0)
+        if (r.lines.length > 0) {
+          restLines.push(
+            `; Rest region ${idx + 1}/${rest.regions.length} (previous tool ${restMode.prevToolDiameterMm.toFixed(3)} mm)`
+          )
+          restLines.push(...r.lines)
+        }
+        restHints.push(...r.hints)
+      })
+      lines = restLines
+      pocketResultHints = [...new Set(restHints)]
+    } else {
+      const pocket = runPocketRegion(contour, islandRings, wallStockMm)
+      lines = pocket.lines
+      pocketResultHints = pocket.hints
+    }
     if (pocketZCapped && pocketStockThickness != null) {
       pocketResultHints = [
         `Pocket: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${pocketStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
         ...pocketResultHints
       ]
     }
-    if (shouldAppendFinalPocketFinishPass({ finishPass, finishEachDepth })) {
+    // REST RULE: in rest mode NEITHER the outer-wall finish trace NOR the
+    // island-wall traces run -- the previous (larger) tool's op already
+    // finished every real wall, so re-tracing them with the small tool is
+    // wasted air / wall burnishing at best (the solver's
+    // REST_SKIP_WALL_FINISH_HINT in `pocketResultHints` tells the operator).
+    if (restMode.kind !== 'rest' && shouldAppendFinalPocketFinishPass({ finishPass, finishEachDepth })) {
       lines.push(
         ...generateContour2dLines({
           contourPoints: contour,
@@ -249,7 +377,7 @@ export async function dispatch2dStrategy(
         })
       )
     }
-    if (finishPass && islandRings.length > 0 && lines.length > 0) {
+    if (restMode.kind !== 'rest' && finishPass && islandRings.length > 0 && lines.length > 0) {
       // Island WALL finish -- one bare contour pass around each island ring at
       // the final (capped) depth, for BOTH clearing strategies. No leads: an
       // arc or tangent lead could swing into the island; each pass begins with
@@ -273,7 +401,9 @@ export async function dispatch2dStrategy(
         ok: false,
         error: 'Pocket toolpath is empty.',
         hint:
-          'Common causes: tool diameter too large for the pocket, contour too tight for stepover, invalid ramp settings, self-intersecting or open contours, islands consuming the whole region, or geometry the offsetter cannot offset. Try smaller toolDiameterMm / stepover or simplify contourPoints.'
+          restMode.kind === 'rest'
+            ? `Rest machining: rest regions were solved but the '${pocketStrategy}' strategy emitted no cut moves -- corner lobes can be smaller than the raster row spacing. Use pocketStrategy 'offset_spiral' (it traces every rest boundary) or reduce stepoverMm. ${pocketResultHints.join(' ')}`
+            : 'Common causes: tool diameter too large for the pocket, contour too tight for stepover, invalid ramp settings, self-intersecting or open contours, islands consuming the whole region, or geometry the offsetter cannot offset. Try smaller toolDiameterMm / stepover or simplify contourPoints.'
       }
     }
   } else if (job.operationKind === 'cnc_adaptive' || job.operationKind === 'cnc_trochoidal_hsm') {
@@ -319,87 +449,149 @@ export async function dispatch2dStrategy(
     const adaptiveZCapped = adaptiveStockThickness != null && job.zPassMm < -adaptiveStockThickness
     const adaptiveZPassMm = adaptiveZCapped && adaptiveStockThickness != null ? -adaptiveStockThickness : job.zPassMm
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
-    const adaptive = generateAdaptiveClearing2dLines({
-      outerRing: contour,
-      islandRings,
-      toolDiameterMm,
-      stepoverMm: job.stepoverMm,
-      maxEngagementMm,
-      trochoidRadiusMm,
-      trochoidStepMm,
-      zPassMm: adaptiveZPassMm,
-      zStepMm,
-      feedMmMin: job.feedMmMin,
-      plungeMmMin: job.plungeMmMin,
-      safeZMm: job.safeZMm,
-      wallStockMm,
-      entryMode,
-      rampMm,
-      rampMaxAngleDeg,
-      stockBoxZMm: adaptiveStockThickness
-    })
-    lines = adaptive.lines
-    pocketResultHints = adaptive.hints
+    // Stack C v1 -- REST MACHINING for the adaptive family. Same placement
+    // reasoning as cnc_pocket above: the placement transform already ran, so
+    // the rest solve operates in placed coordinates (rigid transforms commute
+    // with the morphological opening). The honesty gate compares against the
+    // engine's MATERIALIZED tool diameter (`job.toolDiameterMm ?? 6`).
+    const restModeAdaptive = resolveRestMachiningMode(p, toolDiameterMm)
+    if (restModeAdaptive.kind === 'invalid') {
+      return { ok: false, error: restModeAdaptive.error, hint: restModeAdaptive.hint }
+    }
+    // The engine emits a safe-Z lift before every loop entry and ends its body
+    // at safe Z, so concatenated per-rest-region bodies chain through safe-Z.
+    const runAdaptiveRegion = (
+      regionOuter: ReadonlyArray<CamPoint2d>,
+      regionIslands: ReadonlyArray<ReadonlyArray<CamPoint2d>>,
+      regionWallStockMm: number
+    ): ReturnType<typeof generateAdaptiveClearing2dLines> =>
+      generateAdaptiveClearing2dLines({
+        outerRing: regionOuter,
+        islandRings: regionIslands,
+        toolDiameterMm,
+        stepoverMm: job.stepoverMm,
+        maxEngagementMm,
+        trochoidRadiusMm,
+        trochoidStepMm,
+        zPassMm: adaptiveZPassMm,
+        zStepMm,
+        feedMmMin: job.feedMmMin,
+        plungeMmMin: job.plungeMmMin,
+        safeZMm: job.safeZMm,
+        wallStockMm: regionWallStockMm,
+        entryMode,
+        rampMm,
+        rampMaxAngleDeg,
+        stockBoxZMm: adaptiveStockThickness
+      })
+    if (restModeAdaptive.kind === 'rest') {
+      // `wallStockMm` is folded into the rest solve; regions are cleared with
+      // wall stock 0 (re-applying would double-inset -- see the pocket branch).
+      const rest = solveRestRegion({
+        outerRing: contour,
+        islandRings,
+        wallStockMm,
+        prevToolDiameterMm: restModeAdaptive.prevToolDiameterMm,
+        toolDiameterMm
+      })
+      if (rest.regions.length === 0) {
+        return {
+          ok: false,
+          error: 'Rest machining: the previous tool left nothing this tool can reach.',
+          hint: rest.hints.join(' ')
+        }
+      }
+      const restLines: string[] = []
+      const restHints: string[] = [...rest.hints]
+      rest.regions.forEach((region, idx) => {
+        const r = runAdaptiveRegion(region.outerRing, region.islandRings, 0)
+        if (r.lines.length > 0) {
+          restLines.push(
+            `; Rest region ${idx + 1}/${rest.regions.length} (previous tool ${restModeAdaptive.prevToolDiameterMm.toFixed(3)} mm)`
+          )
+          restLines.push(...r.lines)
+        }
+        restHints.push(...r.hints)
+      })
+      lines = restLines
+      pocketResultHints = [...new Set(restHints)]
+      // REST RULE: no finish trace at all in rest mode (outer wall OR islands)
+      // -- the previous tool's op already finished those walls. This also
+      // trivially preserves the Stack-B `adaptiveClearedToWalls` contract: the
+      // dispatcher's finish pass only ever runs when a NON-rest run reports
+      // `adaptiveClearedToWalls === true` (the gate below), so rest mode can
+      // never trace a wall the engine refused to clear. Cusped corner-lobe
+      // rest regions are typically SKIPPED by this engine with a hint (use
+      // cnc_pocket for those); channel-shaped rest regions cut normally.
+    } else {
+      const adaptive = runAdaptiveRegion(contour, islandRings, wallStockMm)
+      lines = adaptive.lines
+      pocketResultHints = adaptive.hints
+      if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls !== true) {
+        // The engine SKIPPED or TRUNCATED some geometry (spike runs, unrelievable
+        // narrow regions, or the trochoid budget) -- material was deliberately
+        // left at the walls there. A finish contour would trace the FULL wall at
+        // final depth, cutting full-burial into that uncleared stock: exactly the
+        // above-the-cap slot the engine refuses to make. Suppress it honestly.
+        pocketResultHints = [
+          ...pocketResultHints,
+          'Finish pass suppressed: adaptive clearing left material in skipped/truncated regions, so the wall trace would cut full-burial into uncleared stock. Clear the remainder (smaller tool, larger trochoid budget, or a dedicated narrow-channel pass), then run a separate contour finish.'
+        ]
+      }
+      if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls === true) {
+        // Cheap finish reuse (cnc_pocket contract): one wall contour at the
+        // final (capped) depth, then a bare trace around each island ring.
+        // Every pass begins with its own safe-Z lift (generateContour2dLines
+        // lifts first), so pass transitions are never at-depth rapids.
+        // INTENTIONAL differences from cnc_pocket: the finish is gated on a
+        // non-empty clearing body AND on the engine's adaptiveClearedToWalls
+        // flag -- when anything was skipped/truncated, the wall trace would be
+        // a fully-buried slot at depth, the exact above-the-cap cut this engine
+        // exists to prevent (see the suppression branch above). Rest mode never
+        // reaches this gate (the REST RULE branch above suppresses all finish
+        // traces), so the adaptiveClearedToWalls contract is preserved.
+        lines.push(
+          ...generateContour2dLines({
+            contourPoints: contour,
+            zPassMm: adaptiveZPassMm,
+            feedMmMin: job.feedMmMin,
+            plungeMmMin: job.plungeMmMin,
+            safeZMm: job.safeZMm,
+            contourSide,
+            leadInMm,
+            leadOutMm,
+            leadInMode,
+            leadOutMode
+          })
+        )
+        for (const ring of islandRings) {
+          lines.push(
+            ...generateContour2dLines({
+              contourPoints: ring,
+              zPassMm: adaptiveZPassMm,
+              feedMmMin: job.feedMmMin,
+              plungeMmMin: job.plungeMmMin,
+              safeZMm: job.safeZMm,
+              contourSide
+            })
+          )
+        }
+      }
+    }
     if (adaptiveZCapped && adaptiveStockThickness != null) {
       pocketResultHints = [
         `Adaptive clearing: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${adaptiveStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
         ...pocketResultHints
       ]
     }
-    if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls !== true) {
-      // The engine SKIPPED or TRUNCATED some geometry (spike runs, unrelievable
-      // narrow regions, or the trochoid budget) -- material was deliberately
-      // left at the walls there. A finish contour would trace the FULL wall at
-      // final depth, cutting full-burial into that uncleared stock: exactly the
-      // above-the-cap slot the engine refuses to make. Suppress it honestly.
-      pocketResultHints = [
-        ...pocketResultHints,
-        'Finish pass suppressed: adaptive clearing left material in skipped/truncated regions, so the wall trace would cut full-burial into uncleared stock. Clear the remainder (smaller tool, larger trochoid budget, or a dedicated narrow-channel pass), then run a separate contour finish.'
-      ]
-    }
-    if (finishPass && lines.length > 0 && adaptive.adaptiveClearedToWalls === true) {
-      // Cheap finish reuse (cnc_pocket contract): one wall contour at the
-      // final (capped) depth, then a bare trace around each island ring.
-      // Every pass begins with its own safe-Z lift (generateContour2dLines
-      // lifts first), so pass transitions are never at-depth rapids.
-      // INTENTIONAL differences from cnc_pocket: the finish is gated on a
-      // non-empty clearing body AND on the engine's adaptiveClearedToWalls
-      // flag -- when anything was skipped/truncated, the wall trace would be
-      // a fully-buried slot at depth, the exact above-the-cap cut this engine
-      // exists to prevent (see the suppression branch above).
-      lines.push(
-        ...generateContour2dLines({
-          contourPoints: contour,
-          zPassMm: adaptiveZPassMm,
-          feedMmMin: job.feedMmMin,
-          plungeMmMin: job.plungeMmMin,
-          safeZMm: job.safeZMm,
-          contourSide,
-          leadInMm,
-          leadOutMm,
-          leadInMode,
-          leadOutMode
-        })
-      )
-      for (const ring of islandRings) {
-        lines.push(
-          ...generateContour2dLines({
-            contourPoints: ring,
-            zPassMm: adaptiveZPassMm,
-            feedMmMin: job.feedMmMin,
-            plungeMmMin: job.plungeMmMin,
-            safeZMm: job.safeZMm,
-            contourSide
-          })
-        )
-      }
-    }
     if (lines.length === 0) {
       return {
         ok: false,
         error: 'Adaptive clearing toolpath is empty.',
         hint:
-          'Common causes: tool diameter or stepover too large for the region, wall stock consuming the whole pocket, islands covering the clearable area, or open/self-intersecting contourPoints. Reduce stepoverMm / wallStockMm, use a smaller tool, or simplify the loop.'
+          restModeAdaptive.kind === 'rest'
+            ? `Rest machining: rest regions were solved but the adaptive engine skipped them all -- cusped corner lobes taper below its v1 spine coverage, so it refuses to slot them. Clear corner rest with cnc_pocket (pocketStrategy 'offset_spiral' or 'raster'); adaptive rest suits channel-shaped rest regions. ${pocketResultHints.join(' ')}`
+            : 'Common causes: tool diameter or stepover too large for the region, wall stock consuming the whole pocket, islands covering the clearable area, or open/self-intersecting contourPoints. Reduce stepoverMm / wallStockMm, use a smaller tool, or simplify the loop.'
       }
     }
   } else if (job.operationKind === 'cnc_chamfer') {

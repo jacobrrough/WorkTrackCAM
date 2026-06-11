@@ -92,6 +92,14 @@ declare module 'clipper-lib' {
   }
 
   interface ClipperInstance {
+    /**
+     * When true, `Execute` returns strictly-simple polygons: result rings that
+     * touch themselves through zero-width corridors (e.g. a difference whose
+     * clip boundary coincides with the subject boundary, as in the rest-region
+     * solver's `region − reachable`) are split into separate simple rings
+     * instead of one self-touching path. Costs extra processing; default false.
+     */
+    StrictlySimple: boolean
     AddPath(path: Path, polyType: number, closed: boolean): boolean
     AddPaths(paths: Paths, polyType: number, closed: boolean): boolean
     /** Execute into a flat `Paths` solution using subject + clip fill rules. */

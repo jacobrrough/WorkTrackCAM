@@ -912,6 +912,21 @@ export function ManufactureOperationList({
                 </label>
               </div>
             ) : null}
+            {op.kind === 'cnc_pocket' || op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
+              <div className="row row--mt-xs">
+                <label title="Rest machining: clear only what the previous tool left -- set to that tool's diameter (mm). Must be LARGER than this op's tool. The engine clears just the corner/channel material the bigger tool provably could not reach and skips the wall finish trace (the previous op already finished the walls). Equal or smaller values fail honestly; leave blank for a normal full-region pass. Adaptive note: cusped corner lobes are skipped with a hint -- pocket raster/offset-spiral clears those.">
+                  Rest: previous tool diameter (mm)
+                  <input
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={cutParamFieldValue(op, 'restPrevToolDiameterMm')}
+                    onChange={(e) => onSetCutParam(i, 'restPrevToolDiameterMm', e.target.value, 'positive')}
+                    placeholder="off (full region)"
+                  />
+                </label>
+              </div>
+            ) : null}
             {op.kind === 'cnc_adaptive' || op.kind === 'cnc_trochoidal_hsm' ? (
               <p className="msg manufacture-op-hint">
                 <strong>Adaptive clearing (adaptive-lite v1):</strong> with <strong>contourPoints</strong> set (derive

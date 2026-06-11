@@ -217,6 +217,8 @@ describe('manufacture schema pocket param docs', () => {
     expect(source).toContain('wallStockMm')
     expect(source).toContain('finishPass')
     expect(source).toContain('finishEachDepth')
+    // Stack C v1: rest machining is documented on the pocket family.
+    expect(source).toContain('restPrevToolDiameterMm')
   })
 })
 
