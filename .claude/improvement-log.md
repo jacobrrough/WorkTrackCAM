@@ -18133,3 +18133,67 @@ absolute-only — the future K2 caller must not pass mixed-G91 programs without 
 refused companions are counted but not enumerated per-op; a companion-kind op that is a part's
 ONLY op still can't nest (candidate-set widening deferred); stale pin-test header references
 the deleted ShopApp call sites.
+
+
+---
+
+## Cycle 241 — Wave 3m: the export-safety gate wired into every live send/export surface (2026-06-11)
+
+**Focus:** close Wave 3l's CRITICAL FINDING — `assessGcodeForExportSafety` (advisories + the
+hard envelope gate) had ZERO production call sites since the P5 cutover killed its 3 ShopApp
+callers. Gate-wiring only: no emitter/post/profile change; resources/** byte-identical.
+
+**Baseline → result:** 15,849 → **15,902 pass / 1 skip / 0 fail**
+(+53); tsc clean; zero snapshot drift; no-touch sweep clean (resources/, engines/,
+src/main/cam-*, src/main/nesting/, moonraker-push.ts, orca-wrapper.ts, renderer/design/ — 0
+files).
+
+**What landed:** (1) **`gcode-send-gate.ts`** (new, renderer-pure) — the single seam every
+live send/export surface routes through. Pure gate verdicts (`gateCncProgramForSend` threads
+`{ dialect, safeRetractZMm via resolveSafeZClearanceMm, workAreaMm }` from the ACTIVE machine
+profile; `adviseFdmProgramForPush` deliberately omits `workAreaMm`), orchestrated flows
+(`runGatedCncSendFlow` = read EXACT on-disk program → gate → dispatch-or-abort, fail-closed on
+read errors; `runFdmPushPreflight` = advisory-only, can never block or throw), and per-surface
+actions extracted to module level so node-env vitest can run the REAL button logic against a
+mocked IPC boundary (`runCarveraUploadSurface`, `runLagunaExportSurface`, `runK2PushSurface`,
+`formatSetupSheetGateNotice`). (2) **Surfaces wired** — ManufactureAuxPanels `sendToK2Plus`
+(advisory pre-flight + Moonraker push; payload build moved into the seam) + `uploadToCarvera`
+(HARD gate; blocking errors abort with zero upload IPC); ManufactureWorkspace ProfileStack
+Send buttons went from `onSend={null}` (dead) to live: FDM Device stage → K2 push, CNC Send
+stage → Carvera upload (`connection: 'auto'`) or **Export for Laguna** (NEW surface: gate
+first, then native save dialog, then write the VERIFIED program text — gated bytes ≡ shipped
+bytes), with a shared busy latch; `exportManufactureSetupSheet` now appends a NON-blocking
+gate notice when the embedded `output/cam.nc` would be refused at the send surfaces (the sheet
+is a document — it still saves). (3) **K2/FDM caveat enforced structurally** — the FDM path
+calls the gate WITHOUT `workAreaMm` (OrcaSlicer mixes G91 bursts; the shared segment parser is
+absolute-only → envelope blocking would false-block legit prints) and returns a type with NO
+blocking channel; the K2's real hard gate remains the untouched temperature validator in
+`src/main/moonraker-push.ts` (honesty-pinned). (4) **Pin refresh (intended drift)** —
+`gcode-export-safety-pin.test.ts` header now documents the live call-site inventory instead of
+the dead ShopApp lines; `k2-moonraker-push-ui-pin.test.ts` B5–B8 and `slice-orca-ipc-pin.test.ts`
+E2 follow the wire through the seam.
+
+**Tests added:** `gcode-send-gate.test.ts` (36) — behavioral contract on REAL bundled profile
+dims (Laguna 1524×3048 over-bed BLOCKED with travel named / in-bed dispatches; Carvera 360×240
++ 4-axis 240×92; K2 push NEVER blocked even on a G91-mixing no-M5 9-meter program, exact
+Moonraker payload incl. machineId + cfsSlotId, temp-validator rejection relayed verbatim;
+blocked paths assert dispatch-IPC-never-called AND the operator message). `gcode-send-gate-wiring.test.ts`
+(17) — source pins binding each component surface to the seam + renderer-purity +
+`validateGcodeFileTemps` still in the main push path.
+
+**G-code safety:** gate-wiring only. No G-code emission changed anywhere; the seam never
+mutates program bytes (reads, assesses, dispatches verbatim or aborts). CNC = fail-closed
+(unreadable programs never ship); FDM = advisory-only by construction.
+
+**Operational notes:** two [ID-0095]-class escape-semantics fires during this cycle — the
+Bash-tool layer on this machine collapses `\\` → `\` inside python3 heredocs, so non-raw
+Python strings containing `\n`/`\r` escapes corrupt markers (count==0) or write real control
+chars into TS source. Fixed with raw strings / chr(92) composition; all splices ran with
+count==1 asserts per docs/EDIT-WORKFLOW.md.
+
+**Honest residuals:** the workspace ProfileStack Carvera send uses connection 'auto' (the
+CamManufacturePanel picker's component-local connection/device choices do not reach the
+ProfileStack button); node-env vitest still cannot click hook-bearing components, so the
+component→seam binding is pinned textually (wiring test) rather than via DOM events; the
+Laguna export suggests `<project>/output/<name>_laguna.nc` but does not remember the last USB
+drive letter.

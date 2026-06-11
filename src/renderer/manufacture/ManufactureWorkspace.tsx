@@ -70,6 +70,14 @@ import { planNestingPlacementStamps } from '../../shared/cam-placement-siblings'
 import { ManufactureNoSetupBanner } from './ManufactureNoSetupBanner'
 import { ProbeCyclePanel } from './ProbeCyclePanel'
 import { ProfileStack } from './ProfileStack'
+import {
+  formatSetupSheetGateNotice,
+  gateCncProgramForSend,
+  runCarveraUploadSurface,
+  runK2PushSurface,
+  runLagunaExportSurface,
+  type GateIo
+} from './gcode-send-gate'
 import { FdmProcessPanel } from './FdmProcessPanel'
 import { FdmDeviceControls } from './FdmDeviceControls'
 import {
@@ -737,6 +745,10 @@ export function ManufactureWorkspace({
   // the K2 Plus "Send to Printer" button has a concrete file to push
   // to Moonraker. `null` means no slice has succeeded this session.
   const [lastSliceGcodePath, setLastSliceGcodePath] = useState<string | null>(null)
+  // Wave 3m — busy latch for the ProfileStack Send button (K2 push / Carvera
+  // upload / Laguna export). While a send is in flight the button renders
+  // disabled (onSend becomes null) so a double-click cannot dispatch twice.
+  const [profileStackSendBusy, setProfileStackSendBusy] = useState(false)
 
   // CAD V1.5 — TRUE per-layer breakdown of the most recent slice, fetched
   // from the streaming main-process parser via `fab.sliceLayerBreakdown`.
@@ -1923,6 +1935,16 @@ export function ManufactureWorkspace({
       await fab.fsWriteText(outPath, html)
       await fab.shellOpenPath(outPath)
       onStatus?.(`Setup sheet saved: ${fileName}`)
+      // Wave 3m — NON-BLOCKING export-safety notice. The sheet is a document
+      // (never machine-executed) so a failing gate must not abort the export,
+      // but the embedded program is the same output/cam.nc the send surfaces
+      // ship — tell the operator NOW if it would be refused there.
+      if (gcodeText !== null && machineProf) {
+        const notice = formatSetupSheetGateNotice(
+          gateCncProgramForSend({ gcode: gcodeText, machine: machineProf })
+        )
+        if (notice !== null) onStatus?.(notice)
+      }
     } catch (e) {
       onStatus?.(e instanceof Error ? e.message : String(e))
     }
@@ -2262,6 +2284,132 @@ export function ManufactureWorkspace({
     [onSaveSettingsField]
   )
 
+  // ── Wave 3m — gated send/export wiring for the ProfileStack Send button ────
+  //
+  // The ProfileStack is presentation-only; these closures are the actual
+  // dispatch paths. Every one routes through the per-surface actions in
+  // `gcode-send-gate.ts`, so the export-safety gate runs on the EXACT posted
+  // program with `{ dialect, safeRetractZMm, workAreaMm }` threaded from the
+  // ACTIVE machine profile:
+  //   - K2 Plus → `runK2PushSurface` (ADVISORY-ONLY pre-flight; the K2's hard
+  //     gate stays the main-process temperature validator in moonraker-push.ts).
+  //   - Carvera → `runCarveraUploadSurface` (HARD gate, 360×240 mm 3-axis /
+  //     240×92 mm 4-axis dims from the active profile).
+  //   - Laguna  → `runLagunaExportSurface` (HARD gate, 1524×3048 mm; native
+  //     save dialog because the RichAuto A-series pendant takes files via USB —
+  //     there is no in-app send for the Laguna).
+  const sendGateIo: GateIo = {
+    readTextFile: (filePath: string) => fab.readTextFile(filePath)
+  }
+  const sendSep = projectDir && projectDir.includes('\\') ? '\\' : '/'
+  const postedProgramPath = projectDir ? `${projectDir}${sendSep}output${sendSep}cam.nc` : null
+  const activeCncSendTarget = activeMachine?.kind === 'cnc' ? activeMachine : undefined
+  const isCarveraSendTarget =
+    activeCncSendTarget != null &&
+    /carvera/i.test(`${activeCncSendTarget.id} ${activeCncSendTarget.name}`)
+  const isLagunaSendTarget =
+    activeCncSendTarget != null &&
+    /laguna/i.test(`${activeCncSendTarget.id} ${activeCncSendTarget.name}`)
+  const sendMoonrakerUrl = settings?.moonrakerUrl?.trim() ?? ''
+  // Mirror of the SliceManufacturePanel CFS-slot read (0..3, default 0).
+  const sendCfsSlotId: number =
+    typeof settings?.cfsSlotId === 'number' &&
+    Number.isInteger(settings.cfsSlotId) &&
+    settings.cfsSlotId >= 0 &&
+    settings.cfsSlotId <= 3
+      ? settings.cfsSlotId
+      : 0
+
+  /** ProfileStack "Send to K2 Plus" — advisory pre-flight, then Moonraker push. */
+  async function sendSlicedProgramToK2(): Promise<void> {
+    const gcodePath = lastSliceGcodePath?.trim() ?? ''
+    if (!gcodePath || !sendMoonrakerUrl || profileStackSendBusy) return
+    setProfileStackSendBusy(true)
+    try {
+      await runK2PushSurface({
+        gcodePath,
+        machine: activeMachine,
+        moonrakerUrl: sendMoonrakerUrl,
+        cfsSlotId: sendCfsSlotId,
+        io: sendGateIo,
+        moonrakerPush: (payload) => fab.moonrakerPush(payload),
+        onStatus: (msg) => onStatus?.(msg)
+      })
+    } catch (e) {
+      onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProfileStackSendBusy(false)
+    }
+  }
+
+  /** ProfileStack "Send to Carvera" — HARD-gated carvera-cli upload of output/cam.nc. */
+  async function sendPostedProgramToCarvera(): Promise<void> {
+    if (!postedProgramPath || profileStackSendBusy) return
+    setProfileStackSendBusy(true)
+    try {
+      await runCarveraUploadSurface({
+        gcodePath: postedProgramPath,
+        gateMachine: activeCncSendTarget,
+        connection: 'auto',
+        device: undefined,
+        timeoutMs: 120_000,
+        io: sendGateIo,
+        carveraUpload: (payload) => fab.carveraUpload(payload),
+        onStatus: (msg) => onStatus?.(msg)
+      })
+    } catch (e) {
+      onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProfileStackSendBusy(false)
+    }
+  }
+
+  /** ProfileStack "Export for Laguna" — HARD-gated native save-dialog file export. */
+  async function exportPostedProgramForLaguna(): Promise<void> {
+    if (!postedProgramPath || !activeCncSendTarget || profileStackSendBusy) return
+    setProfileStackSendBusy(true)
+    try {
+      const baseName = (project?.name?.trim() || 'job').replace(/[^a-zA-Z0-9_-]/g, '_')
+      const outputDir = postedProgramPath.slice(0, postedProgramPath.length - 'cam.nc'.length)
+      await runLagunaExportSurface({
+        gcodePath: postedProgramPath,
+        gateMachine: activeCncSendTarget,
+        suggestedPath: `${outputDir}${baseName}_laguna.nc`,
+        io: sendGateIo,
+        pickSavePath: (suggestedPath) =>
+          fab.dialogSaveFile([{ name: 'G-code', extensions: ['nc', 'tap', 'gcode'] }], suggestedPath),
+        writeTextFile: (filePath, content) => fab.fsWriteText(filePath, content),
+        onStatus: (msg) => onStatus?.(msg)
+      })
+    } catch (e) {
+      onStatus?.(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProfileStackSendBusy(false)
+    }
+  }
+
+  // FDM Device stage Send — enabled only when the K2 path is actually
+  // sendable (same gating as the SliceManufacturePanel send button).
+  const fdmProfileStackSend: (() => void) | null =
+    activeMachine?.id === 'creality-k2-plus' &&
+    (lastSliceGcodePath?.trim() ?? '').length > 0 &&
+    sendMoonrakerUrl.length > 0 &&
+    !profileStackSendBusy
+      ? () => void sendSlicedProgramToK2()
+      : null
+
+  // CNC Send stage — machine-specific dispatch (Carvera upload / Laguna file
+  // export). Null (disabled button) until a posted program exists on disk.
+  const cncProfileStackSend: (() => void) | null =
+    postedProgramPath !== null && camOut.trim().length > 0 && !profileStackSendBusy
+      ? isCarveraSendTarget
+        ? () => void sendPostedProgramToCarvera()
+        : isLagunaSendTarget
+          ? () => void exportPostedProgramForLaguna()
+          : null
+      : null
+
+
   // Existing `panelTab` dispatch — extracted into a local variable so the
   // workflow-stage switch can reuse it for the "primary" stages.
   const panelTabBody: ReactNode = (
@@ -2382,7 +2530,7 @@ export function ManufactureWorkspace({
         manufacture={effectiveMfg}
         tools={tools ?? null}
         onSaveSettingsField={profileStackSaveSettingsField}
-        onSend={null}
+        onSend={fdmProfileStackSend}
       />
     </div>
   )
@@ -2446,7 +2594,7 @@ export function ManufactureWorkspace({
         manufacture={effectiveMfg}
         tools={tools ?? null}
         onSaveSettingsField={profileStackSaveSettingsField}
-        onSend={null}
+        onSend={cncProfileStackSend}
       />
     </div>
   )

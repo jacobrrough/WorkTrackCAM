@@ -276,10 +276,18 @@ describe('E. SliceManufacturePanel anchors the pivot task in its docstring', () 
     expect(PANELS_SRC).toContain('task #9')
   })
 
-  it('E2: panel still imports K2 preset module + FilamentPicker + moonraker-push helpers', () => {
+  it('E2: panel still imports K2 preset module + FilamentPicker + the send seam', () => {
     expect(PANELS_SRC).toContain("from '../../shared/k2-plus-slice-presets'")
     expect(PANELS_SRC).toContain("from './FilamentPicker'")
-    expect(PANELS_SRC).toContain("from '../src/moonraker-push-payload'")
+    // Wave 3m INTENDED DRIFT: the moonraker-push payload helpers moved
+    // behind the export-safety send seam; the panel now imports that seam
+    // and the seam imports the payload helpers (pinned transitively).
+    expect(PANELS_SRC).toContain("from './gcode-send-gate'")
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, 'src', 'renderer', 'manufacture', 'gcode-send-gate.ts'),
+      'utf8'
+    )
+    expect(gateSrc).toContain("from '../src/moonraker-push-payload'")
   })
 
   it('E3: panel does NOT call window.fab.sliceCura (deleted with pivot)', () => {

@@ -5,13 +5,31 @@
  * (1 exported pure function
  * `assessGcodeForExportSafety` + 1 type-only export
  * `GcodeExportSafetyAssessment`; Wave 3l added a module-private
- * machine-envelope helper -- the runtime export inventory is unchanged). The helper is the renderer-side
- * pre-flight gate the export / send / Moonraker-upload buttons in
- * `ShopApp.tsx` (3 production call-sites at lines 1186, 1294, 1340)
- * consult BEFORE the user is allowed to ship a posted G-code file
- * downstream. Returning a non-empty `blockingErrors` array is what
- * disables the button; non-empty `warnings` only surfaces a yellow
- * banner.
+ * machine-envelope helper -- the runtime export inventory is unchanged).
+ *
+ * LIVE CALL SITES (Wave 3m intended drift -- header refresh only, zero
+ * assertion changes): the 3 legacy `ShopApp.tsx` call-sites this header
+ * used to cite died in the P5 cutover, leaving the helper with ZERO
+ * production consumers. Wave 3m re-wired it behind the
+ * `src/renderer/manufacture/gcode-send-gate.ts` seam, which every live
+ * send/export surface routes through BEFORE a posted G-code file ships
+ * downstream:
+ *   - CNC, HARD gate (WITH `workAreaMm`): `runCarveraUploadSurface` +
+ *     `runLagunaExportSurface` -- the "Upload to Carvera" button in
+ *     `ManufactureAuxPanels.tsx` and the ProfileStack "Send to Carvera" /
+ *     "Export for Laguna" buttons in `ManufactureWorkspace.tsx`.
+ *     Non-empty `blockingErrors` ABORTS the dispatch (the upload /
+ *     save-dialog IPC never fires) and the message reaches the operator.
+ *   - K2 Plus Moonraker push, ADVISORY-ONLY (WITHOUT `workAreaMm`,
+ *     because OrcaSlicer output mixes G91 bursts and the shared segment
+ *     parser is absolute-only): `runK2PushSurface` -> `runFdmPushPreflight`
+ *     -- only `warnings` surface; nothing here can block, and the
+ *     main-process temperature validator in `moonraker-push.ts` remains
+ *     the K2's real hard gate.
+ *   - Setup-sheet export (`formatSetupSheetGateNotice` in
+ *     `ManufactureWorkspace.tsx`): non-blocking document notice.
+ * The seam's own behavioral contract lives in
+ * `src/renderer/manufacture/gcode-send-gate.test.ts`.
  *
  * Per CLAUDE.md "USER CONTEXT -- TARGET MACHINES" this helper is
  * cross-cutting across the THREE target machines:
@@ -710,10 +728,11 @@ describe('[ID-0242] (I) safe-retract invariant', () => {
 describe('[ID-0242] (J) three-machine path realism', () => {
   it('Creality K2 Plus FDM passthrough: M5/G90 absent on slicer output is captured', () => {
     // K2 Plus Klipper-flavored slicer output -- no M5 (no spindle).
-    // The export-safety helper still runs the CNC checks because
-    // its caller in ShopApp.tsx does not yet branch on machine.kind;
-    // this pin documents the current end-to-end behavior so a future
-    // FDM short-circuit refactor surfaces here.
+    // The export-safety helper itself is machine-kind-agnostic and still
+    // runs the CNC checks; the LIVE K2 surface (runK2PushSurface ->
+    // runFdmPushPreflight in gcode-send-gate.ts) therefore consumes only
+    // `warnings` and never blocks. This pin documents WHY: the M5 / M2-M30
+    // blockers fire on every legitimate slicer output.
     const k2 = [
       ';FLAVOR:Marlin',
       ';TIME:1234',
@@ -730,7 +749,7 @@ describe('[ID-0242] (J) three-machine path realism', () => {
     ].join('\n')
     const r = assessGcodeForExportSafety({
       gcode: k2,
-      dialect: 'grbl', // ShopApp routes K2 export through the same gate today
+      dialect: 'grbl', // fixture realism: the live K2 surface is advisories-only (gcode-send-gate.ts)
       safeRetractZMm: 350
     })
     // Documented behavior: missing M5 + missing M2/M30 + missing

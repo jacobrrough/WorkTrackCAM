@@ -5,10 +5,6 @@ import {
   K2_PLUS_SLICE_PRESETS,
   type K2PlusQualityPresetId
 } from '../../shared/k2-plus-slice-presets'
-import {
-  buildMoonrakerPushPayload,
-  formatMoonrakerPushFailure
-} from '../src/moonraker-push-payload'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import { buildCamSimulationPreview } from '../../shared/cam-simulation-preview'
@@ -20,9 +16,23 @@ import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
 import { EmptyState } from '../src/EmptyState'
 import { ProfileStack, type ProfileStackDisplayMode } from './ProfileStack'
+import {
+  runCarveraUploadSurface,
+  runK2PushSurface,
+  type GateIo
+} from './gcode-send-gate'
 
 const CAM_PREVIEW = 8000
 const countVisibleLines = (text: string): number => text.split(/\r?\n/).length
+
+/**
+ * Wave 3m — production GateIo for the send/export safety gate: the preload
+ * bridge's text reader. Lazy arrow so `window.fab` is only touched at click
+ * time (renderToStaticMarkup render-pin tests never invoke it).
+ */
+const sendGateIo: GateIo = {
+  readTextFile: (filePath: string) => window.fab.readTextFile(filePath)
+}
 
 /**
  * Phase 2 [P2-LAGUNA-FULLSHEET]/Cycle 350 pure helper consumed by the
@@ -149,21 +159,21 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
     if (!canSendToK2 || k2SendBusy) return
     setK2SendBusy(true)
     try {
-      const payload = buildMoonrakerPushPayload(
-        {
-          gcodeOut: sendCandidatePath,
-          printerUrl: moonrakerUrl,
-          machineId: p.activeMachine?.id ?? null,
-          cfsSlotId
-        },
-        { startAfterUpload: true }
-      )
-      const r = await window.fab.moonrakerPush(payload)
-      if (r.ok) {
-        p.onStatus?.(`Started on K2 Plus: ${r.filename ?? sendCandidatePath}`)
-      } else {
-        p.onStatus?.(formatMoonrakerPushFailure(r))
-      }
+      // Wave 3m — the gated K2 push surface action (gcode-send-gate.ts):
+      // ADVISORY-ONLY export-safety pre-flight on the EXACT on-disk program
+      // (never blocks; at most one compact status line — see the module
+      // header for the OrcaSlicer-G91 / absolute-only-parser caveat), then
+      // the Moonraker push. The K2's hard gate remains the main-process
+      // temperature validator in moonraker-push.ts.
+      await runK2PushSurface({
+        gcodePath: sendCandidatePath,
+        machine: p.activeMachine,
+        moonrakerUrl,
+        cfsSlotId,
+        io: sendGateIo,
+        moonrakerPush: (payload) => window.fab.moonrakerPush(payload),
+        onStatus: (msg) => p.onStatus?.(msg)
+      })
     } finally {
       setK2SendBusy(false)
     }
@@ -333,23 +343,37 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
     setCamPreviewTick((v) => v + 1)
   }
 
+  /**
+   * Wave 3m — gated Carvera upload. The HARD export-safety gate runs on the
+   * EXACT `output/cam.nc` bytes carvera-cli will ship (NOT the `camOut`
+   * preview prop, which can lag the file on disk). Gate dims come from the
+   * active machine when it IS a Carvera (360 × 240 mm 3-axis / 240 × 92 mm
+   * 4-axis), otherwise from the first installed Carvera profile — the upload
+   * physically targets a Carvera regardless of which machine the session has
+   * active. Blocking errors ABORT the upload (zero upload IPC) with the
+   * honest operator message; a missing profile degrades to the legacy
+   * ungated dispatch (mirrors the gate's optional-dims never-false-block
+   * contract).
+   */
   async function uploadToCarvera(): Promise<void> {
     if (!p.projectDir || !p.camOut?.trim()) return
     const sep = p.projectDir.includes('\\') ? '\\' : '/'
     const gcodePath = `${p.projectDir}${sep}output${sep}cam.nc`
+    const carveraGateMachine: MachineProfile | undefined = isCarvera
+      ? activeCnc
+      : p.machines.find((m) => m.kind === 'cnc' && /carvera/i.test(`${m.id} ${m.name}`))
     setCarveraBusy(true)
     try {
-      const r = await window.fab.carveraUpload({
+      await runCarveraUploadSurface({
         gcodePath,
+        gateMachine: carveraGateMachine,
         connection: carveraConn,
         device: carveraDevice.trim() || undefined,
-        timeoutMs: 120_000
+        timeoutMs: 120_000,
+        io: sendGateIo,
+        carveraUpload: (payload) => window.fab.carveraUpload(payload),
+        onStatus: (msg) => p.onStatus?.(msg)
       })
-      if (r.ok) {
-        p.onStatus?.('Carvera: file uploaded (start the job on the machine if needed).')
-      } else {
-        p.onStatus?.(`Carvera upload failed: ${r.error}${r.detail ? ` — ${r.detail}` : ''}`)
-      }
     } catch (e) {
       p.onStatus?.(e instanceof Error ? e.message : String(e))
     } finally {

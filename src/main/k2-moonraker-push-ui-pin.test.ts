@@ -16,6 +16,11 @@
  *   B. SliceManufacturePanel renders the Send-to-K2-Plus button only
  *      when active machine kind === 'fdm'; the button gating uses the
  *      three-condition rule (isK2Plus + lastSliceGcodePath + moonrakerUrl).
+ *      Wave 3m INTENDED DRIFT: the button's dispatch now routes through
+ *      the export-safety seam (`gcode-send-gate.ts#runK2PushSurface`),
+ *      which owns the payload build + failure formatting + machineId
+ *      threading the panel used to inline -- B5-B8 follow the wire into
+ *      that module so the same end-to-end contract stays pinned.
  *   C. ManufactureAuxPanelsProps declares the new `lastSliceGcodePath`
  *      prop and the panel reads it via `p.lastSliceGcodePath`.
  *   D. ManufactureWorkspace tracks the slice output path in state
@@ -60,6 +65,10 @@ const PANELS_SRC = readFileSync(
 )
 const WORKSPACE_SRC = readFileSync(
   resolve(REPO_ROOT, 'src', 'renderer', 'manufacture', 'ManufactureWorkspace.tsx'),
+  'utf8'
+)
+const SEND_GATE_SRC = readFileSync(
+  resolve(REPO_ROOT, 'src', 'renderer', 'manufacture', 'gcode-send-gate.ts'),
   'utf8'
 )
 const FAKE_PATH = resolve(REPO_ROOT, 'src', 'main', '__mocks__', 'moonraker-fake.ts')
@@ -119,21 +128,26 @@ describe('B. SliceManufacturePanel gates the Send button on isK2Plus + path + ur
     )
   })
 
-  it('B5: button uses moonrakerPush IPC bridge with buildMoonrakerPushPayload', () => {
-    expect(PANELS_SRC).toContain("buildMoonrakerPushPayload")
-    expect(PANELS_SRC).toContain('window.fab.moonrakerPush(payload)')
+  it('B5: button routes through runK2PushSurface, which builds the payload and uses the moonrakerPush IPC bridge', () => {
+    // Wave 3m: the panel injects the IPC boundary; the seam owns the payload.
+    expect(PANELS_SRC).toContain('await runK2PushSurface({')
+    expect(PANELS_SRC).toContain('moonrakerPush: (payload) => window.fab.moonrakerPush(payload)')
+    expect(SEND_GATE_SRC).toContain('buildMoonrakerPushPayload(')
+    expect(SEND_GATE_SRC).toContain('await input.moonrakerPush(payload)')
   })
 
-  it('B6: failure path calls formatMoonrakerPushFailure for a single-line toast', () => {
-    expect(PANELS_SRC).toContain('formatMoonrakerPushFailure(r)')
+  it('B6: failure path calls formatMoonrakerPushFailure for a single-line toast (now inside the seam)', () => {
+    expect(SEND_GATE_SRC).toContain('formatMoonrakerPushFailure(r)')
   })
 
   it('B7: payload threads machineId so the IPC resolver can apply temperature ceilings', () => {
-    expect(PANELS_SRC).toContain('p.activeMachine?.id ?? null')
+    // Panel passes the active machine; the seam threads its id onto the payload.
+    expect(PANELS_SRC).toContain('machine: p.activeMachine,')
+    expect(SEND_GATE_SRC).toContain('machineId: input.machine?.id ?? null')
   })
 
   it('B8: success status mentions "Started on K2 Plus" so the operator sees the right label', () => {
-    expect(PANELS_SRC).toContain('Started on K2 Plus')
+    expect(SEND_GATE_SRC).toContain('Started on K2 Plus')
   })
 
   it('B9: busy state guards against double-click (k2SendBusy gate)', () => {
