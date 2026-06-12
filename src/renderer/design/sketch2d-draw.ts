@@ -31,6 +31,7 @@ import {
 } from '../../shared/sketch-profile'
 import { niceStepMm, screenToWorld } from './sketch2d-canvas-coords'
 import { entityOutlineWorld } from './sketch2d-hit-test'
+import { osnapKindLabel, type OsnapKind } from './sketch2d-osnap'
 import type { SketchTool } from './Sketch2DCanvas'
 
 const CANVAS_SLOT_SEGMENTS = 24
@@ -80,6 +81,22 @@ export interface DrawSketch2DParams {
   selectedEntityIds?: ReadonlySet<string>
   /** Live grid-snapped drag offset (mm) — selected outlines ghost at this offset. */
   selectionGhostOffsetMm?: [number, number] | null
+  /**
+   * Sketch S2 -- active object-snap marker: a distinct glyph per kind at the
+   * snapped point plus a kind label chip near the cursor. Optional + additive;
+   * absent = no change.
+   */
+  osnapMarker?: { kind: OsnapKind; point: readonly [number, number] } | null
+  /**
+   * Sketch S2 -- node-edit overlay for the single-selected entity: square
+   * grip handles (active = armed / dragging, drawn filled) plus an optional
+   * dashed ghost outline of the reshaped entity while a handle drags.
+   * Optional + additive; absent = no change.
+   */
+  nodeEditOverlay?: {
+    handles: ReadonlyArray<{ x: number; y: number; active: boolean }>
+    ghostOutline: { pts: [number, number][]; closed: boolean } | null
+  } | null
 
   // Drag state
   drag:
@@ -137,6 +154,8 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     xformSelectionIds,
     selectedEntityIds,
     selectionGhostOffsetMm,
+    osnapMarker,
+    nodeEditOverlay,
     drag,
     constraintPickActive,
     constraintSegmentPickActive,
@@ -622,6 +641,35 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     ctx.restore()
   }
 
+  // -- Sketch S2 -- node-edit handles (single-selected entity, select tool) --
+  // Square grips in the same selection green; the ACTIVE (armed / dragging)
+  // node fills solid. A mid-drag ghost re-strokes the reshaped outline dashed
+  // in the S1 ghost tint, so the preview lands exactly where the commit will.
+  if (nodeEditOverlay && nodeEditOverlay.handles.length > 0) {
+    ctx.save()
+    if (nodeEditOverlay.ghostOutline) {
+      ctx.lineWidth = 2
+      ctx.strokeStyle = '#86efac'
+      ctx.fillStyle = 'transparent'
+      ctx.setLineDash([4, 4])
+      drawShape(nodeEditOverlay.ghostOutline.pts, nodeEditOverlay.ghostOutline.closed)
+      ctx.setLineDash([])
+    }
+    const half = 4
+    ctx.lineWidth = 2
+    for (const grip of nodeEditOverlay.handles) {
+      const hx = cx + (grip.x - ox) * scale
+      const hy = cy - (grip.y - oy) * scale
+      ctx.strokeStyle = '#4ade80'
+      ctx.fillStyle = grip.active ? '#4ade80' : '#0c0612'
+      ctx.beginPath()
+      ctx.rect(hx - half, hy - half, half * 2, half * 2)
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   ctx.fillStyle = '#c4b5fd'
   for (const p of Object.values(points)) {
     const sx = cx + (p.x - ox) * scale
@@ -973,6 +1021,73 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     ctx.arc(sx, sy, drag.r * scale, 0, Math.PI * 2)
     ctx.strokeStyle = '#a78bfa'
     ctx.stroke()
+  }
+
+  // Sketch S2 -- active object-snap marker: AutoCAD-style glyph per kind at
+  // the snapped point + a kind label chip near the cursor (drawn last so it
+  // overlays entities; mirrors the canvas's fillText readout idiom).
+  if (osnapMarker) {
+    const msx = cx + (osnapMarker.point[0] - ox) * scale
+    const msy = cy - (osnapMarker.point[1] - oy) * scale
+    const r = 6
+    ctx.save()
+    ctx.lineWidth = 1.6
+    ctx.strokeStyle = '#fbbf24'
+    ctx.fillStyle = 'rgba(251, 191, 36, 0.16)'
+    ctx.beginPath()
+    switch (osnapMarker.kind) {
+      case 'endpoint':
+        ctx.rect(msx - r, msy - r, r * 2, r * 2)
+        break
+      case 'midpoint':
+        ctx.moveTo(msx, msy - r)
+        ctx.lineTo(msx + r, msy + r)
+        ctx.lineTo(msx - r, msy + r)
+        ctx.closePath()
+        break
+      case 'center':
+        ctx.arc(msx, msy, r, 0, Math.PI * 2)
+        break
+      case 'quadrant':
+        ctx.moveTo(msx, msy - r)
+        ctx.lineTo(msx + r, msy)
+        ctx.lineTo(msx, msy + r)
+        ctx.lineTo(msx - r, msy)
+        ctx.closePath()
+        break
+      case 'intersection':
+        ctx.moveTo(msx - r, msy - r)
+        ctx.lineTo(msx + r, msy + r)
+        ctx.moveTo(msx - r, msy + r)
+        ctx.lineTo(msx + r, msy - r)
+        break
+      default: {
+        const _exhaustive: never = osnapMarker.kind
+        void _exhaustive
+        break
+      }
+    }
+    if (osnapMarker.kind !== 'intersection') ctx.fill()
+    ctx.stroke()
+    if (osnapMarker.kind === 'center') {
+      ctx.beginPath()
+      ctx.arc(msx, msy, 1.5, 0, Math.PI * 2)
+      ctx.fillStyle = '#fbbf24'
+      ctx.fill()
+    }
+    const chip = osnapKindLabel(osnapMarker.kind)
+    ctx.font = 'bold 10px system-ui, sans-serif'
+    const chipW = ctx.measureText(chip).width + 10
+    const chipX = Math.min(vw - chipW - 4, msx + 12)
+    const chipY = Math.max(14, msy - 14)
+    ctx.fillStyle = 'rgba(12, 6, 18, 0.85)'
+    ctx.fillRect(chipX, chipY - 10, chipW, 14)
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.6)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(chipX + 0.5, chipY - 9.5, chipW - 1, 13)
+    ctx.fillStyle = '#fbbf24'
+    ctx.fillText(chip, chipX + 5, chipY + 1)
+    ctx.restore()
   }
 
   ctx.fillStyle = '#a78bfa'

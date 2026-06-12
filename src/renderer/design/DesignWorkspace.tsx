@@ -408,7 +408,11 @@ export interface DesignWorkspaceProps {
    * Optional + additive: omitted on the splash preview + render-pin tests (the
    * button simply does not render), so every existing Sketch-stage pin holds.
    */
-  readonly onSketchImportDxf?: () => void | Promise<void>
+  readonly onSketchImportDxf?: () =>
+    | void
+    | DesignFileV2
+    | null
+    | Promise<void | DesignFileV2 | null>
   /**
    * FG-5 (Wave 2 Integrate) — a request from the ribbon's Solid commands to open
    * a per-feature dialog in the Properties pane. When this changes to a non-null

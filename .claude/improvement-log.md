@@ -18415,3 +18415,41 @@ step (pinned, deliberate); pointer-leave cancels an in-flight drag (no pointer c
 marquee select, node/vertex editing, object snaps (endpoint/midpoint/center/intersection),
 and tool hotkeys are S2/S3 by design. Hands-on pass owed: the pick/drag FEEL needs the
 operator's hands (node-SSR cannot click).
+
+## Cycle 247 — Sketch S2: object snaps + node editing + the DXF-undo race fix (2026-06-11)
+
+**Focus:** sketching priority, wave 2 (precision). One commit.
+
+**Baseline → result:** 16,172 → **16,325 pass / 1 skip / 0 fail** (+153); tsc clean; the S1
+byte-identity pins extended (absent-props markup still string-equal); the MVP variant proven
+byte-identical by direct byte-compare; 3e/3n pins green.
+
+**What landed:** (1) **Object snaps** — pure `sketch2d-osnap.ts`: endpoint/midpoint/center/
+quadrant/intersection candidates over every entity kind (exhaustive never-guarded switches;
+arc quadrants strictly-in-sweep; ellipse quadrants rotated-parametric; intersections are
+interior-interior proper crossings with AABB pair prefilter + a documented 1500-pair cap);
+resolution = nearest-in-tolerance osnap (exact ties by kind rank) → grid lattice → raw, in
+the ONE pointer pipeline every drawing tool, the S1 entity drag, AND node drags share.
+AutoCAD-style canvas glyphs + label chip; independent OSNAP toggle; self-snap excluded per
+gesture (drag a polyline endpoint onto another line's endpoint and they join to 1e-9 —
+e2e-pinned). (2) **Node/vertex editing** — pure `sketch2d-node-edit.ts`: point-ref nodes
+(shared points move all sharers — the S1 semantic) + param handles (rect corners recompute
+cx/cy/w/h, circle rim drags r, arc/slot/ellipse per-param mappings round-trip-tested);
+single-selected entities grow draggable handles; double-click inserts a polyline node,
+Delete on an armed handle removes it (closed-loop min-3 + orphan-point rules incl.
+constraint/dimension refs); one undo step per gesture through the S1 history. (3) The S1
+**DXF-import undo race fixed** deterministically (resolveDxfImportCommit; a regression test
+fails on the old ordering; import → undo removes the import, 3× stable).
+
+**Verification:** independent osnap probe 29/29 (rotated/translated fixtures vs inline trig,
+tie-ranks in both list orders, inclusive 3-4-5 tolerance boundary, grid-vs-osnap handoff);
+node-edit semantics 52 pure units; one-pipeline source-guard pins (no stray snap() calls in
+the touched paths).
+
+**Honest residuals:** marquee select, tool/OSNAP hotkeys, and dimension-edit gestures are the
+S3 set; curve-curve intersection snaps carry tessellation error (~0.15 mm at r=4/48-seg —
+analytic conics are a precision upgrade if needed); no runtime truncation flag when the
+intersection pair-cap bites; the StatusBar readout can momentarily disagree with a drag ghost
+near the dragged entity's own snap points (cosmetic); per-move candidate scan is fine at
+sketch scale (re-profile past ~500 entities). Hands-on pass owed — handles, markers, and the
+toggle need the operator's mouse.

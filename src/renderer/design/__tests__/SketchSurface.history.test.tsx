@@ -113,9 +113,18 @@ describe('SketchSurface — S1 mutation-seam source pins', () => {
     expect(SRC).toMatch(/onInsert=\{\(next\) => \{\s*applyDesignEdit\(next\)/)
   })
 
-  it('the DXF import path records ONE step only when the model changed', () => {
+  it('the DXF import path records ONE step only when the model changed — via the DETERMINISTIC commit decision (S2 race fix)', () => {
+    // S1 regression guard: the handler must NOT decide from a bare live-ref
+    // comparison in the finally (that races React's prop flush and silently
+    // skipped the import's undo step). The decision routes through the pure
+    // resolveDxfImportCommit over the RESOLVED merged design.
+    expect(SRC).not.toMatch(/if \(liveDesignRef\.current !== before\) \{\s*history\.push\(before\)/)
     expect(SRC).toMatch(
-      /if \(liveDesignRef\.current !== before\) \{\s*history\.push\(before\)/
+      /const commit = resolveDxfImportCommit\(before, resolvedMerged, liveDesignRef\.current\)\s*\n\s*liveDesignRef\.current = commit\.live\s*\n\s*if \(commit\.record\) \{\s*\n\s*history\.push\(before\)/
+    )
+    // The host's resolved value is captured from the SAME await chain.
+    expect(SRC).toMatch(
+      /const result = await onImportDxf\(\)\s*\n\s*resolvedMerged = typeof result === 'object' && result !== null \? result : null/
     )
   })
 
@@ -160,12 +169,15 @@ describe('SketchSurface — S1 mutation-seam source pins', () => {
 // ── (3) BRIDGE — the S1 canvas selection contract ────────────────────────────
 
 describe('SketchSurface — S1 canvas selection bridge', () => {
-  it('the contract prop names are exactly the four the canvas consumes/emits', () => {
+  it('the contract prop names are exactly the seven the canvas consumes/emits (S1 four + S2 node trio)', () => {
     expect([...SKETCH_CANVAS_BRIDGE_PROP_NAMES]).toEqual([
       'selectedEntityIds',
       'onEntityPick',
       'onMoveSelected',
-      'onDeleteSelected'
+      'onDeleteSelected',
+      'onNodeMove',
+      'onNodeInsert',
+      'onNodeDelete'
     ])
   })
 

@@ -8,10 +8,26 @@ import {
 import { clientToCanvasLocal, distSqPointSegment, screenToWorld, snap } from './sketch2d-canvas-coords'
 import {
   dragExceedsThreshold,
+  entityOutlineWorld,
   hitTestSketchEntities,
   selectPickToleranceMm,
-  snappedDragDelta
+  type EntityOutlineWorld
 } from './sketch2d-hit-test'
+import {
+  listEditableNodes,
+  moveNode,
+  nearestEditableNode,
+  nearestPolylineSegment,
+  nodeHandlePickToleranceMm
+} from './sketch2d-node-edit'
+import {
+  collectOsnapCandidates,
+  osnapToleranceMm,
+  resolveDragDeltaWithOsnap,
+  resolveSnappedPoint,
+  type OsnapCandidate,
+  type OsnapResolution
+} from './sketch2d-osnap'
 import { drawSketch2D, type ConstraintPickHit } from './sketch2d-draw'
 import {
   categoriseSolveResult,
@@ -149,6 +165,19 @@ type Props = {
   onMoveSelected?: (dxMm: number, dyMm: number) => void
   /** Sketch S1 — Delete/Backspace pressed with a non-empty selection (canvas focused). */
   onDeleteSelected?: () => void
+  /**
+   * Sketch S2 -- node/vertex editing. Active ONLY in select mode with EXACTLY
+   * ONE selected entity and this callback wired (absent props keep every
+   * legacy mount byte-identical). The canvas renders square node handles for
+   * that entity; a completed handle drag emits ONE resolved move and the
+   * surface applies the pure `moveNode` (shared point-refs move every
+   * referencing entity -- the S1 semantic).
+   */
+  onNodeMove?: (entityId: string, nodeId: string, point: readonly [number, number]) => void
+  /** Sketch S2 -- double-click a segment of the single-selected polyline inserts a vertex. */
+  onNodeInsert?: (entityId: string, segmentIndex: number, point: readonly [number, number]) => void
+  /** Sketch S2 -- Delete/Backspace with an ARMED (clicked) node deletes that vertex. */
+  onNodeDelete?: (entityId: string, nodeId: string) => void
 }
 
 const CROSSHAIR_TOOLS: ReadonlySet<SketchTool> = new Set([
@@ -207,7 +236,10 @@ export function Sketch2DCanvas({
   selectedEntityIds,
   onEntityPick,
   onMoveSelected,
-  onDeleteSelected
+  onDeleteSelected,
+  onNodeMove,
+  onNodeInsert,
+  onNodeDelete
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const { entities, points } = design
@@ -279,6 +311,8 @@ export function Sketch2DCanvas({
     /** Pick already emitted on press (fresh pick) — release without movement emits nothing more. */
     pickedOnDown: boolean
     moved: boolean
+    /** Sketch S2 -- osnap candidates with the MOVING selection excluded (gesture-scoped). */
+    osnapCandidates: OsnapCandidate[]
   } | null>(null)
   /** Live grid-snapped ghost offset while drag-moving the selection (render-only). */
   const [selectGhostOffset, setSelectGhostOffset] = useState<[number, number] | null>(null)
@@ -294,6 +328,133 @@ export function Sketch2DCanvas({
     }
   }, [activeTool])
 
+  // Sketch S2 -- object snaps: candidates memoized per design revision
+  // (recomputed on design identity change only); both toggles independent
+  // (grid snap lives upstream via gridMm; osnap is this canvas's own state).
+  const [osnapEnabled, setOsnapEnabled] = useState(true)
+  const [osnapHover, setOsnapHover] = useState<OsnapCandidate | null>(null)
+  const osnapCandidates = useMemo(() => collectOsnapCandidates({ design }), [design])
+  useEffect(() => {
+    if (!osnapEnabled) setOsnapHover(null)
+  }, [osnapEnabled])
+
+  /** Sketch S2 -- THE pointer-resolution path: osnap wins within tolerance, else grid lattice. */
+  const resolvePointerPlacement = useCallback(
+    (raw: readonly [number, number]): OsnapResolution =>
+      resolveSnappedPoint({
+        raw,
+        candidates: osnapCandidates,
+        gridMm,
+        gridEnabled: true,
+        osnapEnabled,
+        toleranceMm: osnapToleranceMm(scale)
+      }),
+    [osnapCandidates, gridMm, osnapEnabled, scale]
+  )
+
+  /** Sketch S2 -- drag end-point resolution: same engine, selection-excluded candidates. */
+  const resolveSelectDragDelta = (
+    sd: { startWorld: [number, number]; osnapCandidates: OsnapCandidate[] },
+    rawEnd: readonly [number, number]
+  ): { deltaMm: [number, number]; snapped: OsnapCandidate | null } =>
+    resolveDragDeltaWithOsnap({
+      startWorld: sd.startWorld,
+      rawEndWorld: rawEnd,
+      candidates: sd.osnapCandidates,
+      gridMm,
+      osnapEnabled,
+      toleranceMm: osnapToleranceMm(scale)
+    })
+
+  // -- Sketch S2 -- node/vertex editing state (select tool, EXACTLY ONE selected) --
+  /** In-flight node-handle drag; release emits ONE onNodeMove. */
+  const nodeDragRef = useRef<{
+    entityId: string
+    nodeId: string
+    startWorld: [number, number]
+    moved: boolean
+    /** Osnap candidates with the edited entity excluded (a node never snaps to its own entity). */
+    osnapCandidates: OsnapCandidate[]
+  } | null>(null)
+  /** Live resolved ghost for the dragged node (render-only; null = not dragging). */
+  const [nodeGhost, setNodeGhost] = useState<{ nodeId: string; point: [number, number] } | null>(
+    null
+  )
+  /** Armed (clicked) node -- Delete removes it; Esc or a second click disarms. */
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
+
+  // Node editing is available ONLY with the select tool, the move callback
+  // wired, and EXACTLY ONE selected entity (the Fusion grip convention).
+  const nodeEditEntity = useMemo(() => {
+    if (activeTool !== 'select' || !onNodeMove || selectedEntityIds?.size !== 1) return null
+    return entities.find((e) => selectedEntityIds.has(e.id)) ?? null
+  }, [activeTool, onNodeMove, selectedEntityIds, entities])
+  const editableNodes = useMemo(
+    () => (nodeEditEntity ? listEditableNodes(nodeEditEntity, points) : []),
+    [nodeEditEntity, points]
+  )
+
+  // Tool switch or a different single target tears down any node gesture.
+  useEffect(() => {
+    nodeDragRef.current = null
+    setNodeGhost(null)
+    setActiveNodeId(null)
+  }, [activeTool, nodeEditEntity?.id])
+
+  /**
+   * Sketch S2 -- node-drag pointer resolution through the SAME osnap engine
+   * the placement path uses (`resolveSnappedPoint`), with the edited entity's
+   * own candidates excluded so a handle never snaps to the geometry it is
+   * reshaping. Grid lattice fallback matches every other placement path.
+   */
+  const resolveNodeDragPoint = (
+    nd: { osnapCandidates: OsnapCandidate[] },
+    raw: readonly [number, number]
+  ): OsnapResolution =>
+    resolveSnappedPoint({
+      raw,
+      candidates: nd.osnapCandidates,
+      gridMm,
+      gridEnabled: true,
+      osnapEnabled,
+      toleranceMm: osnapToleranceMm(scale)
+    })
+
+  /** Press in select mode: a node-handle hit arms a node drag (true = consumed). */
+  const beginNodeDragAtPoint = (raw: [number, number]): boolean => {
+    if (!nodeEditEntity || editableNodes.length === 0) return false
+    const hit = nearestEditableNode(editableNodes, raw, nodeHandlePickToleranceMm(scale))
+    if (!hit) return false
+    nodeDragRef.current = {
+      entityId: nodeEditEntity.id,
+      nodeId: hit.nodeId,
+      startWorld: [raw[0], raw[1]],
+      moved: false,
+      osnapCandidates: collectOsnapCandidates({ design, excludeEntityIds: [nodeEditEntity.id] })
+    }
+    setNodeGhost(null)
+    return true
+  }
+
+  /** Esc steps node editing down first: cancel a live node drag, then disarm. */
+  const cancelNodeGestureOnEscape = (ev: React.KeyboardEvent<HTMLCanvasElement>): boolean => {
+    if (nodeDragRef.current) {
+      nodeDragRef.current = null
+      setNodeGhost(null)
+      setOsnapHover(null)
+      ev.preventDefault()
+      ev.stopPropagation()
+      return true
+    }
+    if (activeNodeId !== null) {
+      setActiveNodeId(null)
+      ev.preventDefault()
+      ev.stopPropagation()
+      return true
+    }
+    return false
+  }
+
   /** Press on an entity in select mode: emit the pick when it changes the selection, and arm a drag. */
   const beginSelectGesture = (entityId: string, startWorld: [number, number], additive: boolean): void => {
     const alreadySelected = !!selectedEntityIds?.has(entityId)
@@ -302,17 +463,35 @@ export function Sketch2DCanvas({
       onEntityPick?.(entityId, additive)
       pickedOnDown = true
     }
-    selectDragRef.current = { startWorld, pickedId: entityId, additive, pickedOnDown, moved: false }
+    // Sketch S2 -- candidates for THIS gesture exclude every entity the drag
+    // will move (the selection receiving the translation), so a dragged
+    // entity never snaps to ITSELF or to crossings that move with it.
+    const moving =
+      alreadySelected || additive ? new Set<string>(selectedEntityIds) : new Set<string>()
+    moving.add(entityId)
+    const gestureCandidates = osnapEnabled
+      ? collectOsnapCandidates({ design, excludeEntityIds: moving })
+      : []
+    selectDragRef.current = {
+      startWorld,
+      pickedId: entityId,
+      additive,
+      pickedOnDown,
+      moved: false,
+      osnapCandidates: gestureCandidates
+    }
     setSelectGhostOffset(null)
   }
 
   /** Select-mode keys — bound to the CANVAS element (focus-scoped), never to window. */
   const onSelectKeyDown = (ev: React.KeyboardEvent<HTMLCanvasElement>): void => {
     if (ev.key === 'Escape') {
+      if (cancelNodeGestureOnEscape(ev)) return
       if (selectDragRef.current) {
         // Cancel an in-flight drag without emitting a move.
         selectDragRef.current = null
         setSelectGhostOffset(null)
+        setOsnapHover(null)
         ev.preventDefault()
         ev.stopPropagation()
         return
@@ -322,6 +501,20 @@ export function Sketch2DCanvas({
         ev.preventDefault()
         ev.stopPropagation()
       }
+      return
+    }
+    if (
+      (ev.key === 'Delete' || ev.key === 'Backspace') &&
+      activeNodeId !== null &&
+      nodeEditEntity &&
+      onNodeDelete
+    ) {
+      // Sketch S2 -- an ARMED node owns Delete; entity-delete still runs via
+      // the branch below when no node is armed.
+      onNodeDelete(nodeEditEntity.id, activeNodeId)
+      setActiveNodeId(null)
+      ev.preventDefault()
+      ev.stopPropagation()
       return
     }
     if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedCount > 0) {
@@ -522,6 +715,30 @@ export function Sketch2DCanvas({
     }
   }, [activeTool])
 
+  // -- Sketch S2 -- node-handle overlay (render-only; null = no node editing) --
+  // The ghost outline re-tessellates the edited entity through the SAME pure
+  // moveNode the release will commit, so the dashed preview IS the result.
+  const nodeEditOverlay = useMemo(() => {
+    if (!nodeEditEntity || editableNodes.length === 0) return null
+    let ghostOutline: EntityOutlineWorld | null = null
+    if (nodeGhost) {
+      const ghostDesign = moveNode(design, nodeEditEntity.id, nodeGhost.nodeId, nodeGhost.point)
+      const ghostEntity = ghostDesign.entities.find((e) => e.id === nodeEditEntity.id)
+      ghostOutline = ghostEntity ? entityOutlineWorld(ghostEntity, ghostDesign.points) : null
+    }
+    return {
+      handles: editableNodes.map((n) => {
+        const ghost = nodeGhost !== null && nodeGhost.nodeId === n.nodeId ? nodeGhost : null
+        return {
+          x: ghost ? ghost.point[0] : n.point[0],
+          y: ghost ? ghost.point[1] : n.point[1],
+          active: n.nodeId === activeNodeId || ghost !== null
+        }
+      }),
+      ghostOutline
+    }
+  }, [nodeEditEntity, editableNodes, nodeGhost, activeNodeId, design])
+
   const draw = useCallback(() => {
     const c = ref.current
     if (!c) return
@@ -562,6 +779,8 @@ export function Sketch2DCanvas({
       xformSelectionIds,
       selectedEntityIds,
       selectionGhostOffsetMm: selectGhostOffset,
+      osnapMarker: osnapHover,
+      nodeEditOverlay,
       drag,
       constraintPickActive,
       constraintSegmentPickActive,
@@ -604,6 +823,8 @@ export function Sketch2DCanvas({
     xformSelectionIds,
     selectedEntityIds,
     selectGhostOffset,
+    osnapHover,
+    nodeEditOverlay,
     sketchRotateDeg,
     sketchScaleFactor,
     planeLabel,
@@ -769,7 +990,9 @@ export function Sketch2DCanvas({
     const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
     const dpr = Math.max(1, window.devicePixelRatio || 1)
     const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
-    const w: [number, number] = [snap(raw[0], gridMm), snap(raw[1], gridMm)]
+    // Sketch S2 -- the ONE pointer->world resolution: object snaps win within
+    // tolerance, else the grid lattice exactly as before.
+    const w: [number, number] = resolvePointerPlacement(raw).point
 
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
       const action = handleConstraintPickClick(design, raw[0], raw[1], scale, 'vertex_segment', probeConstraintPick, !!onConstraintPointPick, !!onConstraintSegmentPick)
@@ -791,6 +1014,7 @@ export function Sketch2DCanvas({
     // the pan arm above). Unwired mounts do nothing.
     if (activeTool === 'select') {
       if (!onEntityPick) return
+      if (beginNodeDragAtPoint([raw[0], raw[1]])) return
       const hit = hitTestSketchEntities({
         design,
         worldPoint: raw,
@@ -1058,11 +1282,26 @@ export function Sketch2DCanvas({
     const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
     const dpr = Math.max(1, window.devicePixelRatio || 1)
     const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
-    const p: [number, number] = [snap(raw[0], gridMm), snap(raw[1], gridMm)]
+    // Sketch S2 -- same ONE resolution as onMouseDown placements.
+    const res = resolvePointerPlacement(raw)
+    const p: [number, number] = res.point
     // Wave 3n — thread the SAME snap-resolved value the placement logic uses
     // up to the shell StatusBar (pass-through only; nothing recomputed).
     onCursorWorld?.(p)
 
+    // Sketch S2 -- live node-handle drag: ghost the dragged node + the
+    // reshaped outline at the resolved point (osnap into OTHER geometry,
+    // else grid); the ONE onNodeMove emit happens on release.
+    const nd = nodeDragRef.current
+    if (nd) {
+      if (!nd.moved && dragExceedsThreshold(nd.startWorld, raw, scale)) nd.moved = true
+      if (nd.moved) {
+        const nodeRes = resolveNodeDragPoint(nd, raw)
+        setNodeGhost({ nodeId: nd.nodeId, point: nodeRes.point })
+        setOsnapHover(nodeRes.snapped)
+      }
+      return
+    }
     // Sketch S1 — live drag-move of the selection (select tool): track the
     // grid-snapped ghost offset locally; the single onMoveSelected emit
     // happens on release. Hover bookkeeping is suppressed mid-drag.
@@ -1070,10 +1309,21 @@ export function Sketch2DCanvas({
     if (sd) {
       if (!sd.moved && dragExceedsThreshold(sd.startWorld, raw, scale)) sd.moved = true
       if (sd.moved) {
-        setSelectGhostOffset(snappedDragDelta(sd.startWorld, raw, gridMm))
+        // Sketch S2 -- ghost == commit: the SAME selection-excluded resolution
+        // the release will emit (osnap end-point, else the S1 lattice delta).
+        const dragRes = resolveSelectDragDelta(sd, raw)
+        setSelectGhostOffset(dragRes.deltaMm)
+        setOsnapHover(dragRes.snapped)
       }
       return
     }
+    // Sketch S2 -- marker only where the resolution drives a placement:
+    // hidden in select hover + constraint pick modes (those pick at RAW).
+    const markerEligible =
+      activeTool !== 'select' &&
+      !(constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) &&
+      !(constraintEntityPickActive && onConstraintEntityPick)
+    setOsnapHover(markerEligible ? res.snapped : null)
     if (activeTool === 'select' && onEntityPick) {
       const hover = hitTestSketchEntities({
         design,
@@ -1135,6 +1385,29 @@ export function Sketch2DCanvas({
       panRef.current = null
     }
     if (ev.button !== 0) return
+    // Sketch S2 -- finish a node drag: a real drag emits ONE resolved
+    // onNodeMove (one undoable step upstream); an in-place release ARMS the
+    // node (click-to-arm; Delete removes it; a second click disarms).
+    const nd = nodeDragRef.current
+    if (nd) {
+      nodeDragRef.current = null
+      setNodeGhost(null)
+      setOsnapHover(null)
+      const nc = ref.current
+      if (nd.moved && nc) {
+        const [nlx, nly] = clientToCanvasLocal(ev.clientX, ev.clientY, nc)
+        const ndpr = Math.max(1, window.devicePixelRatio || 1)
+        const nraw = screenToWorld(nlx, nly, nc.width, nc.height, scale * ndpr, ox, oy)
+        const placed = resolveNodeDragPoint(nd, nraw).point
+        const startNode = editableNodes.find((n) => n.nodeId === nd.nodeId)
+        if (!startNode || startNode.point[0] !== placed[0] || startNode.point[1] !== placed[1]) {
+          onNodeMove?.(nd.entityId, nd.nodeId, placed)
+        }
+      } else if (!nd.moved) {
+        setActiveNodeId((prev) => (prev === nd.nodeId ? null : nd.nodeId))
+      }
+      return
+    }
     // Sketch S1 — finish a select gesture: a real drag emits ONE grid-snapped
     // move (a single undoable step upstream); an in-place release on an
     // already-selected entity emits the toggle/replace pick instead.
@@ -1142,12 +1415,14 @@ export function Sketch2DCanvas({
     if (sd) {
       selectDragRef.current = null
       setSelectGhostOffset(null)
+      setOsnapHover(null)
       const c = ref.current
       if (sd.moved && c) {
         const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
         const dpr = Math.max(1, window.devicePixelRatio || 1)
         const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
-        const [dxMm, dyMm] = snappedDragDelta(sd.startWorld, raw, gridMm)
+        // Sketch S2 -- same selection-excluded resolution the ghost previewed.
+        const [dxMm, dyMm] = resolveSelectDragDelta(sd, raw).deltaMm
         if (dxMm !== 0 || dyMm !== 0) onMoveSelected?.(dxMm, dyMm)
       } else if (!sd.moved && !sd.pickedOnDown) {
         onEntityPick?.(sd.pickedId, sd.additive)
@@ -1160,6 +1435,30 @@ export function Sketch2DCanvas({
     if (drag?.kind === 'circle') {
       finalizeCircleDrag()
     }
+  }
+
+  /** Sketch S2 -- double-click on the single-selected polyline inserts a vertex on the nearest segment. */
+  function onCanvasDoubleClick(ev: React.MouseEvent) {
+    if (activeTool !== 'select' || !nodeEditEntity || !onNodeInsert) return
+    const c = ref.current
+    if (!c) return
+    const [lx, ly] = clientToCanvasLocal(ev.clientX, ev.clientY, c)
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
+    // Segment resolves at the RAW point (picks are exact); the inserted vertex
+    // placement resolves through the SAME osnap+grid engine as node drags,
+    // with the edited polyline excluded so it cannot snap to itself.
+    const seg = nearestPolylineSegment(nodeEditEntity, points, raw, selectPickToleranceMm(scale))
+    if (!seg) return
+    const placed = resolveSnappedPoint({
+      raw,
+      candidates: collectOsnapCandidates({ design, excludeEntityIds: [nodeEditEntity.id] }),
+      gridMm,
+      gridEnabled: true,
+      osnapEnabled,
+      toleranceMm: osnapToleranceMm(scale)
+    })
+    onNodeInsert(nodeEditEntity.id, seg.segmentIndex, placed.point)
   }
 
   function closePolyline() {
@@ -1308,6 +1607,7 @@ export function Sketch2DCanvas({
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
+        onDoubleClick={activeTool === 'select' && onNodeInsert ? onCanvasDoubleClick : undefined}
         onMouseLeave={() => {
           panRef.current = null
           // Wave 3n — the source goes inactive; blank the StatusBar read-out.
@@ -1316,6 +1616,10 @@ export function Sketch2DCanvas({
           selectDragRef.current = null
           setSelectGhostOffset(null)
           setSelectHoverId(null)
+          setOsnapHover(null)
+          // Sketch S2 -- likewise cancel an in-flight node drag (no emit).
+          nodeDragRef.current = null
+          setNodeGhost(null)
           setArcHover(null)
           setLineHover(null)
           setCircle2ptHover(null)
@@ -1329,6 +1633,19 @@ export function Sketch2DCanvas({
           setEntityHoverId(null)
         }}
       />
+      <button
+        type="button"
+        className={
+          osnapEnabled ? 'sketch-osnap-toggle sketch-osnap-toggle--on' : 'sketch-osnap-toggle'
+        }
+        data-testid="sketch-osnap-toggle"
+        data-osnap={osnapEnabled ? 'on' : 'off'}
+        aria-pressed={osnapEnabled}
+        title="Object snap: endpoint, midpoint, center, quadrant, intersection. Independent of grid snap (grid may be off while osnap stays on)."
+        onClick={() => setOsnapEnabled((v) => !v)}
+      >
+        {osnapEnabled ? 'OSNAP on' : 'OSNAP off'}
+      </button>
       {activeTool === 'line' && lineStart && (
         <div
           className="sketch-numeric-popover"
@@ -1479,10 +1796,11 @@ export function Sketch2DCanvas({
           className="sketch-toolbar sketch-select-toolbar"
           data-testid="sketch-select-toolbar"
           data-selected-count={selectedCount}
+          data-node-editing={onNodeMove ? (nodeEditEntity ? 'true' : 'false') : undefined}
         >
           <span className="msg">
             {selectedCount > 0
-              ? `${selectedCount} selected · drag to move · Shift+click adds · Delete removes · Esc clears`
+              ? `${selectedCount} selected · drag to move · Shift+click adds · Delete removes · Esc clears${nodeEditEntity ? ' · drag a node handle to reshape · double-click a segment to add a node' : ''}`
               : 'Select: click an entity · Shift+click adds · drag a selected entity to move it.'}
           </span>
           <button

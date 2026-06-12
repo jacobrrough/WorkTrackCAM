@@ -33,9 +33,10 @@ const HOST = read('../app/DesignWorkspaceHost.tsx')
 
 describe('Sketch2DCanvas — the existing pointer→world value is threaded out', () => {
   it('emits the SAME snap-resolved point the placement logic computes (no recompute)', () => {
-    // The emit sits directly after the existing math — raw → snap → p → emit.
+    // The emit sits directly after the existing math: raw -> the S2 osnap/grid
+    // resolution (resolvePointerPlacement) -> p -> emit.
     expect(CANVAS).toMatch(
-      /const p: \[number, number\] = \[snap\(raw\[0\], gridMm\), snap\(raw\[1\], gridMm\)\][\s\S]{0,250}?onCursorWorld\?\.\(p\)/
+      /const res = resolvePointerPlacement\(raw\)\s*\n\s*const p: \[number, number\] = res\.point[\s\S]{0,250}?onCursorWorld\?\.\(p\)/
     )
   })
 

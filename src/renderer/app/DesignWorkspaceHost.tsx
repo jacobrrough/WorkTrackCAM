@@ -15,6 +15,7 @@ import {
 import type { SelectionSurface } from '../design/selection-state'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
+import type { DesignFileV2 } from '../../shared/design-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 
 /**
@@ -201,11 +202,14 @@ export function DesignWorkspaceHost({
   // SAFETY: imports sketch geometry only — emits no toolpath / G-code. The Laguna
   // RichAuto/Mach3 post invariants + the V-carve depth cap to stock thickness all
   // live downstream in cam-local → cam-runner-2d → vcarve_mach3.hbs, untouched.
-  const handleImportDxf = useCallback(async () => {
+  // Sketch S2 (race fix): resolve the MERGED design on success and `null` on
+  // every nothing-changed path, so SketchSurface's one-undo-step decision is
+  // deterministic (no dependence on React flushing the session edit first).
+  const handleImportDxf = useCallback(async (): Promise<DesignFileV2 | null> => {
     const projectDir = session.projectDir
     if (projectDir === null) {
       onToast('warn', 'Open a project before importing DXF vectors.')
-      return
+      return null
     }
     const fab = window.fab
     let filePath: string | null
@@ -213,19 +217,19 @@ export function DesignWorkspaceHost({
       filePath = await fab.dialogOpenFile([{ name: 'DXF vectors', extensions: ['dxf'] }])
     } catch (e) {
       onToast('err', `DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
-      return
+      return null
     }
-    if (!filePath) return // user cancelled the picker
+    if (!filePath) return null // user cancelled the picker
     let res: ({ ok: true } & DxfParseResult) | { ok: false; error: string }
     try {
       res = await fab.dxfImport(filePath)
     } catch (e) {
       onToast('err', `DXF import failed: ${e instanceof Error ? e.message : String(e)}`)
-      return
+      return null
     }
     if (!res.ok) {
       onToast('err', `DXF import failed: ${res.error}`)
-      return
+      return null
     }
     const parse: DxfParseResult = {
       entities: res.entities,
@@ -235,7 +239,7 @@ export function DesignWorkspaceHost({
     }
     if (parse.entities.length === 0) {
       onToast('warn', 'DXF parsed but contained no supported 2D geometry (LINE/CIRCLE/ARC/POLYLINE).')
-      return
+      return null
     }
     // Additive merge onto the LIVE session model (never `replace`) so the import
     // can't clobber CAD-authored geometry already on the canvas. Using
@@ -256,7 +260,9 @@ export function DesignWorkspaceHost({
       await fab.designSave(projectDir, JSON.stringify(design))
     } catch (e) {
       onToast('err', `DXF imported onto the canvas but failed to save: ${e instanceof Error ? e.message : String(e)}`)
-      return
+      // The merge IS applied to the session (onDesignChange above) -- still the
+      // surface's undo step; only persistence failed.
+      return design
     }
     const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped)` : ''
     onToast(
@@ -264,6 +270,7 @@ export function DesignWorkspaceHost({
       `Imported ${importedCount} DXF vector${importedCount === 1 ? '' : 's'}${skipNote} onto the sketch.`
     )
     for (const n of notes.slice(0, 3)) onToast('warn', n)
+    return design
   }, [session, onToast])
 
   // Forward the combined command surface (selection ∪ sketch mode) DesignWorkspace

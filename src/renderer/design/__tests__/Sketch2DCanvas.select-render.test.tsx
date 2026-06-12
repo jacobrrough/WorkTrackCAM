@@ -105,15 +105,16 @@ describe('Sketch2DCanvas select tool -- source pins (pointer halves SSR cannot c
     )
   })
 
-  it('drag release emits EXACTLY ONE grid-snapped onMoveSelected (single undoable step upstream)', () => {
+  it('drag release emits EXACTLY ONE resolved onMoveSelected (single undoable step upstream)', () => {
     const emits = SRC.match(/onMoveSelected\?\.\(/g) ?? []
     expect(emits).toHaveLength(1)
-    expect(SRC).toContain('const [dxMm, dyMm] = snappedDragDelta(sd.startWorld, raw, gridMm)')
+    expect(SRC).toContain('const [dxMm, dyMm] = resolveSelectDragDelta(sd, raw).deltaMm')
     expect(SRC).toContain('if (dxMm !== 0 || dyMm !== 0) onMoveSelected?.(dxMm, dyMm)')
   })
 
   it('the live ghost offset is the SAME snapped delta the release will commit', () => {
-    expect(SRC).toContain('setSelectGhostOffset(snappedDragDelta(sd.startWorld, raw, gridMm))')
+    expect(SRC).toContain('const dragRes = resolveSelectDragDelta(sd, raw)')
+    expect(SRC).toContain('setSelectGhostOffset(dragRes.deltaMm)')
   })
 
   it('Escape clears via onEntityPick(null, false); Delete/Backspace fire onDeleteSelected', () => {

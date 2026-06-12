@@ -1148,3 +1148,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Sketch S2 -- the canvas's own OSNAP toggle chip (object snaps; independent
+   of the surface's grid-snap toggle). Bottom-right so it never collides with
+   the numeric popover (top-right) or the per-tool toolbars (bottom-left). */
+.sketch-surface__canvas-host .sketch-osnap-toggle {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: 4;
+  appearance: none;
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt2);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.sketch-surface__canvas-host .sketch-osnap-toggle--on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.sketch-surface__canvas-host .sketch-osnap-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

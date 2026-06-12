@@ -56,6 +56,7 @@ import {
   translateSelectedSketchEntities,
   type SketchHistory
 } from './sketch-history'
+import { deletePolylineNode, insertPolylineNode, moveNode } from './sketch2d-node-edit'
 import { TextDialog, type FontBufferLoader } from './feature-dialogs/TextDialog'
 import {
   ArraySketchDialog,
@@ -91,6 +92,16 @@ export interface SketchSurfaceCanvasBridge {
   readonly onMoveSelected: (dxMm: number, dyMm: number) => void
   /** Canvas-side delete gesture for the current selection. */
   readonly onDeleteSelected: () => void
+  /** Sketch S2 — ONE completed node-handle drag (entity, node, resolved mm). */
+  readonly onNodeMove: (entityId: string, nodeId: string, point: readonly [number, number]) => void
+  /** Sketch S2 — double-click vertex insert on a polyline segment. */
+  readonly onNodeInsert: (
+    entityId: string,
+    segmentIndex: number,
+    point: readonly [number, number]
+  ) => void
+  /** Sketch S2 — Delete pressed with an armed node on the canvas. */
+  readonly onNodeDelete: (entityId: string, nodeId: string) => void
 }
 
 /** The exact prop names {@link SketchSurfaceCanvasBridge} spreads onto the canvas. */
@@ -98,7 +109,10 @@ export const SKETCH_CANVAS_BRIDGE_PROP_NAMES = [
   'selectedEntityIds',
   'onEntityPick',
   'onMoveSelected',
-  'onDeleteSelected'
+  'onDeleteSelected',
+  'onNodeMove',
+  'onNodeInsert',
+  'onNodeDelete'
 ] as const
 
 /**
@@ -231,11 +245,18 @@ export interface SketchSurfaceProps {
    * (bulge-accurate) vectors appear immediately on the mounted canvas AND persist.
    * Resolves the Wave-3e item-e caveat (the only DXF button used to live on the
    * Manufacture ribbon, so an import there was invisible to an already-mounted
-   * Design canvas). Returns once the import settles; the surface reflects whatever
-   * the host pushed via `onDesignChange`. Optional — absent hides the button
-   * (the splash preview + render-pin tests render without it).
+   * Design canvas). Optional — absent hides the button (the splash preview +
+   * render-pin tests render without it).
+   *
+   * Sketch S2 (race fix): the host SHOULD resolve with the MERGED design it
+   * applied (or `null` when nothing changed — cancelled picker, parse failure).
+   * That makes the surface's one-undo-step bookkeeping deterministic: the old
+   * contract (`void`) forced the surface to compare its live ref after the
+   * await, which races React's prop flush and silently skipped the import's
+   * undo step. `void`-resolving hosts still work but keep the legacy
+   * best-effort comparison (see {@link resolveDxfImportCommit}).
    */
-  readonly onImportDxf?: () => void | Promise<void>
+  readonly onImportDxf?: () => void | DesignFileV2 | null | Promise<void | DesignFileV2 | null>
   /**
    * Wave 3f — inject the font-bytes loader the {@link TextDialog} uses. Defaults
    * (when omitted) to the dialog's own `font:read`-IPC loader. Tests pass a
@@ -260,6 +281,44 @@ export interface SketchSurfaceProps {
 function toolForArmedCommand(commandId: string | null | undefined): SketchTool | null {
   if (!commandId) return null
   return sketchToolForDesignCommand(commandId) ?? null
+}
+
+/** What the surface should do once a DXF import settles (see {@link resolveDxfImportCommit}). */
+export interface DxfImportCommitDecision {
+  /** True = the import changed the model: record EXACTLY ONE undo step (push `before`). */
+  readonly record: boolean
+  /** The freshest post-import design the surface must treat as live. */
+  readonly live: DesignFileV2
+}
+
+/**
+ * Sketch S2 — the DETERMINISTIC undo-step decision for a settled DXF import
+ * (the S1 race fix, exported pure so the regression test runs the REAL logic).
+ *
+ * S1's bug: the import handler compared `liveDesignRef.current !== before` in
+ * a `finally` that can run BEFORE React re-renders the surface with the
+ * host's session edit — the comparison saw the stale pre-import design and
+ * silently skipped the import's undo step (the import itself was fine).
+ *
+ * The fix: the host now RESOLVES with the merged design it applied
+ * (`resolvedMerged`). When present, the decision depends ONLY on values the
+ * await chain owns — no dependence on React having flushed:
+ *   - `resolvedMerged !== before`  → record one step, treat it as live;
+ *   - identical reference          → nothing changed, record nothing.
+ * `null` (legacy `void` hosts) falls back to the old live-ref comparison,
+ * which is best-effort by construction.
+ */
+export function resolveDxfImportCommit(
+  before: DesignFileV2,
+  resolvedMerged: DesignFileV2 | null,
+  liveAfter: DesignFileV2
+): DxfImportCommitDecision {
+  if (resolvedMerged !== null) {
+    return resolvedMerged !== before
+      ? { record: true, live: resolvedMerged }
+      : { record: false, live: liveAfter }
+  }
+  return { record: liveAfter !== before, live: liveAfter }
 }
 
 export function SketchSurface({
@@ -489,6 +548,55 @@ export function SketchSurface({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // ── Sketch S2 — node/vertex edit appliers (canvas → pure module → history) ─
+
+  /**
+   * ONE completed node-handle drag → ONE `moveNode` commit. Coalesced per
+   * node (the tag), mirroring the S1 entity-move semantics; a shared
+   * point-ref node moves EVERY entity referencing that record (S1 semantic,
+   * applied exactly once by the pure applier).
+   */
+  function handleNodeMove(entityId: string, nodeId: string, point: readonly [number, number]): void {
+    const cur = liveDesignRef.current
+    const next = moveNode(cur, entityId, nodeId, point)
+    if (next === cur) return
+    history.pushCoalesced(cur, `node:${entityId}:${nodeId}`)
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+  }
+
+  /** Double-click vertex insert — ONE history step per insert. */
+  function handleNodeInsert(
+    entityId: string,
+    segmentIndex: number,
+    point: readonly [number, number]
+  ): void {
+    const cur = liveDesignRef.current
+    const next = insertPolylineNode(cur, entityId, segmentIndex, point)
+    if (next === cur) return
+    history.push(cur)
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+    onSketchHint?.('Node inserted.')
+  }
+
+  /** Delete the armed node — the pure applier refuses below the loop floor. */
+  function handleNodeDelete(entityId: string, nodeId: string): void {
+    const cur = liveDesignRef.current
+    const next = deletePolylineNode(cur, entityId, nodeId)
+    if (next === cur) {
+      onSketchHint?.('Node not removable — a closed loop keeps 3 points (2 for an open path).')
+      return
+    }
+    history.push(cur)
+    liveDesignRef.current = next
+    onDesignChange(next)
+    setHistoryRevision((v) => v + 1)
+    onSketchHint?.('Node deleted.')
+  }
+
   // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
   // variable so this compiles before the canvas declares the props; extra props
   // are inert at runtime until the canvas's hit-test half lands.
@@ -496,26 +604,34 @@ export function SketchSurface({
     selectedEntityIds,
     onEntityPick: handleEntityPick,
     onMoveSelected: handleMoveSelected,
-    onDeleteSelected: handleDeleteSelected
+    onDeleteSelected: handleDeleteSelected,
+    onNodeMove: handleNodeMove,
+    onNodeInsert: handleNodeInsert,
+    onNodeDelete: handleNodeDelete
   }
 
   // Run the host's DXF import, guarding against overlapping pickers. The host
   // owns the file-picker → parse → additive-merge → persist chain; this only
   // toggles the in-flight flag around it. `onImportDxf` may be sync or async.
-  // S1: the host merges via the session's onDesignChange directly (bypassing
-  // this surface's wrapper), so once the import settles we record the
-  // PRE-import state as ONE undo step — and only when the model actually
-  // changed (a cancelled picker records nothing). Push order doesn't matter
-  // here: the snapshot is the pre-state either way.
+  // Sketch S2 (race fix): the host RESOLVES with the merged design it applied,
+  // so the one-undo-step decision runs through the pure, DETERMINISTIC
+  // `resolveDxfImportCommit` — no dependence on React having flushed the
+  // session edit back into the `design` prop before this `finally` runs (the
+  // S1 live-ref comparison silently skipped the step exactly there). A
+  // cancelled picker resolves `null` and records nothing.
   async function handleImportDxfClick(): Promise<void> {
     if (!onImportDxf || importingDxf) return
     setImportingDxf(true)
     const before = liveDesignRef.current
+    let resolvedMerged: DesignFileV2 | null = null
     try {
-      await onImportDxf()
+      const result = await onImportDxf()
+      resolvedMerged = typeof result === 'object' && result !== null ? result : null
     } finally {
       setImportingDxf(false)
-      if (liveDesignRef.current !== before) {
+      const commit = resolveDxfImportCommit(before, resolvedMerged, liveDesignRef.current)
+      liveDesignRef.current = commit.live
+      if (commit.record) {
         history.push(before)
         setHistoryRevision((v) => v + 1)
       }
