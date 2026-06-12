@@ -1175,3 +1175,36 @@
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+/* Sketch S3 -- marquee box-select tints. The rubber band is canvas-drawn;
+   sketch2d-draw resolves these custom properties via getComputedStyle on the
+   canvas (with literal fallbacks for jsdom / detached mounts). Defined on the
+   canvas's own wrap so EVERY mount inherits them, in or out of the cockpit.
+   Window (drag L->R) = the classic solid blue box; crossing (drag R->L) = the
+   classic dashed green box. */
+.sketch-wrap {
+  --sketch-marquee-window: #60a5fa;
+  --sketch-marquee-window-fill: rgba(96, 165, 250, 0.14);
+  --sketch-marquee-crossing: #4ade80;
+  --sketch-marquee-crossing-fill: rgba(74, 222, 128, 0.12);
+}
+
+/* Sketch S3 -- non-blocking "snap simplified" badge: sits beside the OSNAP
+   toggle when the intersection pair cap truncated the candidate collect on a
+   crowded sketch (endpoint / midpoint / center / quadrant snaps stay
+   complete; only late-in-draw-order crossing snaps are skipped). */
+.sketch-surface__canvas-host .sketch-osnap-simplified-badge {
+  position: absolute;
+  right: calc(var(--sp-4) + 96px);
+  bottom: var(--sp-4);
+  z-index: 4;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg3);
+  border: 1px solid var(--warn, var(--txt1));
+  border-radius: var(--radius-sm);
+  color: var(--warn, var(--txt1));
+  font-size: var(--text-xs, 11px);
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}

@@ -354,12 +354,28 @@ export interface CollectOsnapCandidatesInput {
   intersectionPairCap?: number
 }
 
+/** Sketch S3 -- detailed collect result: the candidate list plus the truncation flag. */
+export interface OsnapCandidateCollection {
+  /** The SAME flat candidate list `collectOsnapCandidates` returns (same order). */
+  candidates: OsnapCandidate[]
+  /**
+   * True when the AABB-surviving entity-pair walk hit the intersection pair
+   * cap, i.e. crossings beyond the cap contributed NO candidates this collect
+   * (see the module-header truncation note -- endpoint / midpoint / center /
+   * quadrant candidates are NEVER truncated). The canvas surfaces a small
+   * non-blocking "snap simplified" badge next to the OSNAP toggle from this.
+   */
+  truncated: boolean
+}
+
 /**
  * All osnap candidates for a design, in a flat list the resolver scans
- * linearly. Memoize per design revision (the canvas recomputes on design
- * identity change only).
+ * linearly, PLUS the intersection-cap truncation flag. Memoize per design
+ * revision (the canvas recomputes on design identity change only).
  */
-export function collectOsnapCandidates(input: CollectOsnapCandidatesInput): OsnapCandidate[] {
+export function collectOsnapCandidatesDetailed(
+  input: CollectOsnapCandidatesInput
+): OsnapCandidateCollection {
   const { design } = input
   const exclude = new Set(input.excludeEntityIds ?? [])
   const cap = input.intersectionPairCap ?? OSNAP_INTERSECTION_PAIR_CAP
@@ -386,7 +402,17 @@ export function collectOsnapCandidates(input: CollectOsnapCandidatesInput): Osna
       collectPairIntersections(A, B, out)
     }
   }
-  return out
+  return { candidates: out, truncated }
+}
+
+/**
+ * Legacy array-only signature -- byte-compatible with the pre-S3 behavior
+ * (the SAME candidates in the SAME order). Delegates to
+ * {@link collectOsnapCandidatesDetailed}; callers that need the truncation
+ * flag (the canvas's per-design memo) use the detailed form instead.
+ */
+export function collectOsnapCandidates(input: CollectOsnapCandidatesInput): OsnapCandidate[] {
+  return collectOsnapCandidatesDetailed(input).candidates
 }
 
 export interface ResolveSnappedPointInput {

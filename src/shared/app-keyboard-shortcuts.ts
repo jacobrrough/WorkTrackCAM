@@ -9,6 +9,15 @@ export type AppShortcutGroup = {
   rows: { action: string; keysWin: string; keysMac: string; context?: string }[]
 }
 
+/**
+ * Sketch S3 -- shared context copy for the sketch-canvas hotkey rows. The
+ * handler is strictly canvas-scoped: it fires only while the sketch canvas
+ * wrap is hovered or holds focus, and never while a typable control has
+ * focus (`isTypableKeyboardTarget` gate).
+ */
+export const SKETCH_CANVAS_HOTKEY_CONTEXT =
+  'Sketch canvas only - while the canvas is hovered or focused; ignored while typing in a field'
+
 export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
   {
     id: 'global',
@@ -194,6 +203,50 @@ export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
         context: 'When Measure or Section is active under 3D preview'
       }
     ]
+  },
+  {
+    id: 'sketch_canvas',
+    title: 'Sketch canvas (2D sketcher)',
+    rows: [
+      { action: 'Select tool', keysWin: 'S', keysMac: 'S', context: SKETCH_CANVAS_HOTKEY_CONTEXT },
+      {
+        action: 'Polyline tool',
+        keysWin: 'L',
+        keysMac: 'L',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      },
+      {
+        action: 'Rectangle tool',
+        keysWin: 'R',
+        keysMac: 'R',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      },
+      { action: 'Circle tool', keysWin: 'C', keysMac: 'C', context: SKETCH_CANVAS_HOTKEY_CONTEXT },
+      {
+        action: 'Arc (3-point) tool',
+        keysWin: 'A',
+        keysMac: 'A',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      },
+      {
+        action: 'Ellipse tool',
+        keysWin: 'E',
+        keysMac: 'E',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      },
+      {
+        action: 'Toggle object snap (OSNAP)',
+        keysWin: 'F3',
+        keysMac: 'F3',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      },
+      {
+        action: 'Toggle grid snap',
+        keysWin: 'G',
+        keysMac: 'G',
+        context: SKETCH_CANVAS_HOTKEY_CONTEXT
+      }
+    ]
   }
 ]
 
@@ -291,4 +344,42 @@ export function matchesDesignEnvSwitch(e: KeyboardEvent): boolean {
     !e.altKey &&
     e.key.toLowerCase() === 'd'
   )
+}
+
+/** Tools reachable via the S3 single-key sketch hotkeys (a subset of the canvas SketchTool union). */
+export type SketchCanvasHotkeyTool = 'select' | 'polyline' | 'rect' | 'circle' | 'arc' | 'ellipse'
+
+/** What a matched sketch-canvas hotkey should do: arm a tool, or flip a snap toggle. */
+export type SketchCanvasHotkeyAction =
+  | { kind: 'tool'; tool: SketchCanvasHotkeyTool }
+  | { kind: 'toggleOsnap' }
+  | { kind: 'toggleGridSnap' }
+
+/** Single-letter key -> sketch tool (AutoCAD / Fusion-style arming; Sketch S3). */
+const SKETCH_TOOL_HOTKEY_MAP: Readonly<Partial<Record<string, SketchCanvasHotkeyTool>>> = {
+  s: 'select',
+  l: 'polyline',
+  r: 'rect',
+  c: 'circle',
+  a: 'arc',
+  e: 'ellipse'
+}
+
+/**
+ * Sketch-canvas hotkeys (Sketch S3): plain S / L / R / C / A / E arm tools,
+ * F3 toggles OSNAP (object snap), G toggles grid snap -- mapping onto the
+ * EXISTING tool-arming + toggle state (no new behaviors). Any modifier chord
+ * never matches (Ctrl+S stays Save, Ctrl+C stays copy, Shift is reserved for
+ * gesture modifiers). The CALLER owns the canvas scoping: wrap hover/focus
+ * plus the `isTypableKeyboardTarget` typing gate (see the
+ * `sketch_canvas` rows in {@link APP_KEYBOARD_SHORTCUT_GROUPS}).
+ */
+export function matchesSketchCanvasHotkey(e: KeyboardEvent): SketchCanvasHotkeyAction | null {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null
+  if (e.key === 'F3') return { kind: 'toggleOsnap' }
+  if (e.key.length !== 1) return null
+  const k = e.key.toLowerCase()
+  if (k === 'g') return { kind: 'toggleGridSnap' }
+  const tool = SKETCH_TOOL_HOTKEY_MAP[k]
+  return tool ? { kind: 'tool', tool } : null
 }

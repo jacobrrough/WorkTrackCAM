@@ -32,6 +32,7 @@ import {
 import { niceStepMm, screenToWorld } from './sketch2d-canvas-coords'
 import { entityOutlineWorld } from './sketch2d-hit-test'
 import { osnapKindLabel, type OsnapKind } from './sketch2d-osnap'
+import type { MarqueeMode } from './sketch2d-marquee'
 import type { SketchTool } from './Sketch2DCanvas'
 
 const CANVAS_SLOT_SEGMENTS = 24
@@ -97,6 +98,18 @@ export interface DrawSketch2DParams {
     handles: ReadonlyArray<{ x: number; y: number; active: boolean }>
     ghostOutline: { pts: [number, number][]; closed: boolean } | null
   } | null
+  /**
+   * Sketch S3 -- marquee box-select rubber band: press corner `a` to live
+   * cursor corner `b` (sketch-plane mm) plus the AutoCAD mode the drag
+   * direction picked. Window (L->R) draws the solid blue box; crossing
+   * (R->L) draws the dashed green box. Optional + additive; absent = no
+   * change.
+   */
+  marquee?: {
+    a: readonly [number, number]
+    b: readonly [number, number]
+    mode: MarqueeMode
+  } | null
 
   // Drag state
   drag:
@@ -156,6 +169,7 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     selectionGhostOffsetMm,
     osnapMarker,
     nodeEditOverlay,
+    marquee,
     drag,
     constraintPickActive,
     constraintSegmentPickActive,
@@ -1021,6 +1035,42 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     ctx.arc(sx, sy, drag.r * scale, 0, Math.PI * 2)
     ctx.strokeStyle = '#a78bfa'
     ctx.stroke()
+  }
+
+  // Sketch S3 -- marquee box-select rubber band (AutoCAD convention): window
+  // (L->R) = solid box in the classic blue tint, crossing (R->L) = dashed box
+  // in the classic green tint. Canvas strokeStyle cannot take ``var(--x)``
+  // literals, so the marquee CSS vars resolve through getComputedStyle with
+  // literal fallbacks (the established token idiom) -- jsdom / a detached
+  // canvas still paints a sane colour.
+  if (marquee) {
+    const max1 = cx + (marquee.a[0] - ox) * scale
+    const may1 = cy - (marquee.a[1] - oy) * scale
+    const mbx2 = cx + (marquee.b[0] - ox) * scale
+    const mby2 = cy - (marquee.b[1] - oy) * scale
+    const mLeft = Math.min(max1, mbx2)
+    const mTop = Math.min(may1, mby2)
+    const mW = Math.abs(mbx2 - max1)
+    const mH = Math.abs(mby2 - may1)
+    const marqueeVars = typeof window !== 'undefined' ? window.getComputedStyle(c) : null
+    const marqueeToken = (name: string, fallback: string): string => {
+      const live = marqueeVars?.getPropertyValue(name).trim()
+      return live && live.length > 0 ? live : fallback
+    }
+    const isWindowBox = marquee.mode === 'window'
+    ctx.save()
+    ctx.fillStyle = isWindowBox
+      ? marqueeToken('--sketch-marquee-window-fill', 'rgba(96, 165, 250, 0.14)')
+      : marqueeToken('--sketch-marquee-crossing-fill', 'rgba(74, 222, 128, 0.12)')
+    ctx.fillRect(mLeft, mTop, mW, mH)
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = isWindowBox
+      ? marqueeToken('--sketch-marquee-window', '#60a5fa')
+      : marqueeToken('--sketch-marquee-crossing', '#4ade80')
+    ctx.setLineDash(isWindowBox ? [] : [5, 4])
+    ctx.strokeRect(crisp(mLeft), crisp(mTop), Math.max(1, Math.round(mW)), Math.max(1, Math.round(mH)))
+    ctx.setLineDash([])
+    ctx.restore()
   }
 
   // Sketch S2 -- active object-snap marker: AutoCAD-style glyph per kind at

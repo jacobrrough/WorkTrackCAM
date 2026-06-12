@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { DesignFileV2 } from '../../shared/design-schema'
 import {
+  isTypableKeyboardTarget,
+  matchesSketchCanvasHotkey
+} from '../../shared/app-keyboard-shortcuts'
+import {
   constraintPickPointIdEdges,
   pickNearestCircularEntityId,
   type SketchTrimEdgeRef
@@ -14,6 +18,12 @@ import {
   type EntityOutlineWorld
 } from './sketch2d-hit-test'
 import {
+  entitiesInBox,
+  marqueeBoxFromCorners,
+  marqueeModeForDrag,
+  type MarqueeMode
+} from './sketch2d-marquee'
+import {
   listEditableNodes,
   moveNode,
   nearestEditableNode,
@@ -22,6 +32,7 @@ import {
 } from './sketch2d-node-edit'
 import {
   collectOsnapCandidates,
+  collectOsnapCandidatesDetailed,
   osnapToleranceMm,
   resolveDragDeltaWithOsnap,
   resolveSnappedPoint,
@@ -178,6 +189,19 @@ type Props = {
   onNodeInsert?: (entityId: string, segmentIndex: number, point: readonly [number, number]) => void
   /** Sketch S2 -- Delete/Backspace with an ARMED (clicked) node deletes that vertex. */
   onNodeDelete?: (entityId: string, nodeId: string) => void
+  /**
+   * Sketch S3 -- single-key tool hotkeys (S / L / R / C / A / E), fired only
+   * while the canvas wrap is hovered or holds focus (never while typing in
+   * an input). The canvas owns NO tool state: the surface's EXISTING
+   * tool-arming state applies the switch, exactly like a palette click.
+   * Optional + additive: absent keeps every legacy mount byte-identical.
+   */
+  onToolHotkey?: (tool: SketchTool) => void
+  /**
+   * Sketch S3 -- G pressed (same canvas scoping): flip the surface's
+   * EXISTING grid-snap toggle (the Snap button's setter). Optional + additive.
+   */
+  onGridSnapToggle?: () => void
 }
 
 const CROSSHAIR_TOOLS: ReadonlySet<SketchTool> = new Set([
@@ -239,7 +263,9 @@ export function Sketch2DCanvas({
   onDeleteSelected,
   onNodeMove,
   onNodeInsert,
-  onNodeDelete
+  onNodeDelete,
+  onToolHotkey,
+  onGridSnapToggle
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const { entities, points } = design
@@ -328,15 +354,132 @@ export function Sketch2DCanvas({
     }
   }, [activeTool])
 
+  // -- Sketch S3 -- marquee box-select state (plain press on EMPTY canvas) --
+  /** In-flight marquee gesture; the S1 3 px threshold gates the rubber band. */
+  const marqueeRef = useRef<{ startWorld: [number, number]; moved: boolean } | null>(null)
+  /** Live rubber-band rectangle while the marquee drags (render-only). */
+  const [marqueeRect, setMarqueeRect] = useState<{
+    a: [number, number]
+    b: [number, number]
+    mode: MarqueeMode
+  } | null>(null)
+
+  useEffect(() => {
+    if (activeTool !== 'select') {
+      marqueeRef.current = null
+      setMarqueeRect(null)
+    }
+  }, [activeTool])
+
+  // Sketch S3 -- Escape cancels an in-flight marquee WITHOUT clearing the
+  // selection. The listener exists ONLY while the rubber band is live and
+  // runs in the window CAPTURE phase so the cancel wins over the
+  // canvas-scoped select keys (mirrors the xform Escape listener idiom; the
+  // canvas keydown handler itself stays untouched).
+  const marqueeActive = marqueeRect !== null
+  useEffect(() => {
+    if (!marqueeActive) return
+    const onMarqueeKey = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Escape') return
+      marqueeRef.current = null
+      setMarqueeRect(null)
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    window.addEventListener('keydown', onMarqueeKey, true)
+    return () => window.removeEventListener('keydown', onMarqueeKey, true)
+  }, [marqueeActive])
+
+  /**
+   * Sketch S3 -- apply a completed marquee through the EXISTING onEntityPick
+   * bridge (the canvas never owns selection; upstream updates are
+   * functional): Shift ADDS without ever toggling off (already-selected ids
+   * are skipped); plain REPLACES (first id replaces, the rest add); an empty
+   * plain box clears, exactly like the empty click.
+   */
+  const applyMarqueeSelection = (ids: readonly string[], additive: boolean): void => {
+    if (!onEntityPick) return
+    if (ids.length === 0) {
+      if (!additive) onEntityPick(null, false)
+      return
+    }
+    if (additive) {
+      for (const id of ids) {
+        if (!selectedEntityIds?.has(id)) onEntityPick(id, true)
+      }
+      return
+    }
+    onEntityPick(ids[0]!, false)
+    for (let i = 1; i < ids.length; i++) onEntityPick(ids[i]!, true)
+  }
+
   // Sketch S2 -- object snaps: candidates memoized per design revision
   // (recomputed on design identity change only); both toggles independent
   // (grid snap lives upstream via gridMm; osnap is this canvas's own state).
   const [osnapEnabled, setOsnapEnabled] = useState(true)
   const [osnapHover, setOsnapHover] = useState<OsnapCandidate | null>(null)
-  const osnapCandidates = useMemo(() => collectOsnapCandidates({ design }), [design])
+  const osnapCollect = useMemo(() => collectOsnapCandidatesDetailed({ design }), [design])
+  const osnapCandidates = osnapCollect.candidates
+  // Sketch S3 -- intersection-cap truncation flag for the "snap simplified" badge.
+  const osnapTruncated = osnapCollect.truncated
   useEffect(() => {
     if (!osnapEnabled) setOsnapHover(null)
   }, [osnapEnabled])
+
+  // -- Sketch S3 -- canvas-scoped hotkeys (documented in the catalog's
+  // 'sketch_canvas' group): S/L/R/C/A/E arm tools through the surface's
+  // EXISTING tool-arming state (onToolHotkey), F3 flips the EXISTING osnap
+  // toggle above, G flips the surface's EXISTING grid-snap toggle
+  // (onGridSnapToggle). The listener is window-level but STRICTLY
+  // canvas-scoped: it fires only while the canvas wrap is hovered or holds
+  // focus, and never while a typable control has focus (the catalog's
+  // isTypableKeyboardTarget gate). Latest-callback refs keep the once-only
+  // listener from going stale (the SketchSurface keyboard-seam pattern).
+  const sketchWrapRef = useRef<HTMLDivElement>(null)
+  const wrapHoverRef = useRef(false)
+  const hotkeyHandlersRef = useRef({ onToolHotkey, onGridSnapToggle })
+  hotkeyHandlersRef.current = { onToolHotkey, onGridSnapToggle }
+  useEffect(() => {
+    const wrap = sketchWrapRef.current
+    if (!wrap) return
+    const onWrapPointerEnter = (): void => {
+      wrapHoverRef.current = true
+    }
+    const onWrapPointerLeave = (): void => {
+      wrapHoverRef.current = false
+    }
+    wrap.addEventListener('pointerenter', onWrapPointerEnter)
+    wrap.addEventListener('pointerleave', onWrapPointerLeave)
+    const onHotkeyDown = (e: KeyboardEvent): void => {
+      if (isTypableKeyboardTarget(e.target)) return
+      const focusInside = wrap.contains(document.activeElement)
+      if (!wrapHoverRef.current && !focusInside) return
+      const action = matchesSketchCanvasHotkey(e)
+      if (!action) return
+      if (action.kind === 'tool') {
+        if (hotkeyHandlersRef.current.onToolHotkey) {
+          hotkeyHandlersRef.current.onToolHotkey(action.tool)
+          e.preventDefault()
+        }
+        return
+      }
+      if (action.kind === 'toggleOsnap') {
+        setOsnapEnabled((v) => !v)
+        e.preventDefault()
+        return
+      }
+      if (hotkeyHandlersRef.current.onGridSnapToggle) {
+        hotkeyHandlersRef.current.onGridSnapToggle()
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('keydown', onHotkeyDown)
+    return () => {
+      wrap.removeEventListener('pointerenter', onWrapPointerEnter)
+      wrap.removeEventListener('pointerleave', onWrapPointerLeave)
+      window.removeEventListener('keydown', onHotkeyDown)
+    }
+  }, [])
 
   /** Sketch S2 -- THE pointer-resolution path: osnap wins within tolerance, else grid lattice. */
   const resolvePointerPlacement = useCallback(
@@ -781,6 +924,7 @@ export function Sketch2DCanvas({
       selectionGhostOffsetMm: selectGhostOffset,
       osnapMarker: osnapHover,
       nodeEditOverlay,
+      marquee: marqueeRect,
       drag,
       constraintPickActive,
       constraintSegmentPickActive,
@@ -825,6 +969,7 @@ export function Sketch2DCanvas({
     selectGhostOffset,
     osnapHover,
     nodeEditOverlay,
+    marqueeRect,
     sketchRotateDeg,
     sketchScaleFactor,
     planeLabel,
@@ -1010,8 +1155,9 @@ export function Sketch2DCanvas({
 
     // Sketch S1 — select tool: resolve the pick at the RAW (unsnapped) click
     // location (picks are exact, like constraint picks); a press on an entity
-    // arms a drag-move of the selection. Empty click clears (Shift handled in
-    // the pan arm above). Unwired mounts do nothing.
+    // arms a drag-move of the selection. An empty press arms the Sketch S3
+    // marquee (its no-drag release still clears; Shift handled in the pan arm
+    // above). Unwired mounts do nothing.
     if (activeTool === 'select') {
       if (!onEntityPick) return
       if (beginNodeDragAtPoint([raw[0], raw[1]])) return
@@ -1023,7 +1169,12 @@ export function Sketch2DCanvas({
       if (hit) {
         beginSelectGesture(hit.entityId, [raw[0], raw[1]], false)
       } else {
-        onEntityPick(null, false)
+        // Sketch S3 -- a plain press on EMPTY canvas arms a marquee instead
+        // of clearing immediately: the clear now happens on the NO-DRAG
+        // release in onMouseUp (same observable click behavior), and a drag
+        // past the S1 threshold rubber-bands a box select.
+        marqueeRef.current = { startWorld: [raw[0], raw[1]], moved: false }
+        setMarqueeRect(null)
       }
       return
     }
@@ -1299,6 +1450,11 @@ export function Sketch2DCanvas({
         const nodeRes = resolveNodeDragPoint(nd, raw)
         setNodeGhost({ nodeId: nd.nodeId, point: nodeRes.point })
         setOsnapHover(nodeRes.snapped)
+        // Sketch S3 (S2 cosmetic) -- readout == ghost: override the full-set
+        // emit above with the SAME gesture-scoped (entity-excluded)
+        // resolution the ghost just rendered, so the StatusBar X/Y never
+        // momentarily disagrees with the dashed node preview mid-drag.
+        onCursorWorld?.(nodeRes.point)
       }
       return
     }
@@ -1314,6 +1470,26 @@ export function Sketch2DCanvas({
         const dragRes = resolveSelectDragDelta(sd, raw)
         setSelectGhostOffset(dragRes.deltaMm)
         setOsnapHover(dragRes.snapped)
+        // Sketch S3 (S2 cosmetic) -- readout == ghost: the resolved drag end
+        // point IS startWorld + deltaMm (the osnap end point, else the S1
+        // lattice delta) -- the SAME selection-excluded value the ghost
+        // previews, overriding the full-set emit above.
+        onCursorWorld?.([sd.startWorld[0] + dragRes.deltaMm[0], sd.startWorld[1] + dragRes.deltaMm[1]])
+      }
+      return
+    }
+    // Sketch S3 -- live marquee on empty canvas: the rubber band appears
+    // once the press travels past the SAME S1 drag threshold; the horizontal
+    // direction picks the AutoCAD mode live (L->R window, R->L crossing).
+    const mq = marqueeRef.current
+    if (mq) {
+      if (!mq.moved && dragExceedsThreshold(mq.startWorld, raw, scale)) mq.moved = true
+      if (mq.moved) {
+        setMarqueeRect({
+          a: mq.startWorld,
+          b: [raw[0], raw[1]],
+          mode: marqueeModeForDrag(mq.startWorld, raw)
+        })
       }
       return
     }
@@ -1426,6 +1602,30 @@ export function Sketch2DCanvas({
         if (dxMm !== 0 || dyMm !== 0) onMoveSelected?.(dxMm, dyMm)
       } else if (!sd.moved && !sd.pickedOnDown) {
         onEntityPick?.(sd.pickedId, sd.additive)
+      }
+      return
+    }
+    // Sketch S3 -- finish a marquee: a real drag resolves the box select
+    // through the pure entitiesInBox (window = fully inside, crossing = any
+    // outline touch) with Shift AT RELEASE adding to the selection; a
+    // no-drag release keeps today's empty-click clear.
+    const mq = marqueeRef.current
+    if (mq) {
+      marqueeRef.current = null
+      setMarqueeRect(null)
+      const mc = ref.current
+      if (mq.moved && mc) {
+        const [mlx, mly] = clientToCanvasLocal(ev.clientX, ev.clientY, mc)
+        const mdpr = Math.max(1, window.devicePixelRatio || 1)
+        const mraw = screenToWorld(mlx, mly, mc.width, mc.height, scale * mdpr, ox, oy)
+        const ids = entitiesInBox({
+          design,
+          box: marqueeBoxFromCorners(mq.startWorld, mraw),
+          mode: marqueeModeForDrag(mq.startWorld, mraw)
+        })
+        applyMarqueeSelection(ids, ev.shiftKey)
+      } else if (!mq.moved) {
+        onEntityPick?.(null, false)
       }
       return
     }
@@ -1580,12 +1780,13 @@ export function Sketch2DCanvas({
   }
 
   return (
-    <div className="sketch-wrap">
+    <div className="sketch-wrap" ref={sketchWrapRef}>
       <canvas
         ref={ref}
         width={width}
         height={height}
         className="sketch-canvas"
+        data-marquee={marqueeRect ? marqueeRect.mode : undefined}
         tabIndex={activeTool === 'select' && onEntityPick ? 0 : undefined}
         onKeyDown={activeTool === 'select' && onEntityPick ? onSelectKeyDown : undefined}
         style={{
@@ -1616,6 +1817,9 @@ export function Sketch2DCanvas({
           selectDragRef.current = null
           setSelectGhostOffset(null)
           setSelectHoverId(null)
+          // Sketch S3 -- likewise cancel an in-flight marquee (no select).
+          marqueeRef.current = null
+          setMarqueeRect(null)
           setOsnapHover(null)
           // Sketch S2 -- likewise cancel an in-flight node drag (no emit).
           nodeDragRef.current = null
@@ -1646,6 +1850,15 @@ export function Sketch2DCanvas({
       >
         {osnapEnabled ? 'OSNAP on' : 'OSNAP off'}
       </button>
+      {osnapEnabled && osnapTruncated && (
+        <span
+          className="sketch-osnap-simplified-badge"
+          data-testid="sketch-osnap-simplified"
+          title="Crowded sketch: intersection snaps past the pair cap were skipped this pass. Endpoint / midpoint / center / quadrant snaps stay complete."
+        >
+          snap simplified
+        </span>
+      )}
       {activeTool === 'line' && lineStart && (
         <div
           className="sketch-numeric-popover"

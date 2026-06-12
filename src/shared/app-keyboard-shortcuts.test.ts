@@ -9,6 +9,7 @@ import {
   matchesOpenProject,
   matchesRedo,
   matchesSaveProject,
+  matchesSketchCanvasHotkey,
   matchesUndo
 } from './app-keyboard-shortcuts'
 
@@ -186,5 +187,74 @@ describe('app-keyboard-shortcuts', () => {
   it('commandPaletteShortcutLabel matches platform copy', () => {
     const s = commandPaletteShortcutLabel()
     expect(s === 'Ctrl+K' || s === '⌘K').toBe(true)
+  })
+})
+
+describe('sketch-canvas hotkeys (Sketch S3)', () => {
+  const mk = (overrides: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({
+      key: '',
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      ...overrides
+    }) as KeyboardEvent
+
+  it('plain S/L/R/C/A/E arm the matching tools (case-insensitive, e.g. caps lock)', () => {
+    expect(matchesSketchCanvasHotkey(mk({ key: 's' }))).toEqual({ kind: 'tool', tool: 'select' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'S' }))).toEqual({ kind: 'tool', tool: 'select' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'l' }))).toEqual({ kind: 'tool', tool: 'polyline' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'r' }))).toEqual({ kind: 'tool', tool: 'rect' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'c' }))).toEqual({ kind: 'tool', tool: 'circle' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'a' }))).toEqual({ kind: 'tool', tool: 'arc' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'e' }))).toEqual({ kind: 'tool', tool: 'ellipse' })
+  })
+
+  it('F3 toggles OSNAP; G toggles grid snap', () => {
+    expect(matchesSketchCanvasHotkey(mk({ key: 'F3' }))).toEqual({ kind: 'toggleOsnap' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'g' }))).toEqual({ kind: 'toggleGridSnap' })
+    expect(matchesSketchCanvasHotkey(mk({ key: 'G' }))).toEqual({ kind: 'toggleGridSnap' })
+  })
+
+  it('any modifier chord never matches (Ctrl+S stays Save, Ctrl+C stays copy, Shift reserved)', () => {
+    expect(matchesSketchCanvasHotkey(mk({ key: 's', ctrlKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'c', ctrlKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 's', metaKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'e', altKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'S', shiftKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'F3', ctrlKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'F3', shiftKey: true }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'g', ctrlKey: true }))).toBeNull()
+  })
+
+  it('unbound keys return null (letters, digits, Escape, other F-keys)', () => {
+    expect(matchesSketchCanvasHotkey(mk({ key: 'q' }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: '1' }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'Escape' }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'Delete' }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'F2' }))).toBeNull()
+    expect(matchesSketchCanvasHotkey(mk({ key: 'F4' }))).toBeNull()
+  })
+
+  it('the sketch_canvas group documents every hotkey with the canvas-scoped context', () => {
+    const group = APP_KEYBOARD_SHORTCUT_GROUPS.find((g) => g.id === 'sketch_canvas')
+    expect(group).toBeDefined()
+    expect(group!.rows.map((r) => r.keysWin)).toEqual(['S', 'L', 'R', 'C', 'A', 'E', 'F3', 'G'])
+    const byKey = new Map(group!.rows.map((r) => [r.keysWin, r.action]))
+    expect(byKey.get('S')).toMatch(/select/i)
+    expect(byKey.get('L')).toMatch(/polyline/i)
+    expect(byKey.get('R')).toMatch(/rectangle/i)
+    expect(byKey.get('C')).toMatch(/circle/i)
+    expect(byKey.get('A')).toMatch(/arc/i)
+    expect(byKey.get('E')).toMatch(/ellipse/i)
+    expect(byKey.get('F3')).toMatch(/object snap|osnap/i)
+    expect(byKey.get('G')).toMatch(/grid snap/i)
+    for (const row of group!.rows) {
+      expect(row.context).toContain('hovered or focused')
+      expect(row.context).toMatch(/typing/i)
+      // Plain keys: identical copy on both platforms.
+      expect(row.keysMac).toBe(row.keysWin)
+    }
   })
 })

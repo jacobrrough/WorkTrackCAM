@@ -18453,3 +18453,37 @@ intersection pair-cap bites; the StatusBar readout can momentarily disagree with
 near the dragged entity's own snap points (cosmetic); per-move candidate scan is fine at
 sketch scale (re-profile past ~500 entities). Hands-on pass owed — handles, markers, and the
 toggle need the operator's mouse.
+
+## Cycle 248 — Sketch S3: marquee box-select + hotkeys + S2 cosmetics (2026-06-11)
+
+**Focus:** sketching priority, wave 3 (flow). One commit.
+
+**Baseline → result:** 16,325 → **16,403 pass / 1 skip / 0 fail** (+78); tsc clean; all
+S1/S2 byte-identity + MVP-fence + 3e/3n pins green (one documented intended-drift: the
+osnap memo source pin).
+
+**What landed:** (1) **Marquee box-select** — pure `sketch2d-marquee.ts` (inclusive
+Liang-Barsky segment-vs-box; window = every outline sample inside, crossing = any sample
+inside or any segment crossing), the AutoCAD convention: L→R drag = solid-blue WINDOW
+select, R→L = dashed-green CROSSING select, Shift adds, Escape cancels, pan gestures
+untouched; routes through the existing onEntityPick bridge. (2) **Hotkeys** (canvas-scoped,
+inert while typing): S/L/R/C/A/E arm tools, F3 toggles OSNAP, G toggles grid; documented in
+the app-keyboard-shortcuts source of truth per its conventions. (3) **S2 cosmetics** — the
+drag readout now resolves over the SAME gesture-scoped candidate set as the ghost (the
+momentary disagreement is gone, fixture-pinned); `collectOsnapCandidatesDetailed` exposes a
+truncation flag (old signature byte-compatible) + a "snap simplified" badge when the
+intersection pair-cap bites while OSNAP is on.
+
+**Two intended observable deltas (documented):** empty-click selection-clear now fires on
+mouse-UP instead of mouse-DOWN (required to arm the marquee; the no-drag release preserves
+the old observable behavior), and the osnap memo line drifted for the gesture-scoped sets.
+
+**Verification:** independent marquee probe 15/15 — rotated fixtures, collinear edge graze +
+single-vertex corner touch (crossing-only), and the overlapping-AABB-but-geometrically-
+outside diagonal/circle case (neither mode selects).
+
+**Honest residuals (nano-class):** Escape before the 3px threshold leaves an invisible armed
+marquee ref (visible bands always cancel); onCursorWorld double-emits within one synchronous
+tick during drags (rendered value always correct); hotkey hover-gating needs one pointer
+move if the canvas mounts under a stationary cursor. **S1–S3 of the sketching program are
+complete; S4 (dimension-driven editing) deliberately awaits the user's hands-on feedback.**

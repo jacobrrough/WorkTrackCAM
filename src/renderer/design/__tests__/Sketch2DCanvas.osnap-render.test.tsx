@@ -111,9 +111,13 @@ describe('Sketch2DCanvas osnap -- source pins (pointer halves SSR cannot move)',
   })
 
   it('candidates are memoized per design revision (recompute on design change only)', () => {
+    // Sketch S3 intended drift: the per-design memo now runs the DETAILED
+    // collector so the truncation flag rides the same single collect; the
+    // resolver still consumes the identical candidate array.
     expect(SRC).toContain(
-      'const osnapCandidates = useMemo(() => collectOsnapCandidates({ design }), [design])'
+      'const osnapCollect = useMemo(() => collectOsnapCandidatesDetailed({ design }), [design])'
     )
+    expect(SRC).toContain('const osnapCandidates = osnapCollect.candidates')
   })
 
   it('drag-move resolves through the same engine with the MOVING selection excluded', () => {

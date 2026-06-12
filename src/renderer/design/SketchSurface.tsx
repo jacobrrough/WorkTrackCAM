@@ -895,6 +895,8 @@ export function SketchSurface({
             gridMm={gridMm}
             onSketchHint={onSketchHint}
             onCursorWorld={onCursorWorld}
+            onToolHotkey={setActiveTool}
+            onGridSnapToggle={() => setSnapEnabled((s) => !s)}
             planeLabel={planeLabel}
           />
           {textDialogOpen && (
