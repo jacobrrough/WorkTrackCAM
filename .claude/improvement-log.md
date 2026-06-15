@@ -18682,3 +18682,38 @@ manufacture suites 38 files / 579 green incl. the new guard tests.
 background tasks; the defensive load-key guard on the (unreachable) plan load effect is available
 if ever wanted. Coverage is source-pin + pure-unit (node-SSR, no jsdom — same constraint as the
 Cycle 249 pin).
+
+## Cycle 255 — Manufacture unsaved-changes nav guard (route-switch data-loss) (2026-06-15)
+
+**Focus:** the user-chosen fix for the route-switch data-loss the CAM audit flagged — navigating
+away from Manufacture unmounted the workspace and silently discarded unsaved mfg edits (no
+autosave, no dirty flag, no confirm). Distinct from the Cycle-249 effect-re-fire clobber. One
+commit. (#82)
+
+**Baseline → result:** 16,682 → **16,726 pass / 1 skip / 0 fail** (+44); tsc clean; targeted
+manufacture+app suites 43 files / 623 green; Cycle-249 + CAM-audit guards still green.
+
+**Fix (additive; explicit-Save model preserved — NO silent autosave):**
+- **Shell nav-guard seam** (new NavigationGuardContext + pure resolveNavIntent): AppShell wraps
+  `setActiveWorkspace` → `guardedNavigate`, consulting a ref-Map registry of dirty probes. Dirty +
+  cross-workspace → the existing ConfirmDialog ("Leave Manufacture without saving?" / "Stay");
+  confirm navigates, cancel stays. `guardedNavigate` is passed to ALL FOUR nav sinks (command
+  registry, CommandContextProvider, WorkspaceNav, WorkspaceHost) so keyboard 1-6 / palette /
+  ribbon / nav tabs are all covered. `useNavigationGuard` is provider-tolerant (no-op default) so
+  bare render-pins keep passing.
+- **Manufacture dirty tracking** (pure manufacturePlanFingerprint + isManufacturePlanDirty):
+  lastSavedFingerprintRef set on load / empty / load-failure / post-save / post-Send-to-CAM-merge;
+  registers one mount-time guard (latest-value dirtyRef, no per-edit churn); persistent aria-live
+  "Unsaved changes" indicator by Save.
+
+**Generic by design:** the seam is keyed by id, so the Design workspace (same gap, left untouched
+per the concurrent-owner constraint) can hook in later with one `register('design-workspace', …)`
+call and ZERO seam/AppShell changes.
+
+**Verify caught + fixed a real defect:** the initial build's `dirty` memo didn't re-evaluate after
+Save (stuck-dirty); fixed during the Verify phase + pinned.
+
+**Honest residuals:** the guard covers in-app route switches only — NOT full app-quit/window-close
+(that needs a `beforeunload`/main-process handler, out of scope + no-touch). No bespoke CSS for the
+indicator yet (reuses `.msg`). Task #83 (Send-to-CAM merge eager-updater persistence gap) is a
+separate concern in the same region, fixed next.

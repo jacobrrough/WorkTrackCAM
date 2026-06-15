@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { useMachineSession } from '../contexts/MachineSessionContext'
 import { useToast } from '../contexts/ToastContext'
 import { useUI } from '../contexts/UIContext'
 import { getEnvironmentForMachine } from '../src/environments/env-routing'
-import { useWorkspaceRouter } from './useWorkspaceRouter'
+import { useWorkspaceRouter, type WorkspaceId } from './useWorkspaceRouter'
 import { TopBar } from './TopBar'
 import { Ribbon } from './Ribbon'
 import { WorkspaceNav } from './WorkspaceNav'
@@ -14,7 +14,10 @@ import { SettingsDrawer } from '../shell/SettingsDrawer'
 import { HelpPanel } from '../src/HelpPanel'
 import { NewShellCommandPalette } from './NewShellCommandPalette'
 import { KeyboardShortcutsDialog } from '../src/KeyboardShortcutsDialog'
+import { ConfirmDialog } from '../src/ConfirmDialog'
 import { CommandContextProvider, registerStarterCommands } from '../commands'
+import { NavigationGuardProvider, useNavigationGuard } from './NavigationGuardContext'
+import { resolveNavIntent } from './navigation-guard'
 import { applyTheme } from '../theme/useTheme'
 import type { ThemeId } from '../theme/theme-registry'
 import {
@@ -29,14 +32,53 @@ import {
  * toast, UI) and the SettingsDrawer (which carries the 10-theme picker), so the
  * theme can be changed live from the new shell. Machine/CAM env selection +
  * the command palette / help overlays are wired in the next P3 increment.
+ *
+ * Thin wrapper: provides the {@link NavigationGuardProvider} so the shell body
+ * (and every workspace under it) shares one dirty-probe registry, then renders
+ * {@link AppShellBody}. The body lives UNDER the provider so its `guardedNavigate`
+ * can read `hasUnsavedChanges()` synchronously at click time.
  */
 export function AppShell(): ReactElement {
+  return (
+    <NavigationGuardProvider>
+      <AppShellBody />
+    </NavigationGuardProvider>
+  )
+}
+
+function AppShellBody(): ReactElement {
   const { sessionMachine, setSessionMachine, machines, lastMachineId, loadToolsForMachine } =
     useMachineSession()
   const { setCmdOpen, showShortcuts, setShowShortcuts, helpOpen, setHelpOpen } = useUI()
   const { pushToast } = useToast()
   const { activeWorkspace, setActiveWorkspace } = useWorkspaceRouter('design')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Unsaved-changes navigation guard. `guardedNavigate` wraps EVERY nav path
+  // (nav rail, keyboard 1–6, ribbon, command palette — all funnel through the
+  // command registry / WorkspaceNav / WorkspaceHost into here). When a
+  // registered workspace (today: ManufactureWorkspace) reports unsaved changes,
+  // an attempted route switch is parked in `pendingNav` and the leave-confirm
+  // is shown instead of unmounting the workspace (which would destroy its
+  // in-memory plan). Confirm → commit; cancel → stay. Re-selecting the active
+  // workspace never confirms (pure `resolveNavIntent`).
+  const navGuard = useNavigationGuard()
+  const [pendingNav, setPendingNav] = useState<WorkspaceId | null>(null)
+
+  const guardedNavigate = useCallback(
+    (target: WorkspaceId): void => {
+      const intent = resolveNavIntent({
+        active: activeWorkspace,
+        target,
+        hasUnsavedChanges: navGuard.hasUnsavedChanges()
+      })
+      if (intent === 'confirm') {
+        setPendingNav(target)
+        return
+      }
+      setActiveWorkspace(target)
+    },
+    [activeWorkspace, navGuard, setActiveWorkspace]
+  )
 
   // Global shortcuts: Ctrl/Cmd+K command palette, Ctrl/Cmd+Shift+? shortcuts
   // reference, F1 help, Escape closes overlays. Reuses the shared matchers so
@@ -83,12 +125,14 @@ export function AppShell(): ReactElement {
   // Settings/Help/Palette, theme switching) on the shared command registry so
   // the engine is live: the palette (and the forthcoming ribbon/menus) all
   // dispatch these by `command.id`. The disposer unregisters on unmount so a
-  // shell remount never double-registers. The host actions are stable
-  // (setActiveWorkspace is memoized; the open* setters come from context), so a
-  // single registration covers the app lifetime.
+  // shell remount never double-registers. `navigate` is `guardedNavigate` (NOT
+  // the raw setter) so the keyboard 1–6 / ribbon / palette nav paths all go
+  // through the unsaved-changes confirm. `guardedNavigate` re-identities when
+  // the active workspace changes; the disposer unregisters the prior closure
+  // first, so the registry always holds the freshest guard.
   useEffect(() => {
     return registerStarterCommands({
-      navigate: setActiveWorkspace,
+      navigate: guardedNavigate,
       openSettings: () => setSettingsOpen(true),
       openHelp: () => setHelpOpen(true),
       openCommandPalette: () => setCmdOpen(true),
@@ -96,7 +140,7 @@ export function AppShell(): ReactElement {
         applyTheme(theme)
       }
     })
-  }, [setActiveWorkspace, setHelpOpen, setCmdOpen])
+  }, [guardedNavigate, setHelpOpen, setCmdOpen])
 
   // Layer the active machine's environment accent over the theme (themes.css
   // [data-environment] overrides). Null while no machine is selected → the
@@ -104,7 +148,7 @@ export function AppShell(): ReactElement {
   const env = getEnvironmentForMachine(sessionMachine?.id ?? null)
 
   return (
-    <CommandContextProvider workspace={activeWorkspace} onNavigate={setActiveWorkspace}>
+    <CommandContextProvider workspace={activeWorkspace} onNavigate={guardedNavigate}>
       <div className="wt-shell" data-environment={env?.id}>
         <TopBar
           machine={sessionMachine}
@@ -124,9 +168,9 @@ export function AppShell(): ReactElement {
           columns (`grid-area: ribbon`) so the nav rail starts beneath it.
         */}
         <Ribbon />
-        <WorkspaceNav active={activeWorkspace} onSelect={setActiveWorkspace} />
+        <WorkspaceNav active={activeWorkspace} onSelect={guardedNavigate} />
         <main className="wt-main">
-          <WorkspaceHost active={activeWorkspace} onNavigate={setActiveWorkspace} />
+          <WorkspaceHost active={activeWorkspace} onNavigate={guardedNavigate} />
         </main>
         <StatusBar machineName={sessionMachine?.name ?? null} units="mm" activeWorkspace={activeWorkspace} />
 
@@ -134,6 +178,28 @@ export function AppShell(): ReactElement {
         {helpOpen ? <HelpPanel onClose={() => setHelpOpen(false)} /> : null}
         {showShortcuts ? <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} /> : null}
         <NewShellCommandPalette />
+
+        {/*
+          Unsaved-changes leave-confirm. Shown only when a guarded navigation was
+          parked (a registered workspace reported dirty). Confirm commits the
+          parked route (unmounting the workspace + losing its unsaved plan was
+          the operator's explicit choice); cancel clears the parked route and
+          stays put. Reuses the in-app ConfirmDialog (testable, focus-trapped,
+          Escape-cancels) rather than window.confirm.
+        */}
+        <ConfirmDialog
+          open={pendingNav !== null}
+          title="Unsaved CAM changes"
+          message="Leave Manufacture without saving? Your unsaved setups/operations will be lost."
+          confirmLabel="Leave without saving"
+          cancelLabel="Stay"
+          danger
+          onConfirm={() => {
+            if (pendingNav !== null) setActiveWorkspace(pendingNav)
+            setPendingNav(null)
+          }}
+          onCancel={() => setPendingNav(null)}
+        />
       </div>
     </CommandContextProvider>
   )

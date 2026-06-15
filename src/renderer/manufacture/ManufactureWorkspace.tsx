@@ -93,6 +93,8 @@ import {
   mergeMeshImportIntoLivePlan,
   type PendingMeshImport
 } from './manufacture-load-guard'
+import { manufacturePlanFingerprint, isManufacturePlanDirty } from './manufacture-dirty'
+import { useNavigationGuard } from '../app/NavigationGuardContext'
 
 
 /**
@@ -839,6 +841,41 @@ export function ManufactureWorkspace({
     [mfg, activePlateId]
   )
 
+  // ── Unsaved-changes navigation guard ───────────────────────────────────────
+  // The persisted plan (`mfg`) lives only in memory until the explicit Save
+  // button writes it to disk; switching workspaces UNMOUNTS this component and
+  // destroys it. `lastSavedFingerprintRef` records the fingerprint of the plan
+  // at the three moments disk == memory: after the load effect's setMfg(loaded),
+  // on the empty / no-project branch, and after a successful save. `dirty` is a
+  // pure compare of the live fingerprint against that baseline; the shell reads
+  // it (via a latest-value ref) to confirm before navigating away. Distinct from
+  // the Cycle-249 reload-clobber guard above — that stops a re-render from
+  // wiping state; this stops an intentional nav from unmounting it un-warned.
+  const lastSavedFingerprintRef = useRef<string>(manufacturePlanFingerprint(emptyManufacture()))
+  // A rebaseline that does NOT change `mfg` (a successful Save, or the
+  // Send-to-CAM merge save) still has to flip `dirty` clean. The ref write
+  // alone neither re-renders nor invalidates the memo, so we bump this
+  // counter alongside those two ref writes and list it in the memo deps:
+  // that forces both the re-render AND the recompute (which then reads the
+  // freshly-updated ref). Without it, `dirty` stuck `true` after every save.
+  const [savedBaselineVersion, setSavedBaselineVersion] = useState(0)
+  const dirty = useMemo(
+    () => isManufacturePlanDirty(manufacturePlanFingerprint(mfg), lastSavedFingerprintRef.current),
+    [mfg, savedBaselineVersion]
+  )
+  // The guard registry reads a `() => boolean` probe synchronously at click
+  // time; route the probe through a latest-value ref so the single mount-time
+  // registration always sees the CURRENT `dirty` without re-registering on
+  // every edit (mirrors the stable-probe pattern; no per-keystroke churn).
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
+  const navGuard = useNavigationGuard()
+  useEffect(() => {
+    const id = 'manufacture-workspace'
+    navGuard.register(id, () => dirtyRef.current)
+    return () => navGuard.unregister(id)
+  }, [navGuard])
+
   const meshRelPathsForStaleCheck = useMemo(() => {
     const u = new Set<string>()
     for (const op of effectiveMfg.operations) {
@@ -872,6 +909,8 @@ export function ManufactureWorkspace({
       const empty = emptyManufacture()
       setMfg(empty)
       setActivePlateId(empty.plates?.[0]?.id ?? null)
+      // No project open → the empty plan IS the baseline (nothing to lose).
+      lastSavedFingerprintRef.current = manufacturePlanFingerprint(empty)
       return
     }
     // Anti-clobber guard: only (re)load when projectDir or the host-driven
@@ -889,12 +928,18 @@ export function ManufactureWorkspace({
         // strip itself synthesizes a Default plate via plate-state.getPlates.
         const plates = getPlates(loaded)
         setActivePlateId(plates[0]?.id ?? null)
+        // Baseline = the just-loaded plan: disk == memory, so the workspace is
+        // clean until the operator's next edit.
+        lastSavedFingerprintRef.current = manufacturePlanFingerprint(loaded)
       })
       .catch((e) => {
         onStatus?.(e instanceof Error ? e.message : String(e))
         const empty = emptyManufacture()
         setMfg(empty)
         setActivePlateId(empty.plates?.[0]?.id ?? null)
+        // Load failed → fall back to empty AND treat it as the baseline so a
+        // failed open doesn't leave the workspace falsely 'dirty'.
+        lastSavedFingerprintRef.current = manufacturePlanFingerprint(empty)
       })
     // reloadNonce is bumped by the host after a Send-to-CAM import writes
     // the plan to disk, forcing this load effect to re-read manufacture.json.
@@ -1068,6 +1113,11 @@ export function ManufactureWorkspace({
     if (!projectDir) return
     try {
       await fab.manufactureSave(projectDir, JSON.stringify(mfg))
+      // Save succeeded → disk == this exact mfg, so it is the new baseline and
+      // the workspace is clean again.
+      lastSavedFingerprintRef.current = manufacturePlanFingerprint(mfg)
+      // Rebaseline changed but `mfg` did not — bump so `dirty` recomputes clean.
+      setSavedBaselineVersion((v) => v + 1)
       onStatus?.('Manufacture plan saved.')
       onAfterSave?.()
     } catch (e) {
@@ -1897,6 +1947,12 @@ export function ManufactureWorkspace({
         if (merged) {
           setActivePlateId(getPlates(merged)[0]?.id ?? null)
           await fab.manufactureSave(projectDir, JSON.stringify(merged))
+          // The merged plan was just persisted → rebaseline so the import
+          // doesn't leave the workspace permanently dirty.
+          lastSavedFingerprintRef.current = manufacturePlanFingerprint(merged)
+          // The merged plan is now what `mfg` already holds; bump so the
+          // memo recomputes against the new baseline (import → clean, not dirty).
+          setSavedBaselineVersion((v) => v + 1)
           const rel = req.relPath.replace(/\\/g, '/')
           onStatus?.(`Part landed in CAM → ${rel}`)
         }
@@ -2239,6 +2295,21 @@ export function ManufactureWorkspace({
         onAddOp={addOp}
         onSave={() => void save()}
       />
+
+      {/*
+        Persistent unsaved-changes indicator next to Save. Lives in an
+        aria-live region so a screen reader announces when the plan becomes
+        dirty; hidden entirely (no stale text) once the plan matches disk.
+        Backs the shell's route-switch leave-confirm: the same `dirty` signal
+        the navigation guard reads is shown to the operator here.
+      */}
+      <p className="msg manufacture-unsaved-indicator" role="status" aria-live="polite">
+        {dirty ? (
+          <span className="manufacture-unsaved-indicator__dirty">
+            <strong>Unsaved changes</strong> — Save to write the plan to manufacture.json before leaving Manufacture.
+          </span>
+        ) : null}
+      </p>
 
       <ManufactureSetupList
         setups={effectiveMfg.setups}
