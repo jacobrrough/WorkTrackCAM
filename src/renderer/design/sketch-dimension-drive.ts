@@ -27,8 +27,9 @@
  *      radial         -> circle radius (arc: fit radius through start/via/end)
  *      diameter       -> 2 * radius
  *      angular        -> unsigned angle in degrees, acos(clamp(cos θ)) ∈ [0,180]
- *        (the solver's `angle` term minimises (cos meas − cos target)², so the
- *         unsigned cosine angle is the value that round-trips cleanly).
+ *        (the solver's `angle` term minimises the arm-scaled signed-angle
+ *         difference `|θ_meas| → target` while preserving orientation, so this
+ *         unsigned 0–180° readout is exactly the value it drives onto.)
  *  - DETERMINISTIC IDS: new parameter/dimension/constraint ids are derived by
  *    scanning existing ids and picking the first free slot — no randomness, so
  *    the functions stay pure and the tests are stable.
@@ -335,8 +336,8 @@ function isLengthKind(dim: SketchDimension): boolean {
 }
 
 /**
- * Wrap an angle into a sane driving range. The solver compares cosines, so any
- * value works numerically, but we keep the stored parameter human-sane and
+ * Wrap an angle into a sane driving range. The solver drives the unsigned
+ * magnitude toward this target, so we keep the stored parameter human-sane and
  * matching the unsigned 0–180° the readout shows. We fold into [0,360) first,
  * then mirror the reflex half back into (0,180].
  */

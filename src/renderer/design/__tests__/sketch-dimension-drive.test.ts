@@ -351,7 +351,7 @@ describe('applyDimensionValue — editing moves geometry', () => {
     expect(r1).toBeLessThanOrEqual(14 + 0.5)
   })
 
-  it('angle edit moves the measured angle toward the new target', () => {
+  it('angle edit LANDS the measured angle on the new target (S5.1 exact landing)', () => {
     const d = designWith(
       [
         { id: 'l1', kind: 'polyline', pointIds: ['o', 'x'], closed: false },
@@ -366,9 +366,46 @@ describe('applyDimensionValue — editing moves geometry', () => {
     expect(a0).toBeCloseTo(90, 6)
     const edited = applyDimensionValue(res.design, res.dimensionId, 60)
     const a1 = measureDimensionValue(edited, intent)!
-    // Angle moved materially toward 60° (closer than it started).
-    expect(Math.abs(a1 - 60)).toBeLessThan(Math.abs(a0 - 60))
     expect(a1).toBeLessThan(a0)
+    // The arm-scaled signed-angle objective has a non-vanishing gradient, so a
+    // single applyDimensionValue (which re-solves to tolerance) lands the angle
+    // ON 60° -- not merely "closer". The old cosine objective plateaued short.
+    expect(Math.abs(a1 - 60)).toBeLessThan(1e-2)
+  })
+
+  it('angle edit lands a range of targets (acute 30, obtuse 120 & 150) in ONE edit', () => {
+    // Build a fresh ~45° wedge per target and confirm exact landing in both
+    // directions (opening and closing) and well past 90° into the obtuse range.
+    const make = (): DesignFileV2 =>
+      designWith(
+        [
+          { id: 'l1', kind: 'polyline', pointIds: ['o', 'x'], closed: false },
+          { id: 'l2', kind: 'polyline', pointIds: ['o', 'd'], closed: false }
+        ],
+        { o: { x: 0, y: 0 }, x: { x: 10, y: 0 }, d: { x: 10, y: 10 } } // 45°
+      )
+    const intent: DimensionIntent = { kind: 'angular', a1Id: 'o', b1Id: 'x', a2Id: 'o', b2Id: 'd' }
+    for (const target of [30, 120, 150]) {
+      const res = createDrivingDimension(make(), intent)!
+      const edited = applyDimensionValue(res.design, res.dimensionId, target)
+      const measured = measureDimensionValue(edited, intent)!
+      expect(Math.abs(measured - target)).toBeLessThan(1e-2)
+    }
+  })
+
+  it('a right-angle (90°) driver is stable: re-applying 90 does not drift', () => {
+    // Perpendicular-equivalent case. Create at 90°, drive 90° again -> stays at 90.
+    const d = designWith(
+      [
+        { id: 'l1', kind: 'polyline', pointIds: ['o', 'x'], closed: false },
+        { id: 'l2', kind: 'polyline', pointIds: ['o', 'y'], closed: false }
+      ],
+      { o: { x: 0, y: 0 }, x: { x: 10, y: 0 }, y: { x: 0, y: 10 } }
+    )
+    const intent: DimensionIntent = { kind: 'angular', a1Id: 'o', b1Id: 'x', a2Id: 'o', b2Id: 'y' }
+    const res = createDrivingDimension(d, intent)!
+    const edited = applyDimensionValue(res.design, res.dimensionId, 90)
+    expect(Math.abs(measureDimensionValue(edited, intent)! - 90)).toBeLessThan(1e-2)
   })
 })
 

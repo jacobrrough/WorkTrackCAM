@@ -87,7 +87,7 @@ export const constraintSchema = z.discriminatedUnion('type', [
     a: pointRefSchema,
     b: pointRefSchema
   }),
-  /** Angle between line (a1→b1) and (a2→b2); target from `parameters[parameterKey]` in degrees (solver minimizes (cos meas − cos target)²). */
+  /** Angle between line (a1→b1) and (a2→b2); target from `parameters[parameterKey]` in degrees (solver minimizes the arm-scaled signed-angle difference, so it lands exactly). */
   z.object({
     id: z.string(),
     type: z.literal('angle'),

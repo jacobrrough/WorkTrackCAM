@@ -18608,3 +18608,43 @@ on the live badge yet. (3) toolbar resolves a selected polyline to its FIRST seg
 line-pair constraints (per-segment pick is a canvas-flow follow-up). (4) tangent anchors at arc-
 end/line-B with no auto-coincidence. (5) pre-existing dead CSS class `label--inline-flex-6`
 (copied from the MVP variant; cosmetic). Hands-on pass owed.
+
+## Cycle 252 — Security gate restored + first-cut hardware runbook (2026-06-15)
+
+**Focus:** two of four concurrent post-merge streams the user asked to run in parallel.
+Already landed: security `c82a3b6`, runbook `ee359f7`.
+
+- **Security:** GitHub's push hook (on the campaign merge to main) flagged a runtime advisory.
+  Triage: js-yaml quadratic-DoS (GHSA-h67p-54hq-rp68, MODERATE, runtime) → CLOSED via non-breaking
+  `npm audit fix` (only package-lock changed). `npm audit --omit=dev` back to **0** — the release
+  gate is GREEN. The 4 remaining highs are the esbuild/vite dev-server chain (GHSA-67mh-4wv8-2f99),
+  dev-only (never shipped) + breaking to fix → knowingly DEFERRED with rationale + re-eval trigger
+  in docs/SECURITY.md. Full suite 16,617/0 re-verified post-bump.
+- **Runbook:** the highest-value open item is that NO posted G-code has run on the physical
+  machines. Claude can't do the cut, so NEW docs/FIRST-CUT-RUNBOOK.md scripts the lowest-risk first
+  cut (Laguna V-carve sign in MDF): in-app pre-flight (author → post → export-gate → eyeball the
+  header/M30/%/spindle) then the at-the-machine procedure (fixture, Z-zero-at-top, air-cut, 1–10%
+  feed, verify depth, ramp). docs/PRE-LAUNCH-READINESS.md de-staled (flagged the pre-WorkTrack3D/P5
+  sections; replaced the stale "17 vulnerabilities" note with the current GREEN state).
+
+## Cycle 253 — Sketch S5.1: exact angular landing + conflict-aware DOF badge (2026-06-15)
+
+**Focus:** sketch precision polish (stream 2 of 4). Renderer-only.
+
+**Baseline → result:** 16,617 → **16,682 pass / 1 skip / 0 fail** (combined with Cycle 254);
+tsc clean; design suite 78 files / 1919 green (run twice identical); Cycle 249 reload-guard + all
+S1–S5 pins green.
+
+- **Exact angular landing:** the angle constraint minimized (cos meas − cos target)² — a
+  shallow-gradient objective that plateau-stopped the bounded solver (45→90 settled ~84.5°).
+  Replaced with an atan2 signed-angle-difference residual, arm-length-scaled to be commensurate
+  with the mm-scale distance/radius residuals + the 1e-3 tolerance. Now 45→90 lands at **9.6e-6°**,
+  every probe angle < 1e-2°, the ±180° seam wraps without flipping, distance/radius STILL exact, a
+  conflicting angle sketch stays finite + terminates. solveSketch signature/Jacobi structure
+  unchanged; energy() + sketchResidualReport() route through the shared helper so report.total ==
+  energy(). New solver2d-angle-objective.test.ts (22 tests); the S5 "soft lander" e2e assertions
+  tightened to exact.
+- **Conflict-aware DOF badge:** new settled-gated analyzeSketchDofSettled folds in
+  dofStatusWithResidual ONLY when settled && has-relations — a genuine post-solve conflict reads
+  "conflicting"; an unsettled or constraint-free design NEVER false-positives. Status union
+  extended additively with 'conflicting'. Dead CSS class label--inline-flex-6 now defined.

@@ -93,6 +93,64 @@ function parallelResidual(a1: Pt, b1: Pt, a2: Pt, b2: Pt): number {
   return parallelCross(a1, b1, a2, b2) / (len1 * len2)
 }
 
+// ── Angle constraint (S5.1) ────────────────────────────────────────────────
+// The previous angle term minimised (cos meas − cos target)², whose gradient is
+// ∝ sin(θ)·Δθ — it FLATTENS as the angle approaches the target, so the bounded
+// solver plateau-stopped short of an exact landing (45°→90° settled near 84.5°).
+// The replacement below uses the TRUE signed angle difference, whose gradient
+// w.r.t. the angle is constant (∝ residual, never vanishing), so an angular
+// driver lands on its value in a few solve rounds — see solveSketchToTolerance.
+
+/** Fold an angle (radians) into (−π, π]. */
+function wrapToPi(a: number): number {
+  let x = a % (2 * Math.PI)
+  if (x <= -Math.PI) x += 2 * Math.PI
+  if (x > Math.PI) x -= 2 * Math.PI
+  return x
+}
+
+/**
+ * Signed angle FROM line (a1→b1) TO line (a2→b2), in radians, wrapped to (−π, π],
+ * or `null` if either segment is degenerate. The UNSIGNED measured angle the UI /
+ * `measureDimensionValue` reports is exactly `abs(this)` mapped to degrees, so the
+ * solver and the readout agree on magnitude.
+ */
+function signedLineAngleDiff(a1: Pt, b1: Pt, a2: Pt, b2: Pt): number | null {
+  const v1x = b1.x - a1.x
+  const v1y = b1.y - a1.y
+  const v2x = b2.x - a2.x
+  const v2y = b2.y - a2.y
+  if (Math.hypot(v1x, v1y) < LEN_EPS || Math.hypot(v2x, v2y) < LEN_EPS) return null
+  return wrapToPi(Math.atan2(v2y, v2x) - Math.atan2(v1y, v1x))
+}
+
+/**
+ * Residual the `angle` energy minimises, or `null` when degenerate.
+ *
+ * `targetDeg` is the parameter value (unsigned, degrees, per the schema). We drive
+ * the CURRENT signed difference toward the target with the SAME sign it already has
+ * (`sign(meas) · target`), so we open the angle to its value WITHOUT flipping which
+ * side line 2 sits on — the unsigned readout converges to `targetDeg`.
+ *
+ * The angle error (radians) is multiplied by the geometric-mean arm length so the
+ * residual is a tangential ARC-LENGTH in mm — commensurate with the distance /
+ * radius residuals and the `solveSketchToTolerance` mm tolerance, so a clean
+ * angular driver lands within ~1e-3 mm-equivalent (sub-1e-2°, typically ~1e-5°)
+ * rather than plateauing. Lengths cannot collapse under this term: it depends only
+ * on directions, and shrinking an arm only WEAKENS the term (so the anchor still
+ * wins) — it never rewards a zero-length edge.
+ */
+function angleConstraintResidual(a1: Pt, b1: Pt, a2: Pt, b2: Pt, targetDeg: number): number | null {
+  const meas = signedLineAngleDiff(a1, b1, a2, b2)
+  if (meas === null) return null
+  const targetRad = (targetDeg * Math.PI) / 180
+  const signedTarget = (meas >= 0 ? 1 : -1) * targetRad
+  const len1 = Math.hypot(b1.x - a1.x, b1.y - a1.y)
+  const len2 = Math.hypot(b2.x - a2.x, b2.y - a2.y)
+  const arm = Math.sqrt(len1 * len2)
+  return wrapToPi(meas - signedTarget) * arm
+}
+
 /** Sum of squared constraint residuals. */
 export function energy(d: DesignFileV2): number {
   let e = 0
@@ -158,17 +216,12 @@ export function energy(d: DesignFileV2): number {
       const b2 = getPoint(d, c.b2.pointId)
       const targetDeg = P[c.parameterKey]
       if (targetDeg == null || !Number.isFinite(targetDeg)) continue
-      const cosT = Math.cos((targetDeg * Math.PI) / 180)
-      const v1x = b1.x - a1.x
-      const v1y = b1.y - a1.y
-      const v2x = b2.x - a2.x
-      const v2y = b2.y - a2.y
-      const len1 = Math.hypot(v1x, v1y)
-      const len2 = Math.hypot(v2x, v2y)
-      if (len1 < LEN_EPS || len2 < LEN_EPS) continue
-      const cmeas = (v1x * v2x + v1y * v2y) / (len1 * len2)
-      const dd = cmeas - cosT
-      e += dd * dd
+      // True signed-angle residual (arm-scaled): non-vanishing gradient near the
+      // solution, so the angle lands exactly instead of plateauing. See
+      // angleConstraintResidual for the sign/scale rationale.
+      const r = angleConstraintResidual(a1, b1, a2, b2, targetDeg)
+      if (r === null) continue
+      e += r * r
     } else if (c.type === 'tangent') {
       const pa = getPoint(d, c.lineA.pointId)
       const pb = getPoint(d, c.lineB.pointId)
@@ -559,21 +612,16 @@ export function sketchResidualReport(d: DesignFileV2): { total: number; lines: s
         lines.push(`angle ${c.parameterKey}: missing parameter`)
         continue
       }
-      const v1x = b1.x - a1.x
-      const v1y = b1.y - a1.y
-      const v2x = b2.x - a2.x
-      const v2y = b2.y - a2.y
-      const len1 = Math.hypot(v1x, v1y)
-      const len2 = Math.hypot(v2x, v2y)
-      if (len1 < LEN_EPS || len2 < LEN_EPS) {
+      // Match energy(): arm-scaled signed-angle residual squared (see angleConstraintResidual).
+      const r = angleConstraintResidual(a1, b1, a2, b2, targetDeg)
+      if (r === null) {
         lines.push('angle: degenerate segment')
         continue
       }
-      const cmeas = (v1x * v2x + v1y * v2y) / (len1 * len2)
-      const cosT = Math.cos((targetDeg * Math.PI) / 180)
-      const dd = cmeas - cosT
-      total += dd * dd
-      const measDeg = (Math.acos(Math.max(-1, Math.min(1, cmeas))) * 180) / Math.PI
+      total += r * r
+      // Human-readable line uses the UNSIGNED measured angle (what the UI shows).
+      const signed = signedLineAngleDiff(a1, b1, a2, b2)!
+      const measDeg = (Math.abs(signed) * 180) / Math.PI
       lines.push(`angle ${c.parameterKey}: meas≈${measDeg.toFixed(2)}° target=${targetDeg}°`)
     } else if (c.type === 'tangent') {
       const pa = getPoint(d, c.lineA.pointId)

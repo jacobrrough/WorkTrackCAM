@@ -800,6 +800,15 @@
   color: var(--danger, #c0392b);
   background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent);
 }
+/* Sketch S5.1 — residual-detected conflict (the equation count looked
+   satisfiable, but the SETTLED geometry's post-solve residual is high: a
+   dimension/relation conflict the count cannot see). Warn-keyed (attention to
+   check the dimensions) — distinct from the structural `--over` danger pill. */
+.sketch-surface__dof--conflicting {
+  border-color: var(--warn, #d97706);
+  color: var(--warn, #d97706);
+  background: color-mix(in srgb, var(--warn, #d97706) 14%, transparent);
+}
 
 /* Sketch S5 — constraints toolbar (one row of relation buttons under the status
    row). Buttons disable when the current selection can't form the relation. */
@@ -948,6 +957,18 @@
 }
 .sketch-surface__canvas-host .sketch-toolbar .msg {
   color: var(--txt1);
+}
+/* Sketch S5.1 — small inline-flex utility for an inline label that pairs a
+   control (checkbox / number input) with its text on one baseline. Used by the
+   Sketch2DCanvas toolbar's `<label className="msg label--inline-flex-6">` rows
+   (Angular / Diameter dimension toggles, Polygon "Sides", etc.) — previously the
+   class was referenced but defined in NO stylesheet, so those labels fell back
+   to the browser default `display: inline` and the control + text did not align.
+   `6` names the gap (var(--sp-3) === 6px). */
+.label--inline-flex-6 {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
 }
 .sketch-surface__canvas-host .sketch-toolbar .secondary {
   appearance: none;

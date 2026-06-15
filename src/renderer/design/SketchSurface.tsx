@@ -63,7 +63,7 @@ import {
   TOOLBAR_CONSTRAINT_KINDS,
   type ConstraintKind
 } from './sketch-constraint-apply'
-import { analyzeSketchDof } from './sketch-dof-seam'
+import { analyzeSketchDofSettled } from './sketch-dof-seam'
 import { sketchToolForDesignCommand } from './design-command-map'
 import {
   createSketchHistory,
@@ -464,11 +464,19 @@ export function SketchSurface({
    * record the pre-mutation state, then apply via the session's onDesignChange.
    * Draw commits (canvas), Text inserts, and Offset/Boolean/Array applies all
    * call this instead of the raw prop.
+   *
+   * Sketch S5.1 — `solved` declares whether `next` came out of a solve
+   * (`solveSketchToTolerance`). It gates the conflict-aware DOF badge's settled
+   * read: ONLY the two re-solving handlers pass `true`; every other caller
+   * (draws, text, offset/boolean/array — the default) leaves the design
+   * UNSETTLED, so the badge stays count-only and can never claim a conflict it
+   * hasn't actually solved for.
    */
-  function applyDesignEdit(next: DesignFileV2): void {
+  function applyDesignEdit(next: DesignFileV2, solved = false): void {
     history.push(liveDesignRef.current)
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(solved)
     setHistoryRevision((v) => v + 1)
   }
 
@@ -477,6 +485,9 @@ export function SketchSurface({
     if (prev === null) return
     liveDesignRef.current = prev
     onDesignChange(prev)
+    // A restored snapshot is not a fresh solve — drop the settled gate so the
+    // badge falls back to the honest count-only verdict.
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
     onSketchHint?.('Undo.')
   }
@@ -486,6 +497,7 @@ export function SketchSurface({
     if (next === null) return
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
     onSketchHint?.('Redo.')
   }
@@ -523,6 +535,7 @@ export function SketchSurface({
     history.pushCoalesced(cur, `move:${[...ids].sort().join('|')}`)
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
   }
 
@@ -534,6 +547,7 @@ export function SketchSurface({
     history.push(cur)
     liveDesignRef.current = result.design
     onDesignChange(result.design)
+    setDesignSettled(false)
     setSelectedEntityIds((prev) => {
       const next = new Set(prev)
       for (const id of result.removedEntityIds) next.delete(id)
@@ -592,6 +606,7 @@ export function SketchSurface({
     history.pushCoalesced(cur, `node:${entityId}:${nodeId}`)
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
   }
 
@@ -607,6 +622,7 @@ export function SketchSurface({
     history.push(cur)
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
     onSketchHint?.('Node inserted.')
   }
@@ -622,6 +638,7 @@ export function SketchSurface({
     history.push(cur)
     liveDesignRef.current = next
     onDesignChange(next)
+    setDesignSettled(false)
     setHistoryRevision((v) => v + 1)
     onSketchHint?.('Node deleted.')
   }
@@ -660,7 +677,9 @@ export function SketchSurface({
       onSketchHint?.('Dimension unchanged (annotation-only or invalid value).')
       return
     }
-    applyDesignEdit(next)
+    // `applyDimensionValue` re-solves to tolerance — mark the result SETTLED so
+    // the DOF badge may consult the residual (and surface a genuine conflict).
+    applyDesignEdit(next, true)
     onSketchHint?.('Dimension updated — geometry re-solved.')
   }
 
@@ -692,15 +711,25 @@ export function SketchSurface({
       onSketchHint?.(`Can't apply ${constraintKindLabel(kind)} to that selection.`)
       return
     }
-    applyDesignEdit(solveSketchToTolerance(withConstraint))
+    // `solveSketchToTolerance` re-solves onto the new relation — mark SETTLED so
+    // the DOF badge may consult the residual (and surface a genuine conflict).
+    applyDesignEdit(solveSketchToTolerance(withConstraint), true)
     onSketchHint?.(`${constraintKindLabel(kind)} constraint applied — geometry re-solved.`)
   }
 
-  // ── Sketch S5 — honest DOF read-out (status row badge) ─────────────────────
-  // Consumes the engine agent's `analyzeSketchDof` through the typed seam, which
-  // adapts the engine report into a badge view (label + status). The badge labels
-  // itself approximate; an empty sketch shows nothing.
-  const dofReport = useMemo(() => analyzeSketchDof(design), [design])
+  // ── Sketch S5 / S5.1 — honest, conflict-AWARE DOF read-out (status badge) ──
+  // Consumes the engine agent's DOF analysis through the typed seam. S5.1 upgrade:
+  // `analyzeSketchDofSettled` folds in the post-solve RESIDUAL — so a genuine
+  // conflict the equation count cannot see (a dimension fighting a constraint)
+  // surfaces as 'Conflicting' — but ONLY when `designSettled` is true (the live
+  // design came out of a solve-bearing edit). A transiently-unsolved / mid-draw
+  // design (settled === false) reads the count-only verdict and can NEVER
+  // false-positive a conflict. The badge labels itself approximate; an empty
+  // sketch shows nothing. See `analyzeSketchDofSettled`'s gating contract.
+  const dofReport = useMemo(
+    () => analyzeSketchDofSettled(design, designSettled),
+    [design, designSettled]
+  )
 
   // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
   // variable so this compiles before the canvas declares the props; extra props
@@ -738,6 +767,9 @@ export function SketchSurface({
       liveDesignRef.current = commit.live
       if (commit.record) {
         history.push(before)
+        // An import additively merges vectors — it is not a solve. Drop the
+        // settled gate so the badge stays count-only after it.
+        setDesignSettled(false)
         setHistoryRevision((v) => v + 1)
       }
     }
@@ -975,17 +1007,24 @@ export function SketchSurface({
             </label>
           )}
 
-          {/* Sketch S5 — honest DOF badge. Distinct, non-blocking, aria-live;
-              the title flags it as an approximate estimate (the local 2D solver
-              has no rigorous rank analysis — see `sketch-dof-seam`). An empty
-              sketch (status 'empty', blank label) renders no badge. */}
+          {/* Sketch S5 / S5.1 — honest, conflict-aware DOF badge. Distinct,
+              non-blocking, aria-live. The title keeps the approximate ("approx")
+              honesty qualifier for every verdict (the local 2D solver has no
+              rigorous rank analysis — see `sketch-dof-seam`); the 'conflicting'
+              verdict's title additionally explains it is a SETTLED post-solve
+              residual conflict the equation count cannot see. An empty sketch
+              (status 'empty', blank label) renders no badge. */}
           {dofReport.status !== 'empty' && (
             <span
               className={`sketch-surface__dof sketch-surface__dof--${dofReport.status}`}
               data-testid="sketch-surface-dof-badge"
               data-dof-status={dofReport.status}
               aria-live="polite"
-              title="Approximate degrees of freedom (equations vs. free coordinates — not a rigorous rank analysis)."
+              title={
+                dofReport.status === 'conflicting'
+                  ? 'The solved sketch has a high residual — constraints/dimensions conflict (approx; not a rigorous rank analysis).'
+                  : 'Approximate (approx) degrees of freedom (equations vs. free coordinates — not a rigorous rank analysis).'
+              }
             >
               {dofReport.label}
             </span>

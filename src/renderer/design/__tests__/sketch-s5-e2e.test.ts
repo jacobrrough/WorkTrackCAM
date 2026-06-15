@@ -360,21 +360,18 @@ describe('S5 e2e (c) -- angular driving dimension placed then edited', () => {
     expect(sim.live.current.constraints.some((c) => c.type === 'angle')).toBe(true)
     expect(sim.history.undoDepth()).toBe(1)
 
-    // Retype 90deg -> the geometry opens toward a right angle. The angular solver
-    // minimises (cos meas - cos target)^2, so we assert the angle MOVED a long
-    // way toward 90 (not bit-exact landing -- angle is a softer objective than a
-    // single distance, which is why the task says "moves the angle toward target").
+    // Retype 90deg -> the geometry opens to a right angle. S5.1 replaced the old
+    // (cos meas - cos target)^2 term -- whose gradient flattened near the target,
+    // leaving 45->90 stuck around ~84.5deg -- with the TRUE arm-scaled signed-angle
+    // residual, whose gradient does not vanish. So one edit (which re-solves to
+    // tolerance) now LANDS the angle exactly, not merely near it.
     const before = measureDimensionValue(sim.live.current, intent)!
     const moved = surfaceCommitDimensionValue(sim, dimId!, 90)
     expect(moved).toBe(true)
     const after = measureDimensionValue(sim.live.current, intent)!
     expect(after).toBeGreaterThan(before) // opened up from 45deg
-    // The angular objective is COSINE-based (softer than a distance driver's
-    // direct length residual), so it converges toward -- not bit-onto -- the
-    // target in one edit. Assert a strong move: it crossed well past the
-    // 45->90 midpoint and sits within a few degrees of 90.
-    expect(after).toBeGreaterThan(80)
-    expect(Math.abs(after - 90)).toBeLessThan(8)
+    // Exact landing within 1e-2deg in ONE edit (the whole point of the S5.1 fix).
+    expect(Math.abs(after - 90)).toBeLessThan(1e-2)
     expect(sim.history.undoDepth()).toBe(2)
 
     // The angle parameter holds the sanitized 90.

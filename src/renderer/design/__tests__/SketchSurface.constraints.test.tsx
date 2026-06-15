@@ -151,13 +151,15 @@ describe('SketchSurface — S5 constraint-apply + DOF source pins', () => {
   it('applying a constraint routes through applyDesignEdit + re-solve as ONE step', () => {
     const body = SRC.slice(
       SRC.indexOf('function handleApplyConstraint'),
-      SRC.indexOf('// ── Sketch S5 — honest DOF read-out')
+      SRC.indexOf('honest, conflict-AWARE DOF read-out')
     )
     expect(body).toContain('addConstraintFromSelection(cur, selectedIdSet, kind)')
     // a null result is a no-op (no undo step).
     expect(body).toContain('if (!withConstraint) {')
-    // the success path: re-solve to tolerance, then ONE applyDesignEdit.
-    expect(body).toContain('applyDesignEdit(solveSketchToTolerance(withConstraint))')
+    // the success path: re-solve to tolerance, then ONE applyDesignEdit. S5.1:
+    // the apply is marked SETTLED (solved=true) so the conflict-aware badge may
+    // consult the post-solve residual.
+    expect(body).toContain('applyDesignEdit(solveSketchToTolerance(withConstraint), true)')
     expect(body.match(/applyDesignEdit\(/g) ?? []).toHaveLength(1)
   })
 
@@ -167,9 +169,11 @@ describe('SketchSurface — S5 constraint-apply + DOF source pins', () => {
     expect(SRC).not.toContain('solveSketch(')
   })
 
-  it('the DOF badge consumes the typed seam (analyzeSketchDof)', () => {
+  it('the DOF badge consumes the typed seam (S5.1 conflict-aware analyzeSketchDofSettled)', () => {
     expect(SRC).toContain("from './sketch-dof-seam'")
-    expect(SRC).toContain('const dofReport = useMemo(() => analyzeSketchDof(design)')
+    // S5.1: the badge reads the conflict-aware, SETTLED-gated seam (folds in the
+    // post-solve residual under a strict gate) rather than the count-only one.
+    expect(SRC).toContain('analyzeSketchDofSettled(design, designSettled)')
     // the badge hides itself on the empty verdict.
     expect(SRC).toContain("dofReport.status !== 'empty'")
   })

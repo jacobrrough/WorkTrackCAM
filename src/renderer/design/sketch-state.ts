@@ -233,8 +233,8 @@ export type PointOnLineConstraint = {
 
 /**
  * Angle: angle between line (a1→b1) and (a2→b2) equals ``value`` degrees.
- * Mirrors the design-schema ``angle`` constraint (solver minimizes
- * (cos measured − cos target)²).
+ * Mirrors the design-schema ``angle`` constraint (solver minimizes the
+ * arm-scaled signed-angle difference, so the angle lands exactly).
  */
 export type AngleConstraint = {
   id: string

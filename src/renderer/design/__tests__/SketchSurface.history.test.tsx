@@ -97,8 +97,10 @@ describe('SketchSurface — S1 history controls render contract', () => {
 
 describe('SketchSurface — S1 mutation-seam source pins', () => {
   it('the wrapper pushes the PRE-state BEFORE applying via onDesignChange', () => {
+    // S5.1 added the optional `solved` settled-gate flag (default false); the
+    // push-before-apply ordering is unchanged.
     expect(SRC).toMatch(
-      /function applyDesignEdit\(next: DesignFileV2\): void \{\s*history\.push\(liveDesignRef\.current\)[\s\S]{0,120}onDesignChange\(next\)/
+      /function applyDesignEdit\(next: DesignFileV2, solved = false\): void \{\s*history\.push\(liveDesignRef\.current\)[\s\S]{0,160}onDesignChange\(next\)/
     )
   })
 
@@ -204,7 +206,8 @@ describe('SketchSurface — S4 dimension wiring', () => {
     expect(body).toContain('const next = applyDimensionValue(cur, dimId, value)')
     // reference-equality gate: unchanged -> no undo step.
     expect(body).toContain('if (next === cur) {')
-    expect(body).toContain('applyDesignEdit(next)')
+    // S5.1: applyDimensionValue re-solves, so the result is marked SETTLED.
+    expect(body).toContain('applyDesignEdit(next, true)')
     expect(body.match(/applyDesignEdit\(/g) ?? []).toHaveLength(1)
   })
 
