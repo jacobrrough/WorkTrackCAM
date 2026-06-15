@@ -6,6 +6,13 @@
 
 This doc is the operator's "is the app ready?" checklist. It lists what's been verified, what runbooks exist, what's still deferred, and what the operator needs to bring to each first real run.
 
+> **⚠️ Parts of this doc are stale** (it predates the WorkTrack3D shell rename + the P5 ShopApp/
+> NavRail cutover — ignore references to ShopApp, NavRail, the brand-bar "Design pill", and the
+> Design "overlay"; Design is now a top-level workspace). For the **current, step-by-step first
+> real cut**, use **[`docs/FIRST-CUT-RUNBOOK.md`](FIRST-CUT-RUNBOOK.md)** (Laguna sign job,
+> lowest-risk). For current security state see **[`docs/SECURITY.md`](SECURITY.md)**. The
+> machine-bring-list and known-limitations sections below remain accurate.
+
 ---
 
 ## TL;DR — ALL DEFERRED ITEMS CLOSED
@@ -333,9 +340,12 @@ The Design workspace renders as a **fullscreen overlay** rather than as a regist
 
 ## Security note
 
-Latest `npm audit` reports **17 vulnerabilities** (2 critical, 11 high, 3 moderate, 1 low). The 2 critical advisories are GHSA-5xrq-8626-4rwp (vitest arbitrary file read/execute) — covered by deferred item 1 above. The remaining 15 are transitive dev-dependencies that don't affect the shipping Electron app, but should be triaged in a future security-focused cycle.
-
-GitHub's Dependabot will continue to surface these on every push. Suppressing them is not the answer; the vitest upgrade resolves the criticals.
+**STALE — superseded by [`docs/SECURITY.md`](SECURITY.md) (the live source of truth).** As of
+2026-06-15 the **runtime release gate is GREEN**: `npm audit --omit=dev` reports **0
+vulnerabilities**. Full `npm audit` reports **4 high**, all the dev-only esbuild/vite dev-server
+chain (GHSA-67mh-4wv8-2f99) — never shipped in the packaged app, knowingly deferred (breaking to
+fix). The vitest critical and the js-yaml runtime moderate are both **CLOSED**. See SECURITY.md
+for the per-advisory disposition + re-evaluation triggers.
 
 ---
 

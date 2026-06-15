@@ -399,6 +399,15 @@ export function SketchSurface({
   // (never the render closure) keeps every snapshot an accurate pre-state.
   const liveDesignRef = useRef(design)
   liveDesignRef.current = design
+  // Sketch S5.1 — the conflict-aware DOF badge's SETTLED gate. True only while
+  // the live design is the result of a solve-bearing edit (a constraint apply or
+  // a dimension value re-solve, which run `solveSketchToTolerance`); ANY other
+  // mutation — a raw draw, a drag, a node edit, a delete, a DXF import, a
+  // text/offset/boolean/array apply, an undo/redo — clears it. The badge only
+  // consults the post-solve residual (and can ever read 'Conflicting') when this
+  // is true, so a transiently-unsolved / mid-draw design can never false-positive
+  // a conflict. See `analyzeSketchDofSettled`'s gating contract.
+  const [designSettled, setDesignSettled] = useState(false)
   // Guards the Import-DXF button while the host's picker + parse + merge is in
   // flight, so a double-click can't kick off two overlapping file pickers.
   const [importingDxf, setImportingDxf] = useState(false)
