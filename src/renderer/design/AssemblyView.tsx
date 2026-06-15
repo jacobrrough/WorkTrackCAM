@@ -160,6 +160,19 @@ export interface AssemblyViewProps {
    * and the parts list. When undefined, the Mates panel still renders but
    * with an empty list and no "Define mate" affordance — keeps the
    * V1.5 features opt-in for callers that haven't wired persistence yet.
+   *
+   * HONESTY / DEAD-SURFACE WARNING (Model+Assembly audit): the LIVE `assemble`
+   * route mounts `<AssemblyView>` WITHOUT `mates` / `onAddMate` / `onRemoveMate`
+   * (see DesignWorkspace.tsx), so this whole Mates panel + the modal below are
+   * UNREACHABLE in the running app — only the test suite passes them. The
+   * reachable mate surface is the SEPARATE {@link AssemblyMatePanel}, which
+   * models a mate as 3-VECTORS (point/axis/plane). This panel instead models a
+   * mate as integer FACE IDS ({@link AssemblyMate} `feature1/feature2: number`),
+   * a DIVERGENT shape the durable persistence path (`runPersistMate`, which
+   * expects a `SolvedMate` 3-vector draft) does NOT consume. Do NOT wire this
+   * surface as-is to "turn mates on" — its `onAddMate` would emit a face-id mate
+   * that silently no-ops into persistence. Either delete this panel or unify the
+   * two mate models first.
    */
   readonly mates?: readonly AssemblyMate[]
   /**

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { STARTER_SCRIPT, type DesignViewMode } from '../design/DesignWorkspace'
 import { DesignSessionProvider } from '../design/DesignSessionContext'
@@ -84,6 +84,17 @@ export function WorkspaceHost({
   const { setPendingCamImport } = useCamHandoff()
   const [designScript, setDesignScript] = useState<string>(STARTER_SCRIPT)
 
+  // Serialize assembly-mate persistence. `runPersistMate` is a load→fold→save
+  // over `assembly.json`, and `handleMateAdded` fires it fire-and-forget from
+  // inside the AssemblyMatePanel solve callback (the Solve button re-enables the
+  // instant the solve IPC resolves — BEFORE this persist's save lands). Two
+  // mates solved in quick succession would otherwise each `loadAssembly` the
+  // SAME on-disk constraints and the last `saveAssembly` would drop the other
+  // mate (a silent lost-update; the "Mate saved" toast already claimed success).
+  // Chaining each persist onto the previous one guarantees save N completes
+  // before load N+1 begins, so every fold sees the prior write.
+  const matePersistChainRef = useRef<Promise<void>>(Promise.resolve())
+
   // Stable `onStatus` for the DesignSessionProvider. An inline arrow here gave a
   // new identity every render; the session's load effect used to list onStatus
   // in its deps, so that churn re-ran the disk load and `replace`d the in-memory
@@ -119,15 +130,19 @@ export function WorkspaceHost({
   // toast. SAFETY: assembly-data write only; no G-code.
   const handleMateAdded = useCallback(
     (mate: Parameters<typeof runPersistMate>[0]['mate']): void => {
-      void (async () => {
-        const outcome = await runPersistMate({
-          mate,
-          projectDir,
-          loadAssembly: (dir) => fab().assemblyLoad(dir),
-          saveAssembly: (dir, json) => fab().assemblySave(dir, json)
+      // Chain onto the prior persist (load→fold→save) so concurrent solves can
+      // never stale-base each other's `loadAssembly` — see matePersistChainRef.
+      matePersistChainRef.current = matePersistChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          const outcome = await runPersistMate({
+            mate,
+            projectDir,
+            loadAssembly: (dir) => fab().assemblyLoad(dir),
+            saveAssembly: (dir, json) => fab().assemblySave(dir, json)
+          })
+          pushToast(outcome.toast.kind, outcome.toast.message)
         })
-        pushToast(outcome.toast.kind, outcome.toast.message)
-      })()
     },
     [projectDir, pushToast]
   )

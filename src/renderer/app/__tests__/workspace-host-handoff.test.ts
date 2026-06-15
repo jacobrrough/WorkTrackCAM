@@ -24,6 +24,8 @@
  *
  * SAFETY: data-only seam — no G-code is produced anywhere in this path.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   deriveSourceNameFromStlPath,
@@ -329,5 +331,107 @@ describe('runPersistMate — load → fold → save', () => {
 
     expect(onDisk.mateConstraints).toHaveLength(1)
     expect(onDisk.mateConstraints[0]!.feature1).toMatchObject({ x: 99 })
+  })
+})
+
+// ── (3) concurrent mate persistence — the lost-update race + the serialized fix ─
+//
+// `WorkspaceHost.handleMateAdded` fires `runPersistMate` (a load→fold→save over
+// assembly.json) per solved mate, and the AssemblyMatePanel re-enables its Solve
+// button the instant the solve IPC resolves — BEFORE this persist's save lands.
+// Two mates solved in quick succession therefore overlap. These tests drive that
+// overlap against a single in-memory store with ASYNC load + save (a real IPC
+// round-trip is async), so two un-chained persists read the same stale base.
+
+describe('concurrent mate persistence (the WorkspaceHost.handleMateAdded race)', () => {
+  /** A two-component assembly store; load + save both yield to the microtask queue. */
+  function asyncAssemblyStore() {
+    let onDisk = twoPartAssembly()
+    return {
+      get onDisk() {
+        return onDisk
+      },
+      // Async load: yields a tick before returning the current snapshot, so two
+      // overlapping persists both read the SAME base (the lost-update window).
+      loadAssembly: async (): Promise<AssemblyFile> => {
+        await Promise.resolve()
+        return onDisk
+      },
+      // Async save: yields a tick, then commits (re-parsed exactly as the IPC does).
+      saveAssembly: async (_dir: string, json: string): Promise<void> => {
+        await Promise.resolve()
+        onDisk = assemblyFileSchema.parse(JSON.parse(json))
+      }
+    }
+  }
+
+  function mateA(): SolvedMate {
+    return { id: 'mate-A', draft: { ...solvedPointMate().draft, point1: ['1', '0', '0'] } }
+  }
+  function mateB(): SolvedMate {
+    return {
+      id: 'mate-B',
+      draft: { ...solvedPointMate().draft, part1Id: 'base', part2Id: 'arm', point1: ['2', '0', '0'] }
+    }
+  }
+
+  it('UNSERIALIZED persists stale-base each other → one mate is silently dropped (the BUG)', async () => {
+    const store = asyncAssemblyStore()
+    // Both persists start NOW (no chaining). Each awaits loadAssembly (one tick),
+    // both observe the empty base, each folds its own mate and saves — the second
+    // save overwrites the first because it never saw the first's mate.
+    const pA = runPersistMate({
+      mate: mateA(),
+      projectDir: 'C:/proj',
+      loadAssembly: store.loadAssembly,
+      saveAssembly: store.saveAssembly
+    })
+    const pB = runPersistMate({
+      mate: mateB(),
+      projectDir: 'C:/proj',
+      loadAssembly: store.loadAssembly,
+      saveAssembly: store.saveAssembly
+    })
+    await Promise.all([pA, pB])
+    // Last writer wins on a stale base → only ONE constraint survives.
+    expect(store.onDisk.mateConstraints).toHaveLength(1)
+  })
+
+  it('SERIALIZED via a promise chain (the WorkspaceHost fix) → BOTH mates survive', async () => {
+    const store = asyncAssemblyStore()
+    // Mirror handleMateAdded: chain each persist onto the previous one. Each
+    // link's loadAssembly runs only after the prior link's save committed, so the
+    // second fold sees the first mate already on disk.
+    let chain: Promise<void> = Promise.resolve()
+    const enqueue = (mate: SolvedMate): void => {
+      chain = chain.catch(() => {}).then(async () => {
+        await runPersistMate({
+          mate,
+          projectDir: 'C:/proj',
+          loadAssembly: store.loadAssembly,
+          saveAssembly: store.saveAssembly
+        })
+      })
+    }
+    enqueue(mateA())
+    enqueue(mateB())
+    await chain
+    const ids = store.onDisk.mateConstraints.map((c) => c.id).sort()
+    expect(ids).toEqual(['mate-A', 'mate-B'])
+  })
+})
+
+// ── (4) source pin — WorkspaceHost serializes the persist ─────────────────────
+
+describe('WorkspaceHost serializes mate persistence (source pin)', () => {
+  const HOST_SRC = readFileSync(join(__dirname, '..', 'WorkspaceHost.tsx'), 'utf-8')
+
+  it('holds a promise-chain ref and chains each persist onto the previous', () => {
+    expect(HOST_SRC).toContain(
+      'const matePersistChainRef = useRef<Promise<void>>(Promise.resolve())'
+    )
+    expect(HOST_SRC).toContain('matePersistChainRef.current = matePersistChainRef.current')
+    // The pre-fix fire-and-forget shape (an un-chained IIFE) must be gone.
+    expect(HOST_SRC).not.toContain('void (async () => {\n        const outcome = await runPersistMate(')
   })
 })

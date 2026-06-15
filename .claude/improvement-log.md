@@ -18749,3 +18749,42 @@ intent preserved (live-plan merge + dirty rebaseline).
 **Sequencing note:** this ran AFTER Cycle 255 (the nav guard) committed, because both edit
 ManufactureWorkspace.tsx — two concurrent splices on the same >800-line file would collide, so it
 was queued (task #83) until the nav-guard workflow freed the file.
+
+## Cycle 257 — Model + Assembly shake-down: 4 latent persistence/honesty bugs fixed (2026-06-15)
+
+**Focus:** the validation pass the Model + Assembly pillars never got (user: "get all feature
+sets to gold standard" — validate before enhancing). A 3-lens adversarial audit (kernel/build,
+dialogs+selection, assembly) mirroring the CAM-race audit. 11 candidates examined; the real ones
+fixed, the build-out-class ones de-scoped to the Assembly-depth wave (next).
+
+**Baseline → result:** 16,730 → **16,744 pass / 1 skip / 0 fail** (+14); tsc clean; Cycle-249
+reload-guard intact (deps still [fab, projectDir, designDiskRevision]); sketch surface untouched.
+
+**Fixed (all bug-class C-persist / D-dishonest — the kind green tests miss):**
+- **Auto-build trailing-rebuild drained the STALE closure** (DesignSessionContext): the in-flight
+  build's `finally` called `void buildKernelPart()` — the build-start closure (design D0) — so a
+  sketch edit made DURING a multi-second kernel build (→ D1) was overwritten on disk by D0 when
+  the trailing rebuild re-saved. Invisible until reload (the Cycle-249 damage profile). Fixed to
+  `void buildKernelPartRef.current()` (freshest closure), matching the auto-build trigger.
+- **Kernel-op timeline editors clobbered each other** (DesignSessionContext): all 7 editors
+  (append/remove/move/suppress/reorder/rollback/feature-suppress) read `features` from a stale
+  closure, computed `next`, and `setFeatures(next)` — two gestures within one featuresSave IPC
+  dropped one. Funnelled through a `featuresRef` (refreshed every render + updated synchronously
+  by the prior fold) so each mutation folds onto the freshest state.
+- **Assembly mate persistence lost-update race** (WorkspaceHost.handleMateAdded): concurrent
+  solves each `loadAssembly`'d the same on-disk constraints and the last `saveAssembly` dropped
+  the other mate. Serialized behind `matePersistChainRef` (each persist chains onto the prior, so
+  save N completes before load N+1).
+- **Dishonest "run Build STEP (kernel) to apply" status** — the auto-build already does it; copy
+  corrected. **Dead AssemblyView mate panel/modal** (gated on a `mates` prop only tests pass) made
+  honest.
+
+**Tests:** +14 — DesignSessionContext.kernel-op-race.test.ts, AssemblyView.mate-surface-honesty
+.test.ts, workspace-host-handoff mate-serialization pins. Each fix has a regression pin that fails
+on the old code.
+
+**Teed up for the Assembly-depth wave (real, de-scoped as build-outs not bugs):** (#8) persisted
+mateConstraints reference in-memory `part-<ts>` ids never written into assembly.json components
+(dangling); (#9) saved mateConstraints never reload into any renderer surface (write-only —
+invisible/uneditable after reload); (#11) handleAddPartToAssembly gives every added part the SAME
+firstMesh.handle → multi-part assemblies are N copies of one body. These define the next wave.

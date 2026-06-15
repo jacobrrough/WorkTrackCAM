@@ -256,6 +256,25 @@ export function DesignSessionProvider({
   // load effect skips a redundant reload when unchanged (the anti-clobber guard).
   const lastDesignLoadKeyRef = useRef<string | null>(null)
 
+  // task: kernel-op edits clobbering each other — the seven timeline editors
+  // (append / remove / move / suppress / reorder / roll-back / feature-suppress)
+  // each read `features`, fold a `next`, then `featuresSave` + `setFeatures`. The
+  // render-cycle `features` closure goes STALE the instant two gestures fire
+  // inside one IPC round-trip (a feature dialog stays open after Apply, the
+  // timeline buttons have no in-flight gate), so the second gesture folds onto
+  // the pre-first snapshot and the last write silently drops the first edit on
+  // disk AND in memory. Fix mirrors the onStatus/Cycle-249 ref pattern: read the
+  // freshest features through `featuresRef` (refreshed every render AND updated
+  // synchronously before each await), and serialize the disk writes behind a
+  // single promise chain so each fold lands on the prior result, never a stale
+  // base. `designRef` keeps the rare `derivePartFeatures` fallback (no features
+  // loaded yet) off the same stale-closure trap.
+  const featuresRef = useRef(features)
+  featuresRef.current = features
+  const designRef = useRef(design)
+  designRef.current = design
+  const featuresWriteChainRef = useRef<Promise<void>>(Promise.resolve())
+
   useEffect(() => {
     if (!projectDir) {
       lastDesignLoadKeyRef.current = null
@@ -480,9 +499,15 @@ export function DesignSessionProvider({
       kernelBuildInFlightRef.current = false
       setKernelBuilding(false)
       // Drain a coalesced rebuild requested while this build was running.
+      // Use the LATEST closure (`buildKernelPartRef.current`), not this build's
+      // own `buildKernelPart`: this instance closed over the design at build-start
+      // (D0), and a sketch edit during the multi-second build produced a newer
+      // closure (D1) whose `designSave(design)` would otherwise be skipped while
+      // D0's save re-runs — re-clobbering the D1 sketch on disk (Cycle-249 damage
+      // profile). The ref always points at the freshest design closure.
       if (kernelRebuildPendingRef.current) {
         kernelRebuildPendingRef.current = false
-        void buildKernelPart()
+        void buildKernelPartRef.current()
       }
     }
   }, [fab, projectDir, design, onStatus, refreshKernelInspectGeometry])
@@ -834,171 +859,175 @@ export function DesignSessionProvider({
 
   const undo = useCallback(() => dispatch({ type: 'undo' }), [])
 
+  /**
+   * Outcome of a kernel-features mutation passed to {@link commitKernelFeatures}:
+   *   - `{ next, status }` — a fold to persist + the status toast on success;
+   *   - `{ reject }`       — a validation failure (surface the reason, no write);
+   *   - `null`             — a no-op (out-of-range index, etc.); silently ignore.
+   */
+  type KernelFeaturesMutation =
+    | { next: PartFeaturesFile; status: string }
+    | { reject: string }
+    | null
+
+  /**
+   * Serialize a kernel-features read-modify-write so concurrent timeline
+   * gestures never clobber each other (the bug above). `compute` receives the
+   * FRESHEST features (`featuresRef.current`, updated synchronously by the prior
+   * gesture before its await) — NOT the render-cycle closure — and returns the
+   * fold to persist. The fold is committed to `featuresRef` IMMEDIATELY (so a
+   * second synchronous gesture folds onto it) and the disk write is chained onto
+   * `featuresWriteChainRef` so saves land in gesture order. `setFeatures(next)`
+   * still drives the render — the ref is only the synchronous fold base.
+   */
+  const commitKernelFeatures = useCallback(
+    (compute: (base: PartFeaturesFile) => KernelFeaturesMutation): void => {
+      if (!projectDir) return
+      const base = featuresRef.current ?? derivePartFeatures(designRef.current, null)
+      const outcome = compute(base)
+      if (outcome === null) return
+      if ('reject' in outcome) {
+        onStatusRef.current?.(outcome.reject)
+        return
+      }
+      const { next, status } = outcome
+      // Fold lands synchronously so a same-tick second gesture sees it.
+      featuresRef.current = next
+      setFeatures(next)
+      featuresWriteChainRef.current = featuresWriteChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          try {
+            await fab.featuresSave(projectDir, JSON.stringify(next))
+            onStatusRef.current?.(status)
+          } catch (e) {
+            onStatusRef.current?.(e instanceof Error ? e.message : String(e))
+          }
+        })
+    },
+    [fab, projectDir]
+  )
+
   const appendKernelOp = useCallback(
     async (op: KernelPostSolidOp) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const next: PartFeaturesFile = {
-        ...base,
-        kernelOps: [...(base.kernelOps ?? []), op]
-      }
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        setFeatures(next)
-        onStatus?.('Kernel op saved — run Build STEP (kernel) to apply.')
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      commitKernelFeatures((base) => ({
+        next: { ...base, kernelOps: [...(base.kernelOps ?? []), op] },
+        status: 'Kernel op saved — rebuilding model…'
+      }))
     },
-    [fab, projectDir, features, design, onStatus]
+    [commitKernelFeatures]
   )
 
   const removeKernelOpAt = useCallback(
     async (index: number) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const ops = [...(base.kernelOps ?? [])]
-      if (index < 0 || index >= ops.length) return
-      ops.splice(index, 1)
-      const next: PartFeaturesFile = { ...base, kernelOps: ops.length ? ops : undefined }
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        setFeatures(next)
-        onStatus?.('Kernel op removed.')
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      commitKernelFeatures((base) => {
+        const ops = [...(base.kernelOps ?? [])]
+        if (index < 0 || index >= ops.length) return null
+        ops.splice(index, 1)
+        return {
+          next: { ...base, kernelOps: ops.length ? ops : undefined },
+          status: 'Kernel op removed — rebuilding model…'
+        }
+      })
     },
-    [fab, projectDir, features, design, onStatus]
+    [commitKernelFeatures]
   )
 
   const moveKernelOp = useCallback(
     async (index: number, delta: -1 | 1) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const ops = [...(base.kernelOps ?? [])]
-      const j = index + delta
-      if (index < 0 || index >= ops.length || j < 0 || j >= ops.length) return
-      const a = ops[index]!
-      const b = ops[j]!
-      const order = canSwapKernelOpOrder(a, b, delta)
-      if (!order.ok) {
-        onStatus?.(order.reason)
-        return
-      }
-      ops[index] = b
-      ops[j] = a
-      const next: PartFeaturesFile = { ...base, kernelOps: ops }
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        setFeatures(next)
-        onStatus?.('Kernel op order updated.')
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      commitKernelFeatures((base) => {
+        const ops = [...(base.kernelOps ?? [])]
+        const j = index + delta
+        if (index < 0 || index >= ops.length || j < 0 || j >= ops.length) return null
+        const a = ops[index]!
+        const b = ops[j]!
+        const order = canSwapKernelOpOrder(a, b, delta)
+        if (!order.ok) return { reject: order.reason }
+        ops[index] = b
+        ops[j] = a
+        return { next: { ...base, kernelOps: ops }, status: 'Kernel op order updated — rebuilding model…' }
+      })
     },
-    [fab, projectDir, features, design, onStatus]
+    [commitKernelFeatures]
   )
 
   const setKernelOpSuppressedAt = useCallback(
     async (index: number, suppressed: boolean) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const ops = [...(base.kernelOps ?? [])]
-      if (index < 0 || index >= ops.length) return
-      const cur = ops[index]!
-      ops[index] = { ...cur, suppressed: suppressed ? true : undefined }
-      const next: PartFeaturesFile = { ...base, kernelOps: ops }
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        setFeatures(next)
-        onStatus?.(suppressed ? 'Kernel op suppressed (skipped in build).' : 'Kernel op active again.')
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      commitKernelFeatures((base) => {
+        const ops = [...(base.kernelOps ?? [])]
+        if (index < 0 || index >= ops.length) return null
+        const cur = ops[index]!
+        ops[index] = { ...cur, suppressed: suppressed ? true : undefined }
+        return {
+          next: { ...base, kernelOps: ops },
+          status: suppressed ? 'Kernel op suppressed (skipped in build).' : 'Kernel op active again.'
+        }
+      })
     },
-    [fab, projectDir, features, design, onStatus]
+    [commitKernelFeatures]
   )
 
   /**
-   * Persist the result of a timeline gesture. Folds the pure
-   * `applyTimelineAction` next-state (kernelOps + rolledBackTo) back onto the
-   * current features file and writes it through the SAME `featuresSave` +
-   * `setFeatures` + status path the other kernel-op editors use (so a Build
-   * STEP picks up the change identically). On a rejected gesture it surfaces
-   * the reason and does NOT save. Returns nothing; errors are toasted.
+   * Fold a pure {@link applyTimelineAction} next-state (kernelOps + rolledBackTo)
+   * onto a features base. Shared by `reorderKernelOps` / `setKernelRollbackMarker`
+   * so both run through {@link commitKernelFeatures}'s serialized write path (a
+   * Build STEP picks up the change identically). Drops `rolledBackTo` entirely
+   * when there is no marker so the persisted file stays canonical.
    */
-  const persistTimelineState = useCallback(
-    async (base: PartFeaturesFile, nextTimeline: TimelineState, status: string) => {
-      if (!projectDir) return
+  const foldTimelineState = useCallback(
+    (base: PartFeaturesFile, nextTimeline: TimelineState): PartFeaturesFile => {
       const next: PartFeaturesFile = {
         ...base,
         kernelOps: nextTimeline.kernelOps as KernelPostSolidOp[],
-        // Drop the key entirely when there is no marker so the persisted file
-        // stays canonical (matches the schema's "absent === build all").
         ...(nextTimeline.rolledBackTo === undefined ? {} : { rolledBackTo: nextTimeline.rolledBackTo })
       }
       if (nextTimeline.rolledBackTo === undefined && 'rolledBackTo' in next) {
         delete (next as { rolledBackTo?: number }).rolledBackTo
       }
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        setFeatures(next)
-        onStatus?.(status)
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      return next
     },
-    [fab, projectDir, onStatus]
+    []
   )
 
   const reorderKernelOps = useCallback(
     async (from: number, to: number) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
-      const result = applyTimelineAction(state, { type: 'reorder', from, to })
-      if (!result.changed) {
-        onStatus?.(result.reason)
-        return
-      }
-      await persistTimelineState(base, result.state, result.status)
+      commitKernelFeatures((base) => {
+        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+        const result = applyTimelineAction(state, { type: 'reorder', from, to })
+        if (!result.changed) return { reject: result.reason }
+        return { next: foldTimelineState(base, result.state), status: result.status }
+      })
     },
-    [projectDir, features, design, onStatus, persistTimelineState]
+    [commitKernelFeatures, foldTimelineState]
   )
 
   const setKernelRollbackMarker = useCallback(
     async (index: number | null) => {
-      if (!projectDir) return
-      const base = features ?? derivePartFeatures(design, null)
-      const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
-      const result = applyTimelineAction(
-        state,
-        index === null ? { type: 'clearRollback' } : { type: 'setRollback', index }
-      )
-      if (!result.changed) {
-        onStatus?.(result.reason)
-        return
-      }
-      await persistTimelineState(base, result.state, result.status)
+      commitKernelFeatures((base) => {
+        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+        const result = applyTimelineAction(
+          state,
+          index === null ? { type: 'clearRollback' } : { type: 'setRollback', index }
+        )
+        if (!result.changed) return { reject: result.reason }
+        return { next: foldTimelineState(base, result.state), status: result.status }
+      })
     },
-    [projectDir, features, design, onStatus, persistTimelineState]
+    [commitKernelFeatures, foldTimelineState]
   )
 
   const updateFeatureSuppressed = useCallback(
     async (featureId: string, suppressed: boolean) => {
-      if (!features || !projectDir) return
-      const items = features.items.map((it) => (it.id === featureId ? { ...it, suppressed } : it))
-      const next: PartFeaturesFile = { ...features, items }
-      setFeatures(next)
-      try {
-        await fab.featuresSave(projectDir, JSON.stringify(next))
-        onStatus?.(suppressed ? 'Feature suppressed.' : 'Feature unsuppressed.')
-      } catch (e) {
-        onStatus?.(e instanceof Error ? e.message : String(e))
-      }
+      commitKernelFeatures((base) => {
+        if (!base.items?.some((it) => it.id === featureId)) return null
+        const items = base.items.map((it) => (it.id === featureId ? { ...it, suppressed } : it))
+        return {
+          next: { ...base, items },
+          status: suppressed ? 'Feature suppressed.' : 'Feature unsuppressed.'
+        }
+      })
     },
-    [features, projectDir, fab, onStatus]
+    [commitKernelFeatures]
   )
 
   const value = useMemo<DesignSessionValue>(
