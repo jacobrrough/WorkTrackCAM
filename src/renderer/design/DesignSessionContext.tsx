@@ -90,6 +90,22 @@ function canSwapKernelOpOrder(
   return { ok: true }
 }
 
+/**
+ * The identity a loaded design is keyed by: the open project + its on-disk
+ * revision. The load effect remembers the last key and skips reloading when it
+ * is unchanged, so a spurious effect re-fire (e.g. the provider's inline
+ * `onStatus` arrow changing identity on a parent re-render) can never reload the
+ * on-disk sketch over unsaved in-memory edits. `null` when no project is open.
+ * Exported so the regression test pins the anti-clobber contract.
+ */
+export function designLoadKey(
+  projectDir: string | null,
+  designDiskRevision: number | undefined
+): string | null {
+  return projectDir === null ? null : JSON.stringify([projectDir, designDiskRevision ?? 0])
+}
+
+
 export type DesignSelection =
   | { scope: 'feature'; id: string }
   | { scope: 'entity'; id: string }
@@ -230,14 +246,33 @@ export function DesignSessionProvider({
 
   const fab = window.fab
 
+  // task: sketches disappearing — read the latest onStatus through a ref so the
+  // load effect below does NOT list it as a dependency. The provider passes an
+  // inline arrow (new identity each parent render); depending on it re-ran the
+  // destructive disk reload on every re-render, wiping unsaved sketch edits.
+  const onStatusRef = useRef(onStatus)
+  onStatusRef.current = onStatus
+  // The (projectDir, designDiskRevision) key the design was last loaded for; the
+  // load effect skips a redundant reload when unchanged (the anti-clobber guard).
+  const lastDesignLoadKeyRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (!projectDir) {
+      lastDesignLoadKeyRef.current = null
       dispatch({ type: 'replace', design: emptyDesign() })
       setLoaded(false)
       setFeatures(null)
       setSelection(null)
       return
     }
+    // Anti-clobber guard (task: sketches disappearing): only (re)load from
+    // disk when the project or its on-disk revision actually changed. Without
+    // it a re-render that re-ran this effect would `replace` the in-memory
+    // design with the on-disk copy, silently wiping unsaved sketch edits
+    // (they live only in the reducer until an explicit Save).
+    const loadKey = designLoadKey(projectDir, designDiskRevision)
+    if (loadKey !== null && lastDesignLoadKeyRef.current === loadKey) return
+    lastDesignLoadKeyRef.current = loadKey
     let cancelled = false
     void (async () => {
       const [dr, fr] = await Promise.allSettled([fab.designLoad(projectDir), fab.featuresLoad(projectDir)])
@@ -255,13 +290,13 @@ export function DesignSessionProvider({
         errs.push(formatLoadRejection('part/features.json', fr.reason))
         setFeatures(defaultPartFeatures())
       }
-      if (errs.length) onStatus?.(errs.join(' · '))
+      if (errs.length) onStatusRef.current?.(errs.join(' · '))
       setLoaded(true)
     })()
     return () => {
       cancelled = true
     }
-  }, [fab, projectDir, onStatus, designDiskRevision])
+  }, [fab, projectDir, designDiskRevision])
 
   const geometry = useMemo(() => {
     const g = buildExtrudedGeometry(design)
@@ -530,7 +565,7 @@ export function DesignSessionProvider({
         assetGeomRef.current = null
         setAssetImportGeometry(null)
         if (r.error === 'ascii_stl_not_supported_in_viewport') {
-          onStatus?.('Imported STL is ASCII; 3D preview needs binary STL. Re-import or convert the file.')
+          onStatusRef.current?.('Imported STL is ASCII; 3D preview needs binary STL. Re-import or convert the file.')
         }
         return
       }
@@ -553,7 +588,7 @@ export function DesignSessionProvider({
     return () => {
       cancelled = true
     }
-  }, [projectDir, loaded, assetMeshPathsKey, fab, onStatus])
+  }, [projectDir, loaded, assetMeshPathsKey, fab])
 
   useEffect(() => {
     return () => {

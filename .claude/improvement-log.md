@@ -18487,3 +18487,39 @@ marquee ref (visible bands always cancel); onCursorWorld double-emits within one
 tick during drags (rendered value always correct); hotkey hover-gating needs one pointer
 move if the canvas mounts under a stationary cursor. **S1–S3 of the sketching program are
 complete; S4 (dimension-driven editing) deliberately awaits the user's hands-on feedback.**
+
+## Cycle 249 — FIX: sketches disappearing (the live design was reloaded over unsaved edits) (2026-06-11)
+
+**Focus:** user hands-on report after S1–S3 — "sketches are disappearing, the whole
+sketching system is very buggy." Root-caused and fixed. One commit. (Exactly the
+green-tests-but-broken-in-hand failure mode [[feedback-ui-needs-hands-on-verification]].)
+
+**Root cause:** `WorkspaceHost` mounted `<DesignSessionProvider onStatus={(m) =>
+pushToast('ok', m)} />` — a NEW arrow identity every parent render. The session's design-LOAD
+effect listed `onStatus` in its deps and, each run, dispatched `{type:'replace', design:
+<on-disk>}`. Drawing only updates the in-memory reducer (nothing hits disk until an explicit
+Save), so ANY re-render re-ran the load effect and replaced the live design with the empty/old
+on-disk copy — silently wiping the sketch. It cascaded into "undo broken / selection drops"
+because the whole model reset underneath those systems. Pre-existing since Wave 3e; S1–S3 made
+the surface interactive enough (and 3n's cursor-coords churn frequent enough) to hit it
+constantly.
+
+**Fix (three layers, renderer-only — no G-code surfaces touched):**
+1. `designLoadKey(projectDir, designDiskRevision)` + a `lastDesignLoadKeyRef` guard: the load
+   effect now SKIPS a redundant reload when the key is unchanged, so even a spurious re-fire
+   can never clobber unsaved edits — a real reload happens only when the project or its on-disk
+   revision actually changes.
+2. The load effect (and the asset-import effect) read `onStatus` through `onStatusRef` and no
+   longer list it as a dependency → the churn that caused the re-fire is gone.
+3. `WorkspaceHost` memoizes `onStatus` (`useCallback`) — belt-and-suspenders.
+
+**Baseline → result:** 16,403 → **16,414 pass / 1 skip / 0 fail** (+11); tsc clean. New
+`DesignSessionContext.reload-guard.test.ts`: 6 load-key semantic units (null/stable/Windows-
+path/bumped-rev) + 5 source-wiring pins (deps exclude onStatus, ref read, guard present, asset
+deps, stable mount-site) that fail if the churning form returns.
+
+**Edit method:** DesignSessionContext.tsx (>800 lines) spliced via a Python script file with
+count==1 asserts per docs/EDIT-WORKFLOW.md (CRLF-safe); WorkspaceHost.tsx via Edit.
+
+**Honest note:** this is one definitive showstopper; other S1–S3 feel issues may have been
+masked by the constant reset and need a fresh hands-on pass to confirm.

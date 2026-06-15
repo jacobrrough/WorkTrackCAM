@@ -84,6 +84,14 @@ export function WorkspaceHost({
   const { setPendingCamImport } = useCamHandoff()
   const [designScript, setDesignScript] = useState<string>(STARTER_SCRIPT)
 
+  // Stable `onStatus` for the DesignSessionProvider. An inline arrow here gave a
+  // new identity every render; the session's load effect used to list onStatus
+  // in its deps, so that churn re-ran the disk load and `replace`d the in-memory
+  // design — wiping unsaved sketch edits. The session now reads onStatus through
+  // a ref AND guards reloads by (projectDir, revision), so this is belt-and-
+  // suspenders; keep it stable regardless so no future dep on it can churn.
+  const handleDesignStatus = useCallback((m: string) => pushToast('ok', m), [pushToast])
+
   // Wave 3h — REAL Send-to-CAM hand-off. The design's STL is already exported by
   // the time this fires (`payload.stlPath`); we queue it into the CAM mailbox
   // and navigate to Manufacture, where ManufactureHost imports it into the first
@@ -129,7 +137,7 @@ export function WorkspaceHost({
     case 'assemble':
     case 'drawings':
       return (
-        <DesignSessionProvider projectDir={projectDir} onStatus={(m) => pushToast('ok', m)}>
+        <DesignSessionProvider projectDir={projectDir} onStatus={handleDesignStatus}>
           <DesignWorkspaceHost
             initialScript={designScript}
             initialViewMode={routeToViewMode(active)}
