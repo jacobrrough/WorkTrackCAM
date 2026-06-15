@@ -48,7 +48,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.8.2",
-    "vite": "^6.4.2",
+    "vite": "^6.4.3",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vitest": "^4.1.8"
   },
