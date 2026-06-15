@@ -95,8 +95,11 @@ describe('ManufactureWorkspace — sets the last-saved baseline at every disk==m
   })
 
   it('(d) after the Send-to-CAM live-merge save (import must not leave the plan dirty)', () => {
-    expect(SRC).toContain('await fab.manufactureSave(projectDir, JSON.stringify(merged))')
-    expect(SRC).toContain('lastSavedFingerprintRef.current = manufacturePlanFingerprint(merged)')
+    // task_4a3ff375: the import save now lives in the deterministic persist effect
+    // and reads the COMMITTED merged plan (`mergedNow = mfg`) rather than the old
+    // eager `merged` capture; the dirty rebaseline still runs after it.
+    expect(SRC).toContain('await fab.manufactureSave(projectDir, JSON.stringify(mergedNow))')
+    expect(SRC).toContain('lastSavedFingerprintRef.current = manufacturePlanFingerprint(mergedNow)')
   })
 })
 

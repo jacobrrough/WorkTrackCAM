@@ -1918,52 +1918,63 @@ export function ManufactureWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on nonce change
   }, [requestedDxfImportNonce])
 
-  // Design -> Manufacture STL hand-off (live-plan merge). The host queues a
-  // freshly-imported, project-relative mesh here; we fold it into the CURRENT
-  // in-memory plan (NOT a stale disk read) so the operator's unsaved setups/ops
-  // survive — the DXF-import persistence-race fix. We compute the merge inside
-  // the functional `setMfg` updater (so it always sees the live plan even if two
-  // imports arrive back-to-back), capture the result, persist it, then clear the
-  // one-shot request. SAFETY: plate-data write only; no G-code. Skips when no
-  // project is open (nothing to persist into).
+  // task_4a3ff375 - the queued mesh awaiting a deterministic post-commit
+  // persist (consumed by the persist effect below). null when none is pending.
+  const [pendingMeshPersist, setPendingMeshPersist] = useState<PendingMeshImport | null>(null)
+
+  // Design -> Manufacture STL hand-off (live-plan merge) - the IN-MEMORY apply.
+  // The host queues a freshly-imported, project-relative mesh here; we fold it
+  // into the CURRENT in-memory plan (NOT a stale disk read) via the functional
+  // setMfg updater, so the operator's unsaved setups/ops survive (the DXF-import
+  // persistence-race fix) even across back-to-back imports. We do NOT read the
+  // merged value here: React 19 runs a setState updater EAGERLY only when the
+  // fiber has no pending lanes, so capturing it inside the updater and reading it
+  // synchronously could skip the disk-save under a concurrent update
+  // (task_4a3ff375). The persist effect below reads the COMMITTED plan instead.
   useEffect(() => {
     if (!requestedMeshImport) return
     if (!projectDir) {
-      // No project to persist into — clear the request so it doesn't wedge; the
+      // No project to persist into - clear the request so it doesn't wedge; the
       // host re-queues on the next Send-to-CAM once a project is open.
       onRequestedMeshImportHandled?.()
       return
     }
     const req = requestedMeshImport
-    let merged: ManufactureFile | null = null
-    setMfg((prev) => {
-      merged = mergeMeshImportIntoLivePlan(prev, req)
-      return merged
-    })
-    // Snap the active plate to the first plate (where the import landed) and
-    // persist the merged plan, then clear the one-shot request.
+    setMfg((prev) => mergeMeshImportIntoLivePlan(prev, req))
+    // Hand off to the persist effect, which fires AFTER this merge commits.
+    setPendingMeshPersist(req)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on request change
+  }, [requestedMeshImport])
+
+  // Deterministic persist for the live-plan merge above (the task_4a3ff375 fix).
+  // Runs once the merge has COMMITTED to `mfg`, so `mfg` here is guaranteed the
+  // merged plan regardless of React's eager-vs-deferred updater timing - closing
+  // the gap where the old in-updater capture could skip manufactureSave + the
+  // toast. The token is consumed synchronously so a mid-save edit can't re-fire
+  // it; idempotent under StrictMode (manufactureSave rewrites identical bytes).
+  useEffect(() => {
+    if (!pendingMeshPersist || !projectDir) return
+    const req = pendingMeshPersist
+    const mergedNow = mfg
+    setPendingMeshPersist(null)
     void (async () => {
       try {
-        if (merged) {
-          setActivePlateId(getPlates(merged)[0]?.id ?? null)
-          await fab.manufactureSave(projectDir, JSON.stringify(merged))
-          // The merged plan was just persisted → rebaseline so the import
-          // doesn't leave the workspace permanently dirty.
-          lastSavedFingerprintRef.current = manufacturePlanFingerprint(merged)
-          // The merged plan is now what `mfg` already holds; bump so the
-          // memo recomputes against the new baseline (import → clean, not dirty).
-          setSavedBaselineVersion((v) => v + 1)
-          const rel = req.relPath.replace(/\\/g, '/')
-          onStatus?.(`Part landed in CAM → ${rel}`)
-        }
+        setActivePlateId(getPlates(mergedNow)[0]?.id ?? null)
+        await fab.manufactureSave(projectDir, JSON.stringify(mergedNow))
+        // Just persisted -> rebaseline so the import doesn't leave the workspace
+        // permanently dirty (import -> clean, not dirty).
+        lastSavedFingerprintRef.current = manufacturePlanFingerprint(mergedNow)
+        setSavedBaselineVersion((v) => v + 1)
+        const rel = req.relPath.replace(/\\/g, '/')
+        onStatus?.(`Part landed in CAM → ${rel}`)
       } catch (e) {
         onStatus?.(e instanceof Error ? e.message : String(e))
       } finally {
         onRequestedMeshImportHandled?.()
       }
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on request change
-  }, [requestedMeshImport])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- persist after the merge commits
+  }, [pendingMeshPersist, mfg])
 
   /**
    * Gap #9 — Laguna sheet size derived from the first setup whose machineId

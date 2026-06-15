@@ -18717,3 +18717,35 @@ Save (stuck-dirty); fixed during the Verify phase + pinned.
 (that needs a `beforeunload`/main-process handler, out of scope + no-touch). No bespoke CSS for the
 indicator yet (reuses `.msg`). Task #83 (Send-to-CAM merge eager-updater persistence gap) is a
 separate concern in the same region, fixed next.
+
+## Cycle 256 — Send-to-CAM merge persist made deterministic (task_4a3ff375) (2026-06-15)
+
+**Focus:** the user-flagged latent persistence gap the CAM audit surfaced. The Send-to-CAM merge
+effect captured the merged plan inside the `setMfg((prev) => { merged = ...; return merged })`
+functional updater and read `merged` synchronously in an async IIFE. React 19 runs a setState
+updater EAGERLY only when the fiber has no pending lanes (dispatchSetStateInternal); under a
+concurrent update the updater defers and `merged` was still null when `if (merged)` ran — so the
+in-memory apply landed but `fab.manufactureSave` + the "Part landed in CAM" toast SILENTLY
+skipped (imported part unsaved until the next manual Save). Not a clobber; a real latent defect.
+
+**Baseline → result:** 16,726 → **16,730 pass / 1 skip / 0 fail**; tsc clean.
+
+**Fix (option b — deterministic, additive, Python-splice):** keep the functional `setMfg` updater
+for the live-plan merge (the persistence-race fix stays), but split the persist into a FOLLOW-UP
+effect keyed on a `pendingMeshPersist` token. The merge effect now does `setMfg((prev) =>
+mergeMeshImportIntoLivePlan(prev, req))` + `setPendingMeshPersist(req)` and reads nothing. The
+persist effect (deps `[pendingMeshPersist, mfg]`) fires once the merge has COMMITTED to `mfg`,
+reads the committed plan (`const mergedNow = mfg`), consumes the token synchronously
+(`setPendingMeshPersist(null)` before the await so a mid-save edit can't re-fire it), then saves +
+rebaselines the dirty flag + toasts. Deterministic regardless of eager-vs-deferred updater timing;
+idempotent under StrictMode (manufactureSave rewrites identical bytes).
+
+**Tests:** new manufacture-mesh-persist.test.ts (source pins: the eager `let merged` capture is
+GONE; the token hand-off + committed-read + synchronous-consume shape is present). Two existing
+pins that asserted the OLD eager-capture text updated per intended-drift (load-guard's
+functional-updater pin → the direct-return form; unsaved-guard's (d) baseline pin → `mergedNow`),
+intent preserved (live-plan merge + dirty rebaseline).
+
+**Sequencing note:** this ran AFTER Cycle 255 (the nav guard) committed, because both edit
+ManufactureWorkspace.tsx — two concurrent splices on the same >800-line file would collide, so it
+was queued (task #83) until the nav-guard workflow freed the file.

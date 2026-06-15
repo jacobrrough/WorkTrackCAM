@@ -188,7 +188,12 @@ describe('ManufactureWorkspace merges the Send-to-CAM import into the LIVE plan'
   })
 
   it('folds the import into the live mfg via the functional setMfg updater (not a disk read)', () => {
-    expect(WORKSPACE_SRC).toContain('merged = mergeMeshImportIntoLivePlan(prev, req)')
+    // task_4a3ff375: the merge is still a functional updater over the LIVE plan
+    // (persistence-race fix preserved), now a direct return instead of the old
+    // side-effecting `merged = ...` capture (which could skip the save under a
+    // deferred React-19 updater). The deterministic persist is pinned separately
+    // in manufacture-mesh-persist.test.ts.
+    expect(WORKSPACE_SRC).toContain('setMfg((prev) => mergeMeshImportIntoLivePlan(prev, req))')
     // The merge effect must NOT re-read the plan from disk before merging.
     expect(WORKSPACE_SRC).not.toContain('await fab.manufactureLoad(projectDir)\n      merged')
   })
