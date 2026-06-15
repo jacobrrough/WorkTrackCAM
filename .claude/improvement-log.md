@@ -18567,3 +18567,44 @@ EXISTING vertices (rect/circle primitives store no point ids — radial/diameter
 ellipse click emits a radial intent that the engine safely no-ops (returns null). (6) a
 pre-existing undefined CSS class (`label--inline-flex-6`, copied from the MVP variant) — cosmetic.
 Hands-on pass owed: place/edit dimensions in the running app.
+
+## Cycle 251 — Sketch S5: precision polish (exact landing + constraints toolbar + angular dim + DOF badge) (2026-06-11)
+
+**Focus:** sketching wave 5 (user-chosen after S1–S4). Four pieces. One commit.
+
+**Baseline → result:** 16,491 → **16,617 pass / 1 skip / 0 fail** (+126); tsc clean; the Cycle
+249 no-clobber guard + all S1–S4 byte-identity + MVP-fence pins green (self-verified, not just
+agent-reported — two mid-flight failures from concurrent edits were reconciled in Integrate).
+
+**What landed (renderer-only — no G-code/CAM/post surfaces):**
+- **Exact dimension landing** — new `solveSketchToTolerance` (bounded multi-round wrapper over
+  the existing 120-iter solveSketch: warm-started, early-out on sqrt(energy)≤1e-3 mm or a
+  relative-improvement plateau, hard maxRounds cap default 24, NaN/inf aborts to the last finite
+  clone). `applyDimensionValue` now calls it (same signature) so a single edit lands the driver
+  within ~1e-3 mm in one keystroke (50→80 now 79.99999, was ~79.8). solveSketch's signature/
+  defaults unchanged (so the SketchSurface `not.toContain('solveSketch(')` pin still holds).
+- **Constraints toolbar** — pure `sketch-constraint-apply.ts` (`applicableConstraints(design,
+  sel)` + `addConstraintFromSelection`) drives a selection-gated toolbar (parallel/perpendicular/
+  equal/tangent + coincident/horizontal/vertical); applying re-solves via solveSketchToTolerance
+  as ONE undo step through the surface history.
+- **Angular dimensions** — the canvas dimension tool now places angular drivers (pick two lines →
+  {kind:'angular',…}).
+- **DOF badge** — `sketch-dof.ts` `analyzeSketchDof` (honest equation-count DOF, status
+  under/full/over/empty, labeled "(approx)") in the surface status row; plus a built+tested
+  `dofStatusWithResidual` that upgrades to 'over' on a genuine post-solve conflict.
+
+**Verification:** independent probes — exact-landing (distance & radius within 1e-3 in one call;
+bounded loop terminates <3 s even at hostile maxRounds=10000 via the plateau-stop; conflicting
+dual-driver finite, no NaN/hang); constraint-solve (parallel/perp/equal drive residual≈0; invalid
+selection → null no-op); one-undo-step + Zod persistence round-trip.
+
+**Honest residuals (backlog):** (1) ANGULAR driving is a SOFT lander — the cosine-based `angle`
+objective leaves 45°→90° at ~84.5° in one edit (distance/radius are exact). A truer angle
+objective is an engine follow-up. (2) the DOF badge uses count-only `analyzeSketchDof`, NOT the
+residual-paired version — DELIBERATE: the live status-row design may be mid-edit/unsolved and the
+residual signal would false-positive "over-constrained"; the residual check is reserved for
+post-solve use. So a genuine *conflict* (redundant constraints, count says 'full') isn't surfaced
+on the live badge yet. (3) toolbar resolves a selected polyline to its FIRST segment for
+line-pair constraints (per-segment pick is a canvas-flow follow-up). (4) tangent anchors at arc-
+end/line-B with no auto-coincidence. (5) pre-existing dead CSS class `label--inline-flex-6`
+(copied from the MVP variant; cosmetic). Hands-on pass owed.

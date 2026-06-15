@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest'
 import { emptyDesign, type DesignFileV2, type SketchDimension } from '../../../shared/design-schema'
 import {
+  angularLinePointIds,
   DIMENSION_LABEL_PICK_PX,
   dimensionCurrentValue,
   dimensionLabelAnchorWorld,
@@ -166,5 +167,57 @@ describe('nearestPointIdWithin', () => {
   it('returns null when no vertex is within tolerance', () => {
     const design = fixture()
     expect(nearestPointIdWithin(design, [500, 500], 3)).toBeNull()
+  })
+})
+
+describe('angularLinePointIds (Sketch S5)', () => {
+  function angularFixture(): DesignFileV2 {
+    return {
+      ...emptyDesign(),
+      points: {
+        a: { x: 0, y: 0 },
+        b: { x: 10, y: 0 },
+        c: { x: 10, y: 10 },
+        s: { x: 30, y: 0 },
+        v: { x: 33, y: 3 },
+        e: { x: 36, y: 0 }
+      },
+      entities: [
+        { id: 'pl', kind: 'polyline', pointIds: ['a', 'b', 'c'], closed: false },
+        { id: 'plClosed', kind: 'polyline', pointIds: ['a', 'b', 'c'], closed: true },
+        { id: 'arc', kind: 'arc', startId: 's', viaId: 'v', endId: 'e' },
+        { id: 'circ', kind: 'circle', cx: 100, cy: 0, r: 12 }
+      ]
+    }
+  }
+
+  it('polyline edge 0 → its first two vertices', () => {
+    expect(angularLinePointIds(angularFixture(), 'pl', 0)).toEqual({ aId: 'a', bId: 'b' })
+  })
+
+  it('polyline edge 1 → its second + third vertices', () => {
+    expect(angularLinePointIds(angularFixture(), 'pl', 1)).toEqual({ aId: 'b', bId: 'c' })
+  })
+
+  it('closed polyline closing edge wraps last → first', () => {
+    // 3 vertices closed → edges 0,1,2; edge 2 is c→a.
+    expect(angularLinePointIds(angularFixture(), 'plClosed', 2)).toEqual({ aId: 'c', bId: 'a' })
+  })
+
+  it('an out-of-range edge index → null', () => {
+    // open 3-vertex polyline has only edges 0 and 1.
+    expect(angularLinePointIds(angularFixture(), 'pl', 2)).toBeNull()
+  })
+
+  it('arc → its chord (start → end), regardless of edge index', () => {
+    expect(angularLinePointIds(angularFixture(), 'arc', 0)).toEqual({ aId: 's', bId: 'e' })
+  })
+
+  it('a circle (no straight edge) → null', () => {
+    expect(angularLinePointIds(angularFixture(), 'circ', 0)).toBeNull()
+  })
+
+  it('an unknown entity id → null', () => {
+    expect(angularLinePointIds(angularFixture(), 'nope', 0)).toBeNull()
   })
 })

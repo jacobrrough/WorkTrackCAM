@@ -7,6 +7,7 @@ import {
 import {
   constraintPickPointIdEdges,
   pickNearestCircularEntityId,
+  pickNearestSketchEdge,
   type SketchTrimEdgeRef
 } from '../../shared/sketch-profile'
 import { clientToCanvasLocal, distSqPointSegment, screenToWorld, snap } from './sketch2d-canvas-coords'
@@ -41,6 +42,7 @@ import {
 } from './sketch2d-osnap'
 import { drawSketch2D, type ConstraintPickHit } from './sketch2d-draw'
 import {
+  angularLinePointIds,
   dimensionCurrentValue,
   dimensionLabelPickToleranceMm,
   hitTestDimensionLabel,
@@ -389,6 +391,14 @@ export function Sketch2DCanvas({
   // default radial (toggled in the tool toolbar or by holding Shift).
   const [dimFirstPoint, setDimFirstPoint] = useState<string | null>(null)
   const [dimDiameterMode, setDimDiameterMode] = useState(false)
+  // Sketch S5 -- angular dimension sub-mode: when on, the dimension tool picks
+  // TWO line segments and emits an `angular` intent. `dimAngularFirstLine` holds
+  // the first picked line's ordered (a, b) point ids until the second pick.
+  const [dimAngularMode, setDimAngularMode] = useState(false)
+  const [dimAngularFirstLine, setDimAngularFirstLine] = useState<{
+    aId: string
+    bId: string
+  } | null>(null)
   // Inline value edit (select tool): the dimension whose value label was
   // clicked + its world anchor (so the input floats on the label), and the
   // controlled text being typed. `null` editingDim = no input open.
@@ -406,7 +416,10 @@ export function Sketch2DCanvas({
   // Tool switch tears down any in-flight dimension draft (mirrors the other
   // per-tool draft resets); the diameter-mode toggle persists per session.
   useEffect(() => {
-    if (activeTool !== 'dimension') setDimFirstPoint(null)
+    if (activeTool !== 'dimension') {
+      setDimFirstPoint(null)
+      setDimAngularFirstLine(null)
+    }
   }, [activeTool])
 
   // Leaving select mode (or losing the wiring) closes any open inline editor so
@@ -951,6 +964,20 @@ export function Sketch2DCanvas({
     return pt ? [pt.x, pt.y] : null
   }, [dimFirstPoint, points])
 
+  // Sketch S5 -- the angular tool's first picked line, as a world-space segment
+  // (null when no pick is in flight or a point id is stale), for the draft
+  // highlight so the operator sees which line side one is measuring from.
+  const dimensionAngularFirstLine = useMemo<[[number, number], [number, number]] | null>(() => {
+    if (dimAngularFirstLine === null) return null
+    const a = points[dimAngularFirstLine.aId]
+    const b = points[dimAngularFirstLine.bId]
+    if (!a || !b) return null
+    return [
+      [a.x, a.y],
+      [b.x, b.y]
+    ]
+  }, [dimAngularFirstLine, points])
+
   const draw = useCallback(() => {
     const c = ref.current
     if (!c) return
@@ -995,6 +1022,7 @@ export function Sketch2DCanvas({
       nodeEditOverlay,
       marquee: marqueeRect,
       dimensionDraftPoint,
+      dimensionAngularFirstLine,
       drag,
       constraintPickActive,
       constraintSegmentPickActive,
@@ -1041,6 +1069,7 @@ export function Sketch2DCanvas({
     nodeEditOverlay,
     marqueeRect,
     dimensionDraftPoint,
+    dimensionAngularFirstLine,
     sketchRotateDeg,
     sketchScaleFactor,
     planeLabel,
@@ -1273,6 +1302,42 @@ export function Sketch2DCanvas({
     // Unwired mounts (no onPlaceDimension) are inert.
     if (activeTool === 'dimension') {
       if (!onPlaceDimension) return
+      // Sketch S5 -- angular sub-mode: pick two line segments (polyline edge
+      // or arc chord) and emit an `angular` intent. The edge -> point-id pair
+      // is resolved purely (`angularLinePointIds`) so the angle constraint
+      // reads exactly the picked segment's direction.
+      if (dimAngularMode) {
+        const edge = pickNearestSketchEdge(design, raw[0], raw[1], 10 / Math.max(scale, 0.05))
+        if (!edge) {
+          onSketchHint?.('Angular: click a line segment (polyline edge or arc) for each side.')
+          return
+        }
+        const line = angularLinePointIds(design, edge.entityId, edge.edgeIndex)
+        if (!line) {
+          onSketchHint?.('Angular: that entity has no straight edge to dimension.')
+          return
+        }
+        if (dimAngularFirstLine === null) {
+          setDimAngularFirstLine(line)
+          onSketchHint?.('Angular: pick the second line.')
+          return
+        }
+        const first = dimAngularFirstLine
+        if (first.aId === line.aId && first.bId === line.bId) {
+          onSketchHint?.('Angular: pick a DIFFERENT second line.')
+          return
+        }
+        onPlaceDimension({
+          kind: 'angular',
+          a1Id: first.aId,
+          b1Id: first.bId,
+          a2Id: line.aId,
+          b2Id: line.bId
+        })
+        setDimAngularFirstLine(null)
+        onSketchHint?.('Angular dimension placed.')
+        return
+      }
       const entHit = pickNearestCircularEntityId(
         design,
         raw[0],
@@ -1987,15 +2052,33 @@ export function Sketch2DCanvas({
       {activeTool === 'dimension' && onPlaceDimension && (
         <div className="sketch-toolbar sketch-dimension-toolbar" data-testid="sketch-dimension-toolbar">
           <span className="msg">
-            {dimFirstPoint
-              ? 'Pick the second vertex to dimension (or click a circle/arc for radius/diameter).'
-              : 'Click a vertex to start a dimension, or a circle/arc for radius/diameter.'}
+            {dimAngularMode
+              ? dimAngularFirstLine
+                ? 'Angular: pick the second line.'
+                : 'Angular: pick the first line (polyline edge or arc).'
+              : dimFirstPoint
+                ? 'Pick the second vertex to dimension (or click a circle/arc for radius/diameter).'
+                : 'Click a vertex to start a dimension, or a circle/arc for radius/diameter.'}
           </span>
+          <label className="msg label--inline-flex-6">
+            <input
+              type="checkbox"
+              data-testid="sketch-dimension-angular-toggle"
+              checked={dimAngularMode}
+              onChange={(e) => {
+                setDimAngularMode(e.target.checked)
+                setDimAngularFirstLine(null)
+                setDimFirstPoint(null)
+              }}
+            />{' '}
+            Angular (two lines)
+          </label>
           <label className="msg label--inline-flex-6">
             <input
               type="checkbox"
               data-testid="sketch-dimension-diameter-toggle"
               checked={dimDiameterMode}
+              disabled={dimAngularMode}
               onChange={(e) => setDimDiameterMode(e.target.checked)}
             />{' '}
             Diameter (circle/arc)
@@ -2004,8 +2087,11 @@ export function Sketch2DCanvas({
             type="button"
             className="secondary"
             data-testid="sketch-dimension-cancel"
-            onClick={() => setDimFirstPoint(null)}
-            disabled={dimFirstPoint === null}
+            onClick={() => {
+              setDimFirstPoint(null)
+              setDimAngularFirstLine(null)
+            }}
+            disabled={dimFirstPoint === null && dimAngularFirstLine === null}
           >
             Cancel
           </button>

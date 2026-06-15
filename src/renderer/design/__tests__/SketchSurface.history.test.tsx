@@ -195,9 +195,11 @@ describe('SketchSurface — S4 dimension wiring', () => {
   })
 
   it('handleCommitDimensionValue applies only when applyDimensionValue actually changed the design', () => {
+    // S5 inserted the constraints toolbar handlers AFTER this one, so the slice
+    // ends at the S5 section marker (not the S1 selection bridge any more).
     const body = SRC.slice(
       SRC.indexOf('function handleCommitDimensionValue'),
-      SRC.indexOf('// S1 selection bridge')
+      SRC.indexOf('// ── Sketch S5 — constraints toolbar')
     )
     expect(body).toContain('const next = applyDimensionValue(cur, dimId, value)')
     // reference-equality gate: unchanged -> no undo step.

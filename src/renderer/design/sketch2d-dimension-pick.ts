@@ -223,6 +223,48 @@ export function dimensionLabelPickToleranceMm(scalePxPerMm: number): number {
   return DIMENSION_LABEL_PICK_PX / Math.max(scalePxPerMm, 0.05)
 }
 
+/**
+ * Sketch S5 — the ordered (a, b) point-id pair of a clicked sketch EDGE, for
+ * the angular dimension tool (which dimensions the angle between two lines).
+ *
+ * `pickNearestSketchEdge` resolves a click to `{ entityId, edgeIndex }`; this
+ * maps that edge to the two point ids whose direction the `angle` constraint
+ * reads:
+ *   - polyline: edge `i` is (pointIds[i] -> pointIds[i+1]); the closing edge of
+ *     a closed polyline wraps to pointIds[0].
+ *   - arc: the chord (startId -> endId) — an arc's "line" direction for an angle
+ *     dimension is its chord, the same endpoints the tangent constraint anchors.
+ *
+ * Returns `null` for entities with no exposed vertex ids (rect / circle / slot /
+ * ellipse / spline) or when the resolved ids are missing from the point map, so
+ * the angular tool only forms an angle against geometry it can actually drive.
+ */
+export function angularLinePointIds(
+  design: DesignFileV2,
+  entityId: string,
+  edgeIndex: number
+): { aId: string; bId: string } | null {
+  const ent = design.entities.find((e) => e.id === entityId)
+  if (!ent) return null
+  if (ent.kind === 'polyline') {
+    if (!('pointIds' in ent) || ent.pointIds.length < 2) return null
+    const ids = ent.pointIds
+    const n = ids.length
+    const segCount = ent.closed ? n : n - 1
+    if (edgeIndex < 0 || edgeIndex >= segCount) return null
+    const aId = ids[edgeIndex]!
+    const bId = ids[(edgeIndex + 1) % n]!
+    if (!design.points[aId] || !design.points[bId] || aId === bId) return null
+    return { aId, bId }
+  }
+  if (ent.kind === 'arc') {
+    if (!design.points[ent.startId] || !design.points[ent.endId]) return null
+    if (ent.startId === ent.endId) return null
+    return { aId: ent.startId, bId: ent.endId }
+  }
+  return null
+}
+
 export interface DimensionLabelHit {
   /** The id of the dimension whose value label was clicked. */
   dimId: string

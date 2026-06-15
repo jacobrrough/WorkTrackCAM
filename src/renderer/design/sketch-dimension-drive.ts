@@ -41,7 +41,7 @@ import type {
   SketchEntity
 } from '../../shared/design-schema'
 import { circleThroughThreePoints } from '../../shared/sketch-profile'
-import { cloneDesign, solveSketch } from './solver2d'
+import { cloneDesign, solveSketchToTolerance } from './solver2d'
 
 // ---------------------------------------------------------------------------
 // Placement intent — the interface the UI agent constructs and hands us.
@@ -363,11 +363,17 @@ function sanitizeValueForDimension(dim: SketchDimension, newValue: number): numb
 }
 
 /**
- * Edit a driving dimension's value and re-solve.
+ * Edit a driving dimension's value and re-solve to tolerance.
  *
  * Finds the dimension by id; if it carries a `parameterKey` and `newValue` is
  * valid for its kind, sets `parameters[key] = sanitized` then returns
- * `solveSketch(updated)` (geometry moves toward the new value).
+ * `solveSketchToTolerance(updated)` — a BOUNDED multi-round solve that lands the
+ * edited dimension ON its value (target ~1e-3 mm for a well-conditioned single
+ * driver) in one call, rather than merely converging toward it. The previous
+ * single-`solveSketch` pass left 50→80 at ≈79.8 and required re-pressing Enter;
+ * a single edit now lands it. Conflicting / over-constrained sketches degrade
+ * gracefully: the round loop settles at the least-squares compromise and stops
+ * (finite, no hang, no NaN) — see {@link solveSketchToTolerance}.
  *
  * Returns the SAME `design` reference (no clone, no solve) when:
  *   - the dimension id is unknown,
@@ -392,5 +398,5 @@ export function applyDimensionValue(
 
   const next = cloneDesign(design)
   next.parameters = { ...next.parameters, [parameterKey]: sanitized }
-  return solveSketch(next)
+  return solveSketchToTolerance(next)
 }

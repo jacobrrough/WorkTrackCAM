@@ -54,6 +54,16 @@ import {
   createDrivingDimension,
   type DimensionIntent
 } from './sketch-dimension-drive'
+import {
+  addConstraintFromSelection,
+  applicableConstraints,
+  constraintKindHint,
+  constraintKindLabel,
+  solveSketchToTolerance,
+  TOOLBAR_CONSTRAINT_KINDS,
+  type ConstraintKind
+} from './sketch-constraint-apply'
+import { analyzeSketchDof } from './sketch-dof-seam'
 import { sketchToolForDesignCommand } from './design-command-map'
 import {
   createSketchHistory,
@@ -645,6 +655,44 @@ export function SketchSurface({
     onSketchHint?.('Dimension updated — geometry re-solved.')
   }
 
+  // ── Sketch S5 — constraints toolbar (apply a relation to the selection) ────
+
+  /**
+   * The constraint kinds the CURRENT selection can satisfy (drives each toolbar
+   * button's enabled state). Narrowed to the live selection (stale picks
+   * dropped) so a button never offers a relation the geometry can't form.
+   */
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const applicableConstraintKinds = useMemo(
+    () => new Set<ConstraintKind>(applicableConstraints(design, selectedIdSet)),
+    [design, selectedIdSet]
+  )
+
+  /**
+   * Apply a geometric constraint built from the current selection, then RE-SOLVE
+   * to tolerance — all as ONE undo step. The pure `addConstraintFromSelection`
+   * resolves the selection to the point/entity ids the kind needs (see its
+   * resolution rules) and returns the design with the constraint added, or
+   * `null` when the selection can't satisfy the kind (a no-op, no undo step).
+   * `solveSketchToTolerance` then drives the geometry onto the new relation.
+   */
+  function handleApplyConstraint(kind: ConstraintKind): void {
+    const cur = liveDesignRef.current
+    const withConstraint = addConstraintFromSelection(cur, selectedIdSet, kind)
+    if (!withConstraint) {
+      onSketchHint?.(`Can't apply ${constraintKindLabel(kind)} to that selection.`)
+      return
+    }
+    applyDesignEdit(solveSketchToTolerance(withConstraint))
+    onSketchHint?.(`${constraintKindLabel(kind)} constraint applied — geometry re-solved.`)
+  }
+
+  // ── Sketch S5 — honest DOF read-out (status row badge) ─────────────────────
+  // Consumes the engine agent's `analyzeSketchDof` through the typed seam, which
+  // adapts the engine report into a badge view (label + status). The badge labels
+  // itself approximate; an empty sketch shows nothing.
+  const dofReport = useMemo(() => analyzeSketchDof(design), [design])
+
   // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
   // variable so this compiles before the canvas declares the props; extra props
   // are inert at runtime until the canvas's hit-test half lands.
@@ -918,6 +966,22 @@ export function SketchSurface({
             </label>
           )}
 
+          {/* Sketch S5 — honest DOF badge. Distinct, non-blocking, aria-live;
+              the title flags it as an approximate estimate (the local 2D solver
+              has no rigorous rank analysis — see `sketch-dof-seam`). An empty
+              sketch (status 'empty', blank label) renders no badge. */}
+          {dofReport.status !== 'empty' && (
+            <span
+              className={`sketch-surface__dof sketch-surface__dof--${dofReport.status}`}
+              data-testid="sketch-surface-dof-badge"
+              data-dof-status={dofReport.status}
+              aria-live="polite"
+              title="Approximate degrees of freedom (equations vs. free coordinates — not a rigorous rank analysis)."
+            >
+              {dofReport.label}
+            </span>
+          )}
+
           <span
             className="sketch-surface__count"
             data-testid="sketch-surface-count"
@@ -926,6 +990,36 @@ export function SketchSurface({
             {entityCount} {entityCount === 1 ? 'entity' : 'entities'}
             {pointCount > 0 ? ` · ${pointCount} pts` : ''}
           </span>
+        </div>
+
+        {/* Sketch S5 — constraints toolbar. One button per relation; each is
+            enabled only when `applicableConstraints` includes it for the current
+            selection. Clicking builds the constraint from the selection (pure
+            `addConstraintFromSelection`) and re-solves in ONE undo step. */}
+        <div
+          className="sketch-surface__constraints"
+          role="toolbar"
+          aria-label="Sketch constraints"
+          data-testid="sketch-surface-constraints"
+        >
+          <span className="sketch-surface__constraints-heading">Constrain</span>
+          {TOOLBAR_CONSTRAINT_KINDS.map((kind) => {
+            const enabled = applicableConstraintKinds.has(kind)
+            return (
+              <button
+                key={kind}
+                type="button"
+                className="sketch-surface__constraint-btn"
+                data-testid={`sketch-surface-constraint-${kind}`}
+                data-constraint-enabled={enabled ? 'true' : 'false'}
+                disabled={!enabled}
+                title={constraintKindHint(kind)}
+                onClick={() => handleApplyConstraint(kind)}
+              >
+                {constraintKindLabel(kind)}
+              </button>
+            )
+          })}
         </div>
 
         <div className="sketch-surface__canvas-host" data-testid="sketch-surface-canvas-host">

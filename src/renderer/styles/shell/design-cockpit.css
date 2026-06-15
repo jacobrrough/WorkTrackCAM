@@ -763,6 +763,90 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Sketch S5 — honest DOF badge in the status row. Distinct pill, colour-keyed
+   to the verdict; sits just before the count read-out (pushed right by the
+   count's `margin-left:auto`, so it trails the toggles/params). Non-blocking,
+   aria-live; the title flags the estimate as approximate. */
+.sketch-surface__dof {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  font-size: var(--text-xs, 11px);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* When the DOF badge is present it owns the right-push; the count then follows
+   it with a normal gap (override the count's own auto-margin). */
+.sketch-surface__dof + .sketch-surface__count {
+  margin-left: var(--sp-3);
+}
+.sketch-surface__dof--fully {
+  border-color: var(--ok, #2e9e5b);
+  color: var(--ok, #2e9e5b);
+  background: color-mix(in srgb, var(--ok, #2e9e5b) 12%, transparent);
+}
+.sketch-surface__dof--under {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.sketch-surface__dof--over {
+  border-color: var(--danger, #c0392b);
+  color: var(--danger, #c0392b);
+  background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent);
+}
+
+/* Sketch S5 — constraints toolbar (one row of relation buttons under the status
+   row). Buttons disable when the current selection can't form the relation. */
+.sketch-surface__constraints {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.sketch-surface__constraints-heading {
+  font-size: var(--text-xs, 11px);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--txt2);
+}
+.sketch-surface__constraint-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg1);
+  color: var(--txt0);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.sketch-surface__constraint-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.sketch-surface__constraint-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.sketch-surface__constraint-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* The canvas host fills the remaining height; the legacy canvas's `.sketch-wrap`
    (and the `<canvas>` inside it) stretches to it. The canvas bitmap is a fixed
    integer size that CSS stretches — the canvas's pointer math rescales for the

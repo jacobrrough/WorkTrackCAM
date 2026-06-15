@@ -117,6 +117,13 @@ export interface DrawSketch2DParams {
    * point dimension started from. Optional + additive; absent = no change.
    */
   dimensionDraftPoint?: readonly [number, number] | null
+  /**
+   * Sketch S5 -- the angular DIMENSION tool's first-picked line (sketch-plane mm
+   * endpoints), highlighted so the operator sees which side they are measuring
+   * the angle from before picking the second line. Optional + additive; absent =
+   * no change.
+   */
+  dimensionAngularFirstLine?: readonly [readonly [number, number], readonly [number, number]] | null
 
   // Drag state
   drag:
@@ -178,6 +185,7 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     nodeEditOverlay,
     marquee,
     dimensionDraftPoint,
+    dimensionAngularFirstLine,
     drag,
     constraintPickActive,
     constraintSegmentPickActive,
@@ -1099,6 +1107,21 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     ctx.lineWidth = 2
     ctx.beginPath()
     ctx.arc(dsx, dsy, 7, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // Sketch S5 -- the angular tool's first picked line, re-stroked in the same
+  // dimension cyan so the operator sees which side they are measuring the angle
+  // from before picking the second line (mirrors the draft-point ring idiom).
+  if (dimensionAngularFirstLine) {
+    const [a, b] = dimensionAngularFirstLine
+    ctx.save()
+    ctx.strokeStyle = '#67e8f9'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(cx + (a[0] - ox) * scale, cy - (a[1] - oy) * scale)
+    ctx.lineTo(cx + (b[0] - ox) * scale, cy - (b[1] - oy) * scale)
     ctx.stroke()
     ctx.restore()
   }

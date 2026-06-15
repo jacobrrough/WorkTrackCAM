@@ -346,6 +346,102 @@ export function solveSketch(design: DesignFileV2, iterations = 120, step = 0.4):
   return d
 }
 
+/** Options for {@link solveSketchToTolerance}. */
+export interface SolveToToleranceOptions {
+  /**
+   * Hard upper bound on solve rounds (each round = one full {@link solveSketch}
+   * pass of `iterations` gradient steps). The loop is ALWAYS bounded by this —
+   * it never runs forever, even for a conflicting / over-constrained sketch.
+   * Default 24.
+   */
+  maxRounds?: number
+  /**
+   * Target landing tolerance in mm. The loop stops early once the worst-case
+   * per-constraint residual implied by the total squared energy is comfortably
+   * inside this band (i.e. `sqrt(totalEnergy) <= toleranceMm`), so a
+   * well-conditioned single driver lands on its value rather than merely near
+   * it. Default 1e-3 mm.
+   */
+  toleranceMm?: number
+}
+
+const DEFAULT_MAX_ROUNDS = 24
+const DEFAULT_TOLERANCE_MM = 1e-3
+/**
+ * Relative-improvement floor. When a round shrinks the residual by less than
+ * this fraction of the previous residual, further rounds are not buying us
+ * anything (a conflicting sketch plateaus here immediately), so we settle.
+ */
+const IMPROVEMENT_FLOOR = 1e-6
+
+/**
+ * Exact-landing wrapper around {@link solveSketch}.
+ *
+ * Runs `solveSketch` repeatedly — each round warm-starts from the previous
+ * round's positions (the single-pass solver is bounded to `iterations` gradient
+ * steps and converges TOWARD, not ONTO, a freshly-changed driver) — until ONE
+ * of the following stop conditions trips:
+ *
+ *   1. the constraint residual is within `toleranceMm` (sqrt(energy) ≤ tol) — a
+ *      well-conditioned single driver lands here in 2–4 rounds;
+ *   2. a round no longer improves the residual meaningfully (relative gain below
+ *      {@link IMPROVEMENT_FLOOR}) — an over-/conflicting sketch settles at its
+ *      least-squares compromise and stops here, finite, without thrashing;
+ *   3. `maxRounds` is reached — a hard ceiling, so the loop is ALWAYS bounded.
+ *
+ * Robustness:
+ *   - Empty-constraint designs are returned unchanged (mirrors `solveSketch`).
+ *   - Non-finite energy (NaN/∞) at any point aborts and returns the last design
+ *     whose energy was finite — the solver never propagates NaN geometry out.
+ *
+ * Pure-ish: it mutates `design` in place exactly as `solveSketch` does (callers
+ * in this codebase clone first via `cloneDesign`), and returns that same object
+ * on the happy path. The only time the returned reference differs is the
+ * non-finite-abort fallback, which returns a previously-captured good clone.
+ */
+export function solveSketchToTolerance(
+  design: DesignFileV2,
+  opts?: SolveToToleranceOptions
+): DesignFileV2 {
+  const maxRounds = Math.max(1, Math.floor(opts?.maxRounds ?? DEFAULT_MAX_ROUNDS))
+  const tol = opts?.toleranceMm != null && opts.toleranceMm > 0 ? opts.toleranceMm : DEFAULT_TOLERANCE_MM
+  // Compare against squared tolerance since `energy` sums SQUARED residuals.
+  const energyTarget = tol * tol
+
+  if (design.constraints.length === 0) return solveSketch(design)
+
+  // Keep a finite-valued fallback so a mid-solve NaN never escapes.
+  let lastGood = cloneDesign(design)
+  let prevEnergy = energy(design)
+  if (!Number.isFinite(prevEnergy)) return lastGood
+
+  for (let round = 0; round < maxRounds; round++) {
+    solveSketch(design)
+    const cur = energy(design)
+
+    // Guard: a non-finite residual means the geometry blew up — bail to the
+    // last design we know was finite rather than returning NaN coordinates.
+    if (!Number.isFinite(cur)) return lastGood
+
+    // This round produced finite geometry: capture it as the new fallback.
+    lastGood = cloneDesign(design)
+
+    // Stop condition 1 — inside the requested landing band.
+    if (cur <= energyTarget) break
+
+    // Stop condition 2 — the round stopped buying meaningful progress.
+    // `prevEnergy - cur` can be ~0 (plateau) or, defensively, slightly negative
+    // from the single-pass solver's bounded back-tracking; either way we settle.
+    const improvement = prevEnergy - cur
+    if (improvement <= IMPROVEMENT_FLOOR * Math.max(prevEnergy, 1)) break
+
+    prevEnergy = cur
+    // Stop condition 3 — the `for` bound (`maxRounds`) caps total work.
+  }
+
+  return design
+}
+
 export function cloneDesign(d: DesignFileV2): DesignFileV2 {
   const points: Record<string, SketchPoint> = {}
   for (const [k, v] of Object.entries(d.points)) {

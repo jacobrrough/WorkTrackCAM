@@ -91,6 +91,27 @@ describe('Sketch2DCanvas dimension tool -- render contract (node-SSR)', () => {
   })
 })
 
+describe('Sketch2DCanvas dimension tool -- S5 angular sub-mode (render contract)', () => {
+  it('wired dimension tool renders the angular (two-lines) toggle', () => {
+    const html = markup({ activeTool: 'dimension', ...s4Wired() })
+    expect(html).toContain('data-testid="sketch-dimension-angular-toggle"')
+    expect(html).toContain('Angular (two lines)')
+  })
+
+  it('angular toggle is absent when the dimension tool is UNWIRED (inert)', () => {
+    const html = markup({ activeTool: 'dimension' })
+    expect(html).not.toContain('data-testid="sketch-dimension-angular-toggle"')
+  })
+
+  it('at rest the diameter toggle is enabled (angular off) — prompt is the point/radius prompt', () => {
+    const html = markup({ activeTool: 'dimension', ...s4Wired() })
+    // angular off by default → the default S4 prompt still shows.
+    expect(html).toContain('Click a vertex to start a dimension')
+    // the diameter toggle is not disabled while angular is off.
+    expect(html).not.toMatch(/data-testid="sketch-dimension-diameter-toggle"[^>]*disabled/)
+  })
+})
+
 const SRC = readFileSync(resolve(__dirname, '../Sketch2DCanvas.tsx'), 'utf-8')
 const DRAW = readFileSync(resolve(__dirname, '../sketch2d-draw.ts'), 'utf-8')
 
@@ -151,7 +172,10 @@ describe('Sketch2DCanvas dimension tool -- source pins (pointer halves SSR canno
   })
 
   it('the dimension draft is torn down on tool switch (mirrors the other drafts)', () => {
-    expect(SRC).toMatch(/if \(activeTool !== 'dimension'\) setDimFirstPoint\(null\)/)
+    // S5 extended this to a block that also clears the angular first-line draft.
+    expect(SRC).toMatch(
+      /if \(activeTool !== 'dimension'\) \{\s*setDimFirstPoint\(null\)\s*setDimAngularFirstLine\(null\)/
+    )
   })
 
   it('the draw module renders driving dimensions in a distinct colour + fx marker', () => {
@@ -164,6 +188,36 @@ describe('Sketch2DCanvas dimension tool -- source pins (pointer halves SSR canno
   it('the draw module gained the additive dimension draft-point ring', () => {
     expect(DRAW).toContain('dimensionDraftPoint?: readonly [number, number] | null')
     expect(DRAW).toContain("ctx.strokeStyle = '#67e8f9'")
+  })
+
+  it('S5: the dimension branch emits an angular intent from two line picks', () => {
+    expect(SRC).toContain('if (dimAngularMode) {')
+    expect(SRC).toContain(
+      'const edge = pickNearestSketchEdge(design, raw[0], raw[1], 10 / Math.max(scale, 0.05))'
+    )
+    expect(SRC).toContain('const line = angularLinePointIds(design, edge.entityId, edge.edgeIndex)')
+    // the first pick is held; the second pick emits the angular intent.
+    expect(SRC).toContain('setDimAngularFirstLine(line)')
+    expect(SRC).toMatch(/onPlaceDimension\(\{\s*kind: 'angular',\s*a1Id: first\.aId,\s*b1Id: first\.bId,\s*a2Id: line\.aId,\s*b2Id: line\.bId/)
+  })
+
+  it('S5: the angular draft is torn down on tool switch (with the point draft)', () => {
+    expect(SRC).toMatch(
+      /if \(activeTool !== 'dimension'\) \{\s*setDimFirstPoint\(null\)\s*setDimAngularFirstLine\(null\)/
+    )
+  })
+
+  it('S5: the angular + radial/diameter picks all still resolve through live ids only', () => {
+    // aligned + radial/diameter (S4) preserved alongside the new angular branch.
+    expect(SRC).toContain("{ kind: 'radial', entityId: entHit.entityId }")
+    expect(SRC).toContain("onPlaceDimension({ kind: 'aligned', aId: dimFirstPoint, bId: vid })")
+  })
+
+  it('S5: the draw module gained the additive angular first-line highlight', () => {
+    expect(DRAW).toContain(
+      'dimensionAngularFirstLine?: readonly [readonly [number, number], readonly [number, number]] | null'
+    )
+    expect(DRAW).toContain('if (dimensionAngularFirstLine) {')
   })
 
   it('the MVP variant is untouched by the dimension wave (its readout intact)', () => {
