@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
@@ -88,6 +88,11 @@ import {
 } from '../../shared/fdm-process-overrides'
 import type { K2PlusQualityPresetId } from '../../shared/k2-plus-slice-presets'
 import type { Placement } from './rotary-placement'
+import {
+  manufactureLoadKey,
+  mergeMeshImportIntoLivePlan,
+  type PendingMeshImport
+} from './manufacture-load-guard'
 
 
 /**
@@ -680,6 +685,17 @@ type Props = {
    * remount. Optional - absent / unchanged keeps existing load behavior.
    */
   reloadNonce?: number
+  /**
+   * Design -> Manufacture STL hand-off applied to the LIVE in-memory plan.
+   * When set, the workspace folds the imported mesh into its current `mfg`
+   * (via {@link mergeMeshImportIntoLivePlan}) instead of the host re-reading
+   * stale disk, then saves + fires `onRequestedMeshImportHandled`. This is the
+   * persistence-race fix: merging into the live plan preserves the operator's
+   * unsaved setups/ops, which a disk-read merge would have silently discarded.
+   * Optional - absent keeps the legacy `reloadNonce` disk-reload path.
+   */
+  requestedMeshImport?: PendingMeshImport | null
+  onRequestedMeshImportHandled?: () => void
 }
 
 export function ManufactureWorkspace({
@@ -716,7 +732,9 @@ export function ManufactureWorkspace({
   onRequestedNewOpKindHandled,
   requestedDxfImportNonce = 0,
   onRequestedDxfImportHandled,
-  reloadNonce = 0
+  reloadNonce = 0,
+  requestedMeshImport = null,
+  onRequestedMeshImportHandled
 }: Props) {
   const [mfg, setMfg] = useState<ManufactureFile>(() => emptyManufacture())
   // Gap #7 v1 — active plate id. Initialized lazily so emptyManufacture() always
@@ -841,13 +859,27 @@ export function ManufactureWorkspace({
     })
   }, [effectiveMfg.operations.length])
 
+  // (projectDir, reloadNonce) key the plan was last loaded for. The load
+  // effect skips a redundant reload when this is unchanged, so a spurious
+  // re-fire (a churning dependency from a parent re-render) can never re-read
+  // the on-disk plan over unsaved in-memory edits (the Cycle-249 clobber, for
+  // CAM state). Mirrors DesignSessionContext's lastDesignLoadKeyRef guard.
+  const lastManufactureLoadKeyRef = useRef<string | null>(null)
   useEffect(() => {
     if (!projectDir) {
+      // Reset the key so reopening the SAME project reloads from disk.
+      lastManufactureLoadKeyRef.current = null
       const empty = emptyManufacture()
       setMfg(empty)
       setActivePlateId(empty.plates?.[0]?.id ?? null)
       return
     }
+    // Anti-clobber guard: only (re)load when projectDir or the host-driven
+    // reloadNonce actually changed. A genuine Send-to-CAM disk merge bumps
+    // reloadNonce (new key -> reloads); a bare re-render does not.
+    const loadKey = manufactureLoadKey(projectDir, reloadNonce)
+    if (loadKey !== null && lastManufactureLoadKeyRef.current === loadKey) return
+    lastManufactureLoadKeyRef.current = loadKey
     void fab
       .manufactureLoad(projectDir)
       .then((loaded) => {
@@ -1835,6 +1867,47 @@ export function ManufactureWorkspace({
     onRequestedDxfImportHandled?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on nonce change
   }, [requestedDxfImportNonce])
+
+  // Design -> Manufacture STL hand-off (live-plan merge). The host queues a
+  // freshly-imported, project-relative mesh here; we fold it into the CURRENT
+  // in-memory plan (NOT a stale disk read) so the operator's unsaved setups/ops
+  // survive — the DXF-import persistence-race fix. We compute the merge inside
+  // the functional `setMfg` updater (so it always sees the live plan even if two
+  // imports arrive back-to-back), capture the result, persist it, then clear the
+  // one-shot request. SAFETY: plate-data write only; no G-code. Skips when no
+  // project is open (nothing to persist into).
+  useEffect(() => {
+    if (!requestedMeshImport) return
+    if (!projectDir) {
+      // No project to persist into — clear the request so it doesn't wedge; the
+      // host re-queues on the next Send-to-CAM once a project is open.
+      onRequestedMeshImportHandled?.()
+      return
+    }
+    const req = requestedMeshImport
+    let merged: ManufactureFile | null = null
+    setMfg((prev) => {
+      merged = mergeMeshImportIntoLivePlan(prev, req)
+      return merged
+    })
+    // Snap the active plate to the first plate (where the import landed) and
+    // persist the merged plan, then clear the one-shot request.
+    void (async () => {
+      try {
+        if (merged) {
+          setActivePlateId(getPlates(merged)[0]?.id ?? null)
+          await fab.manufactureSave(projectDir, JSON.stringify(merged))
+          const rel = req.relPath.replace(/\\/g, '/')
+          onStatus?.(`Part landed in CAM → ${rel}`)
+        }
+      } catch (e) {
+        onStatus?.(e instanceof Error ? e.message : String(e))
+      } finally {
+        onRequestedMeshImportHandled?.()
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on request change
+  }, [requestedMeshImport])
 
   /**
    * Gap #9 — Laguna sheet size derived from the first setup whose machineId

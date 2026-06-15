@@ -49,7 +49,8 @@ import { runCamForOp } from '../manufacture/run-cam-for-op'
 import { runSliceForOp } from '../manufacture/run-slice-for-op'
 import { getPlates } from '../manufacture/plate-state'
 import { useCamHandoff } from './CamHandoffContext'
-import { importStlIntoFirstPlate, type CamImportEnv } from './import-stl-into-first-plate'
+import type { CamImportEnv } from './import-stl-into-first-plate'
+import type { PendingMeshImport } from '../manufacture/manufacture-load-guard'
 import type { ManufactureFile, ManufactureOperation } from '../../shared/manufacture-schema'
 import {
   registerCamCommands,
@@ -136,7 +137,11 @@ export function ManufactureHost(): ReactElement {
   // manufacture plan on disk (Design → Manufacture). The workspace re-reads
   // `manufacture.json` whenever this changes, so the imported part appears in
   // the plate without remounting the workspace. Session-only.
-  const [reloadNonce, setReloadNonce] = useState<number>(0)
+  // Legacy disk-reload nonce. Kept wired (stable 0) for backward-compat with
+  // the workspace's reloadNonce path, but no longer bumped: the Send-to-CAM
+  // import now merges into the workspace's LIVE plan (requestedMeshImport)
+  // instead of re-reading disk, so unsaved in-memory edits are preserved.
+  const [reloadNonce] = useState<number>(0)
 
   // Wave 3a (Mill-4 ribbon) — one-shot requests the host pushes DOWN into the
   // workspace so the CAM ribbon commands can drive the workflow-stage strip +
@@ -149,6 +154,13 @@ export function ManufactureHost(): ReactElement {
   // the sketch). A counter (not a boolean) so two back-to-back imports each
   // fire; the workspace clears it via `onRequestedDxfImportHandled`.
   const [requestedDxfImportNonce, setRequestedDxfImportNonce] = useState<number>(0)
+  // Design -> Manufacture STL hand-off applied to the workspace's LIVE plan.
+  // The consume effect below copies the STL via `assets:importMesh`, then sets
+  // this request; the workspace folds it into its current in-memory `mfg` (NOT
+  // a stale disk read) and persists. Merging into the live plan preserves the
+  // operator's unsaved setups/ops — a disk-read merge silently discarded them
+  // (the DXF-import persistence-race). Cleared via `onRequestedMeshImportHandled`.
+  const [requestedMeshImport, setRequestedMeshImport] = useState<PendingMeshImport | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -201,13 +213,16 @@ export function ManufactureHost(): ReactElement {
   // FIRST plate of the manufacture plan. This REUSES the proven mesh-import IPC
   // (`assets:importMesh` — same path the workspace's "Import mesh" button uses):
   // it copies the STL into the project's `assets/` and returns a project-
-  // relative path. We then bind that path onto the first plate's first op (or
-  // seed one if the plate is empty) via the pure `importStlIntoFirstPlate`
-  // helper, persist with `manufacture:save`, and bump `reloadNonce` so the
-  // mounted workspace re-reads the plan from disk. SAFETY: no G-code here — STL
-  // copy + plate-data write only. Consume-once: `consumePendingCamImport`
-  // atomically clears the slot, so a re-fired effect (project/machine change,
-  // Strict-Mode double-invoke) sees nothing and no-ops.
+  // relative path. We then HAND that path to the workspace via the one-shot
+  // `requestedMeshImport` prop; the workspace folds it into its LIVE in-memory
+  // plan (binding onto the first plate's first op, or seeding one when empty)
+  // and persists. We deliberately do NOT load+merge+save from disk here: that
+  // disk read happened WITHOUT the operator's unsaved setups/ops, so the
+  // merge+save+reload silently discarded them (the DXF-import persistence-race,
+  // mirror of the Cycle-249 clobber). SAFETY: no G-code here — STL copy +
+  // plate-data write only. Consume-once: `consumePendingCamImport` atomically
+  // clears the slot, so a re-fired effect (project/machine change, Strict-Mode
+  // double-invoke) sees nothing and no-ops.
   useEffect(() => {
     if (!pendingCamImport) return
     if (!projectDir) {
@@ -226,21 +241,17 @@ export function ManufactureHost(): ReactElement {
           pushToast('err', 'Send to CAM: mesh import failed', imp.detail ?? imp.error)
           return
         }
-        let mfg: ManufactureFile
-        try {
-          mfg = await fab().manufactureLoad(projectDir)
-        } catch {
-          pushToast('err', 'Send to CAM: could not load the manufacture plan to place the part.')
-          return
-        }
-        const next = importStlIntoFirstPlate(mfg, imp.relativePath, {
+        // Hand the imported (project-relative) mesh to the workspace, which
+        // folds it into its LIVE in-memory plan and persists. We do NOT load
+        // + merge + save from disk here: that read happened WITHOUT the
+        // operator's unsaved setups/ops, so the merge+save+reload silently
+        // discarded them (the DXF-import persistence-race). The workspace
+        // emits the authoritative "Part landed in CAM" toast after it saves.
+        setRequestedMeshImport({
+          relPath: imp.relativePath,
           env,
           ...(req.sourceName !== undefined ? { opLabel: req.sourceName } : {})
         })
-        await fab().manufactureSave(projectDir, JSON.stringify(next))
-        setReloadNonce((n) => n + 1)
-        const rel = imp.relativePath.replace(/\\/g, '/')
-        pushToast('ok', `Part landed in CAM → ${rel}`)
       } catch (e) {
         pushToast('err', 'Send to CAM failed', e instanceof Error ? e.message : String(e))
       }
@@ -370,6 +381,14 @@ export function ManufactureHost(): ReactElement {
   const handleGoProject = useCallback((): void => {
     pushToast('warn', NAVIGATE_ADVISORY)
   }, [pushToast])
+
+  // Stable clear for the one-shot Send-to-CAM mesh-import request. Memoized so
+  // the prop identity does not churn the workspace's destructive merge effect
+  // (the Cycle-249 inline-arrow-prop lesson). The workspace calls this after it
+  // has folded the import into the live plan + saved.
+  const handleRequestedMeshImportHandled = useCallback((): void => {
+    setRequestedMeshImport(null)
+  }, [])
 
   // ── Mill-4 ribbon go-live (Wave 3a) ───────────────────────────────────────
   // Register the Manufacture-ribbon command handlers on the shared command
@@ -572,6 +591,8 @@ export function ManufactureHost(): ReactElement {
         onRequestedDxfImportHandled={() => {
           /* nonce is monotonic; nothing to reset — the workspace effect keys on the change */
         }}
+        requestedMeshImport={requestedMeshImport}
+        onRequestedMeshImportHandled={handleRequestedMeshImportHandled}
       />
     </div>
   )

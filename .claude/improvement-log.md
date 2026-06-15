@@ -18648,3 +18648,37 @@ S1–S5 pins green.
   dofStatusWithResidual ONLY when settled && has-relations — a genuine post-solve conflict reads
   "conflicting"; an unsettled or constraint-free design NEVER false-positives. Status union
   extended additively with 'conflicting'. Dead CSS class label--inline-flex-6 now defined.
+
+## Cycle 254 — CAM/Manufacture reload-clobber audit: Send-to-CAM race fixed (2026-06-15)
+
+**Focus:** stream 3 of 4 — adversarially audit the Manufacture/CAM runtime for the
+disappearing-sketch (Cycle 249) bug class, since hands-on testing is what caught the original.
+A 3-lens parallel audit (effect-deps / destructive-effects / stale-persistence) over
+src/renderer/manufacture/** + the manufacture hosts.
+
+**Baseline → result:** part of the combined **16,682 pass / 1 skip / 0 fail**; tsc clean;
+manufacture suites 38 files / 579 green incl. the new guard tests.
+
+**Findings (2 real of 5 candidates; 3 rigorously dismissed):**
+- **[race, FIXED] Send-to-CAM reloadNonce dropped unsaved mfg edits** (ManufactureHost.tsx) —
+  the DXF-import race shape: the consume effect loaded the plan FROM DISK (excluding the
+  operator's unsaved in-memory setups/ops), merged the STL, saved, and bumped a reload nonce that
+  forced the workspace to re-read disk — silently discarding (and overwriting) the unsaved edits.
+  FIX, two layers mirroring Cycle 249: (a) manufactureLoadKey + lastManufactureLoadKeyRef guard so
+  a reload can't clobber; (b) the host now hands the mesh down via a one-shot requestedMeshImport
+  prop merged into the LIVE mfg (mergeMeshImportIntoLivePlan inside a functional setMfg updater)
+  instead of round-tripping disk. New pure manufacture-load-guard.ts + 17 tests.
+- **[minor, DEFERRED] route-switch unmount discards unsaved mfg edits** (WorkspaceHost) — leaving
+  the Manufacture route unmounts the host; with no autosave/keep-alive, unsaved edits are lost.
+  A product decision (autosave vs dirty-prompt vs keep-alive), correctly deferred + tracked.
+- Dismissed as unreachable (isReal:false, with traced rationale): the ManufactureWorkspace plan
+  load effect (Cycle-249 SHAPE but deps are [fab, projectDir, reloadNonce] — no inline-arrow churn
+  vector, and the host doesn't pass onStatus, so no spurious re-fire); the controlled op-editor
+  stale-closure (synchronous distinct-input onChanges, no multi-field batching path); the
+  op-selection clamp + the FDM process-overrides resync (both keyed on primitive/string deps, both
+  non-destructive).
+
+**Honest residuals:** a merge-effect robustness nit + the route-switch data-loss are flagged as
+background tasks; the defensive load-key guard on the (unreachable) plan load effect is available
+if ever wanted. Coverage is source-pin + pure-unit (node-SSR, no jsdom — same constraint as the
+Cycle 249 pin).
