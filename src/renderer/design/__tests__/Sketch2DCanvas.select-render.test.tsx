@@ -100,8 +100,10 @@ const DRAW = readFileSync(resolve(__dirname, '../sketch2d-draw.ts'), 'utf-8')
 
 describe('Sketch2DCanvas select tool -- source pins (pointer halves SSR cannot click)', () => {
   it('mousedown select branch resolves the pick through the pure hit test at the RAW point', () => {
+    // S4 widened the window: the select branch now leads with a dimension-label
+    // edit hit-test (`hitTestDimensionLabel`) before the entity hit-test.
     expect(SRC).toMatch(
-      /if \(activeTool === 'select'\) \{[\s\S]{0,500}?hitTestSketchEntities\(\{[\s\S]{0,120}?worldPoint: raw/
+      /if \(activeTool === 'select'\) \{[\s\S]{0,1400}?hitTestSketchEntities\(\{[\s\S]{0,120}?worldPoint: raw/
     )
   })
 
@@ -152,7 +154,8 @@ describe('Sketch2DCanvas select tool -- source pins (pointer halves SSR cannot c
   })
 
   it("the SketchTool union gained 'select' without disturbing the existing tools", () => {
-    expect(SRC).toMatch(/export type SketchTool =\s+\| 'select'\s+\| 'point'/)
+    // S4 inserted 'dimension' between 'select' and 'point' (the Annotate tool).
+    expect(SRC).toMatch(/export type SketchTool =\s+\| 'select'\s+\| 'dimension'\s+\| 'point'/)
   })
 
   it('the MVP variant is untouched by the select wave (its own readout intact)', () => {

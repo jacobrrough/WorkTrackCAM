@@ -49,6 +49,11 @@ import {
   matchesUndo
 } from '../../shared/app-keyboard-shortcuts'
 import { Sketch2DCanvas, type SketchTool } from './Sketch2DCanvas'
+import {
+  applyDimensionValue,
+  createDrivingDimension,
+  type DimensionIntent
+} from './sketch-dimension-drive'
 import { sketchToolForDesignCommand } from './design-command-map'
 import {
   createSketchHistory,
@@ -148,7 +153,7 @@ function entityLabel(e: SketchEntity): string {
 interface SketchSurfaceToolDef {
   readonly id: SketchTool
   readonly label: string
-  readonly group: 'Select' | 'Create' | 'Modify' | 'Transform'
+  readonly group: 'Select' | 'Create' | 'Modify' | 'Transform' | 'Annotate'
 }
 
 /**
@@ -187,7 +192,11 @@ export const SKETCH_SURFACE_TOOLS: readonly SketchSurfaceToolDef[] = [
   { id: 'move_sk', label: 'Move', group: 'Transform' },
   { id: 'rotate_sk', label: 'Rotate', group: 'Transform' },
   { id: 'scale_sk', label: 'Scale', group: 'Transform' },
-  { id: 'mirror_sk', label: 'Mirror', group: 'Transform' }
+  { id: 'mirror_sk', label: 'Mirror', group: 'Transform' },
+  // Sketch S4 — the dimension tool: click two vertices (aligned distance) or a
+  // circle/arc (radial/diameter) to place a DRIVING dimension. Retyping its
+  // value in select mode re-solves the geometry.
+  { id: 'dimension', label: 'Dimension', group: 'Annotate' }
 ]
 
 /** Ordered group headings for the palette render. */
@@ -195,7 +204,8 @@ const TOOL_GROUPS: ReadonlyArray<SketchSurfaceToolDef['group']> = [
   'Select',
   'Create',
   'Modify',
-  'Transform'
+  'Transform',
+  'Annotate'
 ]
 
 /** Grid pitch (mm) used when snap is ON. Matches the cockpit's other 5 mm grids. */
@@ -597,6 +607,44 @@ export function SketchSurface({
     onSketchHint?.('Node deleted.')
   }
 
+  // ── Sketch S4 — dimension placement + inline value-edit (one undo step) ────
+
+  /**
+   * The dimension tool placed a dimension → make it a DRIVING dimension. The
+   * pure `createDrivingDimension` (other agent's module) adds the dimension +
+   * its parameter (seeded to the CURRENT measured value, so creating it does
+   * NOT move geometry) + the matching solver constraint. A null result (the
+   * intent couldn't be measured — e.g. radial on a non-circle) is a no-op.
+   * Records EXACTLY ONE undo step via the surface history seam.
+   */
+  function handlePlaceDimension(intent: DimensionIntent): void {
+    const result = createDrivingDimension(liveDesignRef.current, intent)
+    if (!result) {
+      onSketchHint?.('Could not dimension that selection.')
+      return
+    }
+    applyDesignEdit(result.design)
+    onSketchHint?.('Driving dimension added.')
+  }
+
+  /**
+   * The operator committed an inline value edit on a dimension's value label →
+   * set its parameter + re-solve via the pure `applyDimensionValue`. That
+   * returns the SAME design reference when nothing changes (unknown id,
+   * annotation-only dim, or an invalid value), so we only record an undo step
+   * when the geometry actually moved. ONE undo step on a real edit.
+   */
+  function handleCommitDimensionValue(dimId: string, value: number): void {
+    const cur = liveDesignRef.current
+    const next = applyDimensionValue(cur, dimId, value)
+    if (next === cur) {
+      onSketchHint?.('Dimension unchanged (annotation-only or invalid value).')
+      return
+    }
+    applyDesignEdit(next)
+    onSketchHint?.('Dimension updated — geometry re-solved.')
+  }
+
   // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
   // variable so this compiles before the canvas declares the props; extra props
   // are inert at runtime until the canvas's hit-test half lands.
@@ -897,6 +945,8 @@ export function SketchSurface({
             onCursorWorld={onCursorWorld}
             onToolHotkey={setActiveTool}
             onGridSnapToggle={() => setSnapEnabled((s) => !s)}
+            onPlaceDimension={handlePlaceDimension}
+            onCommitDimensionValue={handleCommitDimensionValue}
             planeLabel={planeLabel}
           />
           {textDialogOpen && (

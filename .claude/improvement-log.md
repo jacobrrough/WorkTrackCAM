@@ -18523,3 +18523,47 @@ count==1 asserts per docs/EDIT-WORKFLOW.md (CRLF-safe); WorkspaceHost.tsx via Ed
 
 **Honest note:** this is one definitive showstopper; other S1–S3 feel issues may have been
 masked by the constant reset and need a fresh hands-on pass to confirm.
+
+## Cycle 250 — Sketch S4: dimension-driven editing (2026-06-11)
+
+**Focus:** sketching priority, wave 4 (parametric) — "click a dimension, retype the value,
+the geometry re-solves." User had confirmed the Cycle 249 fix ("looks good"); this is the
+last planned sketching wave. One commit.
+
+**Baseline → result:** 16,414 → **16,491 pass / 1 skip / 0 fail** (+77); tsc clean; the
+Cycle 249 no-clobber guard + all S1/S2/S3 byte-identity + MVP-fence pins green.
+
+**Key audit insight:** the constraint solver + parameter-driven constraints
+(distance/radius/diameter/angle reading parameters[parameterKey]) already existed; dimensions
+were annotation-only. S4 WIRED dimensions to that machinery rather than writing a solver.
+
+**What landed (renderer-only — no G-code/CAM/post surfaces):**
+- **Pure engine `sketch-dimension-drive.ts`**: `measureDimensionValue`, `createDrivingDimension`
+  (atomically adds parameter=measured value + dimension.parameterKey + the matching driving
+  constraint; mapping linear|aligned→distance, radial→radius, diameter→diameter, angular→angle;
+  creating does NOT move geometry — already satisfied, <1e-6), `applyDimensionValue` (set param
+  → `solveSketch` → new design; returns the SAME ref on invalid/unknown/annotation-only so the
+  caller skips the undo push). Collision-free ids; never mutates input.
+- **Pure pick `sketch2d-dimension-pick.ts`**: shared label-anchor (render + hit-test never
+  drift), `hitTestDimensionLabel`, current-or-measured value, nearest-vertex resolution.
+- **UI**: a 'dimension' SketchTool (palette 'Annotate' group) — click two existing vertices
+  (aligned/distance) or a circle/arc (radial/diameter) to place a DRIVING dimension; in select
+  mode, click a dimension's value → inline numeric input → commit re-solves. Driving dims render
+  distinctly (cyan, bold, 'fx' marker); annotation-only dims unchanged. Both gestures route
+  through SketchSurface.applyDesignEdit = ONE undo step each.
+
+**Verification:** independent solver-convergence probe 8/8 — aligned 50→80 within 0.05 (diagonal),
+radius 10→4 within 0.2, create-then-solve <1e-6, underconstrained free triangle stays finite +
+converges, conflicting dual drivers settle between targets with NO NaN/Infinity. One-undo-step +
+persistence (Zod round-trip of params+constraints+dimensions) confirmed.
+
+**Honest residuals (backlog):** (1) `solveSketch` is bounded 120-iter gradient descent, so a
+single edit converges TOWARD the target (~79.8 for 80) — monotonic, non-overshooting, tightens
+on re-apply; EXACT one-keystroke landing is an S5 candidate (loop-to-tolerance or raise
+iterations). (2) angular driving is engine+solver+persistence-complete but the canvas gesture
+only emits aligned/radial/diameter (no angular UI yet). (3) aligned dims require snapping to
+EXISTING vertices (rect/circle primitives store no point ids — radial/diameter covers circles).
+(4) no DOF/over-constrained operator badge yet (engine degrades gracefully, UI silent). (5)
+ellipse click emits a radial intent that the engine safely no-ops (returns null). (6) a
+pre-existing undefined CSS class (`label--inline-flex-6`, copied from the MVP variant) — cosmetic.
+Hands-on pass owed: place/edit dimensions in the running app.

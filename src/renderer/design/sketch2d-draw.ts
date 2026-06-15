@@ -30,6 +30,7 @@ import {
   type SketchTrimEdgeRef
 } from '../../shared/sketch-profile'
 import { niceStepMm, screenToWorld } from './sketch2d-canvas-coords'
+import { dimensionLabelAnchorWorld } from './sketch2d-dimension-pick'
 import { entityOutlineWorld } from './sketch2d-hit-test'
 import { osnapKindLabel, type OsnapKind } from './sketch2d-osnap'
 import type { MarqueeMode } from './sketch2d-marquee'
@@ -110,6 +111,12 @@ export interface DrawSketch2DParams {
     b: readonly [number, number]
     mode: MarqueeMode
   } | null
+  /**
+   * Sketch S4 -- the DIMENSION tool's first-picked vertex (sketch-plane mm),
+   * highlighted with a ring so the operator sees which endpoint a point-to-
+   * point dimension started from. Optional + additive; absent = no change.
+   */
+  dimensionDraftPoint?: readonly [number, number] | null
 
   // Drag state
   drag:
@@ -170,6 +177,7 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     osnapMarker,
     nodeEditOverlay,
     marquee,
+    dimensionDraftPoint,
     drag,
     constraintPickActive,
     constraintSegmentPickActive,
@@ -420,11 +428,31 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
   }
 
   const dims = design.dimensions ?? []
+  // Sketch S4 -- a driving dimension (parameterKey set + the param resolves)
+  // reads its value FROM the solver-driven parameter; render it in a distinct
+  // colour + an "fx" marker so the operator can tell driven from annotation.
+  // Annotation-only dims keep today's slate text exactly.
+  const DIM_ANNOTATION_COLOR = '#cbd5e1'
+  const DIM_DRIVEN_COLOR = '#67e8f9'
   for (const dm of dims) {
+    const pkv = dm.parameterKey
+    const drivenValue =
+      pkv && design.parameters[pkv] !== undefined && Number.isFinite(design.parameters[pkv])
+        ? design.parameters[pkv]!
+        : null
+    const isDriven = drivenValue != null
+    // The "fx" marker prefixes a driving dim's value text (Fusion shows a
+    // small fx glyph beside driven dimensions); annotation dims show no marker.
+    const fxMark = isDriven ? 'fx ' : ''
     ctx.strokeStyle = '#64748b'
-    ctx.fillStyle = '#cbd5e1'
+    ctx.fillStyle = isDriven ? DIM_DRIVEN_COLOR : DIM_ANNOTATION_COLOR
     ctx.lineWidth = 1
-    ctx.font = '11px system-ui'
+    ctx.font = isDriven ? 'bold 11px system-ui' : '11px system-ui'
+    // Render the value text at the SAME world anchor the select hit-test picks
+    // (`dimensionLabelAnchorWorld`), so the inline edit box opens on the label.
+    const anchor = dimensionLabelAnchorWorld(dm, design)
+    const labelSx = anchor ? cx + (anchor[0] - ox) * scale : 0
+    const labelSy = anchor ? cy - (anchor[1] - oy) * scale : 0
     if (dm.kind === 'linear' || dm.kind === 'aligned') {
       const pa = points[dm.aId]
       const pb = points[dm.bId]
@@ -451,17 +479,12 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
       ctx.moveTo(sax + nx * scale, say - ny * scale)
       ctx.lineTo(sbx + nx * scale, sby - ny * scale)
       ctx.stroke()
-      const mx = (sax + sbx) / 2 + nx * scale
-      const my = (say + sby) / 2 - ny * scale
       const prefix = dm.kind === 'aligned' ? 'A ' : ''
-      const pk = dm.parameterKey
-      const driven =
-        pk && design.parameters[pk] !== undefined && Number.isFinite(design.parameters[pk])
-          ? design.parameters[pk]!
-          : null
       const label =
-        driven != null ? `${prefix}${driven.toFixed(2)} mm (param ${pk})` : `${prefix}${len.toFixed(2)} mm`
-      ctx.fillText(label, mx + 4, my + 4)
+        drivenValue != null
+          ? `${fxMark}${prefix}${drivenValue.toFixed(2)} mm (param ${pkv})`
+          : `${prefix}${len.toFixed(2)} mm`
+      ctx.fillText(label, labelSx + 4, labelSy + 4)
     } else if (dm.kind === 'angular') {
       const p1 = points[dm.a1Id]
       const p2 = points[dm.b1Id]
@@ -477,17 +500,12 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
       if (l1 < 1e-9 || l2 < 1e-9) continue
       const cos = Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (l1 * l2)))
       const deg = (Math.acos(cos) * 180) / Math.PI
-      const mmx = ((p1.x + p2.x + p3.x + p4.x) * 0.25 - ox) * scale + cx
-      const mmy = (-(p1.y + p2.y + p3.y + p4.y) * 0.25 + oy) * scale + cy
-      const pk = dm.parameterKey
-      const driven =
-        pk && design.parameters[pk] !== undefined && Number.isFinite(design.parameters[pk])
-          ? design.parameters[pk]!
-          : null
       ctx.fillText(
-        driven != null ? `${driven.toFixed(2)}\u00B0 (param ${pk})` : `${deg.toFixed(2)}\u00B0`,
-        mmx + 4,
-        mmy + 4
+        drivenValue != null
+          ? `${fxMark}${drivenValue.toFixed(2)}\u00B0 (param ${pkv})`
+          : `${deg.toFixed(2)}\u00B0`,
+        labelSx + 4,
+        labelSy + 4
       )
     } else {
       const ent = entities.find((e) => e.id === dm.entityId)
@@ -528,20 +546,17 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
       ctx.arc(csx, csy, rMm * scale, 0, Math.PI * 2)
       ctx.stroke()
       ctx.setLineDash([])
-      const pk = dm.parameterKey
-      const driven =
-        pk && design.parameters[pk] !== undefined && Number.isFinite(design.parameters[pk])
-          ? design.parameters[pk]!
-          : null
       const label =
         dm.kind === 'radial'
-          ? driven != null
-            ? `R ${driven.toFixed(2)} mm (param ${pk})`
+          ? drivenValue != null
+            ? `${fxMark}R ${drivenValue.toFixed(2)} mm (param ${pkv})`
             : `R ${rMm.toFixed(2)} mm`
-          : driven != null
-            ? `\u00D8 ${driven.toFixed(2)} mm (param ${pk})`
+          : drivenValue != null
+            ? `${fxMark}\u00D8 ${drivenValue.toFixed(2)} mm (param ${pkv})`
             : `\u00D8 ${(rMm * 2).toFixed(2)} mm`
-      ctx.fillText(label, csx + rMm * scale + 6, csy - 6)
+      // Text sits at the shared label anchor (rim point on +X) so the select
+      // hit-test (`dimensionLabelAnchorWorld`) opens the edit box on the label.
+      ctx.fillText(label, labelSx + 6, labelSy - 6)
     }
   }
 
@@ -1070,6 +1085,21 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     ctx.setLineDash(isWindowBox ? [] : [5, 4])
     ctx.strokeRect(crisp(mLeft), crisp(mTop), Math.max(1, Math.round(mW)), Math.max(1, Math.round(mH)))
     ctx.setLineDash([])
+    ctx.restore()
+  }
+
+  // Sketch S4 -- the dimension tool's first-picked vertex, ringed so the
+  // operator sees where a point-to-point dimension started (drawn before the
+  // osnap glyph so an active snap still reads on top).
+  if (dimensionDraftPoint) {
+    const dsx = cx + (dimensionDraftPoint[0] - ox) * scale
+    const dsy = cy - (dimensionDraftPoint[1] - oy) * scale
+    ctx.save()
+    ctx.strokeStyle = '#67e8f9'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(dsx, dsy, 7, 0, Math.PI * 2)
+    ctx.stroke()
     ctx.restore()
   }
 

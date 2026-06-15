@@ -166,6 +166,55 @@ describe('SketchSurface — S1 mutation-seam source pins', () => {
   })
 })
 
+// ── Sketch S4 — dimension placement + inline value-edit wiring ───────────────
+
+describe('SketchSurface — S4 dimension wiring', () => {
+  it('exposes a Dimension tool in the palette (Annotate group)', () => {
+    const html = render(emptyDesign())
+    expect(html).toContain('data-testid="sketch-surface-tool-dimension"')
+    // The Annotate group heading is rendered for the new group.
+    expect(html).toContain('Annotate')
+  })
+
+  it('threads onPlaceDimension + onCommitDimensionValue to the canvas', () => {
+    expect(SRC).toContain('onPlaceDimension={handlePlaceDimension}')
+    expect(SRC).toContain('onCommitDimensionValue={handleCommitDimensionValue}')
+  })
+
+  it('handlePlaceDimension routes createDrivingDimension through applyDesignEdit (ONE undo step)', () => {
+    const body = SRC.slice(
+      SRC.indexOf('function handlePlaceDimension'),
+      SRC.indexOf('function handleCommitDimensionValue')
+    )
+    expect(body).toContain('createDrivingDimension(liveDesignRef.current, intent)')
+    // null result is a no-op (no history push); a result applies via the seam.
+    expect(body).toContain('if (!result) {')
+    expect(body).toContain('applyDesignEdit(result.design)')
+    // exactly one apply (the single undo step).
+    expect(body.match(/applyDesignEdit\(/g) ?? []).toHaveLength(1)
+  })
+
+  it('handleCommitDimensionValue applies only when applyDimensionValue actually changed the design', () => {
+    const body = SRC.slice(
+      SRC.indexOf('function handleCommitDimensionValue'),
+      SRC.indexOf('// S1 selection bridge')
+    )
+    expect(body).toContain('const next = applyDimensionValue(cur, dimId, value)')
+    // reference-equality gate: unchanged -> no undo step.
+    expect(body).toContain('if (next === cur) {')
+    expect(body).toContain('applyDesignEdit(next)')
+    expect(body.match(/applyDesignEdit\(/g) ?? []).toHaveLength(1)
+  })
+
+  it('both S4 handlers consume the OTHER agent pure module (no local re-implementation)', () => {
+    expect(SRC).toMatch(/from '\.\/sketch-dimension-drive'/)
+    expect(SRC).toContain('createDrivingDimension')
+    expect(SRC).toContain('applyDimensionValue')
+    // the surface never calls the solver directly (that lives in the pure module).
+    expect(SRC).not.toContain('solveSketch(')
+  })
+})
+
 // ── (3) BRIDGE — the S1 canvas selection contract ────────────────────────────
 
 describe('SketchSurface — S1 canvas selection bridge', () => {

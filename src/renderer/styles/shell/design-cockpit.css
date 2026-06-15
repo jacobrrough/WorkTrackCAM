@@ -1208,3 +1208,27 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Sketch S4 -- the inline dimension value editor: a small numeric input that
+   floats on the clicked dimension's value label (its left/top are set inline
+   from the world->screen map). z-index above the canvas + the per-tool
+   toolbars; the accent border matches the numeric popover so it reads as the
+   same "type a value" affordance. */
+.sketch-surface__canvas-host .sketch-dimension-edit-input {
+  z-index: 6;
+  width: 92px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font: inherit;
+  font-size: var(--text-sm);
+  box-shadow: var(--elevation-2);
+  /* Nudge so the box sits ON the label rather than offset down-right of it. */
+  transform: translate(-2px, -10px);
+}
+.sketch-surface__canvas-host .sketch-dimension-edit-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

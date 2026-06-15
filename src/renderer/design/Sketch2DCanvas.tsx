@@ -41,6 +41,13 @@ import {
 } from './sketch2d-osnap'
 import { drawSketch2D, type ConstraintPickHit } from './sketch2d-draw'
 import {
+  dimensionCurrentValue,
+  dimensionLabelPickToleranceMm,
+  hitTestDimensionLabel,
+  nearestPointIdWithin
+} from './sketch2d-dimension-pick'
+import type { DimensionIntent } from './sketch-dimension-drive'
+import {
   categoriseSolveResult,
   initialSketchState,
   sketchReducer,
@@ -93,6 +100,7 @@ import {
 
 export type SketchTool =
   | 'select'
+  | 'dimension'
   | 'point'
   | 'polygon'
   | 'polyline'
@@ -202,6 +210,23 @@ type Props = {
    * EXISTING grid-snap toggle (the Snap button's setter). Optional + additive.
    */
   onGridSnapToggle?: () => void
+  /**
+   * Sketch S4 -- the DIMENSION tool placed a dimension. The canvas resolves
+   * the gesture (click point A then B -> aligned; click a circle/arc entity ->
+   * radial, or diameter with Shift held) and emits the placement INTENT; the
+   * surface turns it into a DRIVING dimension via `createDrivingDimension` and
+   * records ONE undo step. Optional + additive: absent keeps the dimension tool
+   * inert (and every legacy mount byte-identical).
+   */
+  onPlaceDimension?: (intent: DimensionIntent) => void
+  /**
+   * Sketch S4 -- the operator committed an inline value edit on a dimension's
+   * value label (select tool: click the label, retype, Enter/blur). The canvas
+   * owns the transient input state locally; on commit it emits ONE (dimId,
+   * value) and the surface applies `applyDimensionValue` + re-solve as ONE undo
+   * step. Optional + additive: absent disables inline editing entirely.
+   */
+  onCommitDimensionValue?: (dimensionId: string, value: number) => void
 }
 
 const CROSSHAIR_TOOLS: ReadonlySet<SketchTool> = new Set([
@@ -265,7 +290,9 @@ export function Sketch2DCanvas({
   onNodeInsert,
   onNodeDelete,
   onToolHotkey,
-  onGridSnapToggle
+  onGridSnapToggle,
+  onPlaceDimension,
+  onCommitDimensionValue
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const { entities, points } = design
@@ -353,6 +380,40 @@ export function Sketch2DCanvas({
       setSelectHoverId(null)
     }
   }, [activeTool])
+
+  // -- Sketch S4 -- DIMENSION tool draft + inline value-edit state --
+  // The tool is a two-stage gesture: the FIRST pick (an existing vertex id) is
+  // held here; the SECOND pick (another vertex OR a circle/arc entity)
+  // completes the placement INTENT emitted via onPlaceDimension.
+  // `dimDiameterMode` makes an entity pick a diameter dimension instead of the
+  // default radial (toggled in the tool toolbar or by holding Shift).
+  const [dimFirstPoint, setDimFirstPoint] = useState<string | null>(null)
+  const [dimDiameterMode, setDimDiameterMode] = useState(false)
+  // Inline value edit (select tool): the dimension whose value label was
+  // clicked + its world anchor (so the input floats on the label), and the
+  // controlled text being typed. `null` editingDim = no input open.
+  const [editingDim, setEditingDim] = useState<{
+    dimId: string
+    anchorWorld: [number, number]
+  } | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+  // Guards the inline editor against a DOUBLE finalize: pressing Enter (or Esc)
+  // closes the input, and React then fires its `blur` on unmount -- without this
+  // latch that blur would commit a SECOND time (two undo steps upstream). Set
+  // true on the first finalize; reset to false whenever a fresh editor opens.
+  const dimEditDoneRef = useRef(false)
+
+  // Tool switch tears down any in-flight dimension draft (mirrors the other
+  // per-tool draft resets); the diameter-mode toggle persists per session.
+  useEffect(() => {
+    if (activeTool !== 'dimension') setDimFirstPoint(null)
+  }, [activeTool])
+
+  // Leaving select mode (or losing the wiring) closes any open inline editor so
+  // a stale input never lingers over a different tool's canvas.
+  useEffect(() => {
+    if (activeTool !== 'select' || !onCommitDimensionValue) setEditingDim(null)
+  }, [activeTool, onCommitDimensionValue])
 
   // -- Sketch S3 -- marquee box-select state (plain press on EMPTY canvas) --
   /** In-flight marquee gesture; the S1 3 px threshold gates the rubber band. */
@@ -882,6 +943,14 @@ export function Sketch2DCanvas({
     }
   }, [nodeEditEntity, editableNodes, nodeGhost, activeNodeId, design])
 
+  // Sketch S4 -- resolve the dimension first-pick vertex id to coords for the
+  // draft ring highlight (null when no pick is in flight or the id is stale).
+  const dimensionDraftPoint = useMemo<[number, number] | null>(() => {
+    if (dimFirstPoint === null) return null
+    const pt = points[dimFirstPoint]
+    return pt ? [pt.x, pt.y] : null
+  }, [dimFirstPoint, points])
+
   const draw = useCallback(() => {
     const c = ref.current
     if (!c) return
@@ -925,6 +994,7 @@ export function Sketch2DCanvas({
       osnapMarker: osnapHover,
       nodeEditOverlay,
       marquee: marqueeRect,
+      dimensionDraftPoint,
       drag,
       constraintPickActive,
       constraintSegmentPickActive,
@@ -970,6 +1040,7 @@ export function Sketch2DCanvas({
     osnapHover,
     nodeEditOverlay,
     marqueeRect,
+    dimensionDraftPoint,
     sketchRotateDeg,
     sketchScaleFactor,
     planeLabel,
@@ -1159,6 +1230,21 @@ export function Sketch2DCanvas({
     // marquee (its no-drag release still clears; Shift handled in the pan arm
     // above). Unwired mounts do nothing.
     if (activeTool === 'select') {
+      // Sketch S4 -- a click on a dimension's VALUE label (resolved at the RAW
+      // point, like every other select pick) opens the inline numeric editor
+      // pre-filled with the current value. Checked BEFORE the entity hit-test so
+      // the label wins over geometry beneath it.
+      if (onCommitDimensionValue) {
+        const dimHit = hitTestDimensionLabel(design, raw, dimensionLabelPickToleranceMm(scale))
+        if (dimHit) {
+          const dm = (design.dimensions ?? []).find((d) => d.id === dimHit.dimId)
+          const current = dm ? dimensionCurrentValue(dm, design) : null
+          dimEditDoneRef.current = false
+          setEditingDim({ dimId: dimHit.dimId, anchorWorld: dimHit.anchorWorld })
+          setEditingValue(current != null ? String(Math.round(current * 1000) / 1000) : '')
+          return
+        }
+      }
       if (!onEntityPick) return
       if (beginNodeDragAtPoint([raw[0], raw[1]])) return
       const hit = hitTestSketchEntities({
@@ -1176,6 +1262,51 @@ export function Sketch2DCanvas({
         marqueeRef.current = { startWorld: [raw[0], raw[1]], moved: false }
         setMarqueeRect(null)
       }
+      return
+    }
+
+    // Sketch S4 -- DIMENSION tool (two-stage). A circle/arc pick makes a
+    // radial (default) or diameter (toolbar toggle / Shift) dimension; a
+    // point pick that lands on an EXISTING vertex starts/continues an aligned
+    // point-to-point dimension. Both reference live ids only, so the surface's
+    // createDrivingDimension never depends on a not-yet-flushed new point.
+    // Unwired mounts (no onPlaceDimension) are inert.
+    if (activeTool === 'dimension') {
+      if (!onPlaceDimension) return
+      const entHit = pickNearestCircularEntityId(
+        design,
+        raw[0],
+        raw[1],
+        Math.max(2, 10 / Math.max(scale, 0.05))
+      )
+      if (entHit && dimFirstPoint === null) {
+        const wantDiameter = dimDiameterMode || ev.shiftKey
+        onPlaceDimension(
+          wantDiameter
+            ? { kind: 'diameter', entityId: entHit.entityId }
+            : { kind: 'radial', entityId: entHit.entityId }
+        )
+        onSketchHint?.(wantDiameter ? 'Diameter dimension placed.' : 'Radius dimension placed.')
+        return
+      }
+      // Aligned point-to-point: each endpoint must snap to a REAL vertex.
+      const vid = nearestPointIdWithin(design, raw, osnapToleranceMm(scale))
+      if (!vid) {
+        onSketchHint?.('Dimension: click a sketch vertex (endpoint snap) for each end.')
+        return
+      }
+      if (dimFirstPoint === null) {
+        setDimFirstPoint(vid)
+        onSketchHint?.('Dimension: pick the second vertex (or click a circle/arc for radius).')
+        return
+      }
+      if (vid === dimFirstPoint) {
+        onSketchHint?.('Dimension: pick a DIFFERENT second vertex.')
+        return
+      }
+      onPlaceDimension({ kind: 'aligned', aId: dimFirstPoint, bId: vid })
+      setDimFirstPoint(null)
+      onSketchHint?.('Dimension placed.')
       return
     }
 
@@ -1850,6 +1981,85 @@ export function Sketch2DCanvas({
       >
         {osnapEnabled ? 'OSNAP on' : 'OSNAP off'}
       </button>
+
+      {/* Sketch S4 -- DIMENSION tool toolbar: prompt + radius/diameter toggle.
+          Mirrors the other per-tool toolbars; only rendered with the tool wired. */}
+      {activeTool === 'dimension' && onPlaceDimension && (
+        <div className="sketch-toolbar sketch-dimension-toolbar" data-testid="sketch-dimension-toolbar">
+          <span className="msg">
+            {dimFirstPoint
+              ? 'Pick the second vertex to dimension (or click a circle/arc for radius/diameter).'
+              : 'Click a vertex to start a dimension, or a circle/arc for radius/diameter.'}
+          </span>
+          <label className="msg label--inline-flex-6">
+            <input
+              type="checkbox"
+              data-testid="sketch-dimension-diameter-toggle"
+              checked={dimDiameterMode}
+              onChange={(e) => setDimDiameterMode(e.target.checked)}
+            />{' '}
+            Diameter (circle/arc)
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            data-testid="sketch-dimension-cancel"
+            onClick={() => setDimFirstPoint(null)}
+            disabled={dimFirstPoint === null}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Sketch S4 -- inline value editor: a small numeric input floating on the
+          clicked dimension's value label. Local, transient state; Enter/blur
+          commits one (dimId, value) through onCommitDimensionValue (the surface
+          applies applyDimensionValue + re-solve as ONE undo step), Esc cancels.
+          Positioned via the SAME world->CSS-px map the canvas renderer uses, so
+          the box lands exactly on the label `dimensionLabelAnchorWorld` reports. */}
+      {editingDim && onCommitDimensionValue && (() => {
+        const vp = viewportSize()
+        const px = vp.w / 2 + (editingDim.anchorWorld[0] - ox) * scale
+        const py = vp.h / 2 - (editingDim.anchorWorld[1] - oy) * scale
+        const commit = (): void => {
+          if (dimEditDoneRef.current) return
+          dimEditDoneRef.current = true
+          const v = Number.parseFloat(editingValue)
+          if (Number.isFinite(v)) onCommitDimensionValue(editingDim.dimId, v)
+          setEditingDim(null)
+        }
+        const cancel = (): void => {
+          if (dimEditDoneRef.current) return
+          dimEditDoneRef.current = true
+          setEditingDim(null)
+        }
+        return (
+          <input
+            type="text"
+            inputMode="decimal"
+            autoFocus
+            className="sketch-dimension-edit-input"
+            data-testid="sketch-dimension-edit-input"
+            data-dim-id={editingDim.dimId}
+            style={{ position: 'absolute', left: `${px}px`, top: `${py}px` }}
+            value={editingValue}
+            onChange={(e) => setEditingValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                cancel()
+              }
+            }}
+            onBlur={commit}
+          />
+        )
+      })()}
+
       {osnapEnabled && osnapTruncated && (
         <span
           className="sketch-osnap-simplified-badge"
