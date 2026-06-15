@@ -1,6 +1,6 @@
 # WorkTrack3D — Security Posture & Dependency Advisory Tracking
 
-**Last updated**: 2026-06-08
+**Last updated**: 2026-06-15
 **Owner**: dependency-security workflow (DEP stack)
 
 This doc is the source of truth for WorkTrack3D's security posture: which
@@ -18,17 +18,23 @@ The numbers in this file are a snapshot in time; the dashboard is real-time.
 
 ---
 
-## TL;DR — Current State (2026-06-08 snapshot)
+## TL;DR — Current State (2026-06-15 snapshot)
 
-| Severity | Open | Notes |
+| Severity | Open (full tree) | Notes |
 |----------|-----:|-------|
 | Critical |    0 | vitest CVE GHSA-5xrq-8626-4rwp closed (vitest 3 → 4.1.8) in a prior wave. |
-| High     |    0 | **electron-builder 25.1.8 → 26.8.1** dropped the dev-only `tar`/`cacache` subtree (−141 packages); the high chain is closed. |
-| Moderate |    0 | DOMPurify forced via `overrides`; the prior Monaco/bundler advisories are no longer reported by the current lockfile. |
+| High     |    4 | **dev-only, deferred** — the esbuild ≤0.24.2 dev-server CORS advisory (GHSA-67mh-4wv8-2f99) via the `vite` / `electron-vite` / `@vitejs/plugin-react` build chain. Fixing needs `npm audit fix --force` (vite major bump) — breaking, NOT shipped to users. See "Deferred" below. |
+| Moderate |    0 | **js-yaml quadratic-DoS GHSA-h67p-54hq-rp68 closed 2026-06-15** via `npm audit fix` (non-breaking lockfile bump); DOMPurify still forced via `overrides`. |
 | Low      |    0 | `@tootallnate/once` closed in a prior wave. |
-| **Total**| **0** | `npm audit` **and** `npm audit --omit=dev` both report **0 vulnerabilities** (verified 2026-06-08). |
+| **Total**| **4** | `npm audit --omit=dev` reports **0** (the release gate is GREEN); full `npm audit` reports **4 high**, all dev-only build tooling. |
 
-**Runtime / user-shipping advisory count: 0. Full dev+prod advisory count: 0.**
+**Runtime / user-shipping advisory count: 0 (release gate GREEN). Full dev+prod advisory count: 4 (all dev-only esbuild/vite chain, deferred).**
+
+The 2026-06-15 sketch campaign merge to `main` surfaced (via the GitHub push hook) a runtime
+`js-yaml` moderate (quadratic-complexity DoS in merge-key handling) — **closed same day** with a
+non-breaking `npm audit fix` (only `package-lock.json` changed; full suite 16,617/0 + typecheck
+re-verified clean). The 4 remaining high advisories are the esbuild dev-server CORS chain and are
+knowingly deferred (dev-only, breaking to fix) — see below.
 
 The 2026-06-08 Text-engine wave added `opentype.js@^2.0.0` (runtime, MIT) +
 `@types/opentype.js@^1.3.10` (dev). `npm install` added **one** package; both
@@ -47,7 +53,36 @@ dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
 
 ---
 
+## Deferred advisories
+
+### High — esbuild ≤0.24.2 dev-server CORS (GHSA-67mh-4wv8-2f99) — DEV-ONLY, DEFERRED
+- **Chain**: `esbuild` → `vite` (4.2.0-beta.0 – 8.0.3) → `electron-vite` + `@vitejs/plugin-react`.
+  Reported as 4 high entries (one per node in the chain) by full `npm audit`.
+- **Why high / why it does NOT ship**: the advisory is that esbuild's **dev server** lets any
+  web page send it cross-origin requests and read the response. It affects `npm run dev` only —
+  the esbuild/vite dev server is **never** part of the packaged Electron app (`electron-vite
+  build` produces static bundles; no dev server runs in production). `npm audit --omit=dev`
+  reports **0**, confirming nothing in the shipped tree is affected.
+- **Why deferred, not fixed**: the only fix `npm audit` offers is `npm audit fix --force`, which
+  bumps `vite` across a major (4/5 → 8) and pulls `electron-vite` + `@vitejs/plugin-react` majors
+  with it — a breaking change to the entire build/test toolchain. Not worth the regression risk
+  for a dev-server-only advisory with zero runtime exposure.
+- **Re-evaluation trigger**: do the major bump as its own dedicated wave (own branch, full
+  build + 16,600-test re-verify, signed-installer smoke) — NOT bundled into a feature cycle.
+- **Status**: **DEFERRED** (dev-only). The runtime release gate (`npm audit --omit=dev` = 0) is
+  unaffected and remains the hard gate before any release build.
+
 ## Closed advisories (recent)
+
+### Moderate — js-yaml quadratic-complexity DoS GHSA-h67p-54hq-rp68 (closed 2026-06-15)
+- **Bump**: `js-yaml` transitive bump via a non-breaking `npm audit fix` (only
+  `package-lock.json` changed — 103 insertions / 90 deletions; `package.json` untouched).
+- **Why moderate**: js-yaml's merge-key (`<<`) handling had quadratic complexity on repeated
+  aliases — a crafted YAML document could pin CPU. It sat in the **runtime** dependency tree, so
+  it counted against `npm audit --omit=dev`.
+- **Validation**: `npm audit --omit=dev` → **0 vulnerabilities**; full suite **16,617 passed / 1
+  skipped / 0 failed**; `tsc --noEmit` clean — all re-verified after the bump.
+- **Status**: **CLOSED**. Runtime release gate restored to GREEN (0).
 
 ### Critical — vitest GHSA-5xrq-8626-4rwp (closed in commit 61fb5fa)
 - **Bump**: vitest `^3.0.0` → `^4.1.8`, plus `@vitest/coverage-v8 ^4.1.8`.
