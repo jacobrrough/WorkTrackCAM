@@ -19138,3 +19138,27 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Honest scope note:** TRUE z-level Waterline + scallop/spiral/morphing as dedicated geometry engines remain follow-ons — they require bundling OpenCAMLib or new toolpath engines (out of one-cycle scope). Today without OCL: waterline/adaptive/raster/pencil **degrade to the now-verified parallel finish**; scallop/spiral/morphing/trochoidal/steep-shallow **fail with a clear operator error** (the `toolpath_engine` was deleted in the 2026-05-27 pivot). This cycle makes the ALWAYS-ON 3D finish trustworthy; it does not add new strategies.
 
 **Next cycle recommendation:** (a) bundle OpenCAMLib so true Waterline/AdaptiveWaterline run, then pin them with the same posted contract; or (b) wire the existing voxel `stock-simulation.ts` into a "simulate material removal before cut" CAM view (pairs with the comparison-test/first-cut validation); or (c) the editable feature timeline (the #1 Fusion CAD differentiator).
+
+## Cycle 269 — Parallel batch: material-removal sim + editable timeline + OpenCAMLib scaffolding (2026-06-16)
+
+**Focus:** user said "do as many as you can at the same time" against the Fusion-parity roadmap. Ran THREE tracks as parallel sub-agents in isolated worktrees, then consolidated each onto `main` via cherry-pick + **on-branch** gate before claiming it landed (applying the workflow-waves-strand-in-worktrees lesson — verify on the active branch, never trust the worktree's self-report). Four commits + this entry.
+
+**Baseline → result:** full suite **17,279 pass / 1 skip / 0 fail** (+52 from the Cycle-268 baseline of 17,227); tsc clean; `test:python` **161 pass / 84 skip**; OCL gated smoke **5 skip** (no OCL on system 3.14).
+
+**Track A — Editable feature timeline (`9c68411`, CAD):**
+- Wired kernel-op **delete** end-to-end (FeatureTree ✕ → DesignWorkspace → DesignWorkspaceHost → `session.removeKernelOpAt` → persist `part/features.json` + debounced rebuild). **Honest finding:** move/reorder/suppress/roll-back were ALREADY wired to the build-driving `kernelOps[]` — delete was the one real gap; the parity audit was stale on that point. Added pure `items[]`-by-id utilities (`feature-timeline-actions.ts`, +19 tests) as ready-to-wire helpers. **Cycle-249 reload-clobber guard intact** (its regression test green).
+
+**Track B — OpenCAMLib bundling scaffolding + crash-guard (`d2db2b6`, CAM engine/packaging):**
+- Feasibility VERIFIED (agent ran OCL in throwaway 3.11 venvs, never the shared one): `opencamlib` 2023.1.11 ships wheels for **CPython 3.7–3.11 win32/amd64 only — no 3.12+**; installs into the existing 3.11 CadQuery sidecar venv. Added `scripts/bundle-opencamlib.ps1` (wheel install + an `ocl.py` shim bridging the engine's `import ocl` → the package's `opencamlib.ocl`), `docs/OPENCAMLIB.md`, and `engines/cam/ocl_smoke_test.py` (OCL-gated; skips cleanly without OCL).
+- **FIX (real latent crash surfaced):** the only installable wheel OMITS `AdaptiveWaterline.setCosLimit`, which would `AttributeError`-crash `cnc_adaptive`/`cnc_3d_rough` the instant OCL is enabled. Guarded `setMinSampling`/`setCosLimit` with `hasattr` in `ocl_strategies.py` → adaptive degrades to a plain adaptive pass. waterline/raster/surface_scan already fine.
+- **gcode-safety:** the guard is a defensive skip of optional sampling-refinement knobs — emitted coordinates/feeds/structure unchanged; OCL strategies emit via the same safe `loops_to_lines`/`clpoints_to_polyline` + `renderPost` as the Cycle-268-verified mesh path. **Scaffolding only — OCL is NOT enabled for the user** (they must run the script + point `pythonPath` at the 3.11 venv); until then 3D ops keep the verified built-in mesh finish.
+
+**Track C — Material-removal Simulate view (`b137197`, renderer/shared, reads-only):**
+- New pure `simulateStockRemovalFromGcode(gcode, stockBox)` (`stock-removal-sim.ts`): parses posted G-code → carves the existing voxel engine → returns `{stats, heightGrid}` (discriminated union ok / no-toolpath / invalid-stock), fully unit-tested. Wired into `ManufactureWorkspace` `ToolpathSimulationBody`: the CNC Simulate stage shows a top-down removal heatmap + stats for box stock, EmptyState when no toolpath, explicit "VOXEL APPROXIMATION" caveat.
+- **Honest residual:** the heatmap PIXELS are unverified headless (OffscreenCanvas null-fallback in node — needs a hands-on Electron run, per the ui-needs-hands-on-verification rule); flat-tool voxel projection only; box stock feeds the heatmap (fromExtents/cylinder → stats-only). Reads posted toolpaths only — no emission touched (gcode-safety not triggered).
+
+**Also:** `docs/plans/fusion-parity-gap.md` (`0359362`) — the 5-domain audit + prioritized roadmap that drove this batch.
+
+**Process note:** all three agent worktrees consolidated cleanly (manufacture.css auto-merged between the timeline + sim tracks); nothing stranded. Agent worktrees pruned after landing.
+
+**Next cycle recommendation:** (a) HANDS-ON verify the stock-removal heatmap renders in the real Electron app (the one deferred check); (b) optionally enable OCL on the 3.11 sidecar venv (`scripts/bundle-opencamlib.ps1`) to unlock true Waterline/AdaptiveWaterline, then extend the Cycle-268 posted contract to the OCL path; (c) click-to-select faces/edges for fillet/chamfer (Tier-1 CAD parity).

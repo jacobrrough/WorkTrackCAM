@@ -18,7 +18,7 @@ For the shop's real workflow — parametric CAD → CAM + FDM for these three ma
 |---|---|---|
 | Sketcher (entities + constraints) | ✅ strong | line/arc/circle/rect/slot + 12 constraints; live solver is a **custom 2D Newton** (not planegcs) → robustness/DOF-analysis gap |
 | Part modeling | ✅ strong core | extrude/revolve/loft/fillet/chamfer/shell/holes/threads/patterns/booleans/split |
-| Feature timeline | ⚠️ was read-only | suppress honored by kernel; **reorder/suppress/delete UI being added** (see roadmap) |
+| Feature timeline | ✅ editable | move/reorder/suppress/roll-back live; **delete wired (Cycle 269)**; per-feature param-edit dialog is a follow-on |
 | Surface / freeform (NURBS, T-spline/sculpt) | ❌ missing | solid + sketch only |
 | Direct modeling (push/pull) | ❌ missing | all edits flow through features |
 | Multi-body / configurations | ❌ missing | single body per design |
@@ -29,8 +29,8 @@ For the shop's real workflow — parametric CAD → CAM + FDM for these three ma
 | **CAM 2.5D** (contour/pocket/drill/v-carve/chamfer) | ✅ **PRODUCTION** | contract-pinned + gcode-safety on all 3 machines |
 | **CAM 4-axis** (indexed + continuous, Carvera) | ✅ **PRODUCTION** | contract-pinned; rotary chuck collision sweep |
 | **CAM 3D finish** (parallel/raster, mesh-height) | ✅ **verified (Cycle 268)** | the always-on built-in finish is now posted-snapshot + gcode-safety pinned on both routers |
-| CAM 3D — true Waterline / scallop / spiral / morphing | ⚠️/❌ | Waterline/adaptive/pencil need OpenCAMLib (absent → degrade to the verified parallel finish); scallop/spiral/morphing/trochoidal/steep-shallow were `toolpath_engine` stubs (deleted in the 2026-05-27 pivot) → clear error without an engine |
-| CAM verification (material-removal sim) | ⚠️ engine exists, unwired | voxel `stock-simulation.ts` exists; **being wired into a "Simulate" view** (see roadmap) |
+| CAM 3D — true Waterline / scallop / spiral / morphing | ⚠️/❌ | Waterline/adaptive/pencil need OpenCAMLib (absent → degrade to the verified parallel finish); scallop/spiral/morphing/trochoidal/steep-shallow were `toolpath_engine` stubs (deleted in the 2026-05-27 pivot) → clear error without an engine. **OCL scaffolding + crash-guard landed (Cycle 269)** — enable via `scripts/bundle-opencamlib.ps1` on the 3.11 venv |
+| CAM verification (material-removal sim) | ✅ wired (Cycle 269) | voxel removal **heatmap in the Simulate view** from posted G-code; heatmap pixels need a hands-on Electron verify |
 | Feeds & speeds, tool-holder collision, tool wear | ⚠️ stub | material library exists; no adaptive F/S calculator; holder geometry unmodeled |
 | FDM / K2 (slice → Moonraker → monitor, CFS, calibration) | ✅ **PRODUCTION — exceeds Fusion** | OrcaSlicer bundled, presets, supports/infill, CFS slot, temp ceilings, direct Moonraker push + live print monitoring + calibration harness |
 | Render · FEA/Simulation · Generative · Sculpt · PCB · Animation · Cloud/version-branching | ❌ absent | out of scope for a 3-machine shop |
@@ -68,10 +68,10 @@ NURBS/surface + sculpt/T-spline, FEA/simulation, render, generative design, PCB/
 ## Roadmap / cycle sequence
 
 - ✅ **Cycle 268** — 3D finish verified machine-safe + pinned (posted gcode-safety contract, both routers).
-- 🔄 **In progress (parallel tracks, 2026-06-16):**
-  - Material-removal **Simulate** view (wire the voxel `stock-simulation.ts`).
-  - **Editable feature timeline** (reorder / suppress / delete + rebuild).
-  - **OpenCAMLib** feasibility + bundling scaffolding (enables true Waterline/AdaptiveWaterline if a win32 wheel exists).
-- ⏭️ **Next candidates:** click-to-select feature editing · assembly rotational solver · drawings HLR + hole tables · adaptive feeds/speeds.
+- ✅ **Cycle 269 (2026-06-16)** — parallel batch landed:
+  - **Material-removal Simulate view** — voxel removal heatmap from posted G-code (`b137197`). Heatmap pixels still need a hands-on Electron verify.
+  - **Editable feature timeline** — kernel-op delete wired end-to-end + pure utils (`9c68411`); move/suppress/roll-back were already live.
+  - **OpenCAMLib scaffolding + AdaptiveWaterline crash-guard** (`d2db2b6`) — feasibility verified (3.7–3.11 wheels only); install script + gated smoke. NOT yet enabled for the user (manual: run the script against the 3.11 sidecar venv).
+- ⏭️ **Next candidates:** hands-on verify the removal heatmap · enable OCL on the 3.11 venv → true Waterline (extend the Cycle-268 posted contract to the OCL path) · click-to-select feature editing · assembly rotational solver · drawings HLR + hole tables.
 
 > This file is a living roadmap. Each cycle that closes a row should update the status table above and the improvement log.
