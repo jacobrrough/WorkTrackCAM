@@ -252,6 +252,12 @@ export interface FeatureTreeProps {
   readonly onKernelSetRollback?: (index: number) => void
   /** Clear the roll-back marker (back to "build all"). */
   readonly onKernelClearRollback?: () => void
+  /**
+   * Delete the op at `index` from the timeline. Wired to the session context's
+   * `removeKernelOpAt` (persists + rebuilds). When omitted, the per-row delete
+   * button renders disabled (read-only timeline).
+   */
+  readonly onKernelDelete?: (index: number) => void
 }
 
 /**
@@ -544,6 +550,8 @@ function ReadOnlyParameters({
  *   - **Roll-back marker**: a per-row "⏱" button fires `onSetRollback`; the
  *     section header carries a "Clear" button (`onClearRollback`). Ops at
  *     indices strictly greater than the marker render greyed as "rolled back".
+ *   - **Delete**: a per-row "✕" button fires `onDelete(index)`, removing the op
+ *     from the timeline (the parent persists + rebuilds).
  */
 interface KernelTimelineProps {
   readonly kernelOps: ReadonlyArray<KernelPostSolidOp>
@@ -553,6 +561,7 @@ interface KernelTimelineProps {
   readonly onSuppressToggle: ((index: number, suppressed: boolean) => void) | undefined
   readonly onSetRollback: ((index: number) => void) | undefined
   readonly onClearRollback: (() => void) | undefined
+  readonly onDelete: ((index: number) => void) | undefined
 }
 
 /**
@@ -572,6 +581,7 @@ function KernelTimeline({
   onSuppressToggle,
   onSetRollback,
   onClearRollback,
+  onDelete,
 }: KernelTimelineProps): JSX.Element {
   // Index of the row currently being dragged (null when idle). Drives the
   // drop-target styling + the reorder dispatch.
@@ -749,6 +759,18 @@ function KernelTimeline({
                 >
                   {'⏱'}
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs cad-kernel-row__btn cad-kernel-row__btn--delete"
+                  data-testid="cad-kernel-delete"
+                  tabIndex={tabbable ? 0 : -1}
+                  disabled={onDelete == null}
+                  aria-label={`Delete ${kernelOpLabel(op)}`}
+                  title="Delete this op"
+                  onClick={() => onDelete?.(index)}
+                >
+                  {'✕'}
+                </button>
               </span>
             </li>
           )
@@ -772,6 +794,7 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
     onKernelSuppressToggle,
     onKernelSetRollback,
     onKernelClearRollback,
+    onKernelDelete,
   } = props
 
   const editable = onParamsChange != null
@@ -861,6 +884,7 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
           onSuppressToggle={onKernelSuppressToggle}
           onSetRollback={onKernelSetRollback}
           onClearRollback={onKernelClearRollback}
+          onDelete={onKernelDelete}
         />
       )}
     </div>

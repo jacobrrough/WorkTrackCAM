@@ -2579,6 +2579,11 @@
 .cad-kernel-row__btn--marker {
   color: var(--accent);
 }
+/* Delete op button — destructive tint on hover (matches ctx-menu --danger). */
+.cad-kernel-row__btn--delete:not(:disabled):hover {
+  color: var(--err);
+  background: var(--err-dim);
+}
 
 /* Bottom action row in the feature column — Send-to-CAM CTA. */
 .design-workspace__feature-actions {

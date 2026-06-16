@@ -635,6 +635,9 @@ export const partFeatureItemSchema = z.object({
   params: z.record(z.string(), jsonSafeValueSchema).optional().describe('Feature-specific parameters for UI display and future regeneration')
 })
 
+/** A single Fusion-style feature-browser row (`PartFeaturesFile.items[]`). */
+export type PartFeatureItem = z.infer<typeof partFeatureItemSchema>
+
 export const partFeaturesFileSchema = z.object({
   version: z.literal(1).describe('Part features schema version'),
   items: z.array(partFeatureItemSchema).describe('Ordered feature items for the design tree browser'),

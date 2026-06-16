@@ -363,6 +363,8 @@ export interface DesignWorkspaceProps {
   readonly onKernelSetRollback?: (index: number) => void
   /** Clear the roll-back marker (back to "build all"). */
   readonly onKernelClearRollback?: () => void
+  /** Delete the kernel op at `index` from `part/features.json` `kernelOps[]`. */
+  readonly onKernelDelete?: (index: number) => void
   /**
    * FG-5b — append a kernel post-solid op to `part/features.json` `kernelOps[]`.
    * Threaded from the host's `DesignSessionContext.appendKernelOp`. When
@@ -654,6 +656,7 @@ export function DesignWorkspace({
   onKernelSuppressToggle,
   onKernelSetRollback,
   onKernelClearRollback,
+  onKernelDelete,
   onAppendKernelOp,
   kernelOpsDisabled = false,
   sketchActive = false,
@@ -1746,6 +1749,7 @@ export function DesignWorkspace({
                 onKernelSuppressToggle={onKernelSuppressToggle}
                 onKernelSetRollback={onKernelSetRollback}
                 onKernelClearRollback={onKernelClearRollback}
+                onKernelDelete={onKernelDelete}
               />
             )}
           </div>

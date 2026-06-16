@@ -45,7 +45,8 @@ const editCallbacks = {
   onKernelReorder: noop,
   onKernelSuppressToggle: noop,
   onKernelSetRollback: noop,
-  onKernelClearRollback: noop
+  onKernelClearRollback: noop,
+  onKernelDelete: noop
 } as const
 
 describe('FeatureTree timeline — presence + absence', () => {
@@ -95,7 +96,7 @@ describe('FeatureTree timeline — presence + absence', () => {
 })
 
 describe('FeatureTree timeline — per-op controls', () => {
-  it('renders move up/down, suppress, and roll-back controls per row', () => {
+  it('renders move up/down, suppress, roll-back, and delete controls per row', () => {
     const html = renderToStaticMarkup(
       createElement(FeatureTree, {
         operations: [],
@@ -107,6 +108,20 @@ describe('FeatureTree timeline — per-op controls', () => {
     expect((html.match(/data-testid="cad-kernel-move-down"/g) ?? []).length).toBe(2)
     expect((html.match(/data-testid="cad-kernel-suppress"/g) ?? []).length).toBe(2)
     expect((html.match(/data-testid="cad-kernel-rollback"/g) ?? []).length).toBe(2)
+    expect((html.match(/data-testid="cad-kernel-delete"/g) ?? []).length).toBe(2)
+  })
+
+  it('the delete button is enabled when onKernelDelete is supplied', () => {
+    const html = renderToStaticMarkup(
+      createElement(FeatureTree, {
+        operations: [],
+        kernelOps: [unionBox()],
+        ...editCallbacks
+      })
+    )
+    const delBtn = html.match(/<button[^>]*data-testid="cad-kernel-delete"[^>]*>/)
+    expect(delBtn).not.toBeNull()
+    expect(delBtn?.[0].includes('disabled')).toBe(false)
   })
 
   it('disables move-up on the first row and move-down on the last row', () => {
@@ -225,6 +240,8 @@ describe('FeatureTree timeline — read-only (no edit callbacks)', () => {
     // Controls are present but disabled (no handler).
     const suppressBtn = html.match(/<button[^>]*data-testid="cad-kernel-suppress"[^>]*>/)
     expect(suppressBtn?.[0].includes('disabled')).toBe(true)
+    const deleteBtn = html.match(/<button[^>]*data-testid="cad-kernel-delete"[^>]*>/)
+    expect(deleteBtn?.[0].includes('disabled')).toBe(true)
   })
 })
 

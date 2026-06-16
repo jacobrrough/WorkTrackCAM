@@ -35,14 +35,14 @@
  * disagree about a reorder / suppress / rollback.
  */
 
-import type { KernelPostSolidOp } from '../../shared/part-features-schema'
+import type { KernelPostSolidOp, PartFeatureItem } from '../../shared/part-features-schema'
 import {
   resolveTimeline,
   validateTimelineOrder,
   type TimelineOrderValidation
 } from './feature-timeline-resolve'
 
-export type { KernelPostSolidOp }
+export type { KernelPostSolidOp, PartFeatureItem }
 
 /**
  * The persisted timeline state — exactly the two ADDITIVE fields of
@@ -286,4 +286,113 @@ function withSuppressed(op: KernelPostSolidOp, suppressed: boolean): KernelPostS
  */
 export function effectiveOpsForState(state: TimelineState): KernelPostSolidOp[] {
   return resolveTimeline(state.kernelOps, { rollbackTo: state.rolledBackTo })
+}
+
+// ── Feature-BROWSER (`items[]`) edit ops — pure, by stable id ────────────────
+//
+// The two halves of the editable timeline address DIFFERENT arrays:
+//   • `kernelOps[]` — the ordered KERNEL build queue, edited by INDEX through
+//     the `applyTimelineAction` reducer above (it owns the finishing-op order
+//     rule + the roll-back marker; it is what actually drives the B-rep build).
+//   • `items[]`     — the Fusion-style feature-browser metadata
+//     (`PartFeaturesFile.items[]`), edited by stable feature `id`.
+//
+// These four helpers are the pure `items[]`-by-id half: a row reorder, a
+// suppress flip, or a delete comes in as `(items, id)` and a NEW `items` array
+// goes out. Same tenets as the reducer above — no React, no IPC, no Zod, never
+// mutate the input (`.map` / `.filter` / `.slice` only) — so they are unit-
+// testable in the node-env vitest with no jsdom and no live CadQuery round-trip.
+//
+// `suppressed` on an item mirrors the schema's per-row `suppressed?: boolean`;
+// the kernel build already drops suppressed ops via
+// `activeKernelOpsForPython` (shared/sketch-profile.ts), so toggling it here is
+// the persistence shape, not a second build filter. An unknown id is a no-op:
+// the SAME array reference comes back so a caller can cheaply detect "nothing
+// changed" by identity.
+
+/** Index of the item with `id`, or `-1` when absent. */
+function indexOfFeature(items: ReadonlyArray<PartFeatureItem>, id: string): number {
+  return items.findIndex((it) => it.id === id)
+}
+
+/**
+ * Swap the item at `index` with its neighbour at `index + delta`, returning a
+ * NEW array. Caller guarantees both indices are in range.
+ */
+function swapAt(
+  items: ReadonlyArray<PartFeatureItem>,
+  index: number,
+  delta: -1 | 1
+): PartFeatureItem[] {
+  const next = items.slice()
+  const j = index + delta
+  const tmp = next[index]!
+  next[index] = next[j]!
+  next[j] = tmp
+  return next
+}
+
+/**
+ * Move the feature with `id` one slot earlier in `items`. Returns a new array,
+ * or the SAME reference when the id is unknown or the feature is already first
+ * (idempotent at the top — no wrap-around).
+ */
+export function moveFeatureUp(
+  items: ReadonlyArray<PartFeatureItem>,
+  id: string
+): PartFeatureItem[] {
+  const i = indexOfFeature(items, id)
+  if (i <= 0) return items as PartFeatureItem[]
+  return swapAt(items, i, -1)
+}
+
+/**
+ * Move the feature with `id` one slot later in `items`. Returns a new array, or
+ * the SAME reference when the id is unknown or the feature is already last
+ * (idempotent at the bottom — no wrap-around).
+ */
+export function moveFeatureDown(
+  items: ReadonlyArray<PartFeatureItem>,
+  id: string
+): PartFeatureItem[] {
+  const i = indexOfFeature(items, id)
+  if (i < 0 || i >= items.length - 1) return items as PartFeatureItem[]
+  return swapAt(items, i, 1)
+}
+
+/**
+ * Flip the `suppressed` flag of the feature with `id`. A newly-suppressed row
+ * gets `suppressed: true`; un-suppressing DROPS the key entirely (rather than
+ * writing `suppressed: false`) so a round-tripped, never-suppressed item stays
+ * byte-identical to how it was first persisted — keeping the additive contract
+ * tight (mirrors `withSuppressed` for kernel ops). Returns a new array, or the
+ * SAME reference when the id is unknown.
+ */
+export function toggleSuppress(
+  items: ReadonlyArray<PartFeatureItem>,
+  id: string
+): PartFeatureItem[] {
+  const i = indexOfFeature(items, id)
+  if (i < 0) return items as PartFeatureItem[]
+  return items.map((it, idx) => {
+    if (idx !== i) return it
+    if (it.suppressed === true) {
+      const { suppressed: _omit, ...rest } = it
+      return rest
+    }
+    return { ...it, suppressed: true }
+  })
+}
+
+/**
+ * Remove the feature with `id` from `items`. Returns a new array, or the SAME
+ * reference when the id is unknown.
+ */
+export function deleteFeature(
+  items: ReadonlyArray<PartFeatureItem>,
+  id: string
+): PartFeatureItem[] {
+  const i = indexOfFeature(items, id)
+  if (i < 0) return items as PartFeatureItem[]
+  return items.filter((_, idx) => idx !== i)
 }

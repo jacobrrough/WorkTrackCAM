@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { KernelPostSolidOp } from '../../shared/part-features-schema'
+import type { KernelPostSolidOp, PartFeatureItem } from '../../shared/part-features-schema'
 import {
   applyTimelineAction,
+  deleteFeature,
   effectiveOpsForState,
+  moveFeatureDown,
+  moveFeatureUp,
+  toggleSuppress,
   type TimelineState
 } from './feature-timeline-actions'
 
@@ -282,5 +286,118 @@ describe('applyTimelineAction / additive-state integrity', () => {
     const r = applyTimelineAction(state, { type: 'move', index: 0, delta: 1 })
     expect(r.changed).toBe(false)
     expect(r.state).toBe(state)
+  })
+})
+
+// ── Feature-browser (`items[]`) by-id ops ───────────────────────────────────
+const sketch = (id = 'sk1'): PartFeatureItem => ({ id, kind: 'sketch', label: 'Sketch1' })
+const extrude = (id = 'ex1'): PartFeatureItem => ({
+  id,
+  kind: 'extrude',
+  label: 'Extrude1',
+  params: { depthMm: 12 }
+})
+const fillet = (id = 'fl1'): PartFeatureItem => ({ id, kind: 'fillet', label: 'Fillet1' })
+const ids = (items: ReadonlyArray<PartFeatureItem>): string[] => items.map((i) => i.id)
+
+describe('moveFeatureUp / moveFeatureDown (by id)', () => {
+  it('moveFeatureDown moves a feature one slot later, returning a NEW array', () => {
+    const items = [sketch(), extrude(), fillet()]
+    const out = moveFeatureDown(items, 'sk1')
+    expect(ids(out)).toEqual(['ex1', 'sk1', 'fl1'])
+    expect(out).not.toBe(items) // new array
+    expect(ids(items)).toEqual(['sk1', 'ex1', 'fl1']) // input untouched
+  })
+
+  it('moveFeatureUp moves a feature one slot earlier', () => {
+    const items = [sketch(), extrude(), fillet()]
+    expect(ids(moveFeatureUp(items, 'fl1'))).toEqual(['sk1', 'fl1', 'ex1'])
+  })
+
+  it('moveFeatureUp / moveFeatureDown are inverse operations', () => {
+    const items = [sketch(), extrude(), fillet()]
+    expect(ids(moveFeatureUp(moveFeatureDown(items, 'sk1'), 'sk1'))).toEqual(ids(items))
+  })
+
+  it('moveFeatureUp on the first feature is a no-op (same reference, no wrap)', () => {
+    const items = [sketch(), extrude()]
+    expect(moveFeatureUp(items, 'sk1')).toBe(items)
+  })
+
+  it('moveFeatureDown on the last feature is a no-op (same reference, no wrap)', () => {
+    const items = [sketch(), extrude()]
+    expect(moveFeatureDown(items, 'ex1')).toBe(items)
+  })
+
+  it('an unknown id is a no-op (same reference) for both directions', () => {
+    const items = [sketch(), extrude()]
+    expect(moveFeatureUp(items, 'nope')).toBe(items)
+    expect(moveFeatureDown(items, 'nope')).toBe(items)
+  })
+
+  it('preserves the full item body (params, label) across a move', () => {
+    const items = [sketch(), extrude()]
+    const out = moveFeatureDown(items, 'sk1')
+    expect(out[0]).toEqual(extrude())
+    expect(out[1]).toEqual(sketch())
+  })
+})
+
+describe('toggleSuppress (by id)', () => {
+  it('flips an unsuppressed feature to suppressed: true', () => {
+    const items = [sketch(), extrude()]
+    const out = toggleSuppress(items, 'ex1')
+    expect(out[1]).toEqual({ ...extrude(), suppressed: true })
+    expect(out).not.toBe(items)
+    expect(items[1]?.suppressed).toBeUndefined() // input untouched
+  })
+
+  it('un-suppressing DROPS the key entirely (not suppressed: false)', () => {
+    const items = [sketch(), { ...extrude(), suppressed: true }]
+    const out = toggleSuppress(items, 'ex1')
+    expect('suppressed' in out[1]!).toBe(false)
+    expect(out[1]).toEqual(extrude())
+  })
+
+  it('double toggle returns an equal (key-free) item', () => {
+    const items = [extrude()]
+    expect(toggleSuppress(toggleSuppress(items, 'ex1'), 'ex1')[0]).toEqual(extrude())
+  })
+
+  it('only the targeted feature is changed; siblings keep identity', () => {
+    const items = [sketch(), extrude(), fillet()]
+    const out = toggleSuppress(items, 'ex1')
+    expect(out[0]).toBe(items[0]) // untouched rows keep referential identity
+    expect(out[2]).toBe(items[2])
+  })
+
+  it('an unknown id is a no-op (same reference)', () => {
+    const items = [sketch(), extrude()]
+    expect(toggleSuppress(items, 'nope')).toBe(items)
+  })
+})
+
+describe('deleteFeature (by id)', () => {
+  it('removes the targeted feature, returning a NEW shorter array', () => {
+    const items = [sketch(), extrude(), fillet()]
+    const out = deleteFeature(items, 'ex1')
+    expect(ids(out)).toEqual(['sk1', 'fl1'])
+    expect(out).not.toBe(items)
+    expect(ids(items)).toEqual(['sk1', 'ex1', 'fl1']) // input untouched
+  })
+
+  it('can delete the first and the last feature', () => {
+    const items = [sketch(), extrude(), fillet()]
+    expect(ids(deleteFeature(items, 'sk1'))).toEqual(['ex1', 'fl1'])
+    expect(ids(deleteFeature(items, 'fl1'))).toEqual(['sk1', 'ex1'])
+  })
+
+  it('deleting the only feature yields an empty array', () => {
+    expect(deleteFeature([sketch()], 'sk1')).toEqual([])
+  })
+
+  it('an unknown id is a no-op (same reference)', () => {
+    const items = [sketch(), extrude()]
+    expect(deleteFeature(items, 'nope')).toBe(items)
   })
 })

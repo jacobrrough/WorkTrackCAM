@@ -403,6 +403,9 @@ export function DesignWorkspaceHost({
       onKernelClearRollback={() => {
         void session.setKernelRollbackMarker(null)
       }}
+      onKernelDelete={(index) => {
+        void session.removeKernelOpAt(index)
+      }}
       onAppendKernelOp={(op) => {
         void session.appendKernelOp(op)
       }}
