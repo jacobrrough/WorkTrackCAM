@@ -73,21 +73,40 @@ describe('[ID-0018] renderPost -- three-machine header invariants', () => {
   })
 
   it('workCoordinateIndex omitted on a CNC post surfaces HEADER_NO_WCS as a warning', async () => {
-    // The real post templates gate the G54-equivalent line on the
-    // optional wcsLine context key. Omitting workCoordinateIndex
-    // leaves the header without a WCS declaration -- the validator MUST
-    // catch this and surface it as a warning (not an error) so the
-    // operator can decide whether the controller's retained WCS is safe.
+    // WCS posture: the real post templates default the WCS line to G54 when no
+    // workCoordinateIndex is supplied (the header is NEVER WCS-implicit), so the
+    // emitted G-code carries G54. The validator's scan-for-missing-WCS therefore
+    // cannot fire -- the HEADER_NO_WCS *nudge* is re-based in renderPost on the
+    // MISSING explicit index: it MUST still surface as a warning (not an error)
+    // so the operator is reminded to confirm fixture zero against the default.
     const machine = await loadMachine('laguna-swift-5x10.json')
-    const { warnings } = await renderPost(resourcesRoot, machine, sampleToolpath)
+    const { gcode, warnings } = await renderPost(resourcesRoot, machine, sampleToolpath)
+    // The safe default IS present in the output...
+    expect(gcode).toMatch(/^G54\b/m)
+    // ...and the verify nudge still fires exactly once.
     const wcsWarnings = warnings.filter(w => /^\[HEADER_NO_WCS\]/.test(w))
     expect(wcsWarnings.length).toBe(1)
+    // The reworked message conveys the safe default + the verify ask.
+    expect(wcsWarnings[0]).toMatch(/defaulted to.*G54/i)
+    expect(wcsWarnings[0]).toMatch(/verify/i)
     // Sanity: no HEADER_NO_UNITS / HEADER_NO_ABSOLUTE_MODE / HEADER_NO_PLANE_SELECT
     // -- the template still emits G21 / G90 / G17.
     const errorWarnings = warnings.filter(w =>
       /^\[HEADER_NO_(UNITS|ABSOLUTE_MODE|PLANE_SELECT)\]/.test(w)
     )
     expect(errorWarnings).toEqual([])
+  })
+
+  it('a deliberate workCoordinateIndex suppresses the HEADER_NO_WCS nudge', async () => {
+    // The flip side of the rework: when the operator DID select a work offset
+    // (a valid 1..6 index), the verify nudge must NOT fire -- the choice was
+    // explicit. The emitted G-code still carries the selected WCS line.
+    const machine = await loadMachine('laguna-swift-5x10.json')
+    const { gcode, warnings } = await renderPost(resourcesRoot, machine, sampleToolpath, {
+      workCoordinateIndex: WCS_G54_INDEX
+    })
+    expect(gcode).toMatch(/^G54\b/m)
+    expect(warnings.filter(w => /^\[HEADER_NO_WCS\]/.test(w))).toEqual([])
   })
 
   it('header warnings carry a first-motion-line anchor in the message', async () => {

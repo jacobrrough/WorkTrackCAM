@@ -160,10 +160,17 @@ describe('laguna-swift contract: header invariants', () => {
     expect(m3).toBeGreaterThan(g54)
   })
 
-  it('runtime: WCS line OMITTED when workCoordinateIndex is undefined', async () => {
+  it('runtime: WCS line DEFAULTS to G54 when workCoordinateIndex is undefined (never WCS-implicit)', async () => {
     const m = loadLagunaSwiftProfile()
     const { gcode } = await renderPost(RESOURCES_ROOT, m, SAMPLE_LAGUNA_TOOLPATH)
-    expect(gcode).not.toMatch(/^G54\b/m)
+    // WCS posture: the header must NEVER be WCS-implicit. With no explicit
+    // workCoordinateIndex the emitted line defaults to G54 (safe default) plus
+    // its "Active work offset" comment. A reworked HEADER_NO_WCS warning still
+    // nudges the operator to verify fixture zero (covered in
+    // post-process-header-invariants.test.ts).
+    expect(gcode).toMatch(/^G54\b/m)
+    expect(gcode).toMatch(/Active work offset/)
+    // Only the default G54 -- never a different offset.
     expect(gcode).not.toMatch(/^G55\b/m)
   })
 

@@ -989,6 +989,39 @@ export function __resetPostTemplateCache(): void {
   compiledPostTemplateCache.clear()
 }
 
+/**
+ * Locate the 1-based line of the first motion word (G0/G1/G2/G3) in a
+ * rendered G-code string, falling back to the total line count when no
+ * motion word is present. Mirrors the boundary logic in
+ * validateGcodeHeaderInvariants (gcode-header-invariants.ts) so the reworked
+ * HEADER_NO_WCS warning (see renderPost) carries the SAME "(first motion
+ * line N)" anchor the other header-invariant warnings use.
+ *
+ * Lives here rather than as an export of the validator module on purpose:
+ * the validator surface is pinned to exactly two runtime exports and an
+ * arity-2 validateGcodeHeaderInvariants (gcode-header-invariants-pin.test.ts).
+ * Re-basing the WCS nudge on the supplied index (the output now always
+ * carries a safe G54 default, so the validator's scan-for-missing-WCS would
+ * never fire) is a post-pipeline concern, so the small line-finder is local.
+ */
+function firstMotionLineForHeaderWarning(gcode: string): number {
+  const lines = gcode.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    // Strip parenthetical + semicolon comments before testing for motion so a
+    // commented-out move (e.g. "; G0 ...") is not mistaken for a real one.
+    let stripped = lines[i]!.replace(/\([^)]*\)/g, '')
+    const semiIdx = stripped.indexOf(';')
+    if (semiIdx >= 0) stripped = stripped.substring(0, semiIdx)
+    stripped = stripped.trim()
+    if (stripped === '') continue
+    // Token-boundary match for G0..G3 as whole words (not G10, G17, G28).
+    if (/(^|[^\dA-Za-z])G0*[0-3](\.\d+)?($|[^\d])/i.test(stripped)) {
+      return i + 1
+    }
+  }
+  return lines.length
+}
+
 export async function renderPost(
   resourcesRoot: string,
   machine: MachineProfile,
@@ -1056,7 +1089,16 @@ export async function renderPost(
   const tplPath = join(resourcesRoot, 'posts', machine.postTemplate)
   const template = await getOrLoadCompiledTemplate(tplPath)
   const { on, off, units } = resolveDialectSnippets(machine.dialect)
-  const wcsLine = resolveWorkOffsetLine(opts?.workCoordinateIndex)
+  // gcode-safety universal invariant: NEVER an implicit WCS. Every CNC
+  // controller in the fleet (RichAuto A-series, Smoothieware Carvera 3/4-axis)
+  // can retain the last work offset across power cycles -- trusting that is how
+  // stock gets machined into the fixture. So when no valid 1..6
+  // workCoordinateIndex is supplied, default the emitted WCS line to G54 rather
+  // than omitting it. The header is therefore never WCS-implicit. (The operator
+  // still gets a verify nudge: see the HEADER_NO_WCS warning rework below, which
+  // fires on a missing explicit index even though the safe G54 default is now
+  // always present in the output.)
+  const wcsLine = resolveWorkOffsetLine(opts?.workCoordinateIndex) ?? 'G54'
 
   let spindleOn = on
   let spindleWarning: string | undefined
@@ -1184,6 +1226,24 @@ export async function renderPost(
   for (const issue of headerIssues) {
     warnings.push(
       `[${issue.code}] ${issue.message} (first motion line ${issue.firstMotionLine})`
+    )
+  }
+  // [ID-0018] HEADER_NO_WCS verify nudge -- re-based on the SUPPLIED index.
+  // The emitted G-code now always carries a safe WCS line (wcsLine defaults to
+  // G54 above), so the validator's scan-for-missing-WCS can never fire and the
+  // operator would lose the prompt to confirm fixture zero. We restore the
+  // nudge here, triggered when no VALID explicit work offset (index 1..6) was
+  // supplied -- a deliberate G54..G59 selection suppresses it. The message
+  // conveys the safe default + verify ask; the [HEADER_NO_WCS] code prefix and
+  // the "(first motion line N)" suffix are preserved so existing parsers and
+  // the header-invariants tests keep matching. CNC-only: FDM headers skip every
+  // header invariant (matching the validator's own FDM short-circuit).
+  if (headerMode === 'cnc' && resolveWorkOffsetLine(opts?.workCoordinateIndex) == null) {
+    const firstMotionLine = firstMotionLineForHeaderWarning(gcode)
+    warnings.push(
+      `[HEADER_NO_WCS] No explicit work offset was supplied -- defaulted to ` +
+        `G54; verify the fixture zero matches the G54 work-coordinate origin ` +
+        `before running. (first motion line ${firstMotionLine})`
     )
   }
   // [ID-0108] Universal post-pipeline end-of-program invariants: every CNC

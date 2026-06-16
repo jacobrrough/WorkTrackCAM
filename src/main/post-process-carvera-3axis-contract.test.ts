@@ -181,12 +181,17 @@ describe('carvera-3axis contract: header invariants', () => {
     expect(m6).toBeGreaterThan(g54)
   })
 
-  it('runtime: WCS line OMITTED when workCoordinateIndex is undefined', async () => {
+  it('runtime: WCS line DEFAULTS to G54 when workCoordinateIndex is undefined (never WCS-implicit)', async () => {
     const m = loadCarvera3AxisProfile()
     const { gcode } = await renderPost(RESOURCES_ROOT, m, SAMPLE_3AXIS_TOOLPATH)
-    // No standalone G54..G59 line should be emitted; the only G5x in output
-    // would be the conventional WCS lines we explicitly opt out of here.
-    expect(gcode).not.toMatch(/^G54\b/m)
+    // WCS posture: the header must NEVER be WCS-implicit. With no explicit
+    // workCoordinateIndex the emitted line defaults to G54 (safe default) plus
+    // its "Active work offset" comment. A reworked HEADER_NO_WCS warning still
+    // nudges the operator to verify fixture zero (covered in
+    // post-process-header-invariants.test.ts).
+    expect(gcode).toMatch(/^G54\b/m)
+    expect(gcode).toMatch(/Active work offset/)
+    // Only the default G54 -- never a different offset.
     expect(gcode).not.toMatch(/^G55\b/m)
   })
 })

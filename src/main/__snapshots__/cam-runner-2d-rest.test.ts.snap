@@ -23,6 +23,8 @@ G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
 G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; ---------------------------------------------------------------------------
 ; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
 M3
@@ -162,6 +164,8 @@ exports[`dispatch2dStrategy -- cnc_pocket rest mode on Makera Carvera 3-axis (sh
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
 M6 T1            ; select tool 1 and execute tool change (auto-probes length)

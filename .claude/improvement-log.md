@@ -18953,3 +18953,36 @@ single-source). New helper resolveGenericProgramEnd + PostContext.programEnd + E
 (pocket/ridge/4-axis contour), G54 emitted when no workCoordinateIndex, helical/ramp entry,
 4-axis true-simultaneous interpolation. A cosmetic stale-doc fragment in carvera_4axis_grbl.hbs
 (lines 40-41 still say "M30") + an empty cam-axis4/strategies dir noted (pre-existing).
+
+## Cycle 262 — WCS posture: always emit G54 + reworked verify-warning (2026-06-16)
+
+**Focus:** the user-decided WCS posture (the CAM shake-down's one design-tension item).
+User chose: always emit G54 AND keep the operator nudge. One commit. gcode-safety-gated.
+
+**Baseline → result:** 16,943 → **16,944 pass / 1 skip / 0 fail** (+1); tsc clean; per-machine
+gcode-safety verdict PASS; snapshot audit found ZERO unexplained changes.
+
+**Posture (safe output + nudge):** (a) `wcsLine = resolveWorkOffsetLine(index) ?? 'G54'` in
+renderPost — the CNC header is NEVER WCS-implicit (the skill's universal anti-pattern, previously
+violated on no-index jobs). (b) the `[HEADER_NO_WCS]` warning is KEPT but re-based to fire when
+the machine is CNC AND no valid 1..6 index was supplied (since the output now always carries
+G54, the scan-for-missing-WCS trigger could never fire); message reworded to "no explicit work
+offset — defaulted to G54; verify the fixture zero ... (first motion line N)". A valid index
+suppresses it; FDM never gets it. The header-invariant validator stayed byte-identical (pinned
+2-export/arity-2 surface preserved) — the nudge is emitted from renderPost via a local
+first-motion-line helper.
+
+**Tests:** the old omit-WCS assertions flipped to assert the G54 default (post-process.test.ts,
+cam-edge-cases index 0/7, carvera-3axis + laguna-swift contracts); the header-invariants
+HEADER_NO_WCS-fires + first-motion-line tests still pass (warning still fires for no-index); +1
+new "explicit index suppresses the nudge" test.
+
+**gcode-safety (Step-5 record):** all 3 CNC references walked; regenerated samples PASS — Laguna
+% → G21/G90/G17/G94 → (comment + G54) → M3 → G4 P2.0 ... M30 (NOT M2); Carvera-3 G21/G90/G17 →
+(comment + G54) → M6 T1/G43 ... M2; Carvera-4 ... (comment + G54) → G0 Y0 ... M2, no M6. Snapshot
+audit: 49 added G54 + 49 added comments + 88 pure N-renumber pairs, ZERO other G/M-word deltas;
+machine-specific safety lines (Laguna tape/cool-down, Carvera-3 ATC+G49, Carvera-4 Y0/A0) intact.
+
+This closes the CAM-pillar correctness/posture work. Next: the four enhancement waves the user
+picked (CAM true-arcs, Assembly mate-types+interference, Drawings sheets/sections/BOM, CAM
+helical+4-axis-simultaneous).

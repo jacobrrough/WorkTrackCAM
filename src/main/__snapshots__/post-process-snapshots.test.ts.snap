@@ -23,6 +23,8 @@ G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
 G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; ---------------------------------------------------------------------------
 ; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
 M3
@@ -96,6 +98,8 @@ G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
 G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; ---------------------------------------------------------------------------
 ; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
 M3
@@ -306,6 +310,8 @@ exports[`Snapshot — arc fitting > arc fitting DISABLED: G1 moves preserved as-
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Arc Fitting Disabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -354,6 +360,8 @@ exports[`Snapshot — arc fitting > arc fitting ENABLED: G1 sequences converted 
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Arc Fitting Enabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -397,6 +405,8 @@ exports[`Snapshot — arc fitting > arc fitting with custom tolerance 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Arc Fitting Tolerance 0.01mm
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -535,23 +545,25 @@ exports[`Snapshot — combined options > arc fitting + line numbering 1`] = `
 N100 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N110 G90              ; absolute distance mode
 N120 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N130 G54
 ; Operation: Arc + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N130 M3 S12000
-N140 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N140 M3 S12000
+N150 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N150 G0 Z100 ; safe Z lift before first toolpath move
-N160 G0 X0 Y0 Z10
-N170 G0 X10 Y0 Z0
-N180 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
-N190 G0 Z10
+N160 G0 Z100 ; safe Z lift before first toolpath move
+N170 G0 X0 Y0 Z10
+N180 G0 X10 Y0 Z0
+N190 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+N200 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N200 M5
+N210 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N210 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N220 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N230 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N220 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N230 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N240 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -578,29 +590,31 @@ exports[`Snapshot — combined options > cutter compensation + line numbering 1`
 N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N20 G90              ; absolute distance mode
 N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N40 G54
 ; Operation: Comp + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N40 M3 S12000
-N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N50 M3 S12000
+N60 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N60 G0 Z100 ; safe Z lift before first toolpath move
-N70 G0 X0 Y0 Z10
-N80 G0 X5 Y5 Z5
-N90 G41 D7
-N100 G1 Z-1.000 F300
-N110 G1 X15 Y5 F800
-N120 G1 X15 Y15 F800
-N130 G1 X5 Y15 F800
-N140 G1 X5 Y5 F800
-N150 G40
-N160 G0 Z10
+N70 G0 Z100 ; safe Z lift before first toolpath move
+N80 G0 X0 Y0 Z10
+N90 G0 X5 Y5 Z5
+N100 G41 D7
+N110 G1 Z-1.000 F300
+N120 G1 X15 Y5 F800
+N130 G1 X15 Y15 F800
+N140 G1 X5 Y15 F800
+N150 G1 X5 Y5 F800
+N160 G40
+N170 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N170 M5
+N180 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N180 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N190 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N200 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N190 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N200 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N210 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -627,30 +641,32 @@ exports[`Snapshot — combined options > subroutines + line numbering (Fanuc) 1`
 N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N20 G90              ; absolute distance mode
 N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N40 G54
 ; Operation: Subs + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N40 M3 S10000
-N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N50 M3 S10000
+N60 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N60 G0 Z100 ; safe Z lift before first toolpath move
-N70 G0 X0 Y0 Z10
+N70 G0 Z100 ; safe Z lift before first toolpath move
+N80 G0 X0 Y0 Z10
 ; --- Subroutine call (4x repeat) ---
-N80 M98 P1000 L4
-N90 G0 Z10
+N90 M98 P1000 L4
+N100 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N100 M5
+N110 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N110 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N120 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N130 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N120 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N130 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N140 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 
 ; --- SUBROUTINE DEFINITIONS ---
-N140 O1000 (SUBROUTINE 1000)
-N150 G0 Z5
-N160 G1 Z-1.000 F300
-N170 G1 X10 Y0 F800
-N180 M99
+N150 O1000 (SUBROUTINE 1000)
+N160 G0 Z5
+N170 G1 Z-1.000 F300
+N180 G1 X10 Y0 F800
+N190 M99
 "
 `;
 
@@ -677,6 +693,8 @@ exports[`Snapshot — cutter compensation > cutter compensation LEFT (G41): clim
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Cutter Comp Left (G41)
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -726,6 +744,8 @@ exports[`Snapshot — cutter compensation > cutter compensation LEFT with D-regi
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Cutter Comp G41 D5
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -775,6 +795,8 @@ exports[`Snapshot — cutter compensation > cutter compensation NONE: no G41/G42
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Cutter Comp None
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -822,6 +844,8 @@ exports[`Snapshot — cutter compensation > cutter compensation RIGHT (G42): con
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Cutter Comp Right (G42)
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -871,6 +895,8 @@ exports[`Snapshot — cutter compensation > cutter compensation RIGHT with D-reg
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Cutter Comp G42 D3
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -920,6 +946,8 @@ exports[`Snapshot — cutter compensation > cutter compensation combined with ar
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Comp + Arc Fitting
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -1384,6 +1412,8 @@ exports[`Snapshot — inverse time feed mode > inverse time feed DISABLED: no G9
 G21              ; millimeters — must match Carvera controller settings
 G90              ; absolute distance mode (X Y Z A all absolute)
 G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: No Inverse Time
 ; Home / safe position — retract Z before rotating A to avoid collisions
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
@@ -1439,6 +1469,8 @@ exports[`Snapshot — inverse time feed mode > inverse time feed ENABLED: G93 be
 G21              ; millimeters — must match Carvera controller settings
 G90              ; absolute distance mode (X Y Z A all absolute)
 G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Inverse Time Enabled
 ; Home / safe position — retract Z before rotating A to avoid collisions
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
@@ -1498,6 +1530,8 @@ exports[`Snapshot — inverse time feed mode > inverse time feed on Carvera 4-ax
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Safe retract, center on rotary axis, and spindle start
 G0 Z100 ; safe Z retract
 G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis)
@@ -1547,6 +1581,8 @@ exports[`Snapshot — line numbering > line numbering DISABLED: no N-words in ou
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Line Numbering Off
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -1594,27 +1630,29 @@ exports[`Snapshot — line numbering > line numbering ENABLED: N-words prepended
 N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N20 G90              ; absolute distance mode
 N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N40 G54
 ; Operation: Line Numbering On
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N40 M3 S12000
-N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N50 M3 S12000
+N60 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N60 G0 Z100 ; safe Z lift before first toolpath move
-N70 G0 X0 Y0 Z10
-N80 G0 X5 Y5 Z5
-N90 G1 Z-1.000 F300
-N100 G1 X15 Y5 F800
-N110 G1 X15 Y15 F800
-N120 G1 X5 Y15 F800
-N130 G1 X5 Y5 F800
-N140 G0 Z10
+N70 G0 Z100 ; safe Z lift before first toolpath move
+N80 G0 X0 Y0 Z10
+N90 G0 X5 Y5 Z5
+N100 G1 Z-1.000 F300
+N110 G1 X15 Y5 F800
+N120 G1 X15 Y15 F800
+N130 G1 X5 Y15 F800
+N140 G1 X5 Y5 F800
+N150 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N150 M5
+N160 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N180 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N170 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N180 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N190 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1641,27 +1679,29 @@ exports[`Snapshot — line numbering > line numbering with Fanuc dialect 1`] = `
 N10 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N20 G90              ; absolute distance mode
 N30 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N40 G54
 ; Operation: Fanuc Line Numbering
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N40 M3 S10000
-N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N50 M3 S10000
+N60 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N60 G0 Z100 ; safe Z lift before first toolpath move
-N70 G0 X0 Y0 Z10
-N80 G0 X5 Y5 Z5
-N90 G1 Z-1.000 F300
-N100 G1 X15 Y5 F800
-N110 G1 X15 Y15 F800
-N120 G1 X5 Y15 F800
-N130 G1 X5 Y5 F800
-N140 G0 Z10
+N70 G0 Z100 ; safe Z lift before first toolpath move
+N80 G0 X0 Y0 Z10
+N90 G0 X5 Y5 Z5
+N100 G1 Z-1.000 F300
+N110 G1 X15 Y5 F800
+N120 G1 X15 Y15 F800
+N130 G1 X5 Y15 F800
+N140 G1 X5 Y5 F800
+N150 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N150 M5
+N160 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N180 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N170 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N180 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N190 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1688,27 +1728,29 @@ exports[`Snapshot — line numbering > line numbering with custom start and incr
 N100 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 N105 G90              ; absolute distance mode
 N110 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+N115 G54
 ; Operation: Custom Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
-N115 M3 S12000
-N120 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+N120 M3 S12000
+N125 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
 ; Pre-cut safe-Z lift so the first move starts from a known clearance,
 ; regardless of where the previous job left Z or what Z the controller booted into.
-N125 G0 Z100 ; safe Z lift before first toolpath move
-N130 G0 X0 Y0 Z10
-N135 G0 X5 Y5 Z5
-N140 G1 Z-1.000 F300
-N145 G1 X15 Y5 F800
-N150 G1 X15 Y15 F800
-N155 G1 X5 Y15 F800
-N160 G1 X5 Y5 F800
-N165 G0 Z10
+N130 G0 Z100 ; safe Z lift before first toolpath move
+N135 G0 X0 Y0 Z10
+N140 G0 X5 Y5 Z5
+N145 G1 Z-1.000 F300
+N150 G1 X15 Y5 F800
+N155 G1 X15 Y15 F800
+N160 G1 X5 Y15 F800
+N165 G1 X5 Y5 F800
+N170 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N170 M5
+N175 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N175 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N180 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N185 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
+N180 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N185 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N190 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1735,6 +1777,8 @@ exports[`Snapshot — spindle RPM clamping > RPM below min is clamped 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: RPM Clamped Min
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S6000
@@ -1782,6 +1826,8 @@ exports[`Snapshot — spindle RPM clamping > RPM exceeding max is clamped 1`] = 
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: RPM Clamped Max
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S15000
@@ -1829,6 +1875,8 @@ exports[`Snapshot — spindle RPM clamping > custom RPM within range 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: RPM 10000
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
@@ -1876,6 +1924,8 @@ exports[`Snapshot — subroutine detection > subroutines DISABLED: repeated bloc
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Subroutines Disabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -1929,6 +1979,8 @@ exports[`Snapshot — subroutine detection > subroutines Fanuc dialect: M98/M99 
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Subroutines Fanuc
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
@@ -1979,6 +2031,8 @@ exports[`Snapshot — subroutine detection > subroutines Mach3 dialect: M98/sub/
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Subroutines Mach3
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3
@@ -2029,6 +2083,8 @@ exports[`Snapshot — subroutine detection > subroutines Siemens dialect: CALL L
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Subroutines Siemens
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
@@ -2085,6 +2141,8 @@ exports[`Snapshot — tool changes (Carvera ATC) > default tool T1 when toolNumb
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
 M6 T1            ; select tool 1 and execute tool change (auto-probes length)
@@ -2144,6 +2202,8 @@ exports[`Snapshot — tool changes (Carvera ATC) > tool T3 with G43 H3 tool leng
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
 M6 T3            ; select tool 3 and execute tool change (auto-probes length)
@@ -2203,6 +2263,8 @@ exports[`Snapshot — tool changes (Carvera ATC) > tool T6 (max ATC slot) 1`] = 
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
 M6 T6            ; select tool 6 and execute tool change (auto-probes length)

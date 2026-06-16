@@ -28,6 +28,8 @@ exports[`G-code snapshot — carvera_3axis.hbs > carvera 3-axis dialect 1`] = `
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; --- Tool change (ATC) ---
 ; Verify tool number matches the slot loaded in the Carvera ATC.
 M6 T1            ; select tool 1 and execute tool change (auto-probes length)
@@ -85,6 +87,8 @@ exports[`G-code snapshot — carvera_4axis.hbs > carvera 4-axis dialect 1`] = `
 G21              ; millimeters
 G90              ; absolute positioning
 G17              ; XY plane
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Safe retract, center on rotary axis, and spindle start
 G0 Z100 ; safe Z retract
 G0 Y0            ; CRITICAL: center tool on rotation axis (Y must be 0 for 4-axis)
@@ -136,6 +140,8 @@ exports[`G-code snapshot — carvera_4axis_grbl.hbs > grbl_4axis dialect 1`] = `
 G21              ; millimeters — must match Carvera controller settings
 G90              ; absolute distance mode (X Y Z A all absolute)
 G17              ; XY plane for G2/G3 arcs; 4-axis arcs use XZ with G18 if needed
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot 4-Axis GRBL
 ; Home / safe position — retract Z before rotating A to avoid collisions
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
@@ -186,6 +192,8 @@ exports[`G-code snapshot — cnc_generic_mm.hbs > Fanuc dialect 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot Test — Fanuc
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
@@ -233,6 +241,8 @@ exports[`G-code snapshot — cnc_generic_mm.hbs > GRBL dialect 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot Test — GRBL
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
@@ -329,6 +339,8 @@ exports[`G-code snapshot — cnc_generic_mm.hbs > Heidenhain dialect 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot Test — Heidenhain
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
@@ -376,6 +388,8 @@ exports[`G-code snapshot — cnc_generic_mm.hbs > Mach3 dialect 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot Test — Mach3
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3
@@ -423,6 +437,8 @@ exports[`G-code snapshot — cnc_generic_mm.hbs > Siemens dialect 1`] = `
 G21        ; G21=mm / G20=inch — must match controller defaults at power-on
 G90              ; absolute distance mode
 G17              ; XY plane (typical for G2/G3 arcs)
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
 ; Operation: Snapshot Test — Siemens
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000

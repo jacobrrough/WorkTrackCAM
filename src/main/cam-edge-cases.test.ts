@@ -625,14 +625,16 @@ describe('Edge cases — renderPost with empty/minimal inputs', () => {
     expect(gcode).toContain('G1 X999 Y999 F800')
   })
 
-  it('workCoordinateIndex 0 (invalid) omits WCS line', async () => {
+  it('workCoordinateIndex 0 (invalid) falls back to the G54 default (never WCS-implicit)', async () => {
     const { gcode } = await renderPost(resourcesRoot, testMill, [], { workCoordinateIndex: 0 })
-    expect(gcode).not.toContain('Active work offset')
+    expect(gcode).toContain('Active work offset')
+    expect(gcode).toMatch(/^G54\b/m)
   })
 
-  it('workCoordinateIndex 7 (out of range) omits WCS line', async () => {
+  it('workCoordinateIndex 7 (out of range) falls back to the G54 default (never WCS-implicit)', async () => {
     const { gcode } = await renderPost(resourcesRoot, testMill, [], { workCoordinateIndex: 7 })
-    expect(gcode).not.toContain('Active work offset')
+    expect(gcode).toContain('Active work offset')
+    expect(gcode).toMatch(/^G54\b/m)
   })
 
   it('workCoordinateIndex 1 injects G54', async () => {

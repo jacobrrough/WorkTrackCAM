@@ -34,9 +34,15 @@ describe('renderPost', () => {
     expect(g).toMatch(/Active work offset/)
   })
 
-  it('omits WCS line when index absent', async () => {
+  it('defaults to G54 when index absent (never WCS-implicit)', async () => {
+    // WCS posture: the header must NEVER omit the work offset. With no
+    // workCoordinateIndex the emitted line defaults to G54 (safe default)
+    // plus its "Active work offset" comment. A reworked HEADER_NO_WCS warning
+    // (post-process-header-invariants.test.ts) still nudges the operator to
+    // verify fixture zero, but the G-code itself carries G54.
     const { gcode: g } = await renderPost(resourcesRoot, machine, ['G0 X1 Y1'])
-    expect(g).not.toContain('Active work offset')
+    expect(g).toContain('Active work offset')
+    expect(g).toMatch(/^G54\b/m)
   })
 
   it('workCoordinateIndex=1 injects G54, index=6 injects G59', async () => {
@@ -46,11 +52,16 @@ describe('renderPost', () => {
     expect(g6).toContain('G59')
   })
 
-  it('workCoordinateIndex=0 and index=7 are out of range and omit WCS line', async () => {
+  it('workCoordinateIndex=0 and index=7 are out of range and fall back to the G54 default', async () => {
+    // Out-of-range indices are not valid selections, so resolveWorkOffsetLine
+    // returns undefined -- but the header still defaults to G54 (never
+    // WCS-implicit) rather than omitting the line.
     const { gcode: g0 } = await renderPost(resourcesRoot, machine, [], { workCoordinateIndex: 0 })
-    expect(g0).not.toContain('Active work offset')
+    expect(g0).toContain('Active work offset')
+    expect(g0).toMatch(/^G54\b/m)
     const { gcode: g7 } = await renderPost(resourcesRoot, machine, [], { workCoordinateIndex: 7 })
-    expect(g7).not.toContain('Active work offset')
+    expect(g7).toContain('Active work offset')
+    expect(g7).toMatch(/^G54\b/m)
   })
 
   it('grbl_4axis dialect emits Carvera-safe spindle RPM (S12000)', async () => {
