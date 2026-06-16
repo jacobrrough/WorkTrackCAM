@@ -1,6 +1,6 @@
 # WorkTrack3D — Security Posture & Dependency Advisory Tracking
 
-**Last updated**: 2026-06-15
+**Last updated**: 2026-06-16
 **Owner**: dependency-security workflow (DEP stack)
 
 This doc is the source of truth for WorkTrack3D's security posture: which
@@ -18,23 +18,23 @@ The numbers in this file are a snapshot in time; the dashboard is real-time.
 
 ---
 
-## TL;DR — Current State (2026-06-15 snapshot)
+## TL;DR — Current State (2026-06-16 snapshot)
 
 | Severity | Open (full tree) | Notes |
 |----------|-----:|-------|
 | Critical |    0 | vitest CVE GHSA-5xrq-8626-4rwp closed (vitest 3 → 4.1.8) in a prior wave. |
-| High     |    4 | **dev-only, deferred** — the esbuild ≤0.24.2 dev-server CORS advisory (GHSA-67mh-4wv8-2f99) via the `vite` / `electron-vite` / `@vitejs/plugin-react` build chain. Fixing needs `npm audit fix --force` (vite major bump) — breaking, NOT shipped to users. See "Deferred" below. |
-| Moderate |    0 | **js-yaml quadratic-DoS GHSA-h67p-54hq-rp68 closed 2026-06-15** via `npm audit fix` (non-breaking lockfile bump); DOMPurify still forced via `overrides`. |
-| Low      |    0 | `@tootallnate/once` closed in a prior wave. |
-| **Total**| **4** | `npm audit --omit=dev` reports **0** (the release gate is GREEN); full `npm audit` reports **4 high**, all dev-only build tooling. |
+| High     |    0 | **esbuild dev-server advisory GHSA-gv7w-rqvm-qjhr CLOSED 2026-06-16** via an `overrides` bump to esbuild `^0.28.1`, verified with a full `electron-vite build` + typecheck + full-suite re-run. (The older esbuild GHSA-67mh-4wv8-2f99 was already resolved — the tree had moved to esbuild 0.25.x.) |
+| Moderate |    0 | js-yaml quadratic-DoS GHSA-h67p-54hq-rp68 closed 2026-06-15. |
+| Low      |    0 | **DOMPurify (runtime) GHSA-gvmj-g25r-r7wr CLOSED 2026-06-16** — `overrides` floor raised `^3.4.7` → `^3.4.8` (resolves 3.4.10) under `monaco-editor`. |
+| **Total**| **0** | Both full `npm audit` and `npm audit --omit=dev` report **0** — Dependabot dashboard and runtime release gate both GREEN. |
 
-**Runtime / user-shipping advisory count: 0 (release gate GREEN). Full dev+prod advisory count: 4 (all dev-only esbuild/vite chain, deferred).**
+**Runtime / user-shipping advisory count: 0 (release gate GREEN). Full dev+prod advisory count: 0** — the esbuild dev-chain high (GHSA-gv7w-rqvm-qjhr) and the DOMPurify runtime low (GHSA-gvmj-g25r-r7wr) were both **closed 2026-06-16** via `overrides` bumps + a full build/typecheck/test re-verify (not deferred).
 
 The 2026-06-15 sketch campaign merge to `main` surfaced (via the GitHub push hook) a runtime
 `js-yaml` moderate (quadratic-complexity DoS in merge-key handling) — **closed same day** with a
 non-breaking `npm audit fix` (only `package-lock.json` changed; full suite 16,617/0 + typecheck
-re-verified clean). The 4 remaining high advisories are the esbuild dev-server CORS chain and are
-knowingly deferred (dev-only, breaking to fix) — see below.
+re-verified clean). The esbuild dev-server high that remained after that fix (GHSA-gv7w-rqvm-qjhr) was
+**closed 2026-06-16** via an `overrides` bump to esbuild `^0.28.1` — see the Closed section.
 
 The 2026-06-08 Text-engine wave added `opentype.js@^2.0.0` (runtime, MIT) +
 `@types/opentype.js@^1.3.10` (dev). `npm install` added **one** package; both
@@ -55,22 +55,11 @@ dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
 
 ## Deferred advisories
 
-### High — esbuild ≤0.24.2 dev-server CORS (GHSA-67mh-4wv8-2f99) — DEV-ONLY, DEFERRED
-- **Chain**: `esbuild` → `vite` (4.2.0-beta.0 – 8.0.3) → `electron-vite` + `@vitejs/plugin-react`.
-  Reported as 4 high entries (one per node in the chain) by full `npm audit`.
-- **Why high / why it does NOT ship**: the advisory is that esbuild's **dev server** lets any
-  web page send it cross-origin requests and read the response. It affects `npm run dev` only —
-  the esbuild/vite dev server is **never** part of the packaged Electron app (`electron-vite
-  build` produces static bundles; no dev server runs in production). `npm audit --omit=dev`
-  reports **0**, confirming nothing in the shipped tree is affected.
-- **Why deferred, not fixed**: the only fix `npm audit` offers is `npm audit fix --force`, which
-  bumps `vite` across a major (4/5 → 8) and pulls `electron-vite` + `@vitejs/plugin-react` majors
-  with it — a breaking change to the entire build/test toolchain. Not worth the regression risk
-  for a dev-server-only advisory with zero runtime exposure.
-- **Re-evaluation trigger**: do the major bump as its own dedicated wave (own branch, full
-  build + 16,600-test re-verify, signed-installer smoke) — NOT bundled into a feature cycle.
-- **Status**: **DEFERRED** (dev-only). The runtime release gate (`npm audit --omit=dev` = 0) is
-  unaffected and remains the hard gate before any release build.
+**None (full tree).** The esbuild dev-chain high that was previously deferred in this section is
+now **CLOSED** — see "High — esbuild dev-server GHSA-gv7w-rqvm-qjhr" in the Closed section below.
+As of 2026-06-16 both full `npm audit` and `npm audit --omit=dev` report 0. The earlier deferral
+rationale ("the only fix is a breaking `vite` major bump") no longer held: an `overrides` floor of
+esbuild `^0.28.1` cleared it without a vite/electron-vite major, proven by a full bundler smoke.
 
 ## Closed advisories (recent)
 
@@ -83,6 +72,29 @@ dev-only `tar`/`cacache` path that electron-builder 25 pulled in transitively.
 - **Validation**: `npm audit --omit=dev` → **0 vulnerabilities**; full suite **16,617 passed / 1
   skipped / 0 failed**; `tsc --noEmit` clean — all re-verified after the bump.
 - **Status**: **CLOSED**. Runtime release gate restored to GREEN (0).
+
+### High — esbuild dev-server GHSA-gv7w-rqvm-qjhr (closed 2026-06-16)
+- **Bump**: added `esbuild: "^0.28.1"` to the `overrides` block (resolves esbuild 0.28.1 in place
+  of 0.25.12 under `vite` + `electron-vite`). Dev-only — esbuild's dev server is never part of the
+  packaged Electron app.
+- **Why an override was needed**: `vite@6.4.3` declares `esbuild ^0.25.0` and `electron-vite@3.1.0`
+  declares `^0.25.1`, so 0.28.1 is outside both ranges — there is no clean parent bump within the
+  current vite/electron-vite majors. The `overrides` floor forces it.
+- **Why this was safe to force (the old deferral rationale no longer held)**: the override stays
+  within esbuild's stable transform/build API that vite consumes. Verified with the **bundler
+  smoke that a green tsc+vitest alone does not prove**: `electron-vite build` bundled main (136
+  modules), preload, and renderer (846 modules) clean; `tsc --noEmit` clean; full vitest suite
+  re-ran **17,221 passed / 0 failed**. No `vite`/`electron-vite` major bump was required.
+- **Status**: **CLOSED**. Re-evaluate only if a future esbuild minor breaks the vite build (then
+  pin to the last-good 0.28.x).
+
+### Low — DOMPurify (runtime) GHSA-gvmj-g25r-r7wr (closed 2026-06-16)
+- **Bump**: raised the existing `overrides` floor `dompurify@^3.4.7` → `^3.4.8` (resolves 3.4.10).
+  DOMPurify is pulled in transitively by `monaco-editor@0.55.1`; it sits in the **runtime** tree,
+  so it counted against `npm audit --omit=dev` (which had slipped to 2 low before this fix).
+- **Validation**: `npm audit --omit=dev` → **0**; full `npm audit` → **0**; `npm ls dompurify`
+  shows 3.4.10 under `monaco-editor`.
+- **Status**: **CLOSED**. Runtime release gate restored to GREEN.
 
 ### Critical — vitest GHSA-5xrq-8626-4rwp (closed in commit 61fb5fa)
 - **Bump**: vitest `^3.0.0` → `^4.1.8`, plus `@vitest/coverage-v8 ^4.1.8`.
@@ -292,8 +304,12 @@ The following entries in `package-lock.json` are pinned by the `overrides`
 block in `package.json` and will stay stable across `npm install` runs even
 if a parent's `package.json` keeps declaring a vulnerable range:
 
-- `dompurify@^3.4.7` — forced by `overrides`. Every transitive resolution
-  (currently only via `monaco-editor`) lands on 3.4.7.
+- `dompurify@^3.4.8` — forced by `overrides` (raised from `^3.4.7` on 2026-06-16 to clear
+  GHSA-gvmj-g25r-r7wr). Every transitive resolution (currently only via `monaco-editor`)
+  lands on 3.4.8+ (currently 3.4.10).
+- `esbuild@^0.28.1` — forced by `overrides` (added 2026-06-16 to clear GHSA-gv7w-rqvm-qjhr).
+  `vite` + `electron-vite` declare `^0.25.x`; the override lifts every resolution to 0.28.1.
+  Verified with a full `electron-vite build` (no major vite bump required).
 
 If a future dep introduces a separate dompurify range that conflicts with
 `^3.4.7`, npm will error at install time — that is the desired behavior,
