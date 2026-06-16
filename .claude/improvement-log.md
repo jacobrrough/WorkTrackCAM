@@ -18822,3 +18822,45 @@ x=7 after a real JSON round-trip; schema rejects empty geometrySource; dangling 
 rides geometrySource/designModelId — re-resolving the body from a stale session handle is a
 sidecar concern); interference detection, BOM depth, exploded views; the legacy in-component face-id
 Mates modal remains divergent (pre-existing, flagged). These define later Assembly waves.
+
+## Cycle 259 — Drawings persistence: the write-only gap closed (2026-06-15)
+
+**Focus:** gold-standard campaign, Drawings pillar. The backend (drawing:load/drawing:save IPC,
+drawing-file-store, DrawingFile schema) was fully built but the renderer NEVER called it —
+onPersistDimensions={setDrawingDimensions} only updated local state, titleBlock was local-only,
+nothing hydrated on load. So dimensions/GD&T/title block/annotations were write-only-to-memory
+(the assembly-#9 / disappearing-data bug class — the LAST instance across the pillars). One commit.
+
+**Baseline → result:** 16,809 → **16,859 pass / 1 skip / 0 fail** (+50); tsc clean; Cycle-249/256/
+257/258 + sketch pins all intact (re-verified); independent real-disk E2E probe 4/4.
+
+**Wired end-to-end (additive, backward-compatible per Safety Rule 2):**
+- **Preload bridge:** fab.drawingLoad / fab.drawingSave → the existing drawing:load/drawing:save IPC.
+- **Pure round-trip seam** (src/shared/drawing-hydrate.ts): foldDrawingState(state, base) → DrawingFile
+  + hydrateDrawingFile(file) → DrawingViewState (dimensions + GD&T frames + titleBlock + notes +
+  revisions + bom). Folds over the loaded base so FOREIGN sheets / non-modelled fields survive.
+- **Persistence in DesignSessionContext** (reusing the kernel-op-timeline hardening, NOT duplicating
+  it): drawing/onDrawingChange threaded host → DesignWorkspace (controlled drawing/onDrawing props,
+  provider-less SSR fallback preserved) → DrawingView. On project-open: fab.drawingLoad →
+  hydrateDrawingFile. On change: DEBOUNCED fab.drawingSave of COMMITTED state, serialized + flushed
+  on unmount. titleBlock gained its persist path (onPersistTitleBlock) + a value-guarded controlled
+  mirror so a late async hydration doesn't clobber an in-progress edit.
+- **Honesty:** the projection "not certified HLR" caveat surfaced (role=note).
+
+**Persistence-safety (the hard-won lessons applied):** Cycle-249 anti-clobber (load guarded by
+lastDrawingLoadKeyRef===projectDir; effect deps [fab, projectDir] only; status via onStatusRef) +
+Cycle-256 committed-read (debounced save reads drawingRef.current). Schema: titleBlock added
+.optional() (no .default, matching the annotations field) so legacy/empty drawing.json parses
+byte-faithfully.
+
+**Tests:** +50 — drawing-hydrate round-trip (every dimension kind + label + title block; legacy →
+empty; foreign-sheet preservation; purity) + drawings-persistence-wiring source/render pins
+(bridge, schema-additive, load-key guard, committed-read, debounce+unmount-flush, onPersist*→
+onDrawing not bare setState, host threading, HLR caveat).
+
+**Honest residuals (deferred, documentation-only — not persistence bugs):** multi-sheet authoring
+(fold writes ONE primary sheet though foreign sheets are preserved), section views, BOM/balloons,
+a dedicated CSS rule for the caveat note. These define a later Drawings polish wave.
+
+**Systemic note:** this closes the persistence/reload write-only bug class in ALL FOUR pillars
+(sketch clobber → assembly #9 → drawings) — the features were built, the round-trip was never wired.

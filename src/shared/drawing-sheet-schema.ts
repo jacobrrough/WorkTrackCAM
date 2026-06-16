@@ -36,6 +36,41 @@ export const drawingViewPlaceholderSchema = z.object({
 
 export type DrawingViewPlaceholder = z.infer<typeof drawingViewPlaceholderSchema>
 
+/**
+ * Persistable title-block metadata for one sheet (mirrors the renderer's
+ * `DrawingTitleBlock` in `DrawingView.tsx`: name / scale / author / date /
+ * sheet). Every field is a bounded free-text string and defaults to empty so a
+ * sheet that has never had a title block authored still produces a fully-shaped
+ * object once the field is present. Lengths are capped to the same drafting-sane
+ * 120 chars the renderer's `<input maxLength>` enforces so a runaway string can
+ * never blow out the persisted sheet or the title-block stamp.
+ *
+ * Additive + `.optional()` on `drawingSheetSchema` (NO Zod `.default(...)`, same
+ * rationale as the sibling `annotations` field): a `.default(...)` would mark
+ * `titleBlock` REQUIRED on the inferred `DrawingSheet` output type, forcing the
+ * field onto every sheet object literal across the codebase. Keeping it
+ * `.optional()` lets `drawing-hydrate.ts` read-time-default via
+ * {@link emptyDrawingTitleBlock} and keeps save/load byte-faithful (a sheet
+ * authored without a title block round-trips without one), so the
+ * `drawing-file-store` round-trip pins continue to hold against bare fixtures.
+ *
+ * Safety Rule 1: documentation metadata only — never read by CAM/G-code.
+ */
+export const drawingTitleBlockSchema = z.object({
+  name: z.string().max(120).default(''),
+  scale: z.string().max(120).default(''),
+  author: z.string().max(120).default(''),
+  date: z.string().max(120).default(''),
+  sheet: z.string().max(120).default('')
+})
+
+export type DrawingTitleBlock = z.infer<typeof drawingTitleBlockSchema>
+
+/** A fully-defaulted empty title block (all fields blank). Seed for hydrate. */
+export function emptyDrawingTitleBlock(): DrawingTitleBlock {
+  return drawingTitleBlockSchema.parse({})
+}
+
 /** One row for PDF/DXF title-block lists (resolved labels + preview copy). */
 export type DrawingExportViewRow = {
   kind: string
@@ -84,7 +119,15 @@ export const drawingSheetSchema = z.object({
    * rebuild while keeping a durable fallback coordinate. Safety Rule 1: these
    * are documentation overlays only — nothing in CAM/G-code ever reads them.
    */
-  annotations: drawingSheetAnnotationsSchema.optional()
+  annotations: drawingSheetAnnotationsSchema.optional(),
+  /**
+   * Title-block metadata (name / scale / author / date / sheet) the operator
+   * fills in the Drawings title-block panel. Additive + `.optional()` (same
+   * back-compat contract as `annotations` above — no `.default(...)`, so a
+   * legacy `drawing.json` with no title block parses unchanged and save/load
+   * stays byte-faithful). Documentation metadata only (Safety Rule 1).
+   */
+  titleBlock: drawingTitleBlockSchema.optional()
 })
 
 export const drawingFileSchema = z.object({

@@ -249,6 +249,16 @@ export interface DrawingViewProps {
     readonly radiusMm: number
     readonly label: string
   }) => void
+  /**
+   * CAD V2 persistence -- called whenever the title-block metadata changes (any
+   * field edited in the Title Block panel). The host writes the result into
+   * `sheet.titleBlock`. Optional + readonly (additive): when omitted the title
+   * block still edits locally but the change is not persisted (the legacy
+   * write-only-to-memory behaviour). The seam mirrors `onPersistDimensions` /
+   * `onPersistGdt`; the title block is seeded from {@link initialTitleBlock} (so
+   * a host that re-keys this component on project-open lands the hydrated value).
+   */
+  readonly onPersistTitleBlock?: (next: DrawingTitleBlock) => void
 }
 
 /**
@@ -777,6 +787,7 @@ export function DrawingView({
   persistedGdtFrames,
   onPersistGdt,
   onDetail,
+  onPersistTitleBlock,
 }: DrawingViewProps): JSX.Element {
   const [activeView, setActiveView] = useState<DrawingViewAxis>(initialView)
   const [svg, setSvg] = useState<string | null>(previewSvg ?? null)
@@ -912,6 +923,19 @@ export function DrawingView({
 
   /** Ref to the SVG host div -- used to locate the inner <svg> for coord mapping. */
   const svgHostRef = useRef<HTMLDivElement>(null)
+
+  // -- Controlled title-block mirror ----------------------------------------
+  //
+  // In controlled mode (onPersistTitleBlock supplied), sync local titleBlock to
+  // an externally-changed `initialTitleBlock` (project-open hydration that lands
+  // after mount). Value-guarded so it is a no-op when the value already matches
+  // (the user-edit round-trip), so it never clobbers an in-progress edit.
+  useEffect(() => {
+    if (onPersistTitleBlock === undefined || initialTitleBlock === undefined) return
+    setTitleBlock((prev) =>
+      JSON.stringify(prev) === JSON.stringify(initialTitleBlock) ? prev : initialTitleBlock,
+    )
+  }, [onPersistTitleBlock, initialTitleBlock])
 
   // -- Alt key tracking -----------------------------------------------------
 
@@ -1210,9 +1234,16 @@ export function DrawingView({
 
   const updateTitleField = useCallback(
     (field: keyof DrawingTitleBlock, value: string): void => {
-      setTitleBlock((prev) => ({ ...prev, [field]: value }))
+      setTitleBlock((prev) => {
+        const next = { ...prev, [field]: value }
+        // Persist the COMPUTED next block (not the stale `titleBlock` closure) so
+        // a rapid edit burst always reports the latest value up to the host's
+        // debounced save -- no eager-updater capture (Cycle-256).
+        onPersistTitleBlock?.(next)
+        return next
+      })
     },
-    [],
+    [onPersistTitleBlock],
   )
 
   /**
@@ -2064,6 +2095,14 @@ export function DrawingView({
         data-testid="design-drawing-title-panel"
       >
         <h3 className="design-drawing__title-panel-heading">Title Block</h3>
+        <p
+          className="design-drawing__projection-caveat"
+          data-testid="design-drawing-projection-caveat"
+          role="note"
+        >
+          Projected views are mesh-edge previews, not certified hidden-line
+          removal (HLR). Verify critical dimensions against the model.
+        </p>
         <label className="design-drawing__title-row">
           <span className="design-drawing__title-label">Name</span>
           <input

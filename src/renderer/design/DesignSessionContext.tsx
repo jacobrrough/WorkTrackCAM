@@ -21,6 +21,13 @@ import {
 import { formatKernelBuildStatus } from '../../shared/kernel-build-messages'
 import type { KernelManifest } from '../../shared/kernel-manifest-schema'
 import { defaultPartFeatures, type KernelPostSolidOp, type PartFeaturesFile } from '../../shared/part-features-schema'
+import {
+  emptyDrawingViewState,
+  foldDrawingState,
+  hydrateDrawingFile,
+  type DrawingViewState
+} from '../../shared/drawing-hydrate'
+import type { DrawingFile } from '../../shared/drawing-sheet-schema'
 import { applyTimelineAction, type TimelineState } from './feature-timeline-actions'
 import { linearPatternSketch, mirrorDesignAcrossYAxis } from './design-ops'
 import { derivePartFeatures } from './derive-features'
@@ -61,6 +68,15 @@ function docReducer(state: DocState, action: DocAction): DocState {
  * 300–400 ms cadence used elsewhere (DesignWorkspace's list-ops debounce).
  */
 const KERNEL_AUTO_BUILD_DEBOUNCE_MS = 400
+
+/**
+ * Debounce window (ms) for persisting the Drawings sheet to `drawing.json`. A
+ * title-block keystroke or a placed dimension flips `drawing` state immediately
+ * (the UI stays live); this delay coalesces a typing burst into ONE `drawing:save`
+ * so we never write the file on every character. Matches the 300–400 ms cadence
+ * used by the kernel auto-build + the DesignWorkspace list-ops debounce.
+ */
+const DRAWING_SAVE_DEBOUNCE_MS = 400
 
 const kernelFinishingOpKinds = new Set<KernelPostSolidOp['kind']>([
   'fillet_all',
@@ -174,6 +190,23 @@ export type DesignSessionValue = {
   setKernelRollbackMarker: (index: number | null) => Promise<void>
   updateFeatureSuppressed: (featureId: string, suppressed: boolean) => void
   solveReport: string
+  /**
+   * The Drawings sheet state hydrated from `<projectDir>/drawing/drawing.json`
+   * on project-open (dimensions + GD&T frames + title block + the remaining
+   * annotation arrays). `null` until the first load settles for the open
+   * project (or when no project is open); the Drawings workspace renders from
+   * the empty default until then. Documentation overlays only — never read by
+   * CAM/G-code (Safety Rule 1).
+   */
+  drawing: DrawingViewState | null
+  /**
+   * Persist a new Drawings sheet state. The session DEBOUNCES the
+   * `drawing:save` and folds the COMMITTED state through the `DrawingFile`
+   * schema (additive — a legacy/empty `drawing.json` round-trips unchanged,
+   * Safety Rule 2). No-op without an open project. Survives reload + a
+   * Drawings↔other-route switch.
+   */
+  onDrawingChange: (next: DrawingViewState) => void
   onStatus?: (msg: string) => void
   onExportedStl?: (path: string) => void
 }
@@ -223,6 +256,10 @@ export function DesignSessionProvider({
 }: ProviderProps) {
   const [{ design, past }, dispatch] = useReducer(docReducer, { design: emptyDesign(), past: [] })
   const [features, setFeatures] = useState<PartFeaturesFile | null>(null)
+  // Drawings sheet state hydrated from drawing.json on project-open. `null`
+  // until the first load settles (or when no project is open). See the drawing
+  // load + persist block below.
+  const [drawing, setDrawing] = useState<DrawingViewState | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [selection, setSelection] = useState<DesignSelection>(null)
   const [solveReport, setSolveReport] = useState('')
@@ -255,6 +292,33 @@ export function DesignSessionProvider({
   // The (projectDir, designDiskRevision) key the design was last loaded for; the
   // load effect skips a redundant reload when unchanged (the anti-clobber guard).
   const lastDesignLoadKeyRef = useRef<string | null>(null)
+
+  // ── Drawings persistence plumbing (mirrors the design load-guard + the
+  // kernel-features serialized-write pattern) ─────────────────────────────────
+  // The (projectDir) key the drawing was last hydrated for. The load effect
+  // skips a redundant reload when unchanged so a re-render that re-fires the
+  // effect can NEVER reload drawing.json over unsaved in-memory drawing edits
+  // (the Cycle-249 anti-clobber guard, applied to the Drawings sheet).
+  const lastDrawingLoadKeyRef = useRef<string | null>(null)
+  // The freshest COMMITTED drawing state. The debounced save reads THIS (not a
+  // render-cycle closure) so it always persists the latest committed edits and
+  // never captures a stale eager-updater snapshot (Cycle-256). Updated
+  // synchronously by `onDrawingChange` before it schedules the save.
+  const drawingRef = useRef<DrawingViewState | null>(null)
+  drawingRef.current = drawing
+  // The LOADED-from-disk DrawingFile for the open project. The fold persists
+  // onto this base so any sheets / sheet fields the renderer does not model are
+  // preserved across a save (additive, Safety Rule 2). Updated on each load.
+  const drawingFileBaseRef = useRef<DrawingFile | null>(null)
+  // Debounce timer for the drawing save; cleared on unmount + on every change so
+  // a typing burst in the title block coalesces into ONE save.
+  const drawingSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Serialize drawing.json writes so two debounced saves never interleave.
+  const drawingWriteChainRef = useRef<Promise<void>>(Promise.resolve())
+  // Latest projectDir, read by the unmount FLUSH (its effect has [] deps so it
+  // can't close over the live projectDir prop).
+  const projectDirRef = useRef(projectDir)
+  projectDirRef.current = projectDir
 
   // task: kernel-op edits clobbering each other — the seven timeline editors
   // (append / remove / move / suppress / reorder / roll-back / feature-suppress)
@@ -316,6 +380,57 @@ export function DesignSessionProvider({
       cancelled = true
     }
   }, [fab, projectDir, designDiskRevision])
+
+  // ── Drawings load → hydrate ────────────────────────────────────────────────
+  //
+  // Hydrate the Drawings sheet (dimensions + GD&T + title block + annotations)
+  // from `<projectDir>/drawing/drawing.json` when a project opens. Keyed on
+  // (projectDir) ALONE — NOT designDiskRevision — so a design-only revision bump
+  // (e.g. an IPC parameter merge) can never re-fire this and reload drawing.json
+  // over unsaved in-memory drawing edits. The (projectDir) load-key guard makes
+  // a plain re-render that re-runs the effect a no-op (the Cycle-249 anti-clobber
+  // contract, applied to the Drawings sheet). A failed load folds to a status
+  // toast and seeds empty state. NOTE: deliberately does NOT depend on
+  // designDiskRevision — the eslint dep rule is satisfied because the only
+  // load-bearing inputs are `fab` (stable) + `projectDir`.
+  useEffect(() => {
+    if (!projectDir) {
+      lastDrawingLoadKeyRef.current = null
+      drawingFileBaseRef.current = null
+      drawingRef.current = null
+      setDrawing(null)
+      return
+    }
+    // Anti-clobber guard: only (re)load when the project actually changed.
+    if (lastDrawingLoadKeyRef.current === projectDir) return
+    lastDrawingLoadKeyRef.current = projectDir
+    let cancelled = false
+    void (async () => {
+      try {
+        const file = await fab.drawingLoad(projectDir)
+        if (cancelled) return
+        drawingFileBaseRef.current = file
+        const view = hydrateDrawingFile(file)
+        drawingRef.current = view
+        setDrawing(view)
+      } catch (e) {
+        if (cancelled) return
+        // Honest fallback: seed empty state so the workspace still renders, and
+        // start the persist base from an empty file (a later save creates a
+        // clean drawing.json rather than corrupting the unreadable one).
+        drawingFileBaseRef.current = null
+        const empty = emptyDrawingViewState()
+        drawingRef.current = empty
+        setDrawing(empty)
+        onStatusRef.current?.(
+          formatLoadRejection('drawing/drawing.json', e instanceof Error ? e : String(e))
+        )
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fab, projectDir])
 
   const geometry = useMemo(() => {
     const g = buildExtrudedGeometry(design)
@@ -650,6 +765,72 @@ export function DesignSessionProvider({
   const onDesignChange = useCallback((next: DesignFileV2) => {
     dispatch({ type: 'edit', design: next })
   }, [])
+
+  // ── Drawings persist-on-change (debounced; commits the COMMITTED state) ─────
+  //
+  // Called by the Drawings workspace whenever a dimension / GD&T frame / title
+  // block / annotation changes. The new state lands in `drawing` state (and
+  // `drawingRef`) SYNCHRONOUSLY so the UI is live, then a debounced `drawing:save`
+  // fires. CRITICAL persistence-safety: the timer body reads `drawingRef.current`
+  // (the freshest COMMITTED state) — NOT the `next` captured here — so a rapid
+  // burst persists the LAST committed value and never an eager-updater snapshot
+  // (Cycle-256). The fold runs over `drawingFileBaseRef.current` so sheets /
+  // sheet fields the renderer doesn't model are preserved (additive, Safety
+  // Rule 2). Writes are serialized behind `drawingWriteChainRef` so two flushes
+  // can't interleave. No-op without an open project.
+  // Fold the COMMITTED drawing state onto the loaded base file and enqueue a
+  // serialized `drawing:save`. Reads `drawingRef.current` (the freshest committed
+  // value, NOT a captured closure -- Cycle-256) + `projectDirRef.current` (so the
+  // unmount flush works under [] effect deps). The folded file is adopted as the
+  // new base so the next fold updates the primary sheet in place (idempotent)
+  // rather than re-appending it. Foreign sheets are preserved (additive,
+  // Safety Rule 2). No-op without an open project or before hydration.
+  const flushDrawingSave = useCallback((): void => {
+    const dir = projectDirRef.current
+    const committed = drawingRef.current
+    if (!dir || committed === null) return
+    const file = foldDrawingState(committed, drawingFileBaseRef.current ?? undefined)
+    drawingFileBaseRef.current = file
+    drawingWriteChainRef.current = drawingWriteChainRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await fab.drawingSave(dir, JSON.stringify(file))
+        } catch (e) {
+          onStatusRef.current?.(e instanceof Error ? e.message : String(e))
+        }
+      })
+  }, [fab])
+
+  const onDrawingChange = useCallback(
+    (next: DrawingViewState): void => {
+      // Commit synchronously (UI is live; the debounced flush reads this ref).
+      drawingRef.current = next
+      setDrawing(next)
+      if (!projectDir) return
+      if (drawingSaveTimerRef.current !== null) clearTimeout(drawingSaveTimerRef.current)
+      drawingSaveTimerRef.current = setTimeout(() => {
+        drawingSaveTimerRef.current = null
+        flushDrawingSave()
+      }, DRAWING_SAVE_DEBOUNCE_MS)
+    },
+    [projectDir, flushDrawingSave]
+  )
+
+  // Flush-safety: on unmount (e.g. a route switch to a NON-CAD workspace that
+  // tears down the provider), FLUSH any pending debounced edit synchronously
+  // instead of dropping it -- so a drawing edit made <debounce-window before
+  // navigating away is still persisted (the "survive a route switch" contract).
+  // The write itself is async but is enqueued before teardown completes.
+  useEffect(() => {
+    return () => {
+      if (drawingSaveTimerRef.current !== null) {
+        clearTimeout(drawingSaveTimerRef.current)
+        drawingSaveTimerRef.current = null
+        flushDrawingSave()
+      }
+    }
+  }, [flushDrawingSave])
 
   const saveDesign = useCallback(async () => {
     if (!projectDir) return
@@ -1068,6 +1249,8 @@ export function DesignSessionProvider({
       setKernelRollbackMarker,
       updateFeatureSuppressed,
       solveReport,
+      drawing,
+      onDrawingChange,
       onStatus,
       onExportedStl
     }),
@@ -1105,6 +1288,8 @@ export function DesignSessionProvider({
       setKernelOpSuppressedAt,
       setKernelRollbackMarker,
       updateFeatureSuppressed,
+      drawing,
+      onDrawingChange,
       onStatus,
       onExportedStl
     ]

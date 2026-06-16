@@ -69,7 +69,11 @@ import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
-import { DrawingView } from './DrawingView'
+import { DrawingView, type DrawingTitleBlock } from './DrawingView'
+import {
+  emptyDrawingViewState,
+  type DrawingViewState,
+} from '../../shared/drawing-hydrate'
 import type {
   DrawingDimension,
   GdtFeatureControlFrame,
@@ -540,6 +544,24 @@ export interface DesignWorkspaceProps {
    * `false`.
    */
   readonly kernelBuilding?: boolean
+  /**
+   * CAD V2 persistence -- the hydrated Drawings sheet state (dimensions + GD&T
+   * frames + title block + annotations) the host loaded from `drawing.json`.
+   * When SUPPLIED (host-controlled), the DrawingView renders THESE and every
+   * change is folded + pushed up via {@link onDrawing} (which the host debounces
+   * + persists). `null` means "host owns it but it has not hydrated yet" (render
+   * the empty default). When the prop is OMITTED entirely the workspace falls
+   * back to local in-state drawing edits (the legacy write-only behaviour the
+   * SSR render-pins exercise). Documentation overlays only (Safety Rule 1).
+   */
+  readonly drawing?: DrawingViewState | null
+  /**
+   * CAD V2 persistence -- fired whenever the Drawings sheet changes (a placed
+   * dimension, a GD&T frame, an edited title block). The host writes the result
+   * to `drawing.json` (debounced). Only meaningful when {@link drawing} is
+   * supplied (controlled mode). Optional + readonly (additive).
+   */
+  readonly onDrawing?: (next: DrawingViewState) => void
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -617,6 +639,8 @@ export function DesignWorkspace({
   onViewportPickPoint,
   kernelViewportGeometry = null,
   kernelBuilding = false,
+  drawing,
+  onDrawing,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   /**
@@ -766,6 +790,57 @@ export function DesignWorkspace({
    * Documentation overlays only — never read by CAM/G-code (Safety Rule 1).
    */
   const [drawingGdtFrames, setDrawingGdtFrames] = useState<readonly GdtFeatureControlFrame[]>([])
+
+  // ── Drawings persistence seam ──────────────────────────────────────────────
+  //
+  // CONTROLLED mode: the host (DesignWorkspaceHost → DesignSessionContext) supplies
+  // the hydrated `drawing` state + an `onDrawing` sink it debounces to drawing.json.
+  // We render dimensions / GD&T / title block from `drawing` and fold every change
+  // back through `onDrawing`, so a placed dimension or an edited title block SURVIVES
+  // reload + a Drawings↔other-route switch. UNCONTROLLED (prop omitted): fall back to
+  // the legacy local state (the SSR render-pins + the splash preview exercise this).
+  const drawingControlled = drawing !== undefined
+  const effectiveDrawing = drawingControlled ? drawing ?? emptyDrawingViewState() : null
+  const effectiveDrawingDimensions = effectiveDrawing
+    ? effectiveDrawing.dimensions
+    : drawingDimensions
+  const effectiveDrawingGdtFrames = effectiveDrawing
+    ? effectiveDrawing.featureControlFrames
+    : drawingGdtFrames
+  const effectiveDrawingTitleBlock: DrawingTitleBlock | undefined = effectiveDrawing
+    ? effectiveDrawing.titleBlock
+    : undefined
+
+  const handlePersistDrawingDimensions = useCallback(
+    (next: readonly DrawingDimension[]): void => {
+      if (drawingControlled) {
+        const base = drawing ?? emptyDrawingViewState()
+        onDrawing?.({ ...base, dimensions: next })
+      } else {
+        setDrawingDimensions(next)
+      }
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingGdt = useCallback(
+    (next: readonly GdtFeatureControlFrame[]): void => {
+      if (drawingControlled) {
+        const base = drawing ?? emptyDrawingViewState()
+        onDrawing?.({ ...base, featureControlFrames: next })
+      } else {
+        setDrawingGdtFrames(next)
+      }
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingTitleBlock = useCallback(
+    (next: DrawingTitleBlock): void => {
+      if (!drawingControlled) return
+      const base = drawing ?? emptyDrawingViewState()
+      onDrawing?.({ ...base, titleBlock: next })
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
 
   // Debounce timer for the listOperations refresh; cleared on unmount + on
   // every keystroke so we never call the sidecar mid-typing-burst.
@@ -1545,10 +1620,14 @@ export function DesignWorkspace({
             partHandle={activePartHandle}
             onExport={handleExportDrawing}
             onToast={onToast}
-            persistedDimensions={drawingDimensions}
-            onPersistDimensions={setDrawingDimensions}
-            persistedGdtFrames={drawingGdtFrames}
-            onPersistGdt={setDrawingGdtFrames}
+            persistedDimensions={effectiveDrawingDimensions}
+            onPersistDimensions={handlePersistDrawingDimensions}
+            persistedGdtFrames={effectiveDrawingGdtFrames}
+            onPersistGdt={handlePersistDrawingGdt}
+            initialTitleBlock={effectiveDrawingTitleBlock}
+            onPersistTitleBlock={
+              drawingControlled ? handlePersistDrawingTitleBlock : undefined
+            }
             onDetail={handleDetailView}
           />
         </div>

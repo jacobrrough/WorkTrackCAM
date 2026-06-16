@@ -87,6 +87,8 @@ function fakeSession(): DesignSessionValue {
     setKernelRollbackMarker: asyncNoop,
     updateFeatureSuppressed: () => {},
     solveReport: '',
+    drawing: null,
+    onDrawingChange: () => {},
   }
 }
 

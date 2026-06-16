@@ -110,7 +110,9 @@ function fakeSession(features: PartFeaturesFile | null): DesignSessionValue {
     setKernelOpSuppressedAt: asyncNoop,
     setKernelRollbackMarker: asyncNoop,
     updateFeatureSuppressed: () => {},
-    solveReport: ''
+    solveReport: '',
+    drawing: null,
+    onDrawingChange: () => {}
   }
 }
 

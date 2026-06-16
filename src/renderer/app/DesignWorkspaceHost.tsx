@@ -412,6 +412,15 @@ export function DesignWorkspaceHost({
       // feature → see the model" actually display in the cockpit viewport.
       kernelViewportGeometry={session.viewportGeometry}
       kernelBuilding={session.kernelBuilding}
+      // Drawings persistence: thread the session's hydrated Drawings sheet (loaded
+      // from drawing.json on project-open) + its debounced persist sink into the
+      // DrawingView. This is what makes a placed dimension / GD&T frame / edited
+      // title block SURVIVE reload + a Drawings↔other-route switch (closing the
+      // write-only-to-memory gap). `drawing` is null until hydration settles (the
+      // DrawingView renders the empty default until then); `onDrawingChange`
+      // commits + debounce-saves the committed state. Documentation only (no G-code).
+      drawing={session.drawing}
+      onDrawing={session.onDrawingChange}
     />
   )
 }

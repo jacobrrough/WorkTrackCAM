@@ -16,6 +16,7 @@ import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
 import type { AssemblyFile } from '../shared/assembly-schema'
+import type { DrawingFile } from '../shared/drawing-sheet-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { KernelPickFile } from '../shared/kernel-pick-file'
 import type { KernelBuildResult } from '../main/cad/build-kernel-part'
@@ -234,6 +235,23 @@ export type Api = {
    * emits no G-code.
    */
   assemblySave: (projectDir: string, json: string) => Promise<void>
+  /**
+   * Load `<projectDir>/drawing/drawing.json`, parsed + normalized through
+   * `drawingFileSchema` (a missing file resolves to an empty drawing file).
+   * Delegates to `drawing:load`. Used by the Drawings workspace to HYDRATE the
+   * sheet's dimensions + GD&T frames + title block + annotations on project-open
+   * (closing the write-only-to-memory gap). SAFETY: data-only — reads drawing
+   * JSON, never G-code.
+   */
+  drawingLoad: (projectDir: string) => Promise<DrawingFile>
+  /**
+   * Persist a full {@link DrawingFile} (serialized JSON) to
+   * `<projectDir>/drawing/drawing.json`. The main handler re-validates the
+   * payload through `drawingFileSchema` before writing (a malformed drawing
+   * rejects rather than corrupting the file). Delegates to `drawing:save`.
+   * SAFETY: data-only — writes drawing JSON, emits no G-code.
+   */
+  drawingSave: (projectDir: string, json: string) => Promise<void>
   assemblyReadStlBase64: (projectDir: string, meshPath: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
   /**
    * Phase 2 (IPC) + Phase 3 (UI): run the iterative assembly mate solver on the given assembly
@@ -958,6 +976,8 @@ const api: Api = {
   designLoad: (projectDir) => ipcRenderer.invoke('design:load', projectDir),
   assemblyLoad: (projectDir) => ipcRenderer.invoke('assembly:load', projectDir),
   assemblySave: (projectDir, json) => ipcRenderer.invoke('assembly:save', projectDir, json),
+  drawingLoad: (projectDir) => ipcRenderer.invoke('drawing:load', projectDir),
+  drawingSave: (projectDir, json) => ipcRenderer.invoke('drawing:save', projectDir, json),
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),
   assemblySolve: (assemblyInput) => ipcRenderer.invoke('assembly:solve', assemblyInput),
   assemblySimulate: (assemblyInput, sampleCount) => ipcRenderer.invoke('assembly:simulate', assemblyInput, sampleCount),
