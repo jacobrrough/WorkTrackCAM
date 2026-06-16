@@ -53,8 +53,7 @@
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "dompurify": "^3.4.8",
-    "esbuild": "^0.28.1"
+    "dompurify": "^3.4.8"
   },
   "build": {
     "productName": "WorkTrack3D",

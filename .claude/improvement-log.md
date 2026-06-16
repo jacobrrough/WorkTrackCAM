@@ -19162,3 +19162,17 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Process note:** all three agent worktrees consolidated cleanly (manufacture.css auto-merged between the timeline + sim tracks); nothing stranded. Agent worktrees pruned after landing.
 
 **Next cycle recommendation:** (a) HANDS-ON verify the stock-removal heatmap renders in the real Electron app (the one deferred check); (b) optionally enable OCL on the 3.11 sidecar venv (`scripts/bundle-opencamlib.ps1`) to unlock true Waterline/AdaptiveWaterline, then extend the Cycle-268 posted contract to the OCL path; (c) click-to-select faces/edges for fillet/chamfer (Tier-1 CAD parity).
+
+## Cycle 270 — Hotfix: revert esbuild 0.28 override (broke `npm run dev`) (2026-06-16)
+
+**Focus:** verifying the Cycle-269 material-removal heatmap in the real app (a hands-on `npm run dev`) surfaced a REGRESSION from the earlier "fix the github flags" security work. The esbuild `^0.28.1` `overrides` bump — which HAD cleared GHSA-gv7w-rqvm-qjhr and passed `electron-vite build` + the full vitest suite — **breaks `npm run dev`**: esbuild 0.28 errors `"Transforming destructuring to the configured target … is not supported yet"` across ~1162 deps in vite 6.4.3's optimizeDeps (0.28 is outside vite's declared `^0.25.0`). The build + test gates missed it because neither exercises the dev dep-optimizer.
+
+**Fix:** removed the esbuild override → resolves to 0.25.12 (vite's range). `npm run dev` re-verified launching (main + preload built, renderer + DevTools up, `[WorkTrack3D]` main-process log present, no fatal error). The DOMPurify `^3.4.8` runtime override is KEPT.
+
+**Gates:** `npm audit --omit=dev` = **0** (runtime release gate GREEN — dompurify holds); full `npm audit` = **4 high** (the dev-only esbuild chain, RE-DEFERRED — never ships); full suite **17,279 pass / 1 skip / 0 fail**; tsc clean.
+
+**Security disposition:** SECURITY.md moves esbuild GHSA-gv7w-rqvm-qjhr back to Deferred (dev-only; a real fix is blocked on a `vite`/`electron-vite` major that depends on esbuild ≥0.28, or an esbuild 0.28.x optimizeDeps fix). The esbuild Dependabot flag reopens (dev-only, never ships); the DOMPurify runtime flag stays closed.
+
+**Process lesson:** a green `electron-vite build` + full vitest is NOT sufficient proof for an esbuild/vite-chain bump — the dev dep-optimizer (`npm run dev`) is a separate esbuild code path. Add an `npm run dev` smoke to the release gate before any future esbuild/vite override. Reinforces the hands-on-verification rule.
+
+**Heatmap verification status:** the Cycle-269 material-removal heatmap could NOT be visually confirmed via desktop automation (the dev electron window stays minimized, the Windows taskbar/shell isn't controllable for input, and the heatmap needs a deep CAM data flow — posted 3D op + box stock — to populate). What WAS confirmed: the app renders without runtime error (main process + renderer came up clean), and the pure sim helper + the renderToStaticMarkup wiring are fully unit-tested. The literal heatmap pixels remain a hands-on glance for the operator (Manufacture → CNC → Simulate stage with a posted 3D-finish op + box stock).
