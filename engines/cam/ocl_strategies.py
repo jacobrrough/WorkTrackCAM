@@ -270,8 +270,15 @@ def run_waterline_levels(
         wl.setCutter(cutter)
         wl.setSampling(sampling)
         if strategy == "adaptive_waterline" and "adaptive waterline" in tag:
-            wl.setMinSampling(max(0.02, sampling * 0.25))
-            wl.setCosLimit(0.65)
+            # Some published OCL wheels (notably PyPI opencamlib 2023.1.11, the
+            # only win32-installable build — see docs/OPENCAMLIB.md) expose
+            # AdaptiveWaterline but OMIT the setMinSampling / setCosLimit refinement
+            # knobs. Guard each so adaptive_waterline degrades to a plain adaptive
+            # pass instead of raising AttributeError the moment real OCL is enabled.
+            if hasattr(wl, "setMinSampling"):
+                wl.setMinSampling(max(0.02, sampling * 0.25))
+            if hasattr(wl, "setCosLimit"):
+                wl.setCosLimit(0.65)
         wl.setZ(z)
         wl.run()
         loops = wl.getLoops()
