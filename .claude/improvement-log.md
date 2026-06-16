@@ -19082,3 +19082,37 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
   never silently rot.
 
 **Verified:** the guard test passes (the DXF imports cleanly into our own pipeline). +2 tests.
+
+## Cycle 266 — CAM helical/ramp cut-entry + arc-output op-editor toggle (recovered) (2026-06-16)
+
+**Focus:** close Cycle 263's "next" recommendation — make G2/G3 arc output reachable from the op editor — and replace the straight-plunge pocket entry with a region-aware helix/ramp. **Recovered** from a stranded Round-2 wave worktree (`vigorous-ptolemy` / `fd88567`) and re-verified before landing. One commit `21c3ad7`.
+
+**Baseline → result:** full suite **17,220 pass / 2 skip / 0 fail**; tsc clean. (Cherry-picked onto `ca635a2` after `npm install` in a fresh worktree.)
+
+**What landed:**
+- **`src/main/cam-entry-move.ts`** (NEW, 503 lines) — region-aware cut-entry generator. Helix descent clamped so the WHOLE helix stays inside the pocket region (outer ring minus islands); never-degrade fallback helix→ramp→plunge; incline bounded to [1,30]°; lands EXACTLY on target depth, never below. Every descent move is a FEED move (G1/G2/G3) at plunge feed — never a rapid into stock.
+- Integrated into **`cam-local.ts`** `generatePocket2dLines` (`entryMode 'plunge'|'ramp'|'helix'` + `helixRadiusMm`/`entryAngleDeg`/`toolRadiusMm` params + helix-fallback telemetry) and **`cam-runner-2d.ts`**.
+- **Arc-output toggle** surfaced in the op editor (`ManufactureOperationList.tsx` + `manufacture-op-helpers.ts` + `manufacture-schema.ts`) — "Output arcs (G2/G3)" for `cnc_contour`/`cnc_pocket` on the two routers.
+
+**gcode-safety (Laguna Swift + Carvera 3-axis): PASS.** Posted-G-code snapshot test (`cam-entry-move-posted.test.ts`) verified: explicit G21/G90/G17/G94/G54 header; M3 + G4 P2.0 dwell; feed-only descent; region-clamped helix (r 3.0 → 1.25 → straight-plunge fallback all observed); lands on Z-2.000 exactly; correct terminator (M30 + `%` markers for Laguna; M2 / no `%` for Carvera); BYTE-IDENTICAL no-regression vs the plunge default.
+
+**Tests:** +cam-entry-move (geometry) + cam-entry-move-posted (both routers) + cam-local entry integration + ManufactureOperationList.arc-output (UI).
+
+**Honest residuals:** helix is XY-plane (G17) only — G18/G19 plane fitting deferred until a real op needs it; arc output is software-validated / hardware-cert pending (honest tooltip).
+
+## Cycle 267 — Drawings: multi-sheet authoring + section views + BOM table (recovered) (2026-06-16)
+
+**Focus:** Drawings depth on the Cycle-259 persistence round-trip — multiple sheets, section views, and a bill-of-materials table. **Recovered** from the same stranded Round-2 worktree (`vigorous-ptolemy` / `fd88567`) and re-verified before landing. One commit `269c1e4`.
+
+**Baseline → result:** part of the same **17,220 pass / 2 skip / 0 fail** gate; tsc clean; the **Cycle-249 reload-clobber guard intact** (ref-based `onStatus` read + `DesignSessionContext.reload-guard.test.ts` pass).
+
+**What landed (honesty-gated):**
+- **`src/shared/drawing-sheet-ops.ts`** (NEW) — multi-sheet add/remove/reorder/active ops on the persisted sheet model.
+- **`src/shared/drawing-bom.ts`** (NEW) — honesty-gated BOM derivation: assembly rollup (reuses `assembly-bom`) / per-design-model / single stub / empty — never invents rows. `toBomTableRows` adapter for the renderer's `cad.drawing_bom_table`.
+- **Section views** + multi-sheet UI in `DrawingView.tsx`; `DesignSessionContext` multi-sheet SSOT (+215 lines) with the reload guard preserved; `drawing-hydrate.ts` + `drawing-sheet-schema.ts` round-trip; `DesignWorkspaceHost` wiring.
+
+**Tests:** +drawing-bom (derivation boundaries) + drawing-sheet-ops + drawing-hydrate round-trip + DrawingView.sheets-section-bom + drawings-persistence-wiring + DesignWorkspaceHost pins.
+
+**Honest residuals:** BOM is geometry-source-keyed (same body via different ref kinds may not merge — shared limitation with the Assemble BOM); section-view fidelity is bounded by the projection pipeline.
+
+**Process note (both cycles):** these two waves were generated in an isolated Workflow worktree and were nearly lost — narrated as "landed" while the active branch was actually clean at `ca635a2`. Recovery procedure + lesson recorded in memory (`workflow-waves-strand-in-worktrees`): verify `git status` on-branch before claiming a wave landed.

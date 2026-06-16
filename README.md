@@ -26,7 +26,7 @@ Parametric CAD modeling, CNC toolpath generation, 4-axis machining, heightfield 
 - Auto-updates, cross-platform (Win / Linux / Mac)
 
 ## Quick Start
-0. Install OrcaSlicer 2.3.2+ and bundle: `pwsh ./scripts/bundle-orca-slicer.ps1`
+0. Install OrcaSlicer 2.3.2+ and bundle: `powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1`
 1. `git clone https://github.com/jacobrrough/WorkTrack3D.git`
 2. `cd WorkTrack3D`
 3. Install Node: `npm install`

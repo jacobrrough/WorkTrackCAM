@@ -39,8 +39,8 @@ outside git. Two pieces of infrastructure materialize it:
 
    ```powershell
    # From the repo root
-   pwsh ./scripts/bundle-orca-slicer.ps1            # first run (or upgrades)
-   pwsh ./scripts/bundle-orca-slicer.ps1 -Force     # force re-download
+   powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1            # first run (or upgrades)
+   powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1 -Force     # force re-download
    ```
 
    On success it leaves:
@@ -73,7 +73,7 @@ outside git. Two pieces of infrastructure materialize it:
 git clone https://github.com/jacobrrough/WorkTrack3D.git
 cd WorkTrack3D
 npm install
-pwsh ./scripts/bundle-orca-slicer.ps1   # downloads + extracts OrcaSlicer
+powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1   # downloads + extracts OrcaSlicer
 npm run build                            # electron-builder packs it
 ```
 

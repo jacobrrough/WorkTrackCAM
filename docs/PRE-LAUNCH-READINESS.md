@@ -72,7 +72,7 @@ CPS dialect routing (`src/main/machine-cps-import.ts`) now falls back to `cnc_ge
 | `docs/SMOKE-LAGUNA-RICHAUTO.md` | **NEW** | USB transfer to RichAuto A-series pendant, accepted formats, sub-directory limits, 6-zone vacuum, dust collection, RPM ramp, e-stop |
 | `docs/SMOKE-CARVERA-CLI.md` | **NEW** | pip install + virtualenv, `--version` verify, configure `carveraCliPath` in Settings, send a test job, troubleshooting (ENOENT / permissions) |
 | `docs/CAM_4TH_AXIS_REFERENCE.md` | EXTENDED | New Part 1.5: rotary mount, chuck install, tailstock, X-offset measurement, Y=0 enforcement, pre-cut sanity table |
-| `README.md` | EXTENDED | Quick Start now includes `pwsh ./scripts/bundle-orca-slicer.ps1` step + Next Steps section linking all SMOKE-* docs |
+| `README.md` | EXTENDED | Quick Start now includes `powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1` step + Next Steps section linking all SMOKE-* docs |
 
 ### Settings UI additions
 - `External tool paths` section in `SettingsView.tsx` — exposes `carveraCliPath` and `carveraCliExtraArgsJson` (schema fields existed but were UI-invisible)
@@ -142,7 +142,7 @@ All number-key shortcuts are gated on:
 ## What you need to bring to each first real run
 
 ### Creality K2 Plus (FDM)
-1. **Bundle OrcaSlicer**: `pwsh ./scripts/bundle-orca-slicer.ps1` (one-time)
+1. **Bundle OrcaSlicer**: `powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1` (one-time)
 2. **Power up the K2 Plus**, note its IP from the touchscreen Settings or your router DHCP table
 3. **Set the Moonraker URL** in Settings → `http://<ip>:7125`
 4. **Click Probe** in Settings — confirm the connection lights green, nozzle/bed temps appear
@@ -188,7 +188,7 @@ These are explicit and documented; not bugs.
 ### K2 Plus
 - **OrcaSlicer thumbnails not emitted in headless CLI** — the K2 G-code header validator soft-warns rather than fails when the `; thumbnail begin` block is absent. Verified in `src/main/slicer/orca-wrapper.e2e.test.ts`.
 - **CFS multi-material is v1** — single filament per plate, no per-region color assignment yet.
-- **OrcaSlicer binary must be bundled before first slice** — `runOrcaSlice` throws `orca_unavailable` with a clear hint until `pwsh ./scripts/bundle-orca-slicer.ps1` runs.
+- **OrcaSlicer binary must be bundled before first slice** — `runOrcaSlice` throws `orca_unavailable` with a clear hint until `powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1` runs.
 
 ### Laguna Swift 5x10
 - **No in-app upload helper** — USB is the only file transfer path (RichAuto pendant doesn't expose a network API in the bundled controller config)

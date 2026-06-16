@@ -155,7 +155,7 @@ npm run build         # Full production build
 - `resources/machines/` — Machine profiles (JSON) — Creality K2 Plus, Laguna Swift 5x10, Makera Carvera (3-axis + 4-axis). CLAUDE.md spec values are encoded here AND pinned by `src/main/machine-profile-spindle-pin.test.ts`.
 - `resources/posts/` — Handlebars post-processor templates per controller/dialect
 - `resources/materials/` — Material/feed-rate data
-- `resources/orca-slicer/` — bundled OrcaSlicer CLI + .json profiles for K2 Plus FDM (machines/process/filament). Bundled via `pwsh ./scripts/bundle-orca-slicer.ps1`.
+- `resources/orca-slicer/` — bundled OrcaSlicer CLI + .json profiles for K2 Plus FDM (machines/process/filament). Bundled via `powershell -ExecutionPolicy Bypass -File ./scripts/bundle-orca-slicer.ps1`.
 - `resources/samples/cad/` — starter CadQuery scripts shipped by the first-launch wizard: `bracket.cq.py` (Laguna/Carvera 3-axis), `sign.cq.py` (Laguna v-carve), `cylinder.cq.py` (Carvera 4-axis). Each is a valid `cqgi.parse(...)`-compatible script.
 - `.claude/improvement-log.md` — Improvement cycle history (source of truth)
 - `.claude/commands/improve.md` — Full improvement cycle playbook
