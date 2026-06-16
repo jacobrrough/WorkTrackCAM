@@ -19054,3 +19054,31 @@ adversarial probes (solver honesty 4, interference/BOM boundaries 6).
 (+ the renderer currently uses a nominal 10mm half-extent per part until real geometry dims are
 threaded into AssemblyPart); BOM rollup is geometry-blind (different ref kinds to the same body
 don't merge); the legacy face-id Mates modal in AssemblyView stays unreachable (pre-existing).
+
+## Cycle 265 — Output-comparison test harness (WorkTrack3D vs VCarve vs Carvera) (2026-06-16)
+
+**Focus:** user request — a known reference part to run through WorkTrack3D + the trusted commercial
+tools (VCarve for the Laguna, the Carvera CAM app) and compare posted G-code. The closest software
+analogue to bench-truth before cutting material. Files only — no engine/behavior change.
+
+**Delivered:**
+- resources/test-fixtures/comparison/reference-part.dxf — deterministic 2D part (120x80 rectangle
+  profile + Ø36 circle @ (35,40) + a triangle apex) in a neutral DXF (LWPOLYLINE + CIRCLE, mm,
+  AC1015). Pure geometry, NO text (text vectorizes per-app/font and would poison the compare). The
+  three shapes probe: closed profile + arc-corner; arc emission (circle); and v-carve DEPTH
+  MODULATION (triangle base deep, apex shallow — the most important thing to compare).
+- resources/test-fixtures/comparison/reference-block.cq.py — a 60x40x15 stepped block + Ø20x5
+  pocket for an optional 3D Carvera 3-axis comparison (build in WT3D, export STEP/STL, load same in
+  Carvera CAM).
+- docs/COMPARISON-TEST.md — the procedure: identical settings table (units/tool/depth/feed/spindle)
+  so it is apples-to-apples; per-app import/op/post steps for Comparison A (v-carve, Laguna) and B
+  (pocket/profile, Carvera); and a checklist split into MUST-match (units/WCS, part bounds, v-carve
+  depth pattern, feeds/spindle, terminator M30-vs-M2, safe retracts, ATC) vs may-legitimately-differ
+  (line count, arc-vs-segment, comments, lead-in style). Frames it honestly as BEHAVIORAL
+  EQUIVALENCE (different algorithms -> different toolpaths, same result), not a byte-diff, and that
+  it complements but does not replace the physical first cut.
+- src/shared/comparison-reference-dxf.test.ts — guards that reference-part.dxf imports through the
+  REAL parseDxf + dxfToSketch (3 entities; circle 35,40 r18; importedCount 3) so the fixture can
+  never silently rot.
+
+**Verified:** the guard test passes (the DXF imports cleanly into our own pipeline). +2 tests.
