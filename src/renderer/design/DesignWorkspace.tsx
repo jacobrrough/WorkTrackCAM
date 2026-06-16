@@ -65,6 +65,7 @@ import { SketchSurface } from './SketchSurface'
 import { sketchToolForDesignCommand } from './design-command-map'
 import type { DesignFileV2 } from '../../shared/design-schema'
 import { buildViewportGeometry } from './viewport3d-geometry'
+import { buildPickIndex } from '../../shared/kernel-pick-file'
 import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
@@ -1427,13 +1428,28 @@ export function DesignWorkspace({
 
   // ── FG-5b — per-feature property dialogs ──────────────────────────────────
   /**
+   * Tier-2 · Index of the CURRENT build's pickable entities (id → signature),
+   * built from the live selection-grade tessellation. Handed to the feature
+   * dialogs so `resolvePickedSelectionId` can resolve a picked id+signature
+   * against the current geometry — recovering a pick that MOVED / UNIFORMLY
+   * RESIZED upstream (Tier 2) instead of emitting a now-dead id. Rebuilt only
+   * when the tessellation changes.
+   */
+  const currentPickIndex = useMemo(
+    () => buildPickIndex(selectionTessellation),
+    [selectionTessellation],
+  )
+
+  /**
    * Selection context handed to the active feature dialog. Reuses the same
    * `selection` cell + the already-computed `selectionLabel` so the dialog's
-   * picked-edge read-out and the bottom-center status chip always agree.
+   * picked-edge read-out and the bottom-center status chip always agree, plus
+   * the Tier-2 `currentPickIndex` so the picked-edge consumers route through the
+   * tiered resolver.
    */
   const featureDialogSelectionInfo = useMemo(
-    () => ({ selection, label: selectionLabel }),
-    [selection, selectionLabel],
+    () => ({ selection, label: selectionLabel, currentPickIndex }),
+    [selection, selectionLabel, currentPickIndex],
   )
 
   /**

@@ -634,6 +634,18 @@ def tessellate_with_face_ids(
     triangle_count = len(face_ids)
     bbox_min, bbox_max = doc.bbox_min, doc.bbox_max
 
+    # Tier-2: attach the geometry-INVARIANT signature to each faceMap entry,
+    # ALONGSIDE the UNCHANGED Tier-1 occtId. Best-effort + additive — a failure
+    # yields no signature key and Tier-1 / Tier-3 resolution is unaffected.
+    try:
+        face_sigs = build_face_signatures(solid, faces, bbox_min, bbox_max)
+        for fidx, sig in face_sigs.items():
+            entry = face_map.get(str(fidx))
+            if entry is not None:
+                entry["signature"] = sig
+    except Exception:  # noqa: BLE001 - Tier-2 is non-critical
+        pass
+
     # FG-5b: build the edge map. Edges have no per-triangle parallel array (the
     # mesh is face-tessellated), so the edgeMap is keyed by the STABLE edge id
     # and carries only metadata. Best-effort: a failure to enumerate edges must
@@ -665,6 +677,17 @@ def tessellate_with_face_ids(
     except Exception:  # noqa: BLE001 - edge ids are non-critical metadata
         edge_map = {}
         edge_polylines = []
+
+    # Tier-2: attach the geometry-INVARIANT signature to each edgeMap entry,
+    # keyed by the same stable id. Best-effort + additive (see the face block).
+    try:
+        edge_sigs = build_edge_signatures(solid, list(solid.Edges()), bbox_min, bbox_max)
+        for eid, sig in edge_sigs.items():
+            entry = edge_map.get(eid)
+            if entry is not None:
+                entry["signature"] = sig
+    except Exception:  # noqa: BLE001 - Tier-2 is non-critical
+        pass
 
     return {
         "vertices": vertices_flat,
@@ -937,6 +960,627 @@ def _safe_edge_length(edge: Any) -> float:
         return float(edge.Length())
     except Exception:  # noqa: BLE001 - length is best-effort metadata
         return 0.0
+
+
+# ── Tier-2: geometry-INVARIANT signature (survives translate + uniform resize) ─
+#
+# The Tier-1 handle (``_safe_edge_geom_id`` / ``_safe_face_geom_id`` above) hashes
+# ABSOLUTE quantized geometry, so it is byte-identical for a same-geometry rebuild
+# but BREAKS the moment a parametric edit MOVES or RESIZES the topology (a 20 mm
+# box edge and a 25 mm box edge hash differently). Tier-2 is an ADDITIVE,
+# coarser-grained signature that is stable across a uniform translate / uniform
+# scale, so a pick can still be re-resolved after a parametric MOVE or UNIFORM
+# RESIZE. It NEVER replaces Tier-1 — the resolver tries Tier-1 first (exact, no
+# regression) and only falls to Tier-2 when Tier-1 misses.
+#
+# Invariance model (HONEST scope). Every positional quantity is expressed
+# RELATIVE to the body's principal frame — the bbox CENTER as origin and the
+# bbox EXTENT as the length unit — so a uniform translate (shifts the center) and
+# a uniform scale (scales the extent) both cancel out. Direction classes use the
+# WORLD axes of that frame: a parametric MOVE / UNIFORM RESIZE does NOT rotate
+# the body, so the bbox-aligned world axes are a stable frame for those two edit
+# kinds. This is a BOUNDED improvement, NOT a full topological-naming solve:
+#
+#   IN scope  : parametric MOVE (translate) + UNIFORM RESIZE (single scale on all
+#               three axes, or any resize that leaves the shape's proportions and
+#               orientation unchanged).
+#   OUT of scope (documented, NOT faked): a ROTATION of the body (world-axis
+#               classes shift), a NON-UNIFORM / partial resize (proportions
+#               change → ranks + octants can shift), and any TOPOLOGY-CHANGING
+#               edit (face split / merge / an added feature renumbering the face
+#               list). For those the signature may legitimately fail to match and
+#               the resolver returns ``None`` → the caller falls to Tier-3 (the
+#               axis bucket) and ultimately an honest pick-lost. We never guess.
+#
+# Determinism + JSON. Every field is a plain int / str / sorted list of str, so
+# the signature is JSON-serializable and stable across runs (no salted hashes, no
+# floats — ranks and octants are integers; kind/normalClass are fixed strings).
+
+# Octant DEADBAND as a fraction of the bbox half-extent. A centroid/midpoint
+# coordinate whose NORMALIZED offset from the bbox center is within this band counts
+# as "0" (on-center) on that axis. CRITICAL for uniform-scale invariance: a box
+# face centroid sits EXACTLY on the bbox center in two of its three axes (the +Z
+# cap centroid is ~(0, 0, +half)), so a naive sign test keys off the FP sign of ~0
+# and flips arbitrarily between a base body and a scaled one. 0.5 (half the
+# half-extent) cleanly separates a centroid on a face (offset ~1.0 on its normal
+# axis) from the center. MUST match _OCTANT_DEADBAND in the renderer's spec
+# (test_tier2_pick_signature_invariance.py) + the TS resolver's expectation.
+_SIG_OCTANT_BAND = 0.5
+
+
+def _principal_frame(bbox_min: Any, bbox_max: Any) -> Tuple[
+    Tuple[float, float, float], Tuple[float, float, float]
+]:
+    """Return ``(center, extent)`` of the body bbox for the Tier-2 frame.
+
+    ``center`` is the bbox midpoint (the frame origin); ``extent`` is the bbox
+    span on each axis (the per-axis length unit). A zero/degenerate extent on an
+    axis is floored to 1.0 so the relative-position math never divides by zero
+    (a flat body still produces a usable, deterministic signature).
+    """
+    try:
+        mn = (float(bbox_min[0]), float(bbox_min[1]), float(bbox_min[2]))
+        mx = (float(bbox_max[0]), float(bbox_max[1]), float(bbox_max[2]))
+    except Exception:  # noqa: BLE001 - junk bbox → unit frame at origin
+        return (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)
+    center = ((mn[0] + mx[0]) / 2.0, (mn[1] + mx[1]) / 2.0, (mn[2] + mx[2]) / 2.0)
+    extent = (
+        max(abs(mx[0] - mn[0]), 1e-9),
+        max(abs(mx[1] - mn[1]), 1e-9),
+        max(abs(mx[2] - mn[2]), 1e-9),
+    )
+    return center, extent
+
+
+def _relative_octant(
+    point: Tuple[float, float, float],
+    center: Tuple[float, float, float],
+    extent: Tuple[float, float, float],
+) -> int:
+    """Bbox-relative position CELL (0..26) of ``point``: a base-3 pack of the
+    per-axis sign (−1 / 0 / +1, with a deadband) of the offset from the bbox
+    center, NORMALIZED by the half-extent.
+
+    Three cells per axis (0 = below-center, 1 = on-center within the deadband, 2 =
+    above-center) packed as ``cells[0]*9 + cells[1]*3 + cells[2]`` → 0..26. This is
+    strictly MORE discriminating than a 3-bit octant: a box's six faces each get a
+    UNIQUE cell because the on-center "1" separates a face centroid (on-center in
+    two axes) from a corner. INVARIANT under a uniform translate (center moves with
+    the point) and a uniform scale (the normalized offset is unchanged); the
+    deadband keeps an on-center coordinate stable instead of FP-sign-dependent.
+
+    Wire value MUST match ``CadFaceSignature.centroidOctant`` /
+    ``CadEdgeSignature.midpointOctant`` as the renderer + its spec
+    (test_tier2_pick_signature_invariance.py ``_octant``) compute it, so a pick
+    resolves cross-path.
+    """
+    cells: List[int] = []
+    for axis in range(3):
+        half = extent[axis] / 2.0
+        if half <= 1e-9:
+            cells.append(1)  # degenerate axis → on-center
+            continue
+        offset = (point[axis] - center[axis]) / half
+        if offset > _SIG_OCTANT_BAND:
+            cells.append(2)
+        elif offset < -_SIG_OCTANT_BAND:
+            cells.append(0)
+        else:
+            cells.append(1)
+    return cells[0] * 9 + cells[1] * 3 + cells[2]
+
+
+def _signed_quant_component(value: float) -> str:
+    """One signed, sign-PREFIXED integer component of a quantized normal.
+
+    Rounds value to the nearest integer and always emits a leading sign so the
+    string lattice is stable (+0 / +1 / -1; -0.0 folds to +0).
+    An axis-aligned unit normal lands at 0 / ±1; a skew normal rounds its
+    components (still deterministic + scale-invariant + sign-significant).
+    """
+    n = int(round(value))
+    if n == 0:
+        return "+0"  # fold -0 → +0 for a stable key
+    return ("+" if n > 0 else "") + str(n)
+
+
+def _normal_class(normal: Tuple[float, float, float]) -> str:
+    """Classify an outward face normal into a SIGNED quantized-component lattice.
+
+    Wire format MUST match CadFaceSignature.normalClass in
+    src/shared/sidecar-protocol.ts (the renderer agent owns that type + pins the
+    format in kernel-pick-file.test.ts): the three rounded, sign-prefixed unit-
+    normal components joined by commas, e.g. a +Z cap → "+0,+0,+1", a -Z cap →
+    "+0,+0,-1". Direction is sign-significant (a top cap differs from a
+    bottom cap). Scale-invariant (a unit normal is direction-only) and translate-
+    invariant (a direction has no position). "none" for a degenerate /
+    unreadable normal. NOT rotation-invariant (documented out of scope).
+    """
+    u = _unit(normal)
+    if u is None:
+        return "none"
+    return ",".join(_signed_quant_component(c) for c in u)
+
+
+def _face_kind(face: Any) -> str:
+    """Surface kind of a cadquery ``Face`` → plane/cylinder/cone/sphere/other.
+
+    Reads ``face.geomType()`` (CadQuery exposes the underlying OCC surface kind as
+    an upper-case string) and maps it to a stable lower-case token. Anything
+    unrecognised (BSPLINE, TORUS, REVOLUTION, …) folds to ``"other"`` so the
+    signature stays a closed vocabulary. Never raises.
+    """
+    try:
+        gt = face.geomType()
+    except Exception:  # noqa: BLE001 - unreadable → other
+        return "other"
+    if not isinstance(gt, str):
+        return "other"
+    g = gt.upper()
+    if g == "PLANE":
+        return "plane"
+    if g in ("CYLINDER", "CYLINDRICAL"):
+        return "cylinder"
+    if g in ("CONE", "CONICAL"):
+        return "cone"
+    if g in ("SPHERE", "SPHERICAL"):
+        return "sphere"
+    return "other"
+
+
+def _edge_kind(edge: Any) -> str:
+    """Curve kind of a cadquery ``Edge`` → line/circle/other.
+
+    Reads ``edge.geomType()`` ("LINE" / "CIRCLE" / …). Anything else
+    (ELLIPSE, BSPLINE, …) folds to ``"other"``. Never raises.
+    """
+    try:
+        gt = edge.geomType()
+    except Exception:  # noqa: BLE001 - unreadable → other
+        return "other"
+    if not isinstance(gt, str):
+        return "other"
+    g = gt.upper()
+    if g == "LINE":
+        return "line"
+    if g in ("CIRCLE", "CIRCULAR"):
+        return "circle"
+    return "other"
+
+
+def _rank_by(value: float, all_values: List[float]) -> int:
+    """Dense competition rank of ``value`` among ``all_values`` (0 = largest).
+
+    The rank is ``len([v for v in all_values if v > value + eps])`` — i.e. how
+    many entries are STRICTLY larger. Equal-within-tolerance values share a rank,
+    so a tie produces a NON-UNIQUE rank that the resolver treats as ambiguous and
+    refuses to guess on. Quantized comparison (1e-3) so float jitter never
+    reshuffles otherwise-equal ranks. Stable under uniform scale only AFTER the
+    caller normalizes the values (areas by bbox-area, lengths by bbox-diagonal);
+    rank itself is order-based so the normalization is what carries invariance.
+    """
+    eps = 1.0 / (10.0 ** _GEOM_QUANT)
+    return sum(1 for v in all_values if v > value + eps)
+
+
+def compute_face_signature(
+    face: Any,
+    *,
+    center: Tuple[float, float, float],
+    extent: Tuple[float, float, float],
+    same_kind_norm_areas: List[float],
+    adjacent_face_count: int,
+) -> Dict[str, Any]:
+    """Tier-2 geometry-invariant signature for one cadquery ``Face``.
+
+    Wire shape (all fields JSON-serializable, deterministic, invariant under a
+    uniform translate / uniform resize — see the block header for the honest
+    scope):
+
+        {
+          "kind": "plane"|"cylinder"|"cone"|"sphere"|"other",
+          "normalClass": "+x,+y,+z" signed rounded unit-normal components (e.g. "+0,+0,+1") | "none",
+          "centroidOctant": int 0..26,       # bbox-relative position cell
+          "areaRank": int,                    # rank among SAME-kind faces (0=largest)
+          "adjacentFaceCount": int,           # faces sharing an edge with this one
+        }
+
+    Matches CadFaceSignature in src/shared/sidecar-protocol.ts (the renderer
+    owns that type). No tier field — the resolver records the tier, not the sig.
+
+    ``same_kind_norm_areas`` is the list of bbox-area-normalized areas of all
+    faces of THIS face's kind (so the rank is computed within the same surface
+    family — a plane is never ranked against a cylinder). ``adjacent_face_count``
+    is supplied by the caller (it walks the shared-edge adjacency once for the
+    whole body). NEVER raises — a read failure degrades individual fields to a
+    safe default ("other" / "none" / octant 0 / rank 0).
+    """
+    kind = _face_kind(face)
+    # Normal class (signed world-axis bucket relative to the principal frame).
+    try:
+        nrm = face.normalAt()
+        normal_class = _normal_class((float(nrm.x), float(nrm.y), float(nrm.z)))
+    except Exception:  # noqa: BLE001 - normal optional
+        normal_class = "none"
+    # Centroid octant (bbox-relative; translate + uniform-scale invariant).
+    centroid = _xyz_of_raw(face.Center()) if hasattr(face, "Center") else (0.0, 0.0, 0.0)
+    octant = _relative_octant(centroid, center, extent)
+    # Area rank within the same kind, computed on the bbox-area-normalized area.
+    bbox_area = max(extent[0] * extent[1] + extent[1] * extent[2] + extent[0] * extent[2], 1e-9)
+    norm_area = _safe_face_area(face) / bbox_area
+    area_rank = _rank_by(norm_area, same_kind_norm_areas)
+    # Wire shape MUST match CadFaceSignature in src/shared/sidecar-protocol.ts
+    # (the renderer agent owns that type; this emitter conforms). No tier key —
+    # the tier is recorded by the RESOLVER's result, not the signature itself.
+    return {
+        "kind": kind,
+        "normalClass": normal_class,
+        "centroidOctant": octant,
+        "areaRank": area_rank,
+        "adjacentFaceCount": int(adjacent_face_count),
+    }
+
+
+def compute_edge_signature(
+    edge: Any,
+    *,
+    center: Tuple[float, float, float],
+    extent: Tuple[float, float, float],
+    same_kind_norm_lengths: List[float],
+    incident_face_kinds: List[str],
+) -> Dict[str, Any]:
+    """Tier-2 geometry-invariant signature for one cadquery ``Edge``.
+
+    Wire shape (JSON-serializable, deterministic, translate + uniform-resize
+    invariant — see the block header for the honest scope):
+
+        {
+          "kind": "line"|"circle"|"other",
+          "midpointOctant": int 0..26,           # bbox-relative position cell of the midpoint
+          "lengthRank": int,                      # rank among SAME-kind edges (0=longest)
+          "incidentFaceKinds": str,               # sorted |-joined incident-face kinds
+        }
+
+    Matches CadEdgeSignature in src/shared/sidecar-protocol.ts. No tier;
+    incidentFaceKinds is a sorted |-joined STRING (e.g. "cylinder|plane").
+
+    ``all_norm_lengths`` is the list of bbox-diagonal-normalized lengths of all
+    edges in the body (so the rank is scale-invariant). ``incident_face_kinds``
+    is the sorted list of the surface kinds of the faces touching this edge
+    (supplied by the caller, which builds edge→face adjacency once). NEVER raises.
+    """
+    kind = _edge_kind(edge)
+    # Midpoint octant (bbox-relative). Edge.positionAt(0.5) is the curve midpoint;
+    # fall back to the centroid of the endpoints if positionAt is unavailable.
+    midpoint = (0.0, 0.0, 0.0)
+    try:
+        mp = edge.positionAt(0.5)
+        midpoint = (float(mp.x), float(mp.y), float(mp.z))
+    except Exception:  # noqa: BLE001 - fall back to endpoint centroid
+        try:
+            verts = list(edge.Vertices())
+            if verts:
+                sx = sum(float(v.X) for v in verts) / len(verts)
+                sy = sum(float(v.Y) for v in verts) / len(verts)
+                sz = sum(float(v.Z) for v in verts) / len(verts)
+                midpoint = (sx, sy, sz)
+        except Exception:  # noqa: BLE001 - degenerate → origin
+            midpoint = (0.0, 0.0, 0.0)
+    octant = _relative_octant(midpoint, center, extent)
+    # Length rank among SAME-KIND edges (bbox-diagonal-normalized for scale
+    # invariance) — a line is ranked only against lines (matches the renderer spec).
+    diag = max(math.sqrt(extent[0] ** 2 + extent[1] ** 2 + extent[2] ** 2), 1e-9)
+    norm_len = _safe_edge_length(edge) / diag
+    length_rank = _rank_by(norm_len, same_kind_norm_lengths)
+    # Wire shape MUST match CadEdgeSignature in src/shared/sidecar-protocol.ts:
+    # incidentFaceKinds is a sorted |-joined STRING (e.g. "cylinder|plane"),
+    # NOT a list, so the renderer's strict a.incidentFaceKinds === b... compare
+    # works (a JS array `===` is reference equality). No tier key (see face).
+    return {
+        "kind": kind,
+        "midpointOctant": octant,
+        "lengthRank": length_rank,
+        "incidentFaceKinds": "|".join(sorted(incident_face_kinds)),
+    }
+
+
+def _xyz_of_raw(point: Any) -> Tuple[float, float, float]:
+    """Raw (un-quantized) (x, y, z) from a cadquery Vector / OCP point / tuple.
+
+    Tier-2 octant math wants the TRUE coordinate (the relative-position division
+    by bbox extent does the normalization); ``_xyz_of`` quantizes for the Tier-1
+    id and would lose precision here. Best-effort; degenerate → origin.
+    """
+    for ax in ("x", "y", "z"):
+        if hasattr(point, ax):
+            try:
+                return (float(point.x), float(point.y), float(point.z))
+            except Exception:  # noqa: BLE001
+                return (0.0, 0.0, 0.0)
+    if hasattr(point, "X") and hasattr(point, "Y") and hasattr(point, "Z"):
+        try:
+            return (float(point.X()), float(point.Y()), float(point.Z()))
+        except Exception:  # noqa: BLE001
+            return (0.0, 0.0, 0.0)
+    try:
+        return (float(point[0]), float(point[1]), float(point[2]))
+    except Exception:  # noqa: BLE001 - degenerate point → origin
+        return (0.0, 0.0, 0.0)
+
+
+# ── Tier-2 body-frame signature builders (whole-solid context) ────────────────
+#
+# The per-element signature functions above need body-level context (the
+# principal frame + the same-kind area pool + edge length pool + adjacency).
+# These two builders compute that context ONCE per solid and return a parallel
+# dict {element_index_or_id: signature}. ``tessellate_with_face_ids`` calls them
+# so faceMap[id].signature / edgeMap[id].signature are populated alongside the
+# UNCHANGED Tier-1 occtId. Both NEVER raise — a failure yields an empty dict and
+# the caller simply omits the signature (Tier-1 + Tier-3 still work).
+
+
+def build_face_signatures(
+    solid: Any,
+    faces: List[Any],
+    bbox_min: Any,
+    bbox_max: Any,
+) -> Dict[int, Dict[str, Any]]:
+    """Compute Tier-2 signatures for every face in ``faces`` (index-keyed).
+
+    Walks the body once to build the same-kind normalized-area pools and the
+    shared-edge adjacency count per face, then computes each face's signature.
+    Returns ``{face_index: signature}``. NEVER raises (best-effort per face).
+    """
+    center, extent = _principal_frame(bbox_min, bbox_max)
+    bbox_area = max(extent[0] * extent[1] + extent[1] * extent[2] + extent[0] * extent[2], 1e-9)
+    # Group normalized areas by kind so areaRank is computed within a kind.
+    kinds: List[str] = []
+    norm_areas: List[float] = []
+    for face in faces:
+        kinds.append(_face_kind(face))
+        norm_areas.append(_safe_face_area(face) / bbox_area)
+    by_kind: Dict[str, List[float]] = {}
+    for k, a in zip(kinds, norm_areas):
+        by_kind.setdefault(k, []).append(a)
+    # Adjacency: count faces sharing at least one edge id with each face.
+    adjacency = _face_adjacency_counts(faces)
+    out: Dict[int, Dict[str, Any]] = {}
+    for idx, face in enumerate(faces):
+        try:
+            out[idx] = compute_face_signature(
+                face,
+                center=center,
+                extent=extent,
+                same_kind_norm_areas=by_kind.get(kinds[idx], []),
+                adjacent_face_count=adjacency.get(idx, 0),
+            )
+        except Exception:  # noqa: BLE001 - skip a bad face, keep the rest
+            continue
+    return out
+
+
+def build_edge_signatures(
+    solid: Any,
+    edges: List[Any],
+    bbox_min: Any,
+    bbox_max: Any,
+) -> Dict[str, Dict[str, Any]]:
+    """Compute Tier-2 signatures for every edge, keyed by the STABLE edge id.
+
+    Keyed by ``_safe_edge_geom_id`` (the Tier-1 id) so the signature sits next to
+    its Tier-1 entry in ``edgeMap``. Builds the normalized-length pool + each
+    edge's incident-face kinds (via shared-vertex/curve coincidence against the
+    body's faces) once. Returns ``{edge_id: signature}``. NEVER raises.
+    """
+    center, extent = _principal_frame(bbox_min, bbox_max)
+    diag = max(math.sqrt(extent[0] ** 2 + extent[1] ** 2 + extent[2] ** 2), 1e-9)
+    # Group normalized lengths by curve kind so lengthRank is computed WITHIN a
+    # kind (a line is never ranked against a circle) — matches the renderer spec.
+    edge_kinds = [_edge_kind(e) for e in edges]
+    norm_lengths = [_safe_edge_length(e) / diag for e in edges]
+    by_kind: Dict[str, List[float]] = {}
+    for k, ln in zip(edge_kinds, norm_lengths):
+        by_kind.setdefault(k, []).append(ln)
+    incident = _edge_incident_face_kinds(solid, edges)
+    out: Dict[str, Dict[str, Any]] = {}
+    for idx, edge in enumerate(edges):
+        eid = _safe_edge_geom_id(edge)
+        if eid in out:
+            continue  # first wins on a rare hash collision (mirrors edgeMap)
+        try:
+            out[eid] = compute_edge_signature(
+                edge,
+                center=center,
+                extent=extent,
+                same_kind_norm_lengths=by_kind.get(edge_kinds[idx], []),
+                incident_face_kinds=incident.get(idx, []),
+            )
+        except Exception:  # noqa: BLE001 - skip a bad edge, keep the rest
+            continue
+    return out
+
+
+def _face_adjacency_counts(faces: List[Any]) -> Dict[int, int]:
+    """Count, per face index, how many OTHER faces share >=1 edge id with it.
+
+    Uses the stable Tier-1 edge id (``_safe_edge_geom_id``) as the shared-edge
+    key — two faces are adjacent when they list a common edge id. Pure geometry,
+    so it is itself a translate/scale-COVARIANT count (the COUNT is invariant;
+    the ids move but the adjacency relation does not). NEVER raises.
+    """
+    face_edge_ids: List[set] = []
+    for face in faces:
+        ids: set = set()
+        try:
+            for edge in face.Edges():
+                ids.add(_safe_edge_geom_id(edge))
+        except Exception:  # noqa: BLE001 - unreadable face → no edges
+            pass
+        face_edge_ids.append(ids)
+    counts: Dict[int, int] = {}
+    n = len(faces)
+    for i in range(n):
+        c = 0
+        for j in range(n):
+            if i == j:
+                continue
+            if face_edge_ids[i] & face_edge_ids[j]:
+                c += 1
+        counts[i] = c
+    return counts
+
+
+def _edge_incident_face_kinds(solid: Any, edges: List[Any]) -> Dict[int, List[str]]:
+    """Map each edge index → the sorted kinds of faces that contain that edge.
+
+    Builds face→edge-id sets once, then for each edge collects the kinds of the
+    faces whose edge-id set contains the edge's id. Invariant under translate /
+    uniform scale (kinds + the incidence relation do not change). NEVER raises.
+    """
+    try:
+        faces = list(solid.Faces())
+    except Exception:  # noqa: BLE001 - no faces → no incidence
+        return {}
+    face_kind_ids: List[Tuple[str, set]] = []
+    for face in faces:
+        ids: set = set()
+        try:
+            for edge in face.Edges():
+                ids.add(_safe_edge_geom_id(edge))
+        except Exception:  # noqa: BLE001
+            pass
+        face_kind_ids.append((_face_kind(face), ids))
+    out: Dict[int, List[str]] = {}
+    for idx, edge in enumerate(edges):
+        eid = _safe_edge_geom_id(edge)
+        kinds = [fk for (fk, ids) in face_kind_ids if eid in ids]
+        out[idx] = kinds
+    return out
+
+
+# ── Tier-2 + tiered pick-id resolver ─────────────────────────────────────────
+#
+# ``resolve_pick_id`` is the pure, importable core the build path uses to map a
+# stored pick (its Tier-1 id + its Tier-2 signature) back to ONE element of the
+# rebuilt body. The tier ladder:
+#
+#   TIER 1 — exact Tier-1 id match. If the target id is a key in ``candidates``
+#            it wins outright (byte-identical same-geometry rebuild → no
+#            regression vs the pre-Tier-2 behaviour). This is checked first and
+#            short-circuits.
+#   TIER 2 — UNIQUE best signature match. When Tier-1 misses (the geometry moved
+#            / resized so the absolute-coord hash changed), score every candidate
+#            signature against the target signature and accept the single best
+#            ONLY IF it is strictly better than the runner-up (a tie is
+#            ambiguous → return None, never guess). The caller then does Tier-3.
+#   TIER 3 — the axis bucket (``_edges_in_axis_bucket`` / ``_faces_in_open_bucket``)
+#            is the CALLER's responsibility (it predates this resolver); a None
+#            return here means "Tier-1 + Tier-2 both missed, fall to the bucket".
+#
+# The resolver NEVER raises and NEVER guesses on a tie — applying an op to the
+# wrong topology is worse than an honest miss (CLAUDE.md: the kernel is sacred).
+
+
+def _signature_score(target: Dict[str, Any], candidate: Dict[str, Any]) -> int:
+    """Similarity score between two Tier-2 signatures (higher = more similar).
+
+    A field-by-field match counter with a HARD GATE on ``kind``: two elements of
+    different surface/curve kind can NEVER match (return ``-1``) — a plane is not
+    a cylinder no matter how the ranks line up. Beyond the gate each matching
+    field adds 1. The scoring vocabulary is identical for faces (kind /
+    normalClass / centroidOctant / areaRank / adjacentFaceCount) and edges (kind
+    / midpointOctant / lengthRank / incidentFaceKinds) — missing fields simply
+    don't contribute, so the same function scores both element types.
+    """
+    if not isinstance(target, dict) or not isinstance(candidate, dict):
+        return -1
+    # Hard gate: kind must match exactly (or the comparison is meaningless).
+    if target.get("kind") != candidate.get("kind"):
+        return -1
+    score = 1  # kind matched
+    # Every remaining signature field is now a scalar (int) or a string
+    # (normalClass, the |-joined incidentFaceKinds), so a plain == compare is
+    # correct for all of them — faces contribute the face fields, edges the edge
+    # fields, and a field absent on one element type simply never matches.
+    for field in (
+        "normalClass",
+        "centroidOctant",
+        "areaRank",
+        "adjacentFaceCount",
+        "midpointOctant",
+        "lengthRank",
+        "incidentFaceKinds",
+    ):
+        if field in target and field in candidate and target[field] == candidate[field]:
+            score += 1
+    return score
+
+
+# Minimum Tier-2 score for a candidate to be eligible as a match. ``kind`` alone
+# (score 1) is never enough — we require kind PLUS at least two more agreeing
+# fields so a unique match is genuinely discriminating, not "the only plane".
+_TIER2_MIN_SCORE = 3
+
+
+def resolve_pick_id(
+    target_id: Optional[str],
+    target_signature: Optional[Dict[str, Any]],
+    candidates: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Resolve a stored pick to ONE candidate id via the Tier-1 → Tier-2 ladder.
+
+    Pure + importable (no cadquery, no I/O) so it is unit-testable on synthetic
+    signatures and reusable by both the script path and ``build_part.py``.
+
+    Args:
+      target_id:        the Tier-1 stable id the pick was stored with (may be
+                        ``None`` if only a signature was stored).
+      target_signature: the Tier-2 signature the pick was stored with (may be
+                        ``None`` if only an id was stored — then only Tier-1 can
+                        match).
+      candidates:       ``{candidate_id: signature}`` for every element of the
+                        rebuilt body of the SAME element type (faces or edges).
+                        The id is the Tier-1 id; the signature is the Tier-2 dict
+                        (``{}`` if a candidate has no signature).
+
+    Returns the matched candidate id, or ``None`` when neither tier yields a
+    confident UNIQUE match (the caller then falls to Tier-3 / honest pick-lost).
+
+    Tier-1 (exact id) is tried first and short-circuits. Tier-2 accepts the
+    single best-scoring candidate ONLY when it clears ``_TIER2_MIN_SCORE`` AND is
+    STRICTLY better than the runner-up — a tie is ambiguous and returns ``None``.
+    NEVER raises; NEVER guesses on a tie.
+    """
+    if not isinstance(candidates, dict) or not candidates:
+        return None
+    # TIER 1 — exact stable-id hit. Byte-identical same-geometry rebuild lands
+    # here; this is the no-regression path (identical to pre-Tier-2 behaviour).
+    if isinstance(target_id, str) and target_id in candidates:
+        return target_id
+    # TIER 2 — unique best signature match. Requires a target signature.
+    if not isinstance(target_signature, dict) or not target_signature:
+        return None
+    best_id: Optional[str] = None
+    best_score = -1
+    runner_up_score = -1
+    # Deterministic iteration: sort candidate ids so a genuine tie is detected
+    # the same way every run (and the function is reproducible in tests).
+    for cid in sorted(candidates.keys()):
+        score = _signature_score(target_signature, candidates[cid])
+        if score > best_score:
+            runner_up_score = best_score
+            best_score = score
+            best_id = cid
+        elif score > runner_up_score:
+            runner_up_score = score
+    if best_id is None:
+        return None
+    if best_score < _TIER2_MIN_SCORE:
+        return None  # not discriminating enough → honest miss
+    if best_score == runner_up_score:
+        return None  # ambiguous tie → never guess
+    return best_id
+
 
 
 # ── FG-5: per-edge polyline sampling (viewport edge picking) ─────────────────
@@ -1764,4 +2408,11 @@ __all__ = [
     "apply_fillet_select_op",
     "apply_chamfer_select_op",
     "apply_shell_inward_op",
+    # Tier-2: geometry-invariant signature (survives translate + uniform resize)
+    "compute_face_signature",
+    "compute_edge_signature",
+    "build_face_signatures",
+    "build_edge_signatures",
+    # Tier-1 → Tier-2 tiered pick-id resolver (pure, importable)
+    "resolve_pick_id",
 ]

@@ -47,6 +47,8 @@ import {
 } from '../../shared/kernel-pick-file'
 import type {
   CadEdgePolyline,
+  CadEdgeSignature,
+  CadFaceSignature,
   CadTessellateWithIdsResult,
 } from '../../shared/sidecar-protocol'
 
@@ -59,11 +61,19 @@ import type {
  * `edgeId` is the 0-based ordinal in the source `edges` list (the `EdgeSelection`
  * numeric `faceId`); `occtId` is the STABLE `"e:<hex>"` handle the Fillet /
  * Chamfer dialogs forward to the kernel as `pickedEdgeIds`.
+ *
+ * Tier-2 · `signature` is the OPTIONAL geometry-invariant edge signature
+ * (`edgeMap[occtId].signature`) carried alongside the stable id so an edge pick
+ * can be recovered by `resolvePickedId` after a parametric MOVE / UNIFORM RESIZE
+ * (when the absolute-hash `occtId` no longer matches). Absent on legacy /
+ * pre-Tier-2 tessellations — the pick then resolves at Tier 1 only. This mirrors
+ * the FACE path, which already threads `faceMap[id].signature` per triangle.
  */
 export type PickableEdge = {
   readonly edgeId: number
   readonly occtId: string
   readonly positions: Float32Array
+  readonly signature?: CadEdgeSignature
 }
 
 /**
@@ -115,6 +125,34 @@ export function buildFaceOcctIds(
 }
 
 /**
+ * Tier-2 · Build the per-triangle geometry-invariant FACE signature array from a
+ * sanitized numeric `faceIds` array + the sidecar's `faceMap`. `out[i]` is the
+ * `signature` of triangle `i`'s face (`faceMap[String(faceIds[i])].signature`),
+ * or `undefined` when that face carries none (back-compat / failed face).
+ *
+ * Returns `null` (no stash) when NO triangle has a signature — so a pre-Tier-2
+ * tessellation never carries an all-`undefined` array. Unlike
+ * {@link buildFaceOcctIds} this is NOT all-or-nothing: a partial map is fine
+ * because a face pick that lands on a signature-less triangle simply captures no
+ * signature (the resolver then has only Tier-1 for that pick). Pure; exported
+ * for the focused unit test.
+ */
+export function buildFaceSignatures(
+  faceIds: readonly number[],
+  faceMap: CadTessellateWithIdsResult['faceMap'] | undefined,
+): Array<CadFaceSignature | undefined> | null {
+  if (!faceMap || typeof faceMap !== 'object') return null
+  const out: Array<CadFaceSignature | undefined> = new Array(faceIds.length)
+  let any = false
+  for (let i = 0; i < faceIds.length; i++) {
+    const sig = faceMap[String(faceIds[i])]?.signature
+    out[i] = sig
+    if (sig !== undefined) any = true
+  }
+  return any ? out : null
+}
+
+/**
  * FG-5 · Turn the sidecar's per-edge polylines into {@link PickableEdge}s the
  * viewport can render + raycast. Each polyline becomes a flat segment-endpoint
  * buffer (`p0→p1, p1→p2, …`) so a single `THREE.LineSegments` traces the whole
@@ -122,14 +160,23 @@ export function buildFaceOcctIds(
  * `occtId` is its stable `"e:<hex>"` handle (forwarded to the kernel as
  * `pickedEdgeIds`).
  *
+ * Tier-2 · When the parallel `edgeMap` is supplied, the polyline's stable id is
+ * looked up in it (`edgeMap[occtId].signature`) and the geometry-invariant edge
+ * signature is attached to the {@link PickableEdge}, so an edge pick captures the
+ * value `resolvePickedId` recovers a moved/resized pick with. Best-effort: a
+ * polyline with no matching map entry (or a map entry with no signature) simply
+ * carries no signature — the pick then resolves at Tier 1 only (back-compat).
+ *
  * Defensive: drops any polyline with fewer than 2 well-formed `[x,y,z]` points so
  * a malformed entry can't produce a degenerate (un-pickable) line. Returns `[]`
  * when there are no usable edges. Pure; exported for the focused unit test.
  */
 export function buildPickableEdges(
   edges: readonly CadEdgePolyline[] | null | undefined,
+  edgeMap?: CadTessellateWithIdsResult['edgeMap'] | null,
 ): PickableEdge[] {
   if (!Array.isArray(edges) || edges.length === 0) return []
+  const map = edgeMap && typeof edgeMap === 'object' ? edgeMap : null
   const out: PickableEdge[] = []
   for (let edgeId = 0; edgeId < edges.length; edgeId++) {
     const poly = edges[edgeId]
@@ -160,7 +207,14 @@ export function buildPickableEdges(
       positions[cursor++] = a[0]; positions[cursor++] = a[1]; positions[cursor++] = a[2]
       positions[cursor++] = b[0]; positions[cursor++] = b[1]; positions[cursor++] = b[2]
     }
-    out.push({ edgeId, occtId: poly.id, positions })
+    // Tier-2: attach the edge's geometry-invariant signature when the map carries
+    // one (keyed by the same stable id). Build up so we never carry an
+    // `undefined` key on the entry (matches the makeFaceSelection no-stray-key
+    // contract). The edgeMap is keyed by the stable id; prefer the entry's own
+    // occtId but the key equals it by contract.
+    const sig = map ? map[poly.id]?.signature : undefined
+    const base: PickableEdge = { edgeId, occtId: poly.id, positions }
+    out.push(sig !== undefined ? { ...base, signature: sig } : base)
   }
   return out
 }
@@ -206,13 +260,23 @@ export function buildViewportGeometry(
     const faceOcctIds = buildFaceOcctIds(sanitized, tess.faceMap)
     if (faceOcctIds) {
       geometry.userData = { ...geometry.userData, faceOcctIds }
+      // Tier-2: stash the parallel geometry-invariant signatures so a face pick
+      // captures the value `resolvePickedId` recovers a moved/resized pick with.
+      // Best-effort (partial map ok) — only stashed alongside the occtId stash
+      // (a signature without a stable id has no Tier-1 anchor to fall back from).
+      const faceSignatures = buildFaceSignatures(sanitized, tess.faceMap)
+      if (faceSignatures) {
+        geometry.userData = { ...geometry.userData, faceSignatures }
+      }
     }
   }
 
   // FG-5: stash the pickable edge polylines so the viewport can render +
   // raycast selectable edges (edge-mode fillet/chamfer). Independent of the
   // faceIds stash above — edges are emitted even when face-pick is degraded.
-  const pickableEdges = buildPickableEdges(tess.edges)
+  // Tier-2: pass the edgeMap so each pickable edge carries its geometry-invariant
+  // signature (for move/resize recovery), mirroring the per-triangle face stash.
+  const pickableEdges = buildPickableEdges(tess.edges, tess.edgeMap)
   if (pickableEdges.length > 0) {
     geometry.userData = { ...geometry.userData, pickableEdges }
   }

@@ -28,10 +28,11 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
-  pickedOcctIdFor,
+  resolvePickedSelectionId,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
+import { pickLostMessage } from '../../../shared/kernel-pick-file'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 
 type ChamferMode = 'all' | 'select'
@@ -84,8 +85,15 @@ export function ChamferDialog({
   const length = parsePositiveMm(lengthRaw)
   const canApply = length !== null && disabled !== true
 
-  // FG-5b: an edge pick carrying a stable "e:<hex>" id drives chamfer_select by id.
-  const pickedEdgeId = pickedOcctIdFor(selectionInfo.selection, 'edge')
+  // FG-5b + Tier-2: route the live edge pick through the tiered resolver (see
+  // FilletDialog) so a moved/resized pick recovers to its current id (Tier 2)
+  // and an honest loss falls back to the axis bucket.
+  const pickRes = resolvePickedSelectionId(
+    selectionInfo.selection,
+    'edge',
+    selectionInfo.currentPickIndex
+  )
+  const pickedEdgeId = pickRes.id
 
   const handleApply = (): void => {
     if (length === null) return
@@ -100,11 +108,15 @@ export function ChamferDialog({
       ? undefined
       : pickedEdgeId !== null
         ? mode === 'select'
-          ? 'Chamfering the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+          ? pickRes.tier === 2
+            ? 'Chamfering the picked edge — it moved/resized upstream and was re-identified by its geometry signature (falls back to the axis bucket if it can’t be matched).'
+            : 'Chamfering the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
           : 'Switch Edges to “By axis bucket” to chamfer the picked edge by id; “All edges” bevels everything.'
-        : selectionInfo.selection.kind === 'edge'
-          ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
-          : 'Pick an edge to chamfer it by id; this selection drives the axis bucket below instead.'
+        : pickRes.reason !== undefined
+          ? pickLostMessage(pickRes.reason)
+          : selectionInfo.selection.kind === 'edge'
+            ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
+            : 'Pick an edge to chamfer it by id; this selection drives the axis bucket below instead.'
 
   return (
     <FeatureDialogCard title="Chamfer" testId="fd-chamfer">

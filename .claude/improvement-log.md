@@ -18864,3 +18864,41 @@ a dedicated CSS rule for the caveat note. These define a later Drawings polish w
 
 **Systemic note:** this closes the persistence/reload write-only bug class in ALL FOUR pillars
 (sketch clobber → assembly #9 → drawings) — the features were built, the round-trip was never wired.
+
+## Cycle 260 — Topological-naming robustness: tiered pick-id resolver (bounded) (2026-06-15)
+
+**Focus:** gold-standard campaign, Model pillar — the HARD one. A BOUNDED improvement (picks
+survive a parametric MOVE / UNIFORM RESIZE), explicitly NOT a full topological-naming solve. One
+commit. Python engine change — validated against the CadQuery venv.
+
+**Baseline → result:** 16,859 → **16,905 pass / 1 skip / 0 fail** (+46); tsc clean; venv pytest
+(py3.11 + cadquery 2.7.0) — the new Tier-2 fixtures **24 passed / 0 skipped** (real cq solids,
+not skipped); full `pytest engines` 248 passed / 6 skipped (unrelated). Tier-1 hash bodies
+BYTE-UNCHANGED (confirmed by function-slice diff).
+
+**What landed (additive; the existing exact hash stays Tier 1):**
+- **Tier 2 geometry-invariant signature** (engines/cad/cadquery_script.py, flows automatically
+  through build_part via the shared tessellate core — cross-path guarantee is structural):
+  FACE { kind, normalClass (principal-frame signed unit normal), centroidOctant (base-3 0..26,
+  deadband-0.5), areaRank (among same-kind), adjacentFaceCount }; EDGE { kind, midpointOctant,
+  lengthRank, incidentFaceKinds }. Computed in the body principal frame (bbox center + extent),
+  position normalized by extent + area/length by bbox so a uniform translate AND uniform scale
+  cancel; normalClass is direction-only.
+- **Tiered resolver** (renderer src/shared/kernel-pick-file.ts resolvePickedId = the runtime
+  authority): Tier-1 exact hash → Tier-2 unique signature best-match → Tier-3 axis bucket →
+  honest pick-lost. Never guesses on a tie/ambiguity (a wrong resolve would silently fillet the
+  wrong edge — worse than an honest miss). Feature-dialog picked-edge consumers route through it.
+
+**Proven on real meshes:** a face/edge pick re-resolves to the SAME logical element after a
+MOVE (translate) and a UNIFORM RESIZE (1.5×); the 4 vertical box edges each re-resolve to their
+OWN corner (distinct octants, no cross-talk); a same-geometry rebuild still resolves via Tier-1
+(no regression, pinned); an ambiguous/topology-changing case → honest None.
+
+**Honest residuals (documented in code, return None → Tier-3 → honest pick-lost, NOT faked):**
+ROTATION of the body (world-axis principal frame shifts normalClass/octant), NON-UNIFORM/partial
+resize (rank order can change), full topology-changing edits (face split/merge/renumber, OCC
+lineage). The win is verified for MOVE + UNIFORM RESIZE only — a real, bounded improvement, not a
+full solve. Two resolvers exist intentionally: the TS strict-equality one is the runtime
+authority; the Python scoring resolve_pick_id is pure/tested/exported but deliberately NOT wired
+into build_part's select-op path (avoids altering G-code-adjacent build behavior) — a follow-up
+if build-side resolution is ever wanted.

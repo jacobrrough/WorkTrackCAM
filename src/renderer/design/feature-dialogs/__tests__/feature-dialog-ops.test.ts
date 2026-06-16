@@ -25,13 +25,20 @@ import {
   parseClampedInt,
   parseFiniteMm,
   parsePositiveMm,
-  pickedOcctIdFor
+  pickedOcctIdFor,
+  resolvePickedSelectionId
 } from '../feature-dialog-types'
 import {
   makeEdgeSelection,
   makeFaceSelection,
   makeVertexSelection
 } from '../../selection-state'
+import { buildPickIndex } from '../../../../shared/kernel-pick-file'
+import type {
+  CadEdgeSignature,
+  CadFaceSignature,
+  CadTessellateWithIdsResult
+} from '../../../../shared/sidecar-protocol'
 
 describe('FG-5b op builders emit schema-valid kernel ops', () => {
   describe('buildFilletOp', () => {
@@ -270,5 +277,95 @@ describe('FG-5b pickedOcctIdFor — the kernel-by-id gate', () => {
   it('returns null for an empty occtHash string and for a null selection', () => {
     expect(pickedOcctIdFor(makeFaceSelection(4, ''), 'face')).toBeNull()
     expect(pickedOcctIdFor(null, 'face')).toBeNull()
+  })
+})
+
+// ── Tier-2 · resolvePickedSelectionId — the dialog's resolver gate ────────────
+//
+// The single seam Fillet/Chamfer/Shell route their picked id through. It layers
+// the tiered resolver on top of pickedOcctIdFor so a pick that MOVED / UNIFORMLY
+// RESIZED upstream resolves to its CURRENT stable id (Tier 2) — or is honestly
+// lost (axis bucket) — instead of emitting a now-dead id.
+
+const FACE_SIG: CadFaceSignature = {
+  kind: 'plane',
+  adjacentFaceCount: 4,
+  normalClass: '+0,+0,+1',
+  areaRank: 0,
+  centroidOctant: 7
+}
+const EDGE_SIG: CadEdgeSignature = {
+  kind: 'line',
+  lengthRank: 0,
+  midpointOctant: 3,
+  incidentFaceKinds: 'plane|plane'
+}
+
+/** Minimal current-build tessellation carrying one face + one edge with signatures. */
+function indexWith(
+  faceId: string,
+  faceSig: CadFaceSignature | undefined,
+  edgeId: string,
+  edgeSig: CadEdgeSignature | undefined
+) {
+  const tess: CadTessellateWithIdsResult = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2],
+    faceIds: [0],
+    triangleCount: 1,
+    bbox: { min: [0, 0, 0], max: [1, 1, 0] },
+    faceMap: { '0': { kind: 'face', occtHash: 0, occtId: faceId, area: 1, signature: faceSig } },
+    edgeMap: { [edgeId]: { kind: 'edge', occtId: edgeId, occtHash: 0, length: 1, signature: edgeSig } },
+    edges: []
+  }
+  return buildPickIndex(tess)
+}
+
+describe('Tier-2 resolvePickedSelectionId — dialog resolver gate', () => {
+  it('no picked id (wrong kind / no stable id) → { id: null } with no reason', () => {
+    // A face pick handed to an edge op produces no picked id at all.
+    expect(resolvePickedSelectionId(makeFaceSelection(4, 'f:cap'), 'edge')).toEqual({ id: null })
+    // An id-only pick (no occtHash) likewise.
+    expect(resolvePickedSelectionId(makeFaceSelection(4), 'face')).toEqual({ id: null })
+    expect(resolvePickedSelectionId(null, 'face')).toEqual({ id: null })
+  })
+
+  it('NO current index supplied → Tier-1-only: emits the live id unchanged', () => {
+    const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:rail', EDGE_SIG), 'edge')
+    expect(res).toEqual({ id: 'e:rail', tier: 1 })
+  })
+
+  it('TIER 1: the live id is present in the current build', () => {
+    const idx = indexWith('f:x', FACE_SIG, 'e:rail', EDGE_SIG)
+    const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:rail', EDGE_SIG), 'edge', idx)
+    expect(res).toEqual({ id: 'e:rail', tier: 1 })
+  })
+
+  it('TIER 2: the picked edge MOVED/RESIZED — recovered by signature to the CURRENT id', () => {
+    // Live pick still carries the OLD id "e:old" + its signature; the build now
+    // exposes "e:new" with the same signature (uniform move/resize).
+    const idx = indexWith('f:x', FACE_SIG, 'e:new', EDGE_SIG)
+    const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:old', EDGE_SIG), 'edge', idx)
+    expect(res).toEqual({ id: 'e:new', tier: 2 })
+  })
+
+  it('TIER 2: a moved/resized FACE pick recovers to the current face id', () => {
+    const idx = indexWith('f:new', FACE_SIG, 'e:1', EDGE_SIG)
+    const res = resolvePickedSelectionId(makeFaceSelection(4, 'f:old', FACE_SIG), 'face', idx)
+    expect(res).toEqual({ id: 'f:new', tier: 2 })
+  })
+
+  it('HONEST LOSS: id missing + no signature match → { id: null, reason }', () => {
+    const idx = indexWith('f:x', FACE_SIG, 'e:1', { ...EDGE_SIG, kind: 'circle' })
+    const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:old', EDGE_SIG), 'edge', idx)
+    expect(res.id).toBeNull()
+    expect(res).toMatchObject({ reason: 'no-signature-match' })
+  })
+
+  it('HONEST LOSS: a stale pick with no captured signature can only Tier-1 (then lost)', () => {
+    const idx = indexWith('f:x', FACE_SIG, 'e:new', EDGE_SIG)
+    // occtHash present (so there IS a picked id) but no signature captured.
+    const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:old'), 'edge', idx)
+    expect(res).toEqual({ id: null, reason: 'no-tier1-no-signature' })
   })
 })

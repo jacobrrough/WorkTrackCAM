@@ -134,6 +134,100 @@ export type CadTessellateWithIdsParams = {
   toleranceMm?: number
 }
 
+// ── Topological-naming Tier-2: geometry-invariant pick signatures ──────────
+//
+// The stable ``occtId`` handle (Tier 1) is an absolute-geometry FNV hash, so it
+// is byte-identical for a SAME-geometry rebuild but BREAKS the moment a
+// parametric edit MOVES or UNIFORMLY RESIZES the topology (the absolute coords
+// change → new hash → the pick falls through to the axis-bucket fallback). These
+// signatures are the additive Tier-2 layer: a geometry-INVARIANT descriptor of a
+// face / edge computed relative to the body's PRINCIPAL FRAME (bbox center +
+// axes) with position normalized by the bbox extent, so a uniform translate /
+// uniform scale leaves the signature unchanged. When Tier 1 misses, the renderer
+// resolver ({@link resolvePickedId}) picks the UNIQUE best Tier-2 signature
+// match; an ambiguous / tied match fails honestly to the axis bucket (Tier 3)
+// rather than guessing the wrong edge.
+//
+// HONEST SCOPE (documented, NOT faked): this survives a parametric MOVE / UNIFORM
+// RESIZE only. It does NOT survive a topology-changing edit (a face split/merge,
+// an added feature that renumbers neighbours), nor a non-uniform / partial
+// resize — those remain a full topological-naming problem (OCC lineage tracking)
+// that is explicitly out of scope. When all three tiers miss the pick is
+// honestly reported lost.
+//
+// The wire shape is shared by BOTH emitters (the ``cad.tessellate_with_ids``
+// script path AND ``engines/occt/build_part.py``'s ``pickTessellation``) so the
+// renderer can resolve a stored pick cross-path. The fields are OPTIONAL on the
+// map entries so a pick file written before this layer existed still parses
+// (back-compat, Safety Rule 2) — absence simply disables Tier 2 for that entity.
+
+/** Coarse surface-kind class for a face signature (OCC ``geomType`` bucketed). */
+export type CadFaceSignatureKind = 'plane' | 'cylinder' | 'cone' | 'sphere' | 'other'
+
+/** Coarse curve-kind class for an edge signature (OCC ``geomType`` bucketed). */
+export type CadEdgeSignatureKind = 'line' | 'circle' | 'other'
+
+/**
+ * Geometry-invariant FACE signature (Tier-2). Every field is invariant under a
+ * uniform translate + uniform scale because it is rank/class/octant based, not
+ * absolute-coordinate based:
+ *
+ *   - ``kind``            — surface class (a plane stays a plane through a move/resize).
+ *   - ``adjacentFaceCount`` — number of faces sharing an edge with this face
+ *                            (topology degree; unchanged by a rigid move / scale).
+ *   - ``normalClass``     — the outward normal expressed against the body
+ *                            principal frame and quantized to a small lattice
+ *                            (e.g. ``"+0,+0,+1"``) — direction relative to the
+ *                            part, not the world, so it survives a re-place.
+ *   - ``areaRank``        — competition rank of this face's area among faces of
+ *                            the SAME ``kind`` (largest = rank 0; ties share a
+ *                            rank, the next rank skips). Uniform scale multiplies
+ *                            every area by the same factor, so the ordering — and
+ *                            thus the rank — is preserved.
+ *   - ``centroidOctant``  — bbox-relative position cell (0..26): a base-3 pack of
+ *                            the per-axis sign (−1 / 0 / +1, with a deadband) of
+ *                            the centroid's offset from the bbox center,
+ *                            normalized by the half-extent. The deadband is load-
+ *                            bearing: a planar face centroid sits exactly ON the
+ *                            center plane in two axes, so a bare ``>= center``
+ *                            octant flips with float noise across a rebuild —
+ *                            folding near-zero offsets to ``0`` makes the cell
+ *                            genuinely move / uniform-scale invariant. (Validated
+ *                            on a real cube in
+ *                            ``engines/sidecar/__tests__/test_tier2_pick_signature_invariance.py``.)
+ */
+export type CadFaceSignature = {
+  kind: CadFaceSignatureKind
+  adjacentFaceCount: number
+  normalClass: string
+  areaRank: number
+  centroidOctant: number
+}
+
+/**
+ * Geometry-invariant EDGE signature (Tier-2). Mirrors {@link CadFaceSignature};
+ * every field is rank/class/octant based so a uniform move/resize keeps it:
+ *
+ *   - ``kind``            — curve class (line / circle / other).
+ *   - ``lengthRank``      — competition rank of this edge's length among edges of
+ *                            the SAME ``kind`` (longest = rank 0; ties share a
+ *                            rank, the next rank skips — so a box's 12 edges in
+ *                            3 length-groups of 4 rank {0, 4, 8}); uniform scale
+ *                            preserves the ordering.
+ *   - ``midpointOctant``  — bbox-relative position cell (0..26) the edge midpoint
+ *                            sits in — SAME deadbanded base-3 scheme as
+ *                            {@link CadFaceSignature.centroidOctant}.
+ *   - ``incidentFaceKinds`` — sorted, ``|``-joined surface kinds of the faces
+ *                            this edge bounds (e.g. ``"cylinder|plane"``) — a
+ *                            topology fingerprint independent of absolute size.
+ */
+export type CadEdgeSignature = {
+  kind: CadEdgeSignatureKind
+  lengthRank: number
+  midpointOctant: number
+  incidentFaceKinds: string
+}
+
 /**
  * Per-face metadata in the ``faceMap`` dict. The renderer's inspector panel
  * surfaces ``area`` and ``occtHash`` directly; ``kind`` is reserved for
@@ -167,6 +261,15 @@ export type CadFaceMapEntry = {
   occtId?: string
   /** Optional surface area in mm² (``Face.Area()``). ``0`` on failure. */
   area?: number
+  /**
+   * Tier-2 · OPTIONAL geometry-invariant signature for this face (see
+   * {@link CadFaceSignature}). Present when the emitter computed one; ABSENT on
+   * a pick file written before this layer existed (back-compat) or on a face
+   * that failed mid-tessellation. The renderer's {@link resolvePickedId} uses
+   * it only when the Tier-1 ``occtId`` match misses, to recover a pick that
+   * survived a parametric move / uniform resize.
+   */
+  signature?: CadFaceSignature
   /** Diagnostic; only present if a single face failed mid-tessellation. */
   error?: string
 }
@@ -192,6 +295,13 @@ export type CadEdgeMapEntry = {
   occtHash: number
   /** Edge arc length in mm (``Edge.Length()``); ``0`` on failure. */
   length: number
+  /**
+   * Tier-2 · OPTIONAL geometry-invariant signature for this edge (see
+   * {@link CadEdgeSignature}). Same contract as {@link CadFaceMapEntry.signature}:
+   * present when the emitter computed one, absent on a back-compat pick file, and
+   * consulted by {@link resolvePickedId} only when the Tier-1 ``occtId`` misses.
+   */
+  signature?: CadEdgeSignature
 }
 
 /**

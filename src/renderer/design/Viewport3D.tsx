@@ -37,6 +37,7 @@ import {
   readGeometryPickableEdges,
   type PickableEdge
 } from './viewport3d-geometry'
+import type { CadFaceSignature } from '../../shared/sidecar-protocol'
 
 export type MeasureMarker = { x: number; y: number; z: number }
 
@@ -232,6 +233,41 @@ export function readGeometryFaceOcctIds(
 }
 
 /**
+ * Tier-2 · Read the per-triangle geometry-invariant FACE-signature stash, if the
+ * geometry carries one (`DesignWorkspace` stashes it via `buildViewportGeometry`
+ * → `buildFaceSignatures`). A face pick carries the matching entry up as
+ * `FaceSelection.signature` so a moved/resized pick can be recovered by
+ * `resolvePickedId`. Returns `null` when absent (legacy / pre-Tier-2 / assembly
+ * tessellation). Exported for tests; pure.
+ */
+export function readGeometryFaceSignatures(
+  geometry: THREE.BufferGeometry | null | undefined
+): ReadonlyArray<CadFaceSignature | undefined> | null {
+  if (!geometry || !geometry.userData) return null
+  const candidate = (geometry.userData as Record<string, unknown>).faceSignatures
+  if (!Array.isArray(candidate)) return null
+  return candidate as ReadonlyArray<CadFaceSignature | undefined>
+}
+
+/**
+ * Tier-2 · Resolve a triangle index to its FACE signature from a parallel
+ * signature stash. Mirrors {@link triangleToOcctId}; returns `undefined` when the
+ * stash is absent, the index is out of range, or that triangle's face had no
+ * signature — so a face pick on a signature-less triangle simply captures none
+ * (it still resolves at Tier 1). Pure.
+ */
+function triangleToFaceSignature(
+  triangleIndex: number | undefined | null,
+  signatures: ReadonlyArray<CadFaceSignature | undefined> | null
+): CadFaceSignature | undefined {
+  if (signatures === null) return undefined
+  if (triangleIndex === undefined || triangleIndex === null) return undefined
+  if (!Number.isInteger(triangleIndex) || triangleIndex < 0) return undefined
+  if (triangleIndex >= signatures.length) return undefined
+  return signatures[triangleIndex]
+}
+
+/**
  * FG-5b · Resolve a triangle index to a STABLE string id from a parallel
  * occt-id stash. Mirrors {@link triangleToFaceId} (the numeric resolver) but
  * for the `"f:<hex>"` / `"e:<hex>"` handles. Returns `undefined` when the
@@ -330,7 +366,10 @@ export function resolveSelectionFromPick(
   const faceId = triangleToFaceId(triangleIndex, faceIds)
   if (faceId === null) return null
   const occtId = triangleToOcctId(triangleIndex, readGeometryFaceOcctIds(geometry))
-  return makeFaceSelection(faceId, occtId)
+  // Tier-2: also capture the face's geometry-invariant signature (when stashed)
+  // so the picked-face consumers can recover it after a parametric move/resize.
+  const signature = triangleToFaceSignature(triangleIndex, readGeometryFaceSignatures(geometry))
+  return makeFaceSelection(faceId, occtId, signature)
 }
 
 /**
@@ -585,11 +624,16 @@ const Solid = memo(function Solid({
    * (the value the Fillet / Chamfer dialogs forward as `pickedEdgeIds`). Only
    * meaningful in edge `selectionMode`, which is also the only mode in which the
    * `PickableEdges` lines render at all.
+   *
+   * Tier-2 · also forwards the edge's geometry-invariant `signature` (when the
+   * pickable edge carried one) so the Fillet / Chamfer dialogs can recover the
+   * pick through `resolvePickedId` after a parametric MOVE / UNIFORM RESIZE —
+   * mirroring the face pick, which already captures its signature.
    */
   const handleEdgePick = useCallback(
     (edge: PickableEdge, pointMm: { x: number; y: number; z: number }): void => {
       if (!onSelect) return
-      onSelect(makeEdgeSelection(edge.edgeId, edge.occtId))
+      onSelect(makeEdgeSelection(edge.edgeId, edge.occtId, edge.signature))
       // Wave 3n — report the pick location only when the pick registered.
       onPickPoint?.(pointMm)
     },

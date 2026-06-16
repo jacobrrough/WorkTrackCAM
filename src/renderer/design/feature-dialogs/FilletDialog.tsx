@@ -38,11 +38,12 @@ import {
   SelectionContextBanner
 } from './FeatureDialogKit'
 import {
-  parsePositiveMm,
-  pickedOcctIdFor,
+  resolvePickedSelectionId,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
+import { parsePositiveMm } from './feature-dialog-types'
+import { pickLostMessage } from '../../../shared/kernel-pick-file'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 
 /** Which fillet op the dialog will emit. */
@@ -101,9 +102,16 @@ export function FilletDialog({
   const radius = parsePositiveMm(radiusRaw)
   const canApply = radius !== null && disabled !== true
 
-  // FG-5b: an edge pick carrying a stable "e:<hex>" id drives fillet_select by
-  // id. Only meaningful in 'select' mode ('all' rounds every edge regardless).
-  const pickedEdgeId = pickedOcctIdFor(selectionInfo.selection, 'edge')
+  // FG-5b + Tier-2: route the live edge pick through the tiered resolver so a
+  // pick that MOVED / UNIFORMLY RESIZED upstream resolves to its CURRENT stable
+  // id (Tier 2) instead of emitting a dead id; an honest loss yields no picked
+  // id (axis bucket). Only meaningful in 'select' mode ('all' rounds everything).
+  const pickRes = resolvePickedSelectionId(
+    selectionInfo.selection,
+    'edge',
+    selectionInfo.currentPickIndex
+  )
+  const pickedEdgeId = pickRes.id
 
   const handleApply = (): void => {
     if (radius === null) return
@@ -113,20 +121,25 @@ export function FilletDialog({
     })
   }
 
-  // Honest read-out tied to the operator's action:
-  //   - an edge pick with a stable id WILL drive the fillet (in select mode);
-  //   - a pick without a stable id is context only (axis bucket applies);
-  //   - a non-edge pick (e.g. a face) is context only — fillet targets edges.
+  // Honest read-out tied to the operator's action AND the resolution tier:
+  //   - a resolved edge pick (Tier 1 exact OR Tier 2 recovered) WILL drive the
+  //     fillet in select mode (Tier 2 says so explicitly — the edge moved/resized);
+  //   - a pick honestly LOST after an edit explains why the axis bucket applies;
+  //   - a non-edge pick / no stable id is context only (axis bucket applies).
   const selectionNote =
     selectionInfo.selection === null
       ? undefined
       : pickedEdgeId !== null
         ? mode === 'select'
-          ? 'Filleting the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+          ? pickRes.tier === 2
+            ? 'Filleting the picked edge — it moved/resized upstream and was re-identified by its geometry signature (falls back to the axis bucket if it can’t be matched).'
+            : 'Filleting the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
           : 'Switch Edges to “By axis bucket” to fillet the picked edge by id; “All edges” rounds everything.'
-        : selectionInfo.selection.kind === 'edge'
-          ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
-          : 'Pick an edge to fillet it by id; this selection drives the axis bucket below instead.'
+        : pickRes.reason !== undefined
+          ? pickLostMessage(pickRes.reason)
+          : selectionInfo.selection.kind === 'edge'
+            ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
+            : 'Pick an edge to fillet it by id; this selection drives the axis bucket below instead.'
 
   return (
     <FeatureDialogCard title="Fillet" testId="fd-fillet">

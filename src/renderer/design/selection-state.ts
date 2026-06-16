@@ -22,6 +22,14 @@
  *                        re-runs the script (geometry pointer changes).
  *        - V1.5 (later): occtHash present — selection survives re-runs
  *                        when the topology is unchanged.
+ *   4. **Tier-2 signature is optional too.** Alongside the stable `occtHash`
+ *      (the absolute-geometry Tier-1 handle), a pick MAY carry a geometry-
+ *      invariant `signature` (`CadFaceSignature` / `CadEdgeSignature` from the
+ *      sidecar). The picked-edge consumers route the pair `{ occtHash, signature }`
+ *      through `resolvePickedId` (`src/shared/kernel-pick-file.ts`) so a pick
+ *      survives an upstream parametric MOVE / UNIFORM RESIZE: Tier 1 (exact
+ *      hash) → Tier 2 (unique signature) → honest loss. Absent on legacy /
+ *      pre-Tier-2 geometry — then only the hash drives resolution.
  *
  * Why this module instead of inlining the helpers into `DesignWorkspace`?
  *   - Other surfaces (the upcoming `FeatureTree` row click, the
@@ -34,6 +42,8 @@
  */
 
 // ── Discriminated union ─────────────────────────────────────────────────────
+
+import type { CadEdgeSignature, CadFaceSignature } from '../../shared/sidecar-protocol'
 
 /** A picked face on the active body. */
 export interface FaceSelection {
@@ -51,6 +61,14 @@ export interface FaceSelection {
    * then only `faceId` is known and the dialogs fall back to the axis bucket.
    */
   readonly occtHash?: string
+  /**
+   * Tier-2 · OPTIONAL geometry-invariant signature captured at pick time (from
+   * `faceMap[faceId].signature`). Travels with `occtHash` so the picked-edge
+   * consumers can recover the pick through `resolvePickedId` after a parametric
+   * MOVE / UNIFORM RESIZE (when the absolute-hash `occtHash` no longer matches).
+   * Absent on legacy / pre-Tier-2 geometry.
+   */
+  readonly signature?: CadFaceSignature
 }
 
 /**
@@ -61,6 +79,8 @@ export interface EdgeSelection {
   readonly kind: 'edge'
   readonly faceId: number
   readonly occtHash?: string
+  /** Tier-2 · OPTIONAL geometry-invariant edge signature (see {@link FaceSelection.signature}). */
+  readonly signature?: CadEdgeSignature
 }
 
 /** A picked vertex (corner). `occtHash` carries the stable handle when present. */
@@ -86,10 +106,16 @@ export type SelectionKind = Selection['kind']
  * `{ kind: 'face' }` discriminator at every callsite and so a future
  * shape change (e.g. adding a normal vector) lands in one place.
  */
-export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelection {
-  return occtHash !== undefined
-    ? { kind: 'face', faceId, occtHash }
-    : { kind: 'face', faceId }
+export function makeFaceSelection(
+  faceId: number,
+  occtHash?: string,
+  signature?: CadFaceSignature
+): FaceSelection {
+  // Build up so we never carry an `undefined` key (the selection-state pins
+  // assert no stray keys when an optional field is absent).
+  const base: FaceSelection = { kind: 'face', faceId }
+  const withHash = occtHash !== undefined ? { ...base, occtHash } : base
+  return signature !== undefined ? { ...withHash, signature } : withHash
 }
 
 /**
@@ -107,10 +133,14 @@ export function makeFaceSelection(faceId: number, occtHash?: string): FaceSelect
  * targets exactly that edge. The viewport never fabricates an id — a polyline
  * without a stable id is simply not pickable.
  */
-export function makeEdgeSelection(edgeId: number, occtHash?: string): EdgeSelection {
-  return occtHash !== undefined
-    ? { kind: 'edge', faceId: edgeId, occtHash }
-    : { kind: 'edge', faceId: edgeId }
+export function makeEdgeSelection(
+  edgeId: number,
+  occtHash?: string,
+  signature?: CadEdgeSignature
+): EdgeSelection {
+  const base: EdgeSelection = { kind: 'edge', faceId: edgeId }
+  const withHash = occtHash !== undefined ? { ...base, occtHash } : base
+  return signature !== undefined ? { ...withHash, signature } : withHash
 }
 
 /**

@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildFaceOcctIds,
+  buildFaceSignatures,
   buildKernelPickGeometry,
   buildPickableEdges,
   buildViewportGeometry,
@@ -16,9 +17,15 @@ import {
   sanitizeFaceIds,
 } from './viewport3d-geometry'
 import type { KernelPickFile } from '../../shared/kernel-pick-file'
-import { readGeometryFaceIds, readGeometryFaceOcctIds } from './Viewport3D'
+import {
+  readGeometryFaceIds,
+  readGeometryFaceOcctIds,
+  readGeometryFaceSignatures,
+} from './Viewport3D'
 import type {
   CadEdgePolyline,
+  CadEdgeSignature,
+  CadFaceSignature,
   CadTessellateWithIdsResult,
 } from '../../shared/sidecar-protocol'
 
@@ -189,6 +196,14 @@ function straightEdge(id: string): CadEdgePolyline {
   return { id, points: [[0, 0, 0], [10, 0, 0]] }
 }
 
+/** A representative Tier-2 edge signature (one box edge). */
+const EDGE_SIG: CadEdgeSignature = {
+  kind: 'line',
+  lengthRank: 0,
+  midpointOctant: 22,
+  incidentFaceKinds: 'plane|plane',
+}
+
 describe('buildPickableEdges', () => {
   it('returns [] for null / undefined / empty input', () => {
     expect(buildPickableEdges(null)).toEqual([])
@@ -228,6 +243,37 @@ describe('buildPickableEdges', () => {
     expect(out).toHaveLength(1)
     expect(out[0].occtId).toBe('e:ok')
   })
+
+  it('carries no signature when no edgeMap is supplied (Tier-1-only, back-compat)', () => {
+    const out = buildPickableEdges([straightEdge('e:aaa')])
+    expect(out).toHaveLength(1)
+    expect(out[0].signature).toBeUndefined()
+    // The no-stray-key contract: the entry must NOT carry a `signature` key at all.
+    expect('signature' in out[0]).toBe(false)
+  })
+
+  it('Tier-2: attaches edgeMap[id].signature to the matching pickable edge', () => {
+    const edgeMap: CadTessellateWithIdsResult['edgeMap'] = {
+      'e:aaa': { kind: 'edge', occtId: 'e:aaa', occtHash: 0, length: 10, signature: EDGE_SIG },
+      'e:bbb': { kind: 'edge', occtId: 'e:bbb', occtHash: 0, length: 5 }, // no signature
+    }
+    const out = buildPickableEdges([straightEdge('e:aaa'), straightEdge('e:bbb')], edgeMap)
+    expect(out).toHaveLength(2)
+    expect(out[0].occtId).toBe('e:aaa')
+    expect(out[0].signature).toEqual(EDGE_SIG)
+    // An entry whose map row carries no signature stays Tier-1-only (no stray key).
+    expect(out[1].occtId).toBe('e:bbb')
+    expect(out[1].signature).toBeUndefined()
+    expect('signature' in out[1]).toBe(false)
+  })
+
+  it('Tier-2: a polyline with no matching edgeMap row carries no signature', () => {
+    const edgeMap: CadTessellateWithIdsResult['edgeMap'] = {
+      'e:other': { kind: 'edge', occtId: 'e:other', occtHash: 0, length: 1, signature: EDGE_SIG },
+    }
+    const out = buildPickableEdges([straightEdge('e:aaa')], edgeMap)
+    expect(out[0].signature).toBeUndefined()
+  })
 })
 
 describe('readGeometryPickableEdges', () => {
@@ -239,6 +285,21 @@ describe('readGeometryPickableEdges', () => {
     expect(edges).not.toBeNull()
     expect(edges).toHaveLength(2)
     expect(edges![0].occtId).toBe('e:one')
+  })
+
+  it('Tier-2: round-trips the edge signature through buildViewportGeometry (edgeMap → stash)', () => {
+    const g = buildViewportGeometry(
+      oneTriangle({
+        edges: [straightEdge('e:one')],
+        edgeMap: {
+          'e:one': { kind: 'edge', occtId: 'e:one', occtHash: 0, length: 10, signature: EDGE_SIG },
+        },
+      }),
+    )
+    const edges = readGeometryPickableEdges(g)
+    expect(edges).not.toBeNull()
+    expect(edges![0]!.occtId).toBe('e:one')
+    expect(edges![0]!.signature).toEqual(EDGE_SIG)
   })
 
   it('returns null when the geometry has no edge polylines (legacy / no edges)', () => {
@@ -315,5 +376,76 @@ describe('buildKernelPickGeometry — pickable no-code kernel mesh', () => {
   it('returns null for a null pick file (caller falls back to the untagged STL)', () => {
     expect(buildKernelPickGeometry(null)).toBeNull()
     expect(buildKernelPickGeometry(undefined)).toBeNull()
+  })
+})
+
+// ── Tier-2 · per-triangle face-signature stash ───────────────────────────────
+
+const SIG_A: CadFaceSignature = {
+  kind: 'plane',
+  adjacentFaceCount: 4,
+  normalClass: '+0,+0,+1',
+  areaRank: 0,
+  centroidOctant: 7,
+}
+const SIG_B: CadFaceSignature = {
+  kind: 'cylinder',
+  adjacentFaceCount: 2,
+  normalClass: '+1,+0,+0',
+  areaRank: 1,
+  centroidOctant: 0,
+}
+
+describe('buildFaceSignatures', () => {
+  it('maps each triangle to its face signature via faceMap[faceId].signature', () => {
+    const faceMap: CadTessellateWithIdsResult['faceMap'] = {
+      '0': { kind: 'face', occtHash: 0, occtId: 'f:0', area: 1, signature: SIG_A },
+      '1': { kind: 'face', occtHash: 0, occtId: 'f:1', area: 1, signature: SIG_B },
+    }
+    expect(buildFaceSignatures([0, 1, 0], faceMap)).toEqual([SIG_A, SIG_B, SIG_A])
+  })
+
+  it('is NOT all-or-nothing: a face without a signature yields undefined for its triangles', () => {
+    const faceMap: CadTessellateWithIdsResult['faceMap'] = {
+      '0': { kind: 'face', occtHash: 0, occtId: 'f:0', area: 1, signature: SIG_A },
+      '1': { kind: 'face', occtHash: 0, occtId: 'f:1', area: 1 }, // no signature
+    }
+    expect(buildFaceSignatures([0, 1], faceMap)).toEqual([SIG_A, undefined])
+  })
+
+  it('returns null (no stash) when NO face carries a signature (back-compat tessellation)', () => {
+    const faceMap: CadTessellateWithIdsResult['faceMap'] = {
+      '0': { kind: 'face', occtHash: 0, occtId: 'f:0', area: 1 },
+    }
+    expect(buildFaceSignatures([0], faceMap)).toBeNull()
+    expect(buildFaceSignatures([0], undefined)).toBeNull()
+  })
+})
+
+describe('buildViewportGeometry — faceSignatures stash + Viewport3D reader', () => {
+  it('stashes faceSignatures (parallel to faceOcctIds) and the reader reads it back', () => {
+    const tess = oneTriangle({
+      faceMap: { '0': { kind: 'face', occtHash: 0, occtId: 'f:0', area: 1, signature: SIG_A } },
+    })
+    const geometry = buildViewportGeometry(tess)
+    expect(geometry).not.toBeNull()
+    // The occtId stash must be present (the signature stash rides alongside it).
+    expect(readGeometryFaceOcctIds(geometry)).toEqual(['f:0'])
+    expect(readGeometryFaceSignatures(geometry)).toEqual([SIG_A])
+  })
+
+  it('does NOT stash faceSignatures when the faceMap carries none (reader → null)', () => {
+    const tess = oneTriangle({
+      faceMap: { '0': { kind: 'face', occtHash: 0, occtId: 'f:0', area: 1 } },
+    })
+    const geometry = buildViewportGeometry(tess)
+    expect(readGeometryFaceOcctIds(geometry)).toEqual(['f:0'])
+    expect(readGeometryFaceSignatures(geometry)).toBeNull()
+  })
+
+  it('reader returns null for a geometry with no userData stash', () => {
+    expect(readGeometryFaceSignatures(null)).toBeNull()
+    const bare = buildViewportGeometry(oneTriangle())
+    expect(readGeometryFaceSignatures(bare)).toBeNull()
   })
 })

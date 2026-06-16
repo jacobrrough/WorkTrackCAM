@@ -43,6 +43,12 @@
 
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
+import {
+  resolvePickedId,
+  type CurrentPickIndex,
+  type PickLostReason,
+  type StoredPick,
+} from '../../../shared/kernel-pick-file'
 import type { Selection } from '../selection-state'
 
 /**
@@ -130,6 +136,16 @@ export interface FeatureDialogSelectionInfo {
   readonly selection: Selection | null
   /** Friendly label the host already computed (area-aware), or `null`. */
   readonly label: string | null
+  /**
+   * Tier-2 · OPTIONAL index of the CURRENT build's pickable entities (built by
+   * the host from the live selection tessellation via `buildPickIndex`). When
+   * present, {@link resolvePickedSelectionId} routes the picked id+signature
+   * through the tiered resolver so a pick that MOVED / UNIFORMLY RESIZED upstream
+   * still resolves to its current stable id (Tier 2) instead of emitting a dead
+   * id. Absent on hosts that don't supply it — the dialogs then emit the live
+   * pick id unchanged (the existing Tier-1-only behaviour).
+   */
+  readonly currentPickIndex?: CurrentPickIndex
 }
 
 /** Shared props every feature dialog accepts. */
@@ -198,4 +214,63 @@ export function pickedOcctIdFor(
   if (selection === null || selection.kind !== kind) return null
   const id = selection.occtHash
   return typeof id === 'string' && id.length > 0 ? id : null
+}
+
+/**
+ * Tier-2 · The picked-id resolution a dialog acts on. Distinguishes the THREE
+ * tiers so the dialog can be honest in its read-out:
+ *   * `{ id, tier: 1 }`     — exact id hit (or no current index supplied, so the
+ *                             live id is used as-is — Tier-1-only behaviour).
+ *   * `{ id, tier: 2 }`     — the pick MOVED / RESIZED upstream and was recovered
+ *                             by its geometry-invariant signature; `id` is the
+ *                             CURRENT build's id for that entity (what to emit).
+ *   * `{ id: null, reason }` — no usable id: either there was never a stable pick
+ *                             (axis-bucket-only, `reason: undefined`) OR the pick
+ *                             was honestly lost after the edit (`reason` set).
+ */
+export type PickedIdResolution =
+  | { readonly id: string; readonly tier: 1 | 2 }
+  | { readonly id: null; readonly reason?: PickLostReason }
+
+/**
+ * Tier-2 · The single gate the picked-edge consumers (Fillet / Chamfer / Shell)
+ * route through. Given the live {@link Selection}, the entity `kind` the op
+ * wants, and the host's optional {@link CurrentPickIndex}, decide WHICH stable id
+ * (if any) the op should target:
+ *
+ *   1. Extract the live picked id via {@link pickedOcctIdFor} (wrong-kind / no
+ *      stable id → no picked id at all, `{ id: null }` — axis bucket).
+ *   2. If the host supplied no `currentPickIndex`, emit the live id unchanged
+ *      (`tier: 1`) — the pre-Tier-2 behaviour, so a host that hasn't wired the
+ *      index keeps working exactly as before.
+ *   3. Otherwise route `{ id, signature }` through {@link resolvePickedId}:
+ *        - Tier 1 exact hit  → `{ id, tier: 1 }`.
+ *        - Tier 2 recovery   → `{ id: <current id>, tier: 2 }` (the entity moved/
+ *          resized; emit the build's CURRENT id, not the stale one).
+ *        - honest loss       → `{ id: null, reason }` (caller falls back to the
+ *          axis bucket and surfaces the loss — never guesses).
+ *
+ * Pure; exported for the resolver-routing unit test.
+ */
+export function resolvePickedSelectionId(
+  selection: Selection | null,
+  kind: Exclude<Selection['kind'], 'vertex'>,
+  currentPickIndex?: CurrentPickIndex
+): PickedIdResolution {
+  const liveId = pickedOcctIdFor(selection, kind)
+  if (liveId === null) return { id: null }
+
+  // No current build to resolve against → Tier-1-only: emit the live id as-is.
+  if (!currentPickIndex) return { id: liveId, tier: 1 }
+
+  // `selection` is non-null and of the requested kind (pickedOcctIdFor proved
+  // it), so its signature — if any — is the matching variant. Build the StoredPick.
+  const stored: StoredPick =
+    kind === 'face'
+      ? { kind: 'face', id: liveId, signature: selection?.kind === 'face' ? selection.signature : undefined }
+      : { kind: 'edge', id: liveId, signature: selection?.kind === 'edge' ? selection.signature : undefined }
+
+  const res = resolvePickedId(stored, currentPickIndex)
+  if (res.ok) return { id: res.id, tier: res.tier }
+  return { id: null, reason: res.reason }
 }

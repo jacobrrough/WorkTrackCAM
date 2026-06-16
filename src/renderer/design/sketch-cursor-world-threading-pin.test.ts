@@ -97,7 +97,10 @@ describe('Viewport3D — last-pick point only (honest scope)', () => {
 
   it('the edge pick forwards its intersection point through the pick handler', () => {
     expect(VIEWPORT).toContain('onPick(edge, { x: e.point.x, y: e.point.y, z: e.point.z })')
-    expect(VIEWPORT).toMatch(/onSelect\(makeEdgeSelection\(edge\.edgeId, edge\.occtId\)\)[\s\S]{0,200}?onPickPoint\?\.\(pointMm\)/)
+    // Tier-2: the edge selection now ALSO carries `edge.signature` (the geometry-
+    // invariant signature) so a picked fillet/chamfer can be recovered after a
+    // move/resize — but the point-forwarding still rides alongside the pick.
+    expect(VIEWPORT).toMatch(/onSelect\(makeEdgeSelection\(edge\.edgeId, edge\.occtId, edge\.signature\)\)[\s\S]{0,200}?onPickPoint\?\.\(pointMm\)/)
   })
 
   it('adds NO per-frame hover raycast (deliberately rejected as too heavy)', () => {

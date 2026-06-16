@@ -25,10 +25,11 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
-  pickedOcctIdFor,
+  resolvePickedSelectionId,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
+import { pickLostMessage } from '../../../shared/kernel-pick-file'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 
 export interface ShellDialogParams {
@@ -76,22 +77,33 @@ export function ShellDialog({
   const thickness = parsePositiveMm(thicknessRaw)
   const canApply = thickness !== null && disabled !== true
 
-  // FG-5b: a face pick carrying a stable "f:<hex>" id drives the open cap by id.
-  const pickedFaceId = pickedOcctIdFor(selectionInfo.selection, 'face')
+  // FG-5b + Tier-2: route the live face pick through the tiered resolver so a
+  // face that MOVED / UNIFORMLY RESIZED upstream recovers to its current stable
+  // id (Tier 2); an honest loss falls back to the axis-bucket cap.
+  const pickRes = resolvePickedSelectionId(
+    selectionInfo.selection,
+    'face',
+    selectionInfo.currentPickIndex
+  )
+  const pickedFaceId = pickRes.id
 
   const handleApply = (): void => {
     if (thickness === null) return
     onApply({ target: 'kernelOp', op: buildShellOp(thickness, openDirection, pickedFaceId) })
   }
 
-  // Honest read-out: the picked face DRIVES the open cap when it carries a
-  // stable id; otherwise the axis bucket is used (and a picked-but-unstable
-  // face is context only).
+  // Honest read-out: the picked face DRIVES the open cap when it resolves (Tier 1
+  // exact OR Tier 2 recovered); a pick honestly lost after an edit explains the
+  // axis-bucket fallback; a picked-but-unstable face is context only.
   const selectionNote =
     selectionInfo.selection !== null
       ? pickedFaceId !== null
-        ? 'Opening the picked face — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
-        : 'This pick has no stable id yet (re-run the build to refresh), so the cap is chosen by the axis bucket below.'
+        ? pickRes.tier === 2
+          ? 'Opening the picked face — it moved/resized upstream and was re-identified by its geometry signature (falls back to the axis bucket if it can’t be matched).'
+          : 'Opening the picked face — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
+        : pickRes.reason !== undefined
+          ? pickLostMessage(pickRes.reason)
+          : 'This pick has no stable id yet (re-run the build to refresh), so the cap is chosen by the axis bucket below.'
       : undefined
 
   return (
