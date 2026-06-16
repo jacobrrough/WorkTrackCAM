@@ -19116,3 +19116,25 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Honest residuals:** BOM is geometry-source-keyed (same body via different ref kinds may not merge — shared limitation with the Assemble BOM); section-view fidelity is bounded by the projection pipeline.
 
 **Process note (both cycles):** these two waves were generated in an isolated Workflow worktree and were nearly lost — narrated as "landed" while the active branch was actually clean at `ca635a2`. Recovery procedure + lesson recorded in memory (`workflow-waves-strand-in-worktrees`): verify `git status` on-branch before claiming a wave landed.
+
+## Cycle 268 — 3D finishing verified machine-safe: posted gcode-safety contract for the mesh-height raster (2026-06-16)
+
+**Focus:** user picked "3D finishing toolpaths" from the Fusion-parity gap analysis. **Investigation finding:** the 3D surface-finish path that ACTUALLY runs on a shop machine is the built-in mesh-height-field raster (`generateMeshHeightRasterLines`), reached whenever OpenCAMLib is absent (the common case on a fresh box) — it is NOT a stub (it follows the STL upper envelope), but it had **ZERO** posted-snapshot / gcode-safety coverage while 2D and 4-axis both have contract pins. This cycle verifies + pins it. Test-only (no emission code changed → no G-code risk). One commit.
+
+**Baseline → result:** full suite ****17,227 pass / 1 skip / 0 fail** (+6 vs the 17,221 security-cycle baseline)**; tsc clean. (Same tree as the security cycle `d2c41f5` + this test.)
+
+**What landed:**
+- **NEW `src/main/cam-3d-finish-posted.test.ts`** (6 `it()`) — drives `runCamPipeline` with a pyramid binary STL through the REAL Carvera-3axis (`carvera_3axis.hbs`) and Laguna (`vcarve_mach3.hbs`) posts, forcing the built-in mesh-raster path (bogus `pythonPath`, mirroring `cam-runner-model-adherence.test.ts`), and asserts the gcode-safety invariants on the EMITTED program:
+  - explicit `G21`/`G90`/`G54`; `M3` + `G4` dwell; `M5` at end;
+  - **never rapids into stock** — every `G0` carrying a `Z` word is at/above safe-Z (tool only descends under feed);
+  - **surface-following** — apex `Z` > base-corner `Z` (via `extractToolpathSegmentsFromGcode`), proving Z tracks the mesh not a flat bounds sweep;
+  - body within the work envelope;
+  - **correct terminator** — `M30` + `%` tape-marker lines (Laguna/Mach3); `M2` / no bare `%` line / **never an `M30` command** (Carvera/Smoothieware SD-card-delete gotcha);
+  - a stable posted-program **snapshot** (Laguna, coarse stepover).
+- **cnc_3d_finish** and **cnc_waterline** (without OpenCAMLib) are pinned to degrade to the SAME safe parallel finish — so the common 3D ops a user can pick post safe, surface-following, correctly-terminated G-code rather than garbage or a crash.
+
+**gcode-safety (Laguna Swift + Carvera 3-axis): PASS.** Verified via the posted contract above; the emitted G-code was correct on the first run. The test surfaced two invariant-WORDING refinements (not G-code bugs): the Carvera post emits `M2` with a trailing reminder comment and includes a literal "NOT M30" comment plus a "10% feed" comment, so the terminator/tape-marker checks are line-anchored (`^\s*M2\b`, absence of a bare `^\s*%\s*$` line) rather than naive substring matches.
+
+**Honest scope note:** TRUE z-level Waterline + scallop/spiral/morphing as dedicated geometry engines remain follow-ons — they require bundling OpenCAMLib or new toolpath engines (out of one-cycle scope). Today without OCL: waterline/adaptive/raster/pencil **degrade to the now-verified parallel finish**; scallop/spiral/morphing/trochoidal/steep-shallow **fail with a clear operator error** (the `toolpath_engine` was deleted in the 2026-05-27 pivot). This cycle makes the ALWAYS-ON 3D finish trustworthy; it does not add new strategies.
+
+**Next cycle recommendation:** (a) bundle OpenCAMLib so true Waterline/AdaptiveWaterline run, then pin them with the same posted contract; or (b) wire the existing voxel `stock-simulation.ts` into a "simulate material removal before cut" CAM view (pairs with the comparison-test/first-cut validation); or (c) the editable feature timeline (the #1 Fusion CAD differentiator).
