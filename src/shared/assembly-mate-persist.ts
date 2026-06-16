@@ -37,7 +37,7 @@ import type {
 } from './assembly-mate-schema'
 
 /** A solved Model-B mate kind (mirrors `CadAssemblyMateKind`). */
-export type SolvedMateKind = 'point' | 'axis' | 'plane'
+export type SolvedMateKind = 'point' | 'axis' | 'plane' | 'distance'
 
 /** A local-frame 3-vector `[x, y, z]` (finite numbers). */
 export type SolvedVec3 = readonly [number, number, number]
@@ -49,10 +49,13 @@ export type SolvedVec3 = readonly [number, number, number]
  * `SolvedMate` onto this shape (a 1:1 field copy).
  *
  * Per kind, only the relevant vectors are read (the rest may be anything):
- *   - `point`: `point1` + `point2` (feature points coincide → coincident).
- *   - `axis`:  `axis1`  + `axis2`  (axes collinear → concentric; the point
- *              defaults to each part's origin).
- *   - `plane`: `point1` + `normal1` + `point2` + `normal2` (planar flush).
+ *   - `point`:    `point1` + `point2` (feature points coincide → coincident).
+ *   - `axis`:     `axis1`  + `axis2`  (axes collinear → concentric; the point
+ *                 defaults to each part's origin).
+ *   - `plane`:    `point1` + `normal1` + `point2` + `normal2` (planar flush).
+ *   - `distance`: `point1` + `point2` + `value` (feature points held at `value`
+ *                 mm apart → a Model-C `distance` constraint the TS solver drives
+ *                 to the target). `value` is required for this kind.
  */
 export type SolvedMateDraftInput = {
   readonly kind: SolvedMateKind
@@ -64,6 +67,8 @@ export type SolvedMateDraftInput = {
   readonly axis2?: SolvedVec3
   readonly normal1?: SolvedVec3
   readonly normal2?: SolvedVec3
+  /** distance: target separation (mm). Finite, non-negative. Ignored by other kinds. */
+  readonly value?: number
 }
 
 /** A solved mate plus its caller-owned stable id (the renderer's `SolvedMate`). */
@@ -80,15 +85,20 @@ export type BuildMateConstraintResult =
 
 /**
  * Map a solved Model-B mate **kind** onto the persisted Model-C kind:
- *   - `point` → `coincident` (two feature points welded together).
- *   - `axis`  → `concentric` (two feature axes made collinear).
- *   - `plane` → `flush`      (feature points share their coordinate along the
- *                             plane normal — the foundation solver's planar mate).
+ *   - `point`    → `coincident` (two feature points welded together).
+ *   - `axis`     → `concentric` (two feature axes made collinear).
+ *   - `plane`    → `flush`      (feature points share their coordinate along the
+ *                               plane normal — the foundation solver's planar mate).
+ *   - `distance` → `distance`   (two feature points held a numeric `value` mm
+ *                               apart; the TS `solveMateConstraints` drives the
+ *                               part's translation to the target separation).
  *
- * These three are exactly the foundation solver's well-supported kinds, so a
- * persisted mate round-trips straight into `solveMateConstraints` with no extra
- * mapping. (`distance` / `angle` / `tangent` have no Model-B form yet — they are
- * a later enhancement once the form grows a numeric target.)
+ * All four are solver-backed kinds, so a persisted mate round-trips straight into
+ * `solveMateConstraints` with no extra mapping. (`angle` / `tangent` are NOT
+ * mapped here: the foundation solver exposes only translational DOF and so cannot
+ * position a rotational mate — see `CadAssemblyMateKind` in `sidecar-protocol.ts`
+ * for the full honesty note. They become foldable once the solver gains
+ * rotational free variables.)
  */
 export function solvedKindToMateKind(kind: SolvedMateKind): AssemblyMateKind {
   switch (kind) {
@@ -98,6 +108,8 @@ export function solvedKindToMateKind(kind: SolvedMateKind): AssemblyMateKind {
       return 'concentric'
     case 'plane':
       return 'flush'
+    case 'distance':
+      return 'distance'
     default: {
       // Exhaustiveness guard: a new SolvedMateKind must extend the map above.
       const never: never = kind
@@ -175,6 +187,31 @@ export function buildMateConstraintFromSolved(
   }
 
   const kind = solvedKindToMateKind(draft.kind)
+
+  if (draft.kind === 'distance') {
+    if (!isVec3(draft.point1)) return { ok: false, reason: 'Point 1 must be three finite numbers.' }
+    if (!isVec3(draft.point2)) return { ok: false, reason: 'Point 2 must be three finite numbers.' }
+    const value = draft.value
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return { ok: false, reason: 'Distance value must be a finite number (mm).' }
+    }
+    if (value < 0) {
+      return { ok: false, reason: 'Distance value must be zero or positive (mm).' }
+    }
+    return {
+      ok: true,
+      constraint: {
+        id: id.trim(),
+        kind,
+        part1Id,
+        feature1: pointFeature(draft.point1),
+        part2Id,
+        feature2: pointFeature(draft.point2),
+        // Drop -0 to 0 for canonical JSON, matching pointFeature's convention.
+        value: value === 0 ? 0 : value
+      }
+    }
+  }
 
   if (draft.kind === 'point') {
     if (!isVec3(draft.point1)) return { ok: false, reason: 'Point 1 must be three finite numbers.' }

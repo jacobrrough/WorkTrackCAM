@@ -684,3 +684,146 @@ describe('AssemblyView — hydrated-row honesty (geometry not loaded)', () => {
     }
   })
 })
+
+// ── (H) Interference (bbox-level clash list + row highlight) ─────────────────
+//
+// The AssemblyView derives a bbox-level clash report from the parts' placements
+// (nominal extents) and surfaces it as a clash list + a per-row highlight. These
+// pins prove: the panel + honest fidelity label always render; an overlapping
+// fixture produces a clash row AND tints the offending part rows; a spaced-out
+// fixture reports "clear".
+
+describe('AssemblyView — interference (bbox-level)', () => {
+  it('renders the interference panel with an honest bbox-level fidelity label', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] } }),
+      samplePart({ id: 'p2', name: 'Plate', transform: { position: [500, 0, 0] } }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-interference"')
+    expect(html).toContain('data-testid="design-assembly-interference-fidelity"')
+    expect(html).toContain('bbox-level')
+  })
+
+  it('reports "no interferences" for parts spaced apart', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] } }),
+      samplePart({ id: 'p2', name: 'Plate', transform: { position: [500, 0, 0] } }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-interference-clear"')
+    expect(html).toContain('No interferences detected.')
+    expect(html).not.toContain('data-testid="design-assembly-interference-list"')
+  })
+
+  it('lists a clash row for two parts at the same placement', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] } }),
+      samplePart({ id: 'p2', name: 'Plate', transform: { position: [0, 0, 0] } }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-interference-list"')
+    // The clash row carries a deterministic id-pair testid + both part names.
+    expect(html).toContain('data-testid="design-assembly-clash-p1--p2"')
+    expect(html).toContain('Bracket')
+    expect(html).toContain('Plate')
+    // The "clear" placeholder must NOT be present when a clash exists.
+    expect(html).not.toContain('data-testid="design-assembly-interference-clear"')
+  })
+
+  it('highlights the clashing part rows (--clash modifier + clash flag)', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] } }),
+      samplePart({ id: 'p2', name: 'Plate', transform: { position: [0, 0, 0] } }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    // Both rows carry the clash highlight modifier + the per-row clash flag.
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    const p2Row = html.match(/<li[^>]*data-testid="design-assembly-part-p2"[^>]*>/)?.[0] ?? ''
+    expect(p1Row).toContain('design-assembly__row--clash')
+    expect(p2Row).toContain('design-assembly__row--clash')
+    expect(html).toContain('data-testid="design-assembly-part-p1-clash"')
+    expect(html).toContain('data-testid="design-assembly-part-p2-clash"')
+  })
+
+  it('does NOT highlight a non-clashing row', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] } }),
+      samplePart({ id: 'p2', name: 'Plate', transform: { position: [500, 0, 0] } }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    expect(p1Row).not.toContain('design-assembly__row--clash')
+    expect(html).not.toContain('data-testid="design-assembly-part-p1-clash"')
+  })
+})
+
+// ── (I) BOM table (qty / name / source) ──────────────────────────────────────
+//
+// The AssemblyView rolls the parts up into a source-keyed BOM table. These pins
+// prove: the table renders one row per distinct source with a quantity; two
+// instances of the same body collapse to qty 2; and a sourced/hydrated row still
+// produces a line (never silently empty for a real part).
+
+describe('AssemblyView — BOM table', () => {
+  it('renders the BOM table with a header + one row per part source', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', geometrySource: 'design/bracket.step' }),
+      samplePart({ id: 'p2', name: 'Plate', geometrySource: 'design/plate.step' }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-bom"')
+    expect(html).toContain('data-testid="design-assembly-bom-table"')
+    expect(html).toContain('Bill of materials')
+    // One <tr> per distinct source, keyed by representative partId.
+    expect(html).toContain('data-testid="design-assembly-bom-row-p1"')
+    expect(html).toContain('data-testid="design-assembly-bom-row-p2"')
+    expect(html).toContain('design/bracket.step')
+    expect(html).toContain('2 lines')
+  })
+
+  it('collapses two instances of the same body into one line (qty 2)', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'i1', name: 'Bolt', geometrySource: 'design/bolt.step' }),
+      samplePart({ id: 'i2', name: 'Bolt', geometrySource: 'design/bolt.step' }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('1 line')
+    // The single rolled-up row shows quantity 2 in the qty cell.
+    const row = html.match(/<tr[^>]*data-testid="design-assembly-bom-row-i1"[\s\S]*?<\/tr>/)?.[0] ?? ''
+    expect(row).toContain('design-assembly__bom-cell-qty')
+    expect(row).toContain('>2<')
+  })
+
+  it('shows a BOM line even for a hydrated (blank-handle) row', () => {
+    // A reloaded row with a durable geometrySource still rolls up, so the BOM is
+    // never silently empty for a real part.
+    const parts: readonly AssemblyPart[] = [
+      { id: 'h1', name: 'FromDisk', handle: '', geometrySource: 'design/x.json' },
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-bom-table"')
+    expect(html).toContain('FromDisk')
+    expect(html).toContain('1 line')
+  })
+
+  it('does not emit console errors rendering the interference + BOM surfaces', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => { /* swallow */ })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ })
+    try {
+      renderToStaticMarkup(
+        createElement(AssemblyView, {
+          parts: [
+            samplePart({ id: 'p1', name: 'Bracket', transform: { position: [0, 0, 0] }, geometrySource: 'a.step' }),
+            samplePart({ id: 'p2', name: 'Plate', transform: { position: [0, 0, 0] }, geometrySource: 'b.step' }),
+          ],
+        }),
+      )
+      expect(errSpy).not.toHaveBeenCalled()
+      expect(warnSpy).not.toHaveBeenCalled()
+    } finally {
+      errSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
+  })
+})

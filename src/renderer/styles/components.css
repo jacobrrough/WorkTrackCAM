@@ -522,6 +522,101 @@
   margin-top: var(--sp-4);
 }
 
+/* ── Assembly: interference + BOM + clash highlight ──────────────────
+   The Assembly renderer surfaces (AssemblyView). Most design-assembly__*
+   hooks are unstyled structural BEM (the theme cascade covers base look);
+   these add the few rules the new analysis surfaces need: a clash-row
+   highlight (mirrors the --selected highlight idiom), the bbox-level
+   interference list, and the BOM table (reusing .data-table).
+   ────────────────────────────────────────────────────────────────── */
+.design-assembly__interference,
+.design-assembly__bom {
+  margin-top: var(--sp-6);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-4);
+}
+.design-assembly__interference-header,
+.design-assembly__bom-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.design-assembly__interference-title,
+.design-assembly__bom-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--txt2);
+}
+.design-assembly__interference-fidelity,
+.design-assembly__bom-count {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  opacity: 0.8;
+}
+.design-assembly__interference-clear {
+  font-size: var(--text-base);
+  color: var(--ok);
+}
+.design-assembly__interference-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.design-assembly__interference-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--text-base);
+  color: var(--txt1);
+}
+.design-assembly__interference-icon {
+  color: var(--warn);
+}
+/* Clash-row highlight: tint the part row whose bbox overlaps another
+   (reuses the row-highlight mechanism alongside --selected). */
+.design-assembly__row--clash {
+  box-shadow: inset 2px 0 0 var(--warn);
+  background: var(--warn-dim);
+}
+.design-assembly__row-clash-flag {
+  margin-left: var(--sp-3);
+  font-size: var(--text-sm);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.design-assembly__bom-table {
+  margin-top: var(--sp-2);
+}
+.design-assembly__bom-cell-source {
+  color: var(--txt2);
+  font-variant-numeric: tabular-nums;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.design-assembly__bom-cell-qty,
+.design-assembly__bom-cell-item {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+.assembly-mate-panel__deferred {
+  margin: var(--sp-4) 0 0;
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  opacity: 0.8;
+}
+
 /* ── Msg helper ─────────────────────────────────────────────────── */
 .msg { font-size: 12px; color: var(--txt2); }
 .msg--compact { margin: 0; }

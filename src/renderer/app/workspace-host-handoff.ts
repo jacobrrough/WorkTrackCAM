@@ -194,6 +194,19 @@ export function solvedMateToInput(mate: SolvedMate): SolvedMateInput | null {
     const adapted: SolvedMateDraftInput = { ...base, axis1, axis2 }
     return { id: mate.id, draft: adapted }
   }
+  if (kind === 'distance') {
+    // Persist-only parametric mate: two feature points + a numeric target (mm).
+    // (The panel normally routes distance straight to persist via `persistOnly`,
+    // bypassing this SolvedMate adapter; this branch keeps the seam complete so a
+    // distance SolvedMate is never mis-handled as the plane fall-through.)
+    const point1 = parseDraftVector(draft.point1)
+    const point2 = parseDraftVector(draft.point2)
+    if (!point1 || !point2) return null
+    const value = Number(draft.value)
+    if (!Number.isFinite(value) || value < 0) return null
+    const adapted: SolvedMateDraftInput = { ...base, point1, point2, value }
+    return { id: mate.id, draft: adapted }
+  }
   // plane
   const point1 = parseDraftVector(draft.point1)
   const normal1 = parseDraftVector(draft.normal1)

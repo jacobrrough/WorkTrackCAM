@@ -58,7 +58,8 @@ function solvedPointMate(): SolvedMate {
     axis1: ['0', '0', '1'],
     axis2: ['0', '0', '1'],
     normal1: ['0', '0', '1'],
-    normal2: ['0', '0', '1']
+    normal2: ['0', '0', '1'],
+    value: '0'
   }
   return { id: 'mate-point-1', draft }
 }

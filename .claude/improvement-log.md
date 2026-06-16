@@ -19018,3 +19018,39 @@ helical+4-axis-simultaneous).
 **Files:** NEW `src/main/cam-arc-fit.ts`, `src/main/cam-arc-fit.test.ts`, `src/main/cam-arc-fit-posted.test.ts`. MODIFIED `src/main/cam-local.ts`, `src/main/cam-runner.ts`, `src/main/cam-runner-2d.ts`, `src/main/cam-local.test.ts`.
 
 **Next cycle recommendation:** surface `arcTolMm` in the op-editor UI (an "Output arcs (G2/G3)" toggle + tolerance field for cnc_contour/cnc_pocket on the two router machines) so the feature is reachable from the live workflow, with an honest tooltip that it is software-validated / hardware-cert pending. Consider G18/G19 plane fitting only if a real op needs it (today's posts set G17; the module is XY-plane by design).
+
+## Cycle 264 — Assembly enhancement: distance mate + interference + BOM (2026-06-16)
+
+**Focus:** gold-standard Assembly enhancement (user-picked), on the Cycle-258 real-multi-part
+round-trip. Ran concurrently with the CAM-arcs wave (disjoint domains). One commit.
+
+**Baseline → result:** part of the combined **17,065 pass / 1 skip / 0 fail** (+121); tsc clean;
+Cycle-258 round-trip pins + the matePersistChainRef hand-fix + sketch pins all intact.
+
+**What landed (honesty-gated):**
+- **Mate types:** KEY DISCOVERY — the solver (assembly-solver-core mateSquaredResidual) + schema
+  already computed residuals for all 6 Model-C kinds; only the AUTHORING path covered point/axis/
+  plane. So **distance** is wired end-to-end (form draft → persistOnly → Model-C distance
+  constraint → the TS solveMateConstraints, which converges to the exact target once the part's
+  remaining translational DOF are pinned). **angle + tangent are DEFERRED, not offered** — the
+  foundation solver exposes only TRANSLATIONAL free variables, so it provably cannot reduce a
+  rotational residual (empirically verified: residual stays ~1.0 even at coincident). Documented
+  in CadAssemblyMateKind + DEFERRED_MATE_KINDS; the picker derives its options from a single
+  source of truth so it can't drift to offering an unsolvable kind. (distance is persist-only:
+  the Python sidecar solves point/axis/plane live; distance folds straight to the TS solver.)
+- **Interference:** new pure assembly-interference.ts — detectInterferences over each part's
+  local AABB mapped through its transform to a conservative world AABB; reports clashing pairs.
+  HONESTLY bbox-level (fidelity:'bbox') — conservative (possible false positives, no false
+  negatives); mesh/B-rep intersection is a documented follow-up.
+- **BOM:** new pure assembly-bom.ts — deriveBom rolls up components by durable geometry-source
+  key (designModelId > relPath > handle > partPath); same-source qty rollup.
+- **Renderer:** assembly-render-seam.ts + AssemblyMatePanel (distance kind + value input) +
+  AssemblyView (clash list/highlight + BOM table) + components.css. Honest empty states.
+
+**Tests:** +interference (24) + BOM (19) + distance solve/round-trip + renderer pins; independent
+adversarial probes (solver honesty 4, interference/BOM boundaries 6).
+
+**Honest residuals:** angle/tangent await a solver with rotational DOF; interference is bbox-level
+(+ the renderer currently uses a nominal 10mm half-extent per part until real geometry dims are
+threaded into AssemblyPart); BOM rollup is geometry-blind (different ref kinds to the same body
+don't merge); the legacy face-id Mates modal in AssemblyView stays unreachable (pre-existing).

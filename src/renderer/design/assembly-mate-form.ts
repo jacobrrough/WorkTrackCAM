@@ -60,9 +60,9 @@ export type MateFormDraft = {
   readonly part1Id: string
   /** Part 2 child id (must differ from part1Id). */
   readonly part2Id: string
-  /** point / plane: point1. Raw string cells `[x, y, z]`. */
+  /** point / plane / distance: point1. Raw string cells `[x, y, z]`. */
   readonly point1: VectorDraft
-  /** point / plane: point2. */
+  /** point / plane / distance: point2. */
   readonly point2: VectorDraft
   /** axis: axis1. */
   readonly axis1: VectorDraft
@@ -72,6 +72,63 @@ export type MateFormDraft = {
   readonly normal1: VectorDraft
   /** plane: normal2. */
   readonly normal2: VectorDraft
+  /**
+   * distance: the target separation (mm) between point1 and point2, kept as a
+   * **raw string** (like the vector cells) so an in-progress edit (`-`, `1.`)
+   * does not crash the controlled input. Parsed + validated (finite,
+   * non-negative) by {@link buildAddMateRequest} only for the `distance` kind;
+   * ignored by every other kind.
+   */
+  readonly value: string
+}
+
+/**
+ * The mate kinds the authoring form **offers** — the single source of truth the
+ * panel's kind picker should map over (rather than hard-coding a list). Every
+ * entry here is genuinely actionable: `point` / `axis` / `plane` solve live via
+ * the sidecar; `distance` folds to a Model-C constraint the TypeScript solver
+ * positions. See {@link CadAssemblyMateKind} for why `angle` / `tangent` are
+ * **not** here (the foundation solver has no rotational free variables, so it
+ * cannot position them — offering them would be dishonest).
+ */
+export const OFFERED_MATE_KINDS: readonly CadAssemblyMateKind[] = [
+  'point',
+  'axis',
+  'plane',
+  'distance',
+]
+
+/**
+ * Mate kinds intentionally **deferred** from the authoring form, each with the
+ * honest reason. Exported so a UI (or a test) can surface "coming soon" copy
+ * without re-deriving the rationale. These are *not* offered — see
+ * {@link OFFERED_MATE_KINDS}.
+ */
+export const DEFERRED_MATE_KINDS: ReadonlyArray<{
+  readonly kind: 'angle' | 'tangent'
+  readonly reason: string
+}> = [
+  {
+    kind: 'angle',
+    reason:
+      'The assembly solver currently exposes only translational degrees of freedom, so it cannot rotate a part to hit an angle target. Available once rotational DOF land.',
+  },
+  {
+    kind: 'tangent',
+    reason:
+      'Tangency is a rotational/contact condition; the foundation solver has no rotational DOF to satisfy it yet. Deferred until rotational DOF land.',
+  },
+]
+
+/**
+ * Is this mate kind solved **live** by the Python sidecar (`add_assembly_mate`)?
+ * `true` for point/axis/plane (the wire union carries them); `false` for
+ * `distance` (persist-only — the renderer skips the sidecar and folds it straight
+ * into a Model-C constraint). Lets the panel branch its submit path without
+ * re-encoding the rule.
+ */
+export function mateKindUsesSidecar(kind: CadAssemblyMateKind): boolean {
+  return kind === 'point' || kind === 'axis' || kind === 'plane'
 }
 
 /** A single vector's three raw string cells (x, y, z) as typed in the inputs. */
@@ -98,6 +155,8 @@ export function makeMateFormDraft(part1Id: string, part2Id: string): MateFormDra
     axis2: ['0', '0', '1'],
     normal1: ['0', '0', '1'],
     normal2: ['0', '0', '1'],
+    // distance target (mm) — defaults to 0 (a coincident-equivalent separation).
+    value: '0',
   }
 }
 
@@ -118,10 +177,44 @@ export type MateFormField =
   | 'axis2'
   | 'normal1'
   | 'normal2'
+  | 'value'
 
-/** Discriminated result of {@link buildAddMateRequest}. */
+/**
+ * A validated **persist-only** mate (the `distance` kind). Carries the two
+ * feature points (each part's local frame) + the numeric target so the renderer
+ * can adapt it onto `assembly-mate-persist`'s `SolvedMateDraftInput` and fold it
+ * into a Model-C `distance` constraint — WITHOUT a sidecar round-trip (the
+ * Python `add_assembly_mate` does not accept distance). Mirrors the fields the
+ * persist layer reads for a distance fold.
+ */
+export type PersistOnlyMate = {
+  readonly kind: 'distance'
+  readonly part1Id: string
+  readonly part2Id: string
+  readonly point1: readonly [number, number, number]
+  readonly point2: readonly [number, number, number]
+  /** Target separation (mm), finite and non-negative. */
+  readonly value: number
+}
+
+/**
+ * Discriminated result of {@link buildAddMateRequest}.
+ *
+ *   - `{ ok: true, request }`      — a live mate (point/axis/plane): send
+ *                                     `request` to `cad.addAssemblyMate`.
+ *   - `{ ok: true, persistOnly }`  — a `distance` mate: do NOT call the sidecar;
+ *                                     fold `persistOnly` straight into a Model-C
+ *                                     constraint via `assembly-mate-persist`.
+ *   - `{ ok: false, field, message }` — a precise inline validation error.
+ *
+ * Both success shapes carry `ok: true`; the renderer discriminates on the
+ * presence of `request` vs `persistOnly` (or calls {@link mateKindUsesSidecar}
+ * first). Keeping live + persist-only in one result type means the panel's
+ * submit handler has a single validation call site.
+ */
 export type BuildMateRequestResult =
-  | { readonly ok: true; readonly request: CadAddAssemblyMateParams }
+  | { readonly ok: true; readonly request: CadAddAssemblyMateParams; readonly persistOnly?: undefined }
+  | { readonly ok: true; readonly persistOnly: PersistOnlyMate; readonly request?: undefined }
   | { readonly ok: false; readonly field: MateFormField; readonly message: string }
 
 /**
@@ -147,26 +240,47 @@ function isZeroVector(v: readonly [number, number, number]): boolean {
 }
 
 /**
- * Validate + normalise a {@link MateFormDraft} (plus the assembly handle) into
- * the `{ handle, mate }` envelope the `cad.add_assembly_mate` bridge accepts.
+ * Parse one raw numeric cell into a finite number, or `null` if empty /
+ * non-numeric / non-finite. The scalar analogue of {@link parseVector} — used
+ * for the `distance` target field.
+ */
+function parseFiniteNumber(cell: string): number | null {
+  if (cell.trim().length === 0) return null
+  const n = Number(cell)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Validate + normalise a {@link MateFormDraft} (plus the assembly handle).
+ *
+ *   - **Live kinds** (`point` / `axis` / `plane`) → `{ ok: true, request }`: the
+ *     `{ handle, mate }` envelope `cad.add_assembly_mate` accepts.
+ *   - **`distance`** → `{ ok: true, persistOnly }`: a validated
+ *     {@link PersistOnlyMate} the renderer folds straight into a Model-C
+ *     constraint (NO sidecar — the Python verb does not accept distance). The
+ *     `handle` is NOT required for this kind (persistence needs no live B-rep).
  *
  * Validation order (fail fast, precise field pointer):
- *   1. `handle` non-empty (the assembly must have been created first).
+ *   1. for **live kinds only**, `handle` non-empty (the assembly must exist).
  *   2. both part ids non-empty and **distinct** (a mate joins two parts).
  *   3. the per-kind feature vectors parse to finite 3-tuples.
  *   4. axis / normal vectors are **non-zero** (a zero-length direction is
  *      degenerate — the sidecar would raise `bad_params` at solve time, so we
  *      reject it up front with a clearer message).
+ *   5. for `distance`, the target `value` parses to a **finite, non-negative**
+ *      number (a separation cannot be negative).
  *
- * On success the returned `request.mate` is a real {@link CadAssemblyMate}
- * (discriminated by `kind`) ready to `JSON.stringify` onto the wire. No `any`:
- * each kind builds its concrete member explicitly.
+ * On a live-kind success the returned `request.mate` is a real
+ * {@link CadAssemblyMate} (discriminated by `kind`) ready to `JSON.stringify`
+ * onto the wire. No `any`: each kind builds its concrete member explicitly.
  */
 export function buildAddMateRequest(
   handle: string,
   draft: MateFormDraft,
 ): BuildMateRequestResult {
-  if (typeof handle !== 'string' || handle.trim().length === 0) {
+  // The assembly handle is only needed for the live sidecar solve; a persist-only
+  // distance mate folds to a Model-C constraint with no live B-rep, so skip it.
+  if (mateKindUsesSidecar(draft.kind) && (typeof handle !== 'string' || handle.trim().length === 0)) {
     return {
       ok: false,
       field: 'handle',
@@ -184,6 +298,35 @@ export function buildAddMateRequest(
       ok: false,
       field: 'part2Id',
       message: 'A mate must connect two different parts.',
+    }
+  }
+
+  if (draft.kind === 'distance') {
+    const point1 = parseVector(draft.point1)
+    if (!point1) {
+      return { ok: false, field: 'point1', message: 'Point 1 needs three finite numbers.' }
+    }
+    const point2 = parseVector(draft.point2)
+    if (!point2) {
+      return { ok: false, field: 'point2', message: 'Point 2 needs three finite numbers.' }
+    }
+    const target = parseFiniteNumber(draft.value)
+    if (target == null) {
+      return { ok: false, field: 'value', message: 'Distance needs a finite number (mm).' }
+    }
+    if (target < 0) {
+      return { ok: false, field: 'value', message: 'Distance must be zero or positive (mm).' }
+    }
+    return {
+      ok: true,
+      persistOnly: {
+        kind: 'distance',
+        part1Id: draft.part1Id,
+        part2Id: draft.part2Id,
+        point1,
+        point2,
+        value: target,
+      },
     }
   }
 

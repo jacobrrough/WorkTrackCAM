@@ -927,8 +927,34 @@ export type CadExportAssemblyResult = {
 //                            (over-constrained system); the renderer
 //                            should surface a "loosen a constraint" hint.
 
-/** Discriminated mate kind. Each kind requires a different feature payload. */
-export type CadAssemblyMateKind = 'point' | 'axis' | 'plane'
+/**
+ * Discriminated mate kind for the **authoring form**.
+ *
+ *   - `point` / `axis` / `plane` — solved **live** by the Python sidecar's
+ *     `cad.add_assembly_mate` (`cadquery_assembly.py`): the wire union
+ *     {@link CadAssemblyMate} carries each one's feature payload, and the sidecar
+ *     runs `cq.Assembly.constrain(...).solve()`.
+ *   - `distance` — a **persist-only** parametric mate: two feature points held at
+ *     a numeric target separation (mm). The Python `add_assembly_mate` verb does
+ *     NOT accept it (no distance member in {@link CadAssemblyMate}); instead the
+ *     renderer folds it straight into a durable Model-C `distance`
+ *     `AssemblyMateConstraint` (`assembly-mate-schema.ts`), which the TypeScript
+ *     `solveMateConstraints` (`assembly-solver-core.ts`) positions by driving
+ *     translation to the target. This is honest: `distance` is empirically
+ *     solver-backed (it converges to the exact target once the part's remaining
+ *     translational DOF are pinned), so it belongs in the offered set even though
+ *     it bypasses the live B-rep round-trip.
+ *
+ * **Deliberately NOT included** (honesty contract): `angle` and `tangent`. The
+ * Model-C schema + residual functions already *measure* both, but the foundation
+ * `solveMateConstraints` only exposes **translational** free variables — it has
+ * no rotational DOF to drive, so an angle/tangent residual can never be reduced
+ * by the solver (verified empirically: the residual stays pinned at its initial
+ * value). Offering them in the authoring form would imply a positioning
+ * capability that does not exist. They become offerable once the solver gains
+ * rotational free variables (full-vision enhancement).
+ */
+export type CadAssemblyMateKind = 'point' | 'axis' | 'plane' | 'distance'
 
 /**
  * Point mate: weld two 3-D points (in each child's local frame) together.

@@ -61,6 +61,14 @@ import { EmptyState } from '../src/EmptyState'
 import { fab } from '../src/shop-types'
 import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
+import {
+  bomForParts,
+  bomRowSourceLabel,
+  clashingPartIds,
+  interferencesForParts,
+  type BomRow,
+  type InterferenceReport,
+} from './assembly-render-seam'
 
 /**
  * One row in the assembly's parts list.
@@ -299,6 +307,7 @@ function rowTestId(id: string): string {
   return `design-assembly-part-${id}`
 }
 
+
 // ── CAD V1.5: Assembly mate constraints (Wave 3) ─────────────────────────
 //
 // Three mate kinds — point / axis / plane — back the new Mates panel +
@@ -454,6 +463,29 @@ export function AssemblyView({
     for (const p of parts) out[p.id] = p.name
     return out
   }, [parts])
+
+  // ── Interference (bbox-level clash) ────────────────────────────────────────
+  // Recomputed whenever the parts list changes (membership OR a transform move —
+  // the host re-creates the parts array with new positions after a solve) AND
+  // whenever the durable mateConstraints change (a new mate can move a part on
+  // the next solve). useMemo keys on both so the clash list + row highlights
+  // stay in sync without an effect/timer. Pure + synchronous (no IPC) — backed by
+  // the shared engine `detectInterferences` via the seam.
+  const interferenceReport = useMemo<InterferenceReport>(
+    () => interferencesForParts(parts),
+    // mateConstraints is a recompute trigger (a mate changes future placement);
+    // the bodies themselves derive from `parts` transforms.
+    [parts, mateConstraints],
+  )
+  const clashIds = useMemo<ReadonlySet<string>>(
+    () => clashingPartIds(interferenceReport),
+    [interferenceReport],
+  )
+
+  // ── BOM roll-up (qty / name / source) ──────────────────────────────────────
+  // Updates with the components: a re-render with a new parts list re-rolls the
+  // table (shared engine `deriveBom` via the seam). Pure + synchronous.
+  const bomRows = useMemo<BomRow[]>(() => bomForParts(parts).rows, [parts])
 
   const toast = useCallback(
     (kind: 'ok' | 'err' | 'warn', message: string): void => {
@@ -856,17 +888,26 @@ export function AssemblyView({
           >
             {parts.map((part) => {
               const isSelected = part.id === selectedPartId
+              const isClashing = clashIds.has(part.id)
               const rowId = rowTestId(part.id)
               const summary = formatTransformSummary(part)
+              const rowClass = [
+                'design-assembly__row',
+                isSelected ? 'design-assembly__row--selected' : '',
+                // Highlight idiom (mirrors --selected): a clashing row gets a
+                // --clash modifier so the theme can tint it, matching the clash
+                // list below. Reuses the existing row-highlight mechanism rather
+                // than a bespoke overlay.
+                isClashing ? 'design-assembly__row--clash' : '',
+              ]
+                .filter((c) => c.length > 0)
+                .join(' ')
               return (
                 <li
                   key={part.id}
-                  className={
-                    isSelected
-                      ? 'design-assembly__row design-assembly__row--selected'
-                      : 'design-assembly__row'
-                  }
+                  className={rowClass}
                   data-testid={rowId}
+                  data-clash={isClashing ? 'true' : undefined}
                   role="listitem"
                   aria-selected={isSelected}
                 >
@@ -878,6 +919,15 @@ export function AssemblyView({
                   >
                     <span className="design-assembly__row-name">{part.name}</span>
                     <span className="design-assembly__row-summary">{summary}</span>
+                    {isClashing && (
+                      <span
+                        className="design-assembly__row-clash-flag"
+                        data-testid={`${rowId}-clash`}
+                        title="This part's bounding box overlaps another part (bbox-level — see the Interference list)."
+                      >
+                        clash
+                      </span>
+                    )}
                     {!partHasLiveGeometry(part) && (
                       <span
                         className="design-assembly__row-nogeo"
@@ -988,6 +1038,122 @@ export function AssemblyView({
               )}
             </div>
           )}
+
+          {/*
+            Interference panel — bbox-level clash list. Sits under the parts +
+            mates so the operator scans "what's here / how it's pinned / does it
+            clash" top-to-bottom. HONESTY: the sub-label states this is a
+            bounding-box check (the engine returns fidelity:'bbox'), and the part
+            boxes are nominal extents (the renderer carries no real geometry size
+            yet) — a reported clash is "worth a look", not a certified collision.
+            Recomputes with parts/mates via the useMemo above.
+          */}
+          <div
+            className="design-assembly__interference"
+            data-testid="design-assembly-interference"
+            aria-label="Assembly interference"
+          >
+            <div className="design-assembly__interference-header">
+              <span className="design-assembly__interference-title">Interference</span>
+              <span
+                className="design-assembly__interference-fidelity"
+                data-testid="design-assembly-interference-fidelity"
+                title="Axis-aligned bounding-box overlap on nominal part extents — a coarse clash filter, not a certified solid-intersection check."
+              >
+                bbox-level
+              </span>
+            </div>
+            {interferenceReport.clashingPairs.length === 0 ? (
+              <div
+                className="design-assembly__interference-clear"
+                data-testid="design-assembly-interference-clear"
+              >
+                No interferences detected.
+              </div>
+            ) : (
+              <ul
+                className="design-assembly__interference-list"
+                data-testid="design-assembly-interference-list"
+                role="list"
+              >
+                {interferenceReport.clashingPairs.map((pair) => {
+                  const aLabel = partNameById[pair.aId] ?? pair.aId
+                  const bLabel = partNameById[pair.bId] ?? pair.bId
+                  const pairId = `${pair.aId}--${pair.bId}`
+                  return (
+                    <li
+                      key={pairId}
+                      className="design-assembly__interference-row"
+                      data-testid={`design-assembly-clash-${pairId}`}
+                      role="listitem"
+                    >
+                      <span className="design-assembly__interference-icon" aria-hidden="true">
+                        {'⚠'}
+                      </span>
+                      <span className="design-assembly__interference-pair">
+                        {aLabel} ↔ {bLabel}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/*
+            BOM table — qty / name / source roll-up (shared engine deriveBom).
+            Identical (name, durable source) instances collapse into one line
+            with a summed quantity. Updates with the components.
+          */}
+          <div
+            className="design-assembly__bom"
+            data-testid="design-assembly-bom"
+            aria-label="Bill of materials"
+          >
+            <div className="design-assembly__bom-header">
+              <span className="design-assembly__bom-title">Bill of materials</span>
+              <span className="design-assembly__bom-count" data-testid="design-assembly-bom-count">
+                {`${bomRows.length} line${bomRows.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            {bomRows.length === 0 ? (
+              <EmptyState
+                testId="design-assembly-bom-empty"
+                title="No BOM lines yet"
+                body="Add a part with a geometry source to populate the bill of materials."
+              />
+            ) : (
+              <table className="data-table design-assembly__bom-table" data-testid="design-assembly-bom-table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">Qty</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bomRows.map((row, idx) => (
+                    <tr
+                      key={row.source.key}
+                      className="design-assembly__bom-row"
+                      data-testid={`design-assembly-bom-row-${row.partId}`}
+                    >
+                      <td className="design-assembly__bom-cell-item">{idx + 1}</td>
+                      <td className="design-assembly__bom-cell-qty">{row.qty}</td>
+                      <td className="design-assembly__bom-cell-name">{row.name}</td>
+                      <td
+                        className="design-assembly__bom-cell-source"
+                        title={`${row.source.kind}: ${row.source.ref}`}
+                      >
+                        {bomRowSourceLabel(row)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </aside>
 
         <section

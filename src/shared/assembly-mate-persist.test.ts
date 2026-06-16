@@ -76,10 +76,11 @@ const POINT_MATE: SolvedMateInput = {
 // ── (A) fold + round-trip ────────────────────────────────────────────────────
 
 describe('solvedKindToMateKind', () => {
-  it('maps point→coincident, axis→concentric, plane→flush', () => {
+  it('maps point→coincident, axis→concentric, plane→flush, distance→distance', () => {
     expect(solvedKindToMateKind('point')).toBe('coincident')
     expect(solvedKindToMateKind('axis')).toBe('concentric')
     expect(solvedKindToMateKind('plane')).toBe('flush')
+    expect(solvedKindToMateKind('distance')).toBe('distance')
   })
 })
 
@@ -185,6 +186,87 @@ describe('mate persistence round-trip (save → load → parse)', () => {
   })
 })
 
+// ── (A1b) distance mate fold + round-trip ────────────────────────────────────
+
+describe('buildMateConstraintFromSolved — distance mate', () => {
+  const DISTANCE_MATE: SolvedMateInput = {
+    id: 'mate-distance-1',
+    draft: {
+      kind: 'distance',
+      part1Id: 'base',
+      part2Id: 'arm',
+      point1: [0, 0, 0],
+      point2: [0, 0, 0],
+      value: 25
+    }
+  }
+
+  it('folds a distance mate into a distance constraint carrying both points + value', () => {
+    const r = buildMateConstraintFromSolved(DISTANCE_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.constraint).toMatchObject({
+      id: 'mate-distance-1',
+      kind: 'distance',
+      part1Id: 'base',
+      feature1: { x: 0, y: 0, z: 0 },
+      part2Id: 'arm',
+      feature2: { x: 0, y: 0, z: 0 },
+      value: 25
+    })
+  })
+
+  it('a distance mate persists with its value and survives the disk round-trip', () => {
+    const r = persistMate(twoPartAssembly(), DISTANCE_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints).toHaveLength(1)
+    expect(reloaded.mateConstraints[0]).toMatchObject({
+      id: 'mate-distance-1',
+      kind: 'distance',
+      value: 25
+    })
+  })
+
+  it('rejects a missing / non-finite distance value', () => {
+    const noValue = buildMateConstraintFromSolved({
+      id: 'd-noval',
+      draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0] }
+    })
+    expect(noValue.ok).toBe(false)
+    if (noValue.ok) return
+    expect(noValue.reason).toMatch(/finite number/i)
+
+    const nan = buildMateConstraintFromSolved({
+      id: 'd-nan',
+      draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0], value: Number.NaN }
+    })
+    expect(nan.ok).toBe(false)
+  })
+
+  it('rejects a negative distance value (a separation cannot be negative)', () => {
+    const neg = buildMateConstraintFromSolved({
+      id: 'd-neg',
+      draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0], value: -3 }
+    })
+    expect(neg.ok).toBe(false)
+    if (neg.ok) return
+    expect(neg.reason).toMatch(/zero or positive/i)
+  })
+
+  it('canonicalizes a -0 distance value to 0', () => {
+    const r = buildMateConstraintFromSolved({
+      id: 'd-negzero',
+      draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0], value: -0 }
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(Object.is(r.constraint.value, -0)).toBe(false)
+    expect(r.constraint.value).toBe(0)
+  })
+})
+
 // ── (A2) reloaded constraints are solver-consumable (end-to-end GOAL) ────────
 
 describe('reloaded mate is solver-consumable', () => {
@@ -222,6 +304,47 @@ describe('reloaded mate is solver-consumable', () => {
     expect(arm!.x).toBeCloseTo(5, 4)
     expect(arm!.y).toBeCloseTo(0, 4)
     expect(arm!.z).toBeCloseTo(0, 4)
+  })
+
+  it('a persisted+reloaded distance mate (fully constrained) drives the solver to its target', () => {
+    // base grounded; arm offset; two flush mates pin X/Y, a distance mate holds
+    // 8mm between origins → after the solve |arm.z| must equal 8 (X,Y pinned to 0).
+    const asm = parseAssemblyFile({
+      version: 2,
+      name: 'Distance assy',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 }, grounded: true },
+        { id: 'arm', name: 'Arm', partPath: 'q', transform: { x: 2, y: 3, z: 4 } }
+      ]
+    })
+    // Persist the two flush mates + the distance mate (each via the fold).
+    let acc = persistMate(asm, {
+      id: 'fx',
+      draft: { kind: 'plane', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], normal1: [1, 0, 0], point2: [0, 0, 0], normal2: [1, 0, 0] }
+    })
+    expect(acc.ok).toBe(true)
+    if (!acc.ok) return
+    acc = persistMate(acc.assembly, {
+      id: 'fy',
+      draft: { kind: 'plane', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], normal1: [0, 1, 0], point2: [0, 0, 0], normal2: [0, 1, 0] }
+    })
+    expect(acc.ok).toBe(true)
+    if (!acc.ok) return
+    acc = persistMate(acc.assembly, {
+      id: 'd1',
+      draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0], value: 8 }
+    })
+    expect(acc.ok).toBe(true)
+    if (!acc.ok) return
+
+    const reloaded = saveLoadRoundTrip(acc.assembly)
+    expect(reloaded.mateConstraints.map((c) => c.id).sort()).toEqual(['d1', 'fx', 'fy'])
+    const solve = solveMateConstraints(reloaded.components, reloaded.mateConstraints)
+    expect(solve.report.status).toBe('converged')
+    const arm = solve.transforms.get('arm')!
+    expect(arm.x).toBeCloseTo(0, 3)
+    expect(arm.y).toBeCloseTo(0, 3)
+    expect(Math.abs(arm.z)).toBeCloseTo(8, 3)
   })
 })
 

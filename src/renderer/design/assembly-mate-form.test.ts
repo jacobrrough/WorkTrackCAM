@@ -20,9 +20,12 @@ import {
   bboxExtentSummary,
   makeMateFormDraft,
   mateOutcomeToBadge,
+  mateKindUsesSidecar,
   narrowAddMateResponse,
+  DEFERRED_MATE_KINDS,
   EMPTY_VECTOR,
   IDLE_MATE_BADGE,
+  OFFERED_MATE_KINDS,
   SOLVING_MATE_BADGE,
   type MateFormDraft,
 } from './assembly-mate-form'
@@ -63,7 +66,7 @@ describe('buildAddMateRequest — point mate', () => {
   it('maps a valid point draft onto the { handle, mate } wire envelope', () => {
     const r = buildAddMateRequest(HANDLE, base)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.request == null) return
     expect(r.request.handle).toBe(HANDLE)
     expect(r.request.mate).toEqual({
       kind: 'point',
@@ -81,7 +84,7 @@ describe('buildAddMateRequest — point mate', () => {
       point2: ['10', '-3', '0'],
     })
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.request == null) return
     expect(r.request.mate.kind).toBe('point')
     if (r.request.mate.kind !== 'point') return
     expect(r.request.mate.point1).toEqual([-1.5, 0, 2.25])
@@ -91,7 +94,7 @@ describe('buildAddMateRequest — point mate', () => {
   it('does NOT carry axis / normal slots onto a point mate', () => {
     const r = buildAddMateRequest(HANDLE, base)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.request == null) return
     expect(r.request.mate).not.toHaveProperty('axis1')
     expect(r.request.mate).not.toHaveProperty('normal1')
   })
@@ -108,7 +111,7 @@ describe('buildAddMateRequest — axis mate', () => {
   it('maps a valid axis draft onto the wire envelope', () => {
     const r = buildAddMateRequest(HANDLE, base)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.request == null) return
     expect(r.request.mate).toEqual({
       kind: 'axis',
       part1Id: 'p1',
@@ -147,7 +150,7 @@ describe('buildAddMateRequest — plane mate', () => {
   it('maps a valid plane draft onto the wire envelope with both points + normals', () => {
     const r = buildAddMateRequest(HANDLE, base)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.request == null) return
     expect(r.request.mate).toEqual({
       kind: 'plane',
       part1Id: 'p1',
@@ -242,6 +245,110 @@ describe('buildAddMateRequest — structural validation', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.field).toBe('point1')
+  })
+})
+
+// ── (A3) distance mate (persist-only) ────────────────────────────────────────
+
+describe('buildAddMateRequest — distance mate (persist-only)', () => {
+  const base: MateFormDraft = {
+    ...makeMateFormDraft('p1', 'p2'),
+    kind: 'distance',
+    point1: ['1', '2', '3'],
+    point2: ['4', '5', '6'],
+    value: '12.5',
+  }
+
+  it('returns a persistOnly result (NOT a sidecar request) for a valid distance draft', () => {
+    const r = buildAddMateRequest(HANDLE, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.request).toBeUndefined()
+    expect(r.persistOnly).toBeDefined()
+    expect(r.persistOnly).toEqual({
+      kind: 'distance',
+      part1Id: 'p1',
+      part2Id: 'p2',
+      point1: [1, 2, 3],
+      point2: [4, 5, 6],
+      value: 12.5,
+    })
+  })
+
+  it('does NOT require an assembly handle (distance folds without a live B-rep)', () => {
+    const r = buildAddMateRequest('', base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.persistOnly?.value).toBe(12.5)
+  })
+
+  it('still requires two distinct parts', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, part2Id: 'p1' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('part2Id')
+  })
+
+  it('rejects a non-numeric distance value with a value field pointer', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, value: 'abc' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('value')
+  })
+
+  it('rejects an empty distance value', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, value: '' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('value')
+  })
+
+  it('rejects a negative distance value', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, value: '-5' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('value')
+    expect(r.message).toMatch(/zero or positive/i)
+  })
+
+  it('accepts a zero distance value', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, value: '0' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.persistOnly?.value).toBe(0)
+  })
+
+  it('rejects a malformed point even when value is fine', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, point1: ['x', '0', '0'] })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('point1')
+  })
+})
+
+describe('offered vs deferred mate kinds (honesty surface)', () => {
+  it('offers exactly the solver-backed kinds (point/axis/plane/distance)', () => {
+    expect([...OFFERED_MATE_KINDS]).toEqual(['point', 'axis', 'plane', 'distance'])
+  })
+
+  it('defers angle + tangent with a documented reason (no rotational DOF yet)', () => {
+    const kinds = DEFERRED_MATE_KINDS.map((d) => d.kind)
+    expect(kinds).toEqual(['angle', 'tangent'])
+    for (const d of DEFERRED_MATE_KINDS) {
+      expect(d.reason.length).toBeGreaterThan(0)
+      expect(d.reason).toMatch(/rotational|rotate/i)
+    }
+  })
+
+  it('mateKindUsesSidecar is true for live kinds, false for distance', () => {
+    expect(mateKindUsesSidecar('point')).toBe(true)
+    expect(mateKindUsesSidecar('axis')).toBe(true)
+    expect(mateKindUsesSidecar('plane')).toBe(true)
+    expect(mateKindUsesSidecar('distance')).toBe(false)
+  })
+
+  it('makeMateFormDraft seeds a numeric-string distance value', () => {
+    expect(makeMateFormDraft('p1', 'p2').value).toBe('0')
   })
 })
 

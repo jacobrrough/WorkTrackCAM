@@ -46,9 +46,12 @@ import type { CadAssemblyMateKind } from '../../shared/sidecar-protocol'
 import {
   buildAddMateRequest,
   makeMateFormDraft,
+  mateKindUsesSidecar,
   mateOutcomeToBadge,
   narrowAddMateResponse,
+  DEFERRED_MATE_KINDS,
   IDLE_MATE_BADGE,
+  OFFERED_MATE_KINDS,
   SOLVING_MATE_BADGE,
   type MateBadgeView,
   type MateFormDraft,
@@ -105,10 +108,20 @@ const KIND_LABELS: Record<CadAssemblyMateKind, string> = {
   point: 'Point',
   axis: 'Axis',
   plane: 'Plane',
+  distance: 'Distance',
 }
 
-/** Kind options in declaration order (point first — the common case). */
-const KINDS: readonly CadAssemblyMateKind[] = ['point', 'axis', 'plane']
+/**
+ * Kind options the picker offers — the SINGLE SOURCE OF TRUTH is the engine's
+ * `OFFERED_MATE_KINDS` (`assembly-mate-form.ts`), NOT a list re-typed here. Every
+ * entry is genuinely actionable: point/axis/plane solve live via the sidecar;
+ * `distance` folds straight into a Model-C constraint the TS solver positions.
+ * `angle` / `tangent` are deliberately absent (see {@link DEFERRED_MATE_KINDS}) —
+ * the foundation solver has no rotational DOF, so offering them would be
+ * dishonest. Deriving from the shared constant means the picker can never drift
+ * from what the solver actually supports.
+ */
+const KINDS: readonly CadAssemblyMateKind[] = OFFERED_MATE_KINDS
 
 /** Per-cell axis labels for the vector inputs. */
 const CELL_LABELS: readonly ['X', 'Y', 'Z'] = ['X', 'Y', 'Z']
@@ -171,8 +184,26 @@ export function AssemblyMatePanel({
     [],
   )
 
+  // Distance-target scalar setter (raw string so an in-progress edit like `1.`
+  // or `-` does not crash the controlled input; the builder parses it).
+  const setValue = useCallback((value: string): void => {
+    setDraft((d) => ({ ...d, value }))
+    setFieldError(null)
+  }, [])
+
   // ── Solve handler — build request, call bridge, map to badge ────────────────
-  const canSolve = parts.length >= 2 && typeof assemblyHandle === 'string' && assemblyHandle.length > 0
+  //
+  // Two submit paths, branched on `mateKindUsesSidecar(draft.kind)`:
+  //   - LIVE kinds (point / axis / plane) need a built B-rep assembly, so Solve
+  //     stays disabled until a non-empty `assemblyHandle` exists. They round-trip
+  //     through `cad.add_assembly_mate`.
+  //   - PERSIST-ONLY `distance` needs NO live B-rep — it folds straight into a
+  //     Model-C constraint via the host's `onMateAdded` → `persistMate` path — so
+  //     it only requires two parts (the assembly handle is irrelevant).
+  const usesSidecar = mateKindUsesSidecar(draft.kind)
+  const canSolve =
+    parts.length >= 2 &&
+    (usesSidecar ? typeof assemblyHandle === 'string' && assemblyHandle.length > 0 : true)
   const solveDisabled = !canSolve || solving
 
   const handleSolve = useCallback((): void => {
@@ -184,6 +215,27 @@ export function AssemblyMatePanel({
       return
     }
     setFieldError(null)
+
+    // ── PERSIST-ONLY path (distance) ─────────────────────────────────────────
+    // No sidecar: the durable Model-C `distance` constraint is folded by the
+    // host (`onMateAdded` → `runPersistMate` → `persistMate`), and the TS
+    // `solveMateConstraints` drives the part's translation to the target on the
+    // next Solve in AssemblyView. We hand the SolvedMate straight back and paint
+    // a "solved" badge — honest: the mate is recorded + solver-backed, the
+    // separation is realised when the assembly solve runs.
+    if (built.persistOnly !== undefined) {
+      const id = `mate-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`
+      onMateAdded?.({ id, draft })
+      setBadge({
+        label: `Mate added: ${KIND_LABELS[draft.kind]} ${built.persistOnly.value} mm`,
+        status: 'solved',
+        detail: 'Saved as a distance constraint — runs in the assembly solve.',
+      })
+      toast('ok', `Mate added: ${KIND_LABELS[draft.kind]} (${built.persistOnly.value} mm)`)
+      return
+    }
+
+    // ── LIVE path (point / axis / plane) ─────────────────────────────────────
     setBadge(SOLVING_MATE_BADGE)
     setSolving(true)
 
@@ -378,6 +430,37 @@ export function AssemblyMatePanel({
               />
             </>
           )}
+          {draft.kind === 'distance' && (
+            <>
+              <VectorField
+                slot="point1"
+                label={`Point 1 — ${partNameById[draft.part1Id] ?? draft.part1Id} (mm)`}
+                vector={draft.point1}
+                onCell={setVectorCell}
+              />
+              <VectorField
+                slot="point2"
+                label={`Point 2 — ${partNameById[draft.part2Id] ?? draft.part2Id} (mm)`}
+                vector={draft.point2}
+                onCell={setVectorCell}
+              />
+              <div className="assembly-mate-panel__field assembly-mate-panel__field--scalar">
+                <label className="assembly-mate-panel__label" htmlFor="assembly-mate-value">
+                  Target separation (mm)
+                </label>
+                <input
+                  id="assembly-mate-value"
+                  className="assembly-mate-panel__input"
+                  data-testid="assembly-mate-value"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  value={draft.value}
+                  onChange={(e) => setValue(e.target.value)}
+                />
+              </div>
+            </>
+          )}
 
           {fieldError !== null && (
             <div
@@ -399,13 +482,31 @@ export function AssemblyMatePanel({
               aria-disabled={solveDisabled}
               title={
                 !canSolve
-                  ? 'Add a second part and build the assembly before solving a mate.'
-                  : 'Solve this mate'
+                  ? usesSidecar
+                    ? 'Add a second part and build the assembly before solving a mate.'
+                    : 'Add a second part before defining a mate.'
+                  : usesSidecar
+                    ? 'Solve this mate'
+                    : 'Add this distance constraint (runs in the assembly solve).'
               }
             >
-              {solving ? 'Solving…' : 'Solve mate'}
+              {solving ? 'Solving…' : usesSidecar ? 'Solve mate' : 'Add mate'}
             </button>
           </div>
+
+          {/*
+            HONESTY: the foundation solver exposes only translational DOF, so the
+            rotational kinds (angle / tangent) cannot be positioned yet — they are
+            withheld from the picker (OFFERED_MATE_KINDS) and documented here as
+            deferred rather than offered as no-ops. Surfaced from the shared
+            DEFERRED_MATE_KINDS so the reason can't drift from the engine's truth.
+          */}
+          <p
+            className="assembly-mate-panel__deferred"
+            data-testid="assembly-mate-deferred"
+          >
+            {`Coming soon: ${DEFERRED_MATE_KINDS.map((d) => d.kind).join(', ')} (need rotational DOF).`}
+          </p>
         </div>
       )}
     </div>

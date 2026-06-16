@@ -17,7 +17,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AssemblyMatePanel } from '../AssemblyMatePanel'
 import type { AssemblyPart } from '../AssemblyView'
-import { makeMateFormDraft, type MateBadgeView } from '../assembly-mate-form'
+import {
+  DEFERRED_MATE_KINDS,
+  OFFERED_MATE_KINDS,
+  makeMateFormDraft,
+  type MateBadgeView,
+} from '../assembly-mate-form'
 
 // window.fab shim — only consulted inside the click handler (never in SSR),
 // but installed so any future render-time bridge read fails loudly instead of
@@ -201,5 +206,111 @@ describe('AssemblyMatePanel — no console errors on render', () => {
       errSpy.mockRestore()
       warnSpy.mockRestore()
     }
+  })
+})
+
+// ── Mate-kind picker: SSOT-derived options (solver-backed only) ───────────────
+//
+// The picker must offer EXACTLY the engine's OFFERED_MATE_KINDS (the single
+// source of truth) — including the new solver-backed `distance` — and must NOT
+// offer the deferred rotational kinds (angle / tangent), which the foundation
+// solver cannot position. These pins fail loudly if the picker drifts from the
+// SSOT or if someone slips a non-solver-backed kind into the dropdown.
+
+describe('AssemblyMatePanel — kind picker reflects the solver-backed SSOT', () => {
+  it('renders one <option> per OFFERED_MATE_KIND (point/axis/plane/distance)', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    for (const kind of OFFERED_MATE_KINDS) {
+      expect(html).toContain(`value="${kind}"`)
+    }
+    // distance is the new solver-backed kind — explicitly present.
+    expect(OFFERED_MATE_KINDS).toContain('distance')
+    expect(html).toContain('value="distance"')
+  })
+
+  it('does NOT offer the deferred rotational kinds (angle / tangent)', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    for (const { kind } of DEFERRED_MATE_KINDS) {
+      // No selectable <option value="angle"> / <option value="tangent">.
+      expect(html).not.toContain(`value="${kind}"`)
+    }
+  })
+
+  it('documents the deferred kinds honestly (coming-soon note)', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    expect(html).toContain('data-testid="assembly-mate-deferred"')
+    // Names the deferred kinds so the operator knows they are coming, not broken.
+    for (const { kind } of DEFERRED_MATE_KINDS) {
+      expect(html).toContain(kind)
+    }
+  })
+})
+
+// ── Distance kind: per-kind inputs + persist-only gating ──────────────────────
+
+describe('AssemblyMatePanel — distance kind inputs', () => {
+  const distanceDraft = () => ({ ...makeMateFormDraft('p1', 'p2'), kind: 'distance' as const })
+
+  it('renders point1 + point2 cells AND the target-separation input for a distance mate', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: TWO_PARTS,
+        assemblyHandle: 'asm:1',
+        initialDraft: distanceDraft(),
+      }),
+    )
+    for (const i of [0, 1, 2]) {
+      expect(html).toContain(`data-testid="assembly-mate-point1-${i}"`)
+      expect(html).toContain(`data-testid="assembly-mate-point2-${i}"`)
+    }
+    // The numeric distance-target field is unique to this kind.
+    expect(html).toContain('data-testid="assembly-mate-value"')
+    expect(html).toContain('Target separation (mm)')
+    // A distance mate must NOT show axis / normal cells.
+    expect(html).not.toContain('data-testid="assembly-mate-axis1-0"')
+    expect(html).not.toContain('data-testid="assembly-mate-normal1-0"')
+  })
+
+  it('does NOT render the target-separation input for a point mate', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    expect(html).not.toContain('data-testid="assembly-mate-value"')
+  })
+
+  it('ENABLES the submit for a distance mate even with NO assembly handle (persist-only)', () => {
+    // A distance mate folds straight to a Model-C constraint — no live B-rep — so
+    // it does not need a built assembly. The button stays usable when handle=null.
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: TWO_PARTS,
+        assemblyHandle: null,
+        initialDraft: distanceDraft(),
+      }),
+    )
+    const match = html.match(/data-testid="assembly-mate-solve"[^>]*>/)
+    expect(match).not.toBeNull()
+    const tagWithoutAria = match?.[0].replace(/aria-disabled="[^"]*"/, '') ?? ''
+    expect(/[\s"]disabled(=|>|\s|$)/.test(tagWithoutAria)).toBe(false)
+    // Persist-only path labels the action "Add mate" (not "Solve mate").
+    expect(html).toContain('Add mate')
+  })
+
+  it('still DISABLES the submit for a distance mate when only one part exists', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: [part('solo', 'Solo')],
+        assemblyHandle: null,
+        initialDraft: { ...makeMateFormDraft('solo', 'solo'), kind: 'distance' as const },
+      }),
+    )
+    // Fewer than two parts → the "need a second part" hint, no form.
+    expect(html).toContain('data-testid="assembly-mate-need-parts"')
   })
 })

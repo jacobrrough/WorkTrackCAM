@@ -214,6 +214,59 @@ describe('solveMateConstraints — (4) determinism', () => {
   })
 })
 
+describe('solveMateConstraints — (5) distance mate is solver-backed', () => {
+  // distance is positional (drives translation). A single distance is honestly
+  // under-constrained by count; once the other two translational DOF are pinned
+  // (here by two flush mates locking X and Y), the distance converges to its
+  // EXACT target along the remaining (Z) axis — proving distance is genuinely
+  // positioned by the solver, not merely measured.
+  it('drives a part to the exact target separation when fully constrained (1 distance + 2 flush)', () => {
+    const components = [
+      comp({ id: 'a', grounded: true, transform: { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 } }),
+      comp({ id: 'b', grounded: false, transform: { x: 3, y: 4, z: 2, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      // Lock B.x to A.x (flush along world X) and B.y to A.y (flush along world Y).
+      { id: 'fx', kind: 'flush', part1Id: 'a', feature1: { x: 0, y: 0, z: 0, axis: 'x' }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0, axis: 'x' } },
+      { id: 'fy', kind: 'flush', part1Id: 'a', feature1: { x: 0, y: 0, z: 0, axis: 'y' }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0, axis: 'y' } },
+      // Hold B.origin 5mm from A.origin → with X,Y pinned to 0, |Z| must be 5.
+      { id: 'd1', kind: 'distance', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 }, value: 5 }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('converged')
+    expect(report.converged).toBe(true)
+    expect(report.finalResidual).toBeLessThan(1e-5)
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(0, 4)
+    expect(b.y).toBeCloseTo(0, 4)
+    // Started at z=2 > 0, so the solver lands on the +5 branch.
+    expect(Math.abs(b.z)).toBeCloseTo(5, 4)
+    // Each constraint's residual is ~0 at the solved pose.
+    const perId = Object.fromEntries(report.perConstraintResiduals.map((r) => [r.constraintId, r.residual]))
+    expect(perId['d1']).toBeLessThan(1e-4)
+    expect(perId['fx']).toBeLessThan(1e-4)
+    expect(perId['fy']).toBeLessThan(1e-4)
+  })
+
+  it('a target of 0 collapses the distance to coincident-at-pinned-point (residual ~0)', () => {
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 1, y: 1, z: 6, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'fx', kind: 'flush', part1Id: 'a', feature1: { x: 0, y: 0, z: 0, axis: 'x' }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0, axis: 'x' } },
+      { id: 'fy', kind: 'flush', part1Id: 'a', feature1: { x: 0, y: 0, z: 0, axis: 'y' }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0, axis: 'y' } },
+      { id: 'd0', kind: 'distance', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 }, value: 0 }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('converged')
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(0, 4)
+    expect(b.y).toBeCloseTo(0, 4)
+    expect(b.z).toBeCloseTo(0, 4)
+  })
+})
+
 describe('solveMateConstraints — suppressed mates excluded', () => {
   it('ignores suppressed constraints in the solve and the report', () => {
     const components = [comp({ id: 'a', grounded: true }), comp({ id: 'b', grounded: false })]
