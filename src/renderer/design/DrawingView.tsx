@@ -98,6 +98,7 @@ import {
   reanchorGdtFrames,
 } from './drawing-gdt-model'
 import type {
+  DrawingBomRow,
   DrawingDimension,
   GdtCharacteristic,
   GdtFeatureControlFrame,
@@ -259,6 +260,40 @@ export interface DrawingViewProps {
    * a host that re-keys this component on project-open lands the hydrated value).
    */
   readonly onPersistTitleBlock?: (next: DrawingTitleBlock) => void
+  // -- Drawings RENDERER half: sheet tabs / section view / BOM table seams ----
+  /**
+   * Multi-sheet tab strip (CONTROLLED). When supplied, the tab strip renders
+   * one tab per entry and reports add / rename / delete / switch INTENT up via
+   * the callbacks below; the host owns the persisted sheet list (folded through
+   * the Cycle-259 `onDrawing` seam) and re-points the single-sheet `persisted*`
+   * props at the active sheet so per-sheet content swaps on switch. When OMITTED
+   * the component shows ONE implicit fallback tab (the legacy single-sheet
+   * behaviour) so the strip is always present but inert beyond display.
+   */
+  readonly sheets?: readonly DrawingSheetTab[]
+  /** Active sheet id (controlled). Falls back to the first sheet when unmatched. */
+  readonly activeSheetId?: string
+  /** Switch to a different sheet. Host re-points the per-sheet content props. */
+  readonly onSelectSheet?: (sheetId: string) => void
+  /** Add a new sheet. The host mints the id + default name and persists it. */
+  readonly onAddSheet?: () => void
+  /** Rename a sheet (trimmed, non-empty enforced before this fires). */
+  readonly onRenameSheet?: (sheetId: string, name: string) => void
+  /**
+   * Delete a sheet. The host enforces the "never delete the last sheet"
+   * invariant; the strip hides the delete affordance when only one sheet exists.
+   */
+  readonly onDeleteSheet?: (sheetId: string) => void
+  /**
+   * Placeable BOM table rows (CONTROLLED display). Rows the host derived via the
+   * engine `deriveDrawingBom` seam (qty / name / source roll-up). When supplied
+   * a BOM panel renders these as a table; when the array is empty an honest
+   * empty state renders; when the prop is OMITTED the panel does not render at
+   * all (the host opts in only when a part/assembly is available). This is the
+   * placeable on-sheet table, distinct from the existing `bomRows` SVG-stamp
+   * path which composes a table layer into the exported drawing.
+   */
+  readonly bomLines?: readonly DrawingBomLine[]
 }
 
 /**
@@ -605,6 +640,91 @@ export type DrawingBomTableRow = {
   readonly notes?: string
 }
 
+// -- Drawings RENDERER half (gold-standard enhancement) -- sheet tabs, section
+// view option, and a placeable BOM table. Every export below is an ADDITIVE,
+// typed seam: the engine agent's matching shared modules (multi-sheet
+// hydrate / sheet ops / deriveDrawingBom / section-view spec) are consumed
+// through the OPTIONAL props declared on {@link DrawingViewProps}. When a prop
+// is absent at build time the renderer degrades to an honest fallback (a single
+// implicit sheet / a placeholder / an empty state), so the existing render-pins
+// stay green and the Integrate phase only has to wire the props through. ------
+
+/**
+ * One sheet entry the tab strip renders. A deliberately MINIMAL structural
+ * shape (id + display name) so it is compatible-by-structure with the engine
+ * agent's persisted `DrawingSheet` (a superset) without importing it -- keeping
+ * this module's only shared-schema dependency the annotation types it already
+ * uses. The host maps its persisted sheet list down to this shape and re-points
+ * the existing single-sheet `persisted*` props at the active sheet, so per-sheet
+ * edits keep flowing through the Cycle-259 `onDrawing` persist seam (this
+ * component never owns the sheet bytes -- it reports intent up).
+ */
+export type DrawingSheetTab = {
+  readonly id: string
+  readonly name: string
+}
+
+/** Stable testid generator for a sheet tab. Exported for the unit-test pin. */
+export function drawingSheetTabTestId(id: string): string {
+  return `design-drawing-sheet-tab-${id}`
+}
+
+/**
+ * The implicit single-sheet fallback used when the host does NOT supply a
+ * `sheets` prop (uncontrolled mode). Mirrors the persistence layer's
+ * `PRIMARY_DRAWING_SHEET_ID` / name so the visible tab matches the one logical
+ * sheet the legacy single-sheet persist seam writes -- declared locally (not
+ * imported) to keep the design domain disjoint from the shared module the
+ * engine agent owns.
+ */
+const FALLBACK_SHEET_ID = 'sheet-primary'
+const FALLBACK_SHEET_NAME = 'Drawing'
+
+/**
+ * One row rendered in the placeable BOM table. This is the engine
+ * {@link DrawingBomRow} shape verbatim (`item` / `qty` / `partNumber` /
+ * `description`) -- the EXACT return type of the shared `deriveDrawingBom`
+ * helper, so the host threads `deriveDrawingBom(...)` straight into the
+ * `bomLines` prop with no adapter. Re-exported under this name so the renderer's
+ * typed-seam surface is self-describing (the rows it paints are persistable BOM
+ * rows). `item` is the 1-based find-number; `description` is the part name;
+ * `partNumber` is the durable identifier shown in the Source column.
+ */
+export type DrawingBomLine = DrawingBomRow
+
+/**
+ * UI-level view selection. Extends the projection {@link DrawingViewAxis} with a
+ * `'section'` pseudo-view so "Section" sits in the toolbar ALONGSIDE
+ * Front/Top/Right/Iso (the task requirement) WITHOUT widening the bridge `view`
+ * parameter (which stays a real orthographic/iso axis). When `'section'` is
+ * active the component drives the section projection path using the section
+ * plane for the cut and renders an honest "section preview not available"
+ * placeholder if the projector yields nothing.
+ */
+export type DrawingUiView = DrawingViewAxis | 'section'
+
+/** Toolbar order including the Section pseudo-view (after the four real axes). */
+const UI_TOOLBAR_ORDER: readonly DrawingUiView[] = [
+  'front',
+  'top',
+  'right',
+  'iso',
+  'section',
+] as const
+
+/** Display label for the Section pseudo-view button. */
+const SECTION_VIEW_LABEL = 'Section'
+
+/** Human axis labels for the section honest-placeholder copy. */
+const SECTION_AXIS_LABEL: Record<DrawingSectionAxis, string> = {
+  x: 'X',
+  y: 'Y',
+  z: 'Z',
+}
+
+/** Stable testid for the Section view button (parallels {@link drawingViewTestId}). */
+export const DRAWING_SECTION_VIEW_TESTID = 'design-drawing-view-section'
+
 /**
  * Coerce one raw snap point from the `cad.extract_drawing_geometry` result
  * into the renderer's typed FreshSnapPoint. The IPC coercer already guarantees
@@ -788,8 +908,25 @@ export function DrawingView({
   onPersistGdt,
   onDetail,
   onPersistTitleBlock,
+  sheets,
+  activeSheetId,
+  onSelectSheet,
+  onAddSheet,
+  onRenameSheet,
+  onDeleteSheet,
+  bomLines,
 }: DrawingViewProps): JSX.Element {
   const [activeView, setActiveView] = useState<DrawingViewAxis>(initialView)
+  /**
+   * UI-level view selection (Front/Top/Right/Iso/Section). Separate from
+   * `activeView` (the real projection axis the bridge consumes): selecting
+   * Section flips this to `'section'` while `activeView` keeps the orthographic
+   * axis used to orient the cut. Seeded from `initialSectionPlane` so a render
+   * pin can land the component directly in the Section view.
+   */
+  const [uiView, setUiView] = useState<DrawingUiView>(
+    initialSectionPlane !== undefined ? 'section' : initialView,
+  )
   const [svg, setSvg] = useState<string | null>(previewSvg ?? null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -819,6 +956,13 @@ export function DrawingView({
    * string through verbatim (never escapes here, which would mask a regression).
    */
   const [sectionLabel, setSectionLabel] = useState<string>('A-A')
+  /**
+   * True when the Section pseudo-view is active but the projector produced NO
+   * geometry (handler returned an error, or the section bridge is absent). Drives
+   * the honest "section preview not available" placeholder -- we NEVER fabricate
+   * section linework, so an unsupported part shows an honest message instead.
+   */
+  const [sectionUnavailable, setSectionUnavailable] = useState<boolean>(false)
   const [titleBlock, setTitleBlock] = useState<DrawingTitleBlock>(
     initialTitleBlock ?? defaultTitleBlock(),
   )
@@ -923,6 +1067,15 @@ export function DrawingView({
 
   /** Ref to the SVG host div -- used to locate the inner <svg> for coord mapping. */
   const svgHostRef = useRef<HTMLDivElement>(null)
+
+  // -- Sheet-tab strip state (inline rename) --------------------------------
+
+  /** id of the sheet currently being inline-renamed, or null. */
+  const [editingSheetId, setEditingSheetId] = useState<string | null>(null)
+  /** Draft text for the in-progress sheet rename. */
+  const [sheetNameDraft, setSheetNameDraft] = useState<string>('')
+  /** Focus ref for the sheet-rename input. */
+  const sheetRenameInputRef = useRef<HTMLInputElement>(null)
 
   // -- Controlled title-block mirror ----------------------------------------
   //
@@ -1220,8 +1373,17 @@ export function DrawingView({
   }, [onPersistGdt])
 
   const toggleSection = useCallback((): void => {
-    setSectionEnabled((prev) => !prev)
-  }, [])
+    setSectionEnabled((prev) => {
+      const next = !prev
+      // Keep the toolbar pseudo-view in lock-step: turning the section path on
+      // selects the Section view; turning it off drops back to the real axis.
+      setUiView((cur) => {
+        if (next) return 'section'
+        return cur === 'section' ? activeView : cur
+      })
+      return next
+    })
+  }, [activeView])
 
   const updateSectionAxis = useCallback((axis: DrawingSectionAxis): void => {
     setSectionPlane((prev) => ({ ...prev, axis }))
@@ -1231,6 +1393,105 @@ export function DrawingView({
     if (!Number.isFinite(offset)) return
     setSectionPlane((prev) => ({ ...prev, offset }))
   }, [])
+
+  // -- Sheet-tab model + handlers -------------------------------------------
+  //
+  // CONTROLLED multi-sheet mode: `sheets` is supplied and the strip drives the
+  // host's add/rename/delete/switch callbacks. UNCONTROLLED: one implicit
+  // fallback tab so the strip always renders (the legacy single-sheet shape).
+
+  /** Whether the host wired the multi-sheet controlled seam. */
+  const sheetsControlled = sheets !== undefined
+
+  /** The sheet list actually rendered (controlled list, or the fallback tab). */
+  const effectiveSheets = useMemo<readonly DrawingSheetTab[]>(() => {
+    if (sheets !== undefined && sheets.length > 0) return sheets
+    return [{ id: FALLBACK_SHEET_ID, name: FALLBACK_SHEET_NAME }]
+  }, [sheets])
+
+  /**
+   * The active sheet id. In controlled mode honour `activeSheetId` when it
+   * matches a known sheet, else fall back to the first sheet (defensive: a stale
+   * active id never blanks the strip). In uncontrolled mode it is the fallback.
+   */
+  const effectiveActiveSheetId = useMemo<string>(() => {
+    const first = effectiveSheets[0]
+    const firstId = first ? first.id : FALLBACK_SHEET_ID
+    if (activeSheetId === undefined) return firstId
+    return effectiveSheets.some((s) => s.id === activeSheetId) ? activeSheetId : firstId
+  }, [effectiveSheets, activeSheetId])
+
+  const handleSelectSheet = useCallback(
+    (sheetId: string): void => {
+      if (sheetId === effectiveActiveSheetId) return
+      onSelectSheet?.(sheetId)
+    },
+    [effectiveActiveSheetId, onSelectSheet],
+  )
+
+  const handleAddSheet = useCallback((): void => {
+    onAddSheet?.()
+  }, [onAddSheet])
+
+  const beginSheetRename = useCallback((sheet: DrawingSheetTab): void => {
+    setEditingSheetId(sheet.id)
+    setSheetNameDraft(sheet.name)
+  }, [])
+
+  const commitSheetRename = useCallback((): void => {
+    setEditingSheetId((current) => {
+      if (current !== null) {
+        const trimmed = sheetNameDraft.trim()
+        if (trimmed.length > 0) onRenameSheet?.(current, trimmed)
+      }
+      return null
+    })
+    setSheetNameDraft('')
+  }, [sheetNameDraft, onRenameSheet])
+
+  const cancelSheetRename = useCallback((): void => {
+    setEditingSheetId(null)
+    setSheetNameDraft('')
+  }, [])
+
+  const handleDeleteSheet = useCallback(
+    (sheetId: string): void => {
+      // The strip hides this affordance when only one sheet exists; this guard
+      // is belt-and-braces so a programmatic call can never orphan the view.
+      if (effectiveSheets.length <= 1) return
+      onDeleteSheet?.(sheetId)
+    },
+    [effectiveSheets, onDeleteSheet],
+  )
+
+  // Focus the rename input when entering edit mode.
+  useEffect(() => {
+    if (editingSheetId !== null && sheetRenameInputRef.current !== null) {
+      sheetRenameInputRef.current.focus()
+      sheetRenameInputRef.current.select()
+    }
+  }, [editingSheetId])
+
+  // -- Section pseudo-view <-> section path wiring ---------------------------
+  //
+  // The toolbar's `'section'` button is the UI-level selection; the actual
+  // section projection is driven by `sectionEnabled` + `sectionPlane` (the
+  // existing Stage-1 `cad.section_drawing` path). Selecting `'section'` enables
+  // the section path; selecting any orthographic axis disables it and threads
+  // the chosen axis to the bridge. Kept as one handler so the two states never
+  // drift (you can never be on the Section button with the section path off).
+  const selectUiView = useCallback((view: DrawingUiView): void => {
+    setUiView(view)
+    if (view === 'section') {
+      setSectionEnabled(true)
+      return
+    }
+    setActiveView(view)
+    setSectionEnabled(false)
+  }, [])
+
+  /** True when the Section pseudo-view is the active toolbar selection. */
+  const sectionViewActive = uiView === 'section'
 
   const updateTitleField = useCallback(
     (field: keyof DrawingTitleBlock, value: string): void => {
@@ -1338,10 +1599,21 @@ export function DrawingView({
     let cancelled = false
     setBusy(true)
     setError(null)
+    // Optimistic reset: assume the section will render. The section branch sets
+    // this back to true on a failed/absent section projection.
+    setSectionUnavailable(false)
     void (async () => {
       try {
         let svgText: string | null = null
         // Stage 1: base projection (section or plain).
+        if (sectionEnabled && !bridge.sectionDrawing) {
+          // Section requested but the section bridge has not landed: honest
+          // placeholder, no fabricated geometry.
+          if (cancelled) return
+          setSvg(null)
+          setSectionUnavailable(true)
+          return
+        }
         if (sectionEnabled && bridge.sectionDrawing) {
           const res = await bridge.sectionDrawing({
             handle: partHandle,
@@ -1357,6 +1629,9 @@ export function DrawingView({
             setError(`Section projection failed: ${res.error}${detail}`)
             toast('err', `Section projection failed: ${res.error}`)
             setSvg(null)
+            // Honest fallback: the projector could not section this part. Show the
+            // "section preview not available" placeholder rather than blank.
+            setSectionUnavailable(true)
             return
           }
           svgText = res.result.svg
@@ -1631,6 +1906,15 @@ export function DrawingView({
   /** Whether the BOM-table affordance should render. */
   const showBomTable = bomRows !== undefined && bomRows.length > 0
 
+  /**
+   * The placeable BOM-panel rows. When the host supplies `bomLines` (rows it
+   * derived through the `deriveDrawingBom` seam) the panel renders. The panel is
+   * present whenever the prop is supplied -- an EMPTY array renders the honest
+   * empty state (vs. OMITTED, which hides the panel entirely).
+   */
+  const showBomPanel = bomLines !== undefined
+  const effectiveBomLines: readonly DrawingBomLine[] = bomLines ?? []
+
   /** Persisted GD&T frame count (controlled mode). Drives the count readout + Clear. */
   const gdtFrameCount = (persistedGdtFrames ?? []).length
   /** How many GD&T frames are currently dangling. */
@@ -1661,6 +1945,94 @@ export function DrawingView({
         </div>
       )}
 
+      {/* Sheet-tab strip -- add / rename / delete / switch sheets. */}
+      <div
+        className="design-drawing__sheet-tabs"
+        role="tablist"
+        aria-label="Drawing sheets"
+        data-testid="design-drawing-sheet-tabs"
+      >
+        {effectiveSheets.map((sheet) => {
+          const isActive = sheet.id === effectiveActiveSheetId
+          const isEditing = sheet.id === editingSheetId
+          return (
+            <span
+              key={sheet.id}
+              className={
+                isActive
+                  ? 'design-drawing__sheet-tab design-drawing__sheet-tab--active'
+                  : 'design-drawing__sheet-tab'
+              }
+            >
+              {isEditing ? (
+                <input
+                  ref={sheetRenameInputRef}
+                  type="text"
+                  className="design-drawing__sheet-rename-input"
+                  data-testid="design-drawing-sheet-rename-input"
+                  value={sheetNameDraft}
+                  maxLength={80}
+                  aria-label={`Rename sheet (currently ${sheet.name})`}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSheetNameDraft(e.target.value)
+                  }
+                  onBlur={commitSheetRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      commitSheetRename()
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      cancelSheetRename()
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  className="design-drawing__sheet-tab-btn"
+                  data-testid={drawingSheetTabTestId(sheet.id)}
+                  title={`${sheet.name} (double-click to rename)`}
+                  onClick={() => handleSelectSheet(sheet.id)}
+                  onDoubleClick={() => beginSheetRename(sheet)}
+                >
+                  {sheet.name}
+                </button>
+              )}
+              {effectiveSheets.length > 1 && !isEditing && (
+                <button
+                  type="button"
+                  className="design-drawing__sheet-close"
+                  data-testid={`design-drawing-sheet-close-${sheet.id}`}
+                  title={`Delete sheet "${sheet.name}"`}
+                  aria-label={`Delete sheet ${sheet.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleDeleteSheet(sheet.id)
+                  }}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              )}
+            </span>
+          )
+        })}
+        <button
+          type="button"
+          className="design-drawing__sheet-add"
+          data-testid="design-drawing-sheet-add"
+          title="Add a new drawing sheet"
+          aria-label="Add new sheet"
+          disabled={!sheetsControlled}
+          aria-disabled={!sheetsControlled}
+          onClick={handleAddSheet}
+        >
+          <span aria-hidden="true">+</span> Sheet
+        </button>
+      </div>
+
       <div
         className="design-drawing__toolbar"
         role="toolbar"
@@ -1671,8 +2043,11 @@ export function DrawingView({
           role="group"
           aria-label="Projection view"
         >
-          {TOOLBAR_ORDER.map((view) => {
-            const isActive = view === activeView
+          {UI_TOOLBAR_ORDER.map((view) => {
+            const isSection = view === 'section'
+            const isActive = isSection ? sectionViewActive : uiView === view
+            const label = isSection ? SECTION_VIEW_LABEL : DRAWING_VIEW_LABELS[view]
+            const testid = isSection ? DRAWING_SECTION_VIEW_TESTID : drawingViewTestId(view)
             return (
               <button
                 key={view}
@@ -1682,11 +2057,11 @@ export function DrawingView({
                     ? 'btn btn-primary design-drawing__view-btn design-drawing__view-btn--active'
                     : 'btn btn-secondary design-drawing__view-btn'
                 }
-                data-testid={drawingViewTestId(view)}
+                data-testid={testid}
                 aria-pressed={isActive}
-                onClick={() => setActiveView(view)}
+                onClick={() => selectUiView(view)}
               >
-                {DRAWING_VIEW_LABELS[view]}
+                {label}
               </button>
             )
           })}
@@ -2066,13 +2441,26 @@ export function DrawingView({
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
           />
+        ) : sectionViewActive && sectionUnavailable && !busy ? (
+          // Honest placeholder: the projector could not produce a section for
+          // this part (handler error or section bridge absent). We never draw
+          // fabricated section geometry.
+          <div
+            className="design-drawing__placeholder design-drawing__placeholder--section-unavailable"
+            data-testid="design-drawing-section-unavailable"
+            role="note"
+          >
+            Section preview not available -- this part could not be sectioned on
+            the {SECTION_AXIS_LABEL[sectionPlane.axis]} plane. Adjust the cut
+            plane or pick another view.
+          </div>
         ) : (
           <div
             className="design-drawing__placeholder"
             data-testid="design-drawing-placeholder"
           >
             {busy
-              ? `Projecting ${DRAWING_VIEW_LABELS[activeView]} view...`
+              ? `Projecting ${sectionViewActive ? 'Section' : DRAWING_VIEW_LABELS[activeView]} view...`
               : 'No drawing yet -- pick a view above.'}
           </div>
         )}
@@ -2169,6 +2557,70 @@ export function DrawingView({
           />
         </label>
       </aside>
+
+      {/*
+        Placeable BOM table -- qty / name / source rows from the engine
+        `deriveDrawingBom` seam (rendered as rows the host already rolled up;
+        this panel does NOT recompute). Renders only when the host opts in by
+        supplying `bomLines`; an empty array shows the honest empty state.
+      */}
+      {showBomPanel && (
+        <aside
+          className="design-drawing__bom"
+          data-testid="design-drawing-bom"
+          aria-label="Drawing bill of materials"
+        >
+          <div className="design-drawing__bom-header">
+            <span className="design-drawing__bom-title">Bill of materials</span>
+            <span
+              className="design-drawing__bom-count"
+              data-testid="design-drawing-bom-count"
+            >
+              {`${effectiveBomLines.length} line${effectiveBomLines.length === 1 ? '' : 's'}`}
+            </span>
+          </div>
+          {effectiveBomLines.length === 0 ? (
+            <EmptyState
+              testId="design-drawing-bom-empty"
+              title="No parts to list"
+              body="Add parts to the assembly (or build a part) to populate this drawing bill of materials."
+            />
+          ) : (
+            <table
+              className="data-table design-drawing__bom-table"
+              data-testid="design-drawing-bom-grid"
+            >
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Qty</th>
+                  <th scope="col">Name</th>
+                  <th scope="col">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {effectiveBomLines.map((row) => (
+                  <tr
+                    key={row.item}
+                    className="design-drawing__bom-row"
+                    data-testid={`design-drawing-bom-row-${row.item}`}
+                  >
+                    <td className="design-drawing__bom-cell-item">{row.item}</td>
+                    <td className="design-drawing__bom-cell-qty">{row.qty}</td>
+                    <td className="design-drawing__bom-cell-name">{row.description}</td>
+                    <td
+                      className="design-drawing__bom-cell-source"
+                      title={row.partNumber}
+                    >
+                      {row.partNumber.length > 0 ? row.partNumber : '--'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </aside>
+      )}
     </div>
   )
 }

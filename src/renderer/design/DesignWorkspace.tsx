@@ -70,7 +70,12 @@ import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
-import { DrawingView, type DrawingTitleBlock } from './DrawingView'
+import {
+  DrawingView,
+  type DrawingBomLine,
+  type DrawingSheetTab,
+  type DrawingTitleBlock,
+} from './DrawingView'
 import {
   emptyDrawingViewState,
   type DrawingViewState,
@@ -563,6 +568,35 @@ export interface DesignWorkspaceProps {
    * supplied (controlled mode). Optional + readonly (additive).
    */
   readonly onDrawing?: (next: DrawingViewState) => void
+  // -- Drawings MULTI-SHEET seam (the tab strip) -----------------------------
+  /**
+   * The full ordered Drawings sheet set (id + name) for the tab strip. When
+   * SUPPLIED (host-controlled, threaded from `session.drawingWorkspace.sheets`)
+   * the DrawingView renders one tab per entry and reports add/rename/delete/switch
+   * INTENT up through the callbacks below; the host owns the persisted sheet list
+   * + re-points the single-sheet `drawing` at the active sheet so per-sheet
+   * content swaps. When OMITTED the DrawingView shows ONE implicit fallback tab
+   * (legacy single-sheet behaviour). Documentation overlays only (Safety Rule 1).
+   */
+  readonly drawingSheets?: readonly DrawingSheetTab[]
+  /** Active Drawings sheet id (controlled). Falls back to the first sheet when unmatched. */
+  readonly drawingActiveSheetId?: string
+  /** Switch the active Drawings sheet (host re-points the per-sheet content). */
+  readonly onDrawingSelectSheet?: (sheetId: string) => void
+  /** Add a new Drawings sheet (host mints id + default name, persists it). */
+  readonly onDrawingAddSheet?: () => void
+  /** Rename a Drawings sheet (trimmed, non-empty enforced before this fires). */
+  readonly onDrawingRenameSheet?: (sheetId: string, name: string) => void
+  /** Delete a Drawings sheet (host keeps a minimum of one). */
+  readonly onDrawingDeleteSheet?: (sheetId: string) => void
+  /**
+   * Placeable Drawings BOM rows the host derived via the engine
+   * `deriveDrawingBom` seam (qty / name / source roll-up from the assembly or the
+   * CAD design models). When SUPPLIED a BOM panel renders these; an EMPTY array
+   * renders an honest empty state; OMITTED hides the panel entirely. Documentation
+   * overlays only (Safety Rule 1).
+   */
+  readonly drawingBomLines?: readonly DrawingBomLine[]
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -642,6 +676,13 @@ export function DesignWorkspace({
   kernelBuilding = false,
   drawing,
   onDrawing,
+  drawingSheets,
+  drawingActiveSheetId,
+  onDrawingSelectSheet,
+  onDrawingAddSheet,
+  onDrawingRenameSheet,
+  onDrawingDeleteSheet,
+  drawingBomLines,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   /**
@@ -1645,6 +1686,16 @@ export function DesignWorkspace({
               drawingControlled ? handlePersistDrawingTitleBlock : undefined
             }
             onDetail={handleDetailView}
+            // Multi-sheet tab strip — controlled by the host (session workspace).
+            // When omitted the DrawingView shows one implicit fallback tab.
+            sheets={drawingSheets}
+            activeSheetId={drawingActiveSheetId}
+            onSelectSheet={onDrawingSelectSheet}
+            onAddSheet={onDrawingAddSheet}
+            onRenameSheet={onDrawingRenameSheet}
+            onDeleteSheet={onDrawingDeleteSheet}
+            // Placeable BOM rows derived via the engine deriveDrawingBom seam.
+            bomLines={drawingBomLines}
           />
         </div>
       </div>

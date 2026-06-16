@@ -112,7 +112,12 @@ function fakeSession(features: PartFeaturesFile | null): DesignSessionValue {
     updateFeatureSuppressed: () => {},
     solveReport: '',
     drawing: null,
-    onDrawingChange: () => {}
+    onDrawingChange: () => {},
+    drawingWorkspace: null,
+    onDrawingSelectSheet: () => {},
+    onDrawingAddSheet: () => {},
+    onDrawingRenameSheet: () => {},
+    onDrawingDeleteSheet: () => {}
   }
 }
 

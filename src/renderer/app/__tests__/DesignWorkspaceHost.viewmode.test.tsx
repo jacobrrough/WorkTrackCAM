@@ -89,6 +89,11 @@ function fakeSession(): DesignSessionValue {
     solveReport: '',
     drawing: null,
     onDrawingChange: () => {},
+    drawingWorkspace: null,
+    onDrawingSelectSheet: () => {},
+    onDrawingAddSheet: () => {},
+    onDrawingRenameSheet: () => {},
+    onDrawingDeleteSheet: () => {},
   }
 }
 

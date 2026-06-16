@@ -26,11 +26,17 @@ import {
 } from './drawing-sheet-schema'
 import {
   emptyDrawingViewState,
+  emptyDrawingWorkspaceState,
   foldDrawingState,
+  foldDrawingWorkspace,
+  hydrateActiveSheet,
   hydrateDrawingFile,
+  hydrateDrawingWorkspace,
   PRIMARY_DRAWING_SHEET_ID,
   type DrawingViewState
 } from './drawing-hydrate'
+import { addSectionView, addSheet, setActiveSheet } from './drawing-sheet-ops'
+import type { DrawingSectionView } from './drawing-sheet-schema'
 import type {
   DrawingDimension,
   GdtFeatureControlFrame,
@@ -286,6 +292,271 @@ describe('hydrateDrawingFile — legacy / empty back-compat', () => {
     const hydrated = hydrateDrawingFile(saveLoadRoundTrip(foldDrawingState(emptyDrawingViewState())))
     expect(hydrated).toEqual(emptyDrawingViewState())
   })
+})
+
+// ── (C2) Multi-sheet: foldDrawingState preserves activeSheetId ─────────────────
+
+describe('foldDrawingState — multi-sheet preservation', () => {
+  it('preserves the loaded activeSheetId across a single-sheet fold', () => {
+    const base = parseDrawingFile({
+      version: 1,
+      sheets: [
+        { id: PRIMARY_DRAWING_SHEET_ID, name: 'Primary' },
+        { id: 'detail-b', name: 'Detail B' }
+      ],
+      activeSheetId: 'detail-b'
+    })
+    const file = foldDrawingState(fullViewState(), base)
+    // The renderer's single-sheet state edits the PRIMARY sheet, but folding it
+    // must NOT drop which tab the operator had active.
+    expect(file.activeSheetId).toBe('detail-b')
+    expect(file.sheets.some((s) => s.id === 'detail-b')).toBe(true)
+  })
+
+  it('does not invent an activeSheetId when the base had none', () => {
+    const file = foldDrawingState(fullViewState())
+    expect(file.activeSheetId).toBeUndefined()
+  })
+
+  it('preserves a foreign sheet AND the active id through the disk round-trip', () => {
+    const base = parseDrawingFile({
+      version: 1,
+      sheets: [{ id: 'detail-b', name: 'Detail B', scale: '2:1' }],
+      activeSheetId: 'detail-b'
+    })
+    const reread = saveLoadRoundTrip(foldDrawingState(fullViewState(), base))
+    expect(reread.activeSheetId).toBe('detail-b')
+    expect(reread.sheets.map((s) => s.id).sort()).toEqual(
+      [PRIMARY_DRAWING_SHEET_ID, 'detail-b'].sort()
+    )
+    // The primary sheet still hydrates the renderer's annotations.
+    expect(hydrateDrawingFile(reread)).toEqual(fullViewState())
+  })
+})
+
+// ── (C2b) foldDrawingState — explicit target sheet id (active-sheet routing) ───
+
+describe('foldDrawingState — explicit target sheet id', () => {
+  it('folds the view state into the NAMED sheet, not the primary, leaving the primary untouched', () => {
+    const base = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: PRIMARY_DRAWING_SHEET_ID,
+          name: 'Drawing',
+          annotations: { dimensions: [LINEAR_DIM] }
+        },
+        { id: 'detail-b', name: 'Detail B' }
+      ],
+      activeSheetId: 'detail-b'
+    })
+    // Edit the SECONDARY (active) sheet: a radial dim goes onto detail-b.
+    const secondaryState: DrawingViewState = { ...emptyDrawingViewState(), dimensions: [RADIAL_DIM] }
+    const file = foldDrawingState(secondaryState, base, 'detail-b')
+    const primary = file.sheets.find((s) => s.id === PRIMARY_DRAWING_SHEET_ID)!
+    const detail = file.sheets.find((s) => s.id === 'detail-b')!
+    // The primary sheet's linear dim is preserved (NOT clobbered by the secondary edit).
+    expect(primary.annotations?.dimensions).toEqual([LINEAR_DIM])
+    // The secondary sheet now carries the radial dim.
+    expect(detail.annotations?.dimensions).toEqual([RADIAL_DIM])
+    // The active id is preserved.
+    expect(file.activeSheetId).toBe('detail-b')
+  })
+
+  it('creates a fresh sheet with the given id when it is absent, keeping a distinct name', () => {
+    const base = parseDrawingFile({
+      version: 1,
+      sheets: [{ id: PRIMARY_DRAWING_SHEET_ID, name: 'Drawing' }]
+    })
+    const file = foldDrawingState(fullViewState(), base, 'detail-c')
+    expect(file.sheets).toHaveLength(2)
+    const fresh = file.sheets.find((s) => s.id === 'detail-c')!
+    expect(fresh.name).toBe('detail-c')
+    expect(fresh.annotations?.dimensions).toHaveLength(2)
+  })
+
+  it('omitting sheetId is byte-identical to passing the primary id (back-compat)', () => {
+    const state = fullViewState()
+    const a = JSON.stringify(foldDrawingState(state), null, 2)
+    const b = JSON.stringify(foldDrawingState(state, undefined, PRIMARY_DRAWING_SHEET_ID), null, 2)
+    expect(a).toBe(b)
+  })
+})
+
+// ── (C3) Multi-sheet workspace fold ⇄ hydrate round-trip ───────────────────────
+
+describe('hydrateDrawingWorkspace / foldDrawingWorkspace round-trip', () => {
+  it('an empty file hydrates to an empty workspace', () => {
+    expect(hydrateDrawingWorkspace(parseDrawingFile({ version: 1, sheets: [] }))).toEqual(
+      emptyDrawingWorkspaceState()
+    )
+  })
+
+  it('round-trips N sheets + the active id (fold → save/load → hydrate == input)', () => {
+    // Build a 3-sheet file via the pure sheet ops, with annotations on two sheets.
+    let file = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: PRIMARY_DRAWING_SHEET_ID,
+          name: 'Drawing',
+          annotations: {
+            dimensions: [LINEAR_DIM],
+            featureControlFrames: [GDT_FRAME],
+            notes: [NOTE],
+            revisions: [REVISION],
+            bom: [BOM_ROW]
+          },
+          titleBlock: TITLE_BLOCK,
+          sectionViews: [
+            { id: 'sec-1', name: 'A-A', viewFrom: 'front', cutPlane: { axis: 'z', offset: 0, keepSide: 'positive' } }
+          ]
+        }
+      ]
+    })
+    file = addSheet(file, 'detail-b', 'Detail B')
+    file = addSheet(file, 'detail-c', 'Detail C')
+    file = setActiveSheet(file, 'detail-b')
+
+    const ws = hydrateDrawingWorkspace(file)
+    expect(ws.sheets).toHaveLength(3)
+    expect(ws.activeSheetId).toBe('detail-b')
+
+    // fold → exact disk round-trip → hydrate must equal the hydrated input.
+    const reread = saveLoadRoundTrip(foldDrawingWorkspace(ws))
+    expect(hydrateDrawingWorkspace(reread)).toEqual(ws)
+    // And the underlying file is byte-identical (sheets + active id all survive).
+    expect(reread).toEqual(file)
+  })
+
+  it('drops a dangling/null active id on fold (reopen resolves to the first sheet)', () => {
+    const ws = {
+      sheets: parseDrawingFile({ version: 1, sheets: [{ id: 's1', name: 'One' }] }).sheets,
+      activeSheetId: 'gone'
+    }
+    const file = foldDrawingWorkspace(ws)
+    expect(file.activeSheetId).toBeUndefined()
+    // Hydrate resolves the active id back to the surviving first sheet.
+    expect(hydrateDrawingWorkspace(file).activeSheetId).toBe('s1')
+  })
+
+  it('a legacy single-sheet file becomes a one-sheet workspace', () => {
+    const file = parseDrawingFile({
+      version: 1,
+      sheets: [{ id: 'legacy', name: 'Old Sheet', scale: '1:1' }]
+    })
+    const ws = hydrateDrawingWorkspace(file)
+    expect(ws.sheets).toHaveLength(1)
+    expect(ws.activeSheetId).toBe('legacy')
+  })
+
+  it('section views survive the workspace round-trip', () => {
+    const file = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: 's1',
+          name: 'One',
+          sectionViews: [
+            { id: 'sec-1', name: 'A-A', viewFrom: 'top', cutPlane: { axis: 'y', offset: 12.5, keepSide: 'negative' } }
+          ]
+        }
+      ],
+      activeSheetId: 's1'
+    })
+    const reread = saveLoadRoundTrip(foldDrawingWorkspace(hydrateDrawingWorkspace(file)))
+    expect(reread.sheets[0]!.sectionViews).toEqual([
+      { id: 'sec-1', name: 'A-A', viewFrom: 'top', cutPlane: { axis: 'y', offset: 12.5, keepSide: 'negative' } }
+    ])
+  })
+})
+
+// ── (C4) END-TO-END production flow: the session's multi-sheet round-trip ──────
+//
+// Replays EXACTLY what DesignSessionContext does at the data layer when the
+// operator works across sheets, then proves a save→load→parse→hydrate cycle
+// preserves BOTH sheets + their per-sheet content + which tab was active:
+//   1. hydrate an opened file (the active-sheet view + the workspace),
+//   2. add a 2nd sheet (engine op) and switch the active tab to it,
+//   3. put a SECTION VIEW on the 2nd sheet (engine op),
+//   4. place a DIM on the ACTIVE (2nd) sheet — folded via the active-sheet
+//      `foldDrawingState(state, base, activeId)` path (NOT the primary!),
+//   5. save→load→parse, then hydrate the workspace + the active sheet.
+// The primary sheet's own content must be untouched the whole time.
+
+describe('end-to-end multi-sheet round-trip (the session data flow)', () => {
+  const SECTION: DrawingSectionView = {
+    id: 'sec-A',
+    name: 'A-A',
+    viewFrom: 'front',
+    cutPlane: { axis: 'z', offset: 4, keepSide: 'positive' }
+  }
+
+  it('a 2nd sheet with a section view + a dim survives save/load/hydrate, primary intact, active preserved', () => {
+    // (1) Opened file: a primary sheet carrying the renderer's single-sheet state.
+    let file = foldDrawingState(fullViewState())
+    expect(file.sheets).toHaveLength(1)
+
+    // (2) Add a 2nd sheet (engine op makes it active) — and (3) put a section on it.
+    file = addSheet(file, 'detail-b', 'Detail B')
+    expect(resolveActiveSheetIdViaHydrate(file)).toBe('detail-b')
+    file = addSectionView(file, 'detail-b', SECTION)
+
+    // (4) Place a dim on the ACTIVE (2nd) sheet via the active-sheet fold. This is
+    // the session's `flushDrawingSave` path: fold the committed view into the
+    // ACTIVE sheet id, over the current file as the base.
+    const secondSheetEdit: DrawingViewState = {
+      ...emptyDrawingViewState(),
+      dimensions: [RADIAL_DIM],
+      titleBlock: { name: 'Detail', scale: '2:1', author: 'Jacob', date: '2026-06-16', sheet: '2 of 2' }
+    }
+    file = foldDrawingState(secondSheetEdit, file, 'detail-b')
+
+    // (5) Exact disk round-trip.
+    const reread = saveLoadRoundTrip(file)
+
+    // BOTH sheets survive.
+    expect(reread.sheets.map((s) => s.id).sort()).toEqual([PRIMARY_DRAWING_SHEET_ID, 'detail-b'].sort())
+    // The active id survived.
+    expect(reread.activeSheetId).toBe('detail-b')
+
+    // The PRIMARY sheet's content is UNTOUCHED (the secondary edits never bled in).
+    const primary = reread.sheets.find((s) => s.id === PRIMARY_DRAWING_SHEET_ID)!
+    expect(primary.annotations?.dimensions).toEqual(fullViewState().dimensions)
+    expect(primary.titleBlock).toEqual(TITLE_BLOCK)
+    expect(primary.sectionViews).toBeUndefined()
+
+    // The 2nd sheet carries its section view AND its dim + title block.
+    const detail = reread.sheets.find((s) => s.id === 'detail-b')!
+    expect(detail.sectionViews).toEqual([SECTION])
+    expect(detail.annotations?.dimensions).toEqual([RADIAL_DIM])
+    expect(detail.titleBlock?.scale).toBe('2:1')
+
+    // Hydrating the ACTIVE sheet yields the 2nd sheet's view (per-sheet content
+    // swap), and the workspace hydrate carries both sheets + the active id.
+    expect(hydrateActiveSheet(reread).dimensions).toEqual([RADIAL_DIM])
+    const ws = hydrateDrawingWorkspace(reread)
+    expect(ws.sheets).toHaveLength(2)
+    expect(ws.activeSheetId).toBe('detail-b')
+  })
+
+  it('a legacy single-sheet drawing.json still loads (back-compat through the same path)', () => {
+    const legacy = parseDrawingFile({
+      version: 1,
+      sheets: [{ id: 'legacy', name: 'Old Sheet', scale: '1:1' }]
+    })
+    const reread = saveLoadRoundTrip(legacy)
+    // One sheet, resolves active to it, hydrates to clean empty view state.
+    const ws = hydrateDrawingWorkspace(reread)
+    expect(ws.sheets).toHaveLength(1)
+    expect(ws.activeSheetId).toBe('legacy')
+    expect(hydrateActiveSheet(reread)).toEqual(emptyDrawingViewState())
+  })
+
+  // Helper: the session resolves the active id via `hydrateDrawingWorkspace`.
+  function resolveActiveSheetIdViaHydrate(f: DrawingFile): string | null {
+    return hydrateDrawingWorkspace(f).activeSheetId
+  }
 })
 
 // ── (D) Purity ────────────────────────────────────────────────────────────────

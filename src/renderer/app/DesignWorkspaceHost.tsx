@@ -19,6 +19,8 @@ import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
 import type { DesignFileV2 } from '../../shared/design-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
+import { deriveDrawingBom } from '../../shared/drawing-bom'
+import type { DrawingSheetTab } from '../design/DrawingView'
 
 /**
  * Reverse of {@link FEATURE_DIALOG_COMMAND_ID}: catalog id (`'so_extrude'`,
@@ -32,6 +34,18 @@ const FEATURE_DIALOG_KIND_BY_COMMAND: ReadonlyMap<string, FeatureDialogKind> = n
     ([kind, id]) => [id, kind]
   )
 )
+
+/**
+ * The project folder's basename — used as the Drawings BOM single-part name so a
+ * row reads meaningfully (e.g. "bracket") without fabricating data. Tolerates
+ * both `/` and `\` separators; falls back to the whole string when there is no
+ * separator, and to "Part" when empty. Pure + module-level.
+ */
+function projectBasename(dir: string): string {
+  const sepIdx = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'))
+  const base = (sepIdx >= 0 ? dir.slice(sepIdx + 1) : dir).trim()
+  return base.length > 0 ? base : 'Part'
+}
 
 /**
  * Bridge between the new-shell `WorkspaceHost` and the prop-driven
@@ -335,6 +349,32 @@ export function DesignWorkspaceHost({
     }
   }, [setCursorCoords])
 
+  // ── Drawings multi-sheet seam — map the session workspace to the tab strip ──
+  // The session owns the persisted sheet set (`session.drawingWorkspace`); map it
+  // down to the DrawingView's minimal {id,name} tab shape. `undefined` until the
+  // drawing hydrates (DrawingView then shows its single implicit fallback tab),
+  // so a project that has never opened the Drawings view still renders cleanly.
+  const drawingSheets = useMemo<readonly DrawingSheetTab[] | undefined>(() => {
+    const ws = session.drawingWorkspace
+    if (ws === null || ws.sheets.length === 0) return undefined
+    return ws.sheets.map((s) => ({ id: s.id, name: s.name }))
+  }, [session.drawingWorkspace])
+  const drawingActiveSheetId = session.drawingWorkspace?.activeSheetId ?? undefined
+
+  // ── Drawings BOM — derived through the engine `deriveDrawingBom` seam ────────
+  // Honest source for a single-part drawing (the dominant Laguna/Carvera case):
+  // when a part is being documented, one BOM row for that part (`singlePart`);
+  // otherwise an empty list (the panel shows its honest empty state). The part
+  // name is the project-folder basename so the row reads meaningfully without
+  // inventing data. (Rolling an ASSEMBLY drawing's full multi-part BOM via the
+  // `assembly` path is a follow-up once the host threads the live AssemblyFile.)
+  const drawingBomLines = useMemo(() => {
+    const dir = session.projectDir
+    if (dir === null) return deriveDrawingBom({ kind: 'empty' })
+    const name = projectBasename(dir)
+    return deriveDrawingBom({ kind: 'singlePart', name })
+  }, [session.projectDir])
+
   return (
     <DesignWorkspace
       initialScript={initialScript}
@@ -421,6 +461,18 @@ export function DesignWorkspaceHost({
       // commits + debounce-saves the committed state. Documentation only (no G-code).
       drawing={session.drawing}
       onDrawing={session.onDrawingChange}
+      // Drawings MULTI-SHEET: the session owns the persisted sheet set; the tab
+      // strip reports add/rename/delete/switch INTENT and the session re-points
+      // `drawing` at the newly-active sheet so per-sheet content swaps. All four
+      // ops persist through the same Cycle-259 round-trip (now multi-sheet).
+      drawingSheets={drawingSheets}
+      drawingActiveSheetId={drawingActiveSheetId}
+      onDrawingSelectSheet={session.onDrawingSelectSheet}
+      onDrawingAddSheet={session.onDrawingAddSheet}
+      onDrawingRenameSheet={session.onDrawingRenameSheet}
+      onDrawingDeleteSheet={session.onDrawingDeleteSheet}
+      // Drawings BOM: rendered from the engine deriveDrawingBom seam.
+      drawingBomLines={drawingBomLines}
     />
   )
 }

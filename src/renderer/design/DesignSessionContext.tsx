@@ -23,11 +23,21 @@ import type { KernelManifest } from '../../shared/kernel-manifest-schema'
 import { defaultPartFeatures, type KernelPostSolidOp, type PartFeaturesFile } from '../../shared/part-features-schema'
 import {
   emptyDrawingViewState,
+  emptyDrawingWorkspaceState,
   foldDrawingState,
-  hydrateDrawingFile,
-  type DrawingViewState
+  hydrateActiveSheet,
+  hydrateDrawingWorkspace,
+  type DrawingViewState,
+  type DrawingWorkspaceState
 } from '../../shared/drawing-hydrate'
 import type { DrawingFile } from '../../shared/drawing-sheet-schema'
+import {
+  addSheet as addDrawingSheet,
+  deleteSheet as deleteDrawingSheet,
+  renameSheet as renameDrawingSheet,
+  resolveActiveSheetId as resolveDrawingActiveSheetId,
+  setActiveSheet as setDrawingActiveSheet
+} from '../../shared/drawing-sheet-ops'
 import { applyTimelineAction, type TimelineState } from './feature-timeline-actions'
 import { linearPatternSketch, mirrorDesignAcrossYAxis } from './design-ops'
 import { derivePartFeatures } from './derive-features'
@@ -203,10 +213,40 @@ export type DesignSessionValue = {
    * Persist a new Drawings sheet state. The session DEBOUNCES the
    * `drawing:save` and folds the COMMITTED state through the `DrawingFile`
    * schema (additive — a legacy/empty `drawing.json` round-trips unchanged,
-   * Safety Rule 2). No-op without an open project. Survives reload + a
-   * Drawings↔other-route switch.
+   * Safety Rule 2). The fold targets the ACTIVE sheet (see {@link drawingWorkspace}),
+   * so editing a secondary tab never clobbers the primary sheet. No-op without an
+   * open project. Survives reload + a Drawings↔other-route switch.
    */
   onDrawingChange: (next: DrawingViewState) => void
+  /**
+   * The full multi-sheet Drawings workspace (every sheet, in order, + the
+   * resolved active sheet id) hydrated from `drawing.json`. The Drawings tab
+   * strip renders from this; {@link drawing} above is the ACTIVE sheet's view
+   * state derived from it (so per-sheet content swaps on a tab switch). `null`
+   * until the first load settles for the open project (or when no project is
+   * open). Documentation overlays only — never read by CAM/G-code (Safety Rule 1).
+   */
+  drawingWorkspace: DrawingWorkspaceState | null
+  /**
+   * Switch the active Drawings sheet. Re-derives {@link drawing} from the newly
+   * active sheet (so the per-sheet `persisted*` props re-point) and persists the
+   * active-id change (debounced). No-op without an open project or for an
+   * unknown id.
+   */
+  onDrawingSelectSheet: (sheetId: string) => void
+  /**
+   * Append a fresh empty Drawings sheet (the session mints a stable id + name)
+   * and make it active. Persists the new sheet set. No-op without an open project.
+   */
+  onDrawingAddSheet: () => void
+  /** Rename a Drawings sheet (trimmed, non-empty enforced). Persists. */
+  onDrawingRenameSheet: (sheetId: string, name: string) => void
+  /**
+   * Delete a Drawings sheet, keeping a minimum of one (the engine op refuses to
+   * empty the file). Re-points the active id at a neighbour when the active sheet
+   * is deleted. Persists. No-op without an open project.
+   */
+  onDrawingDeleteSheet: (sheetId: string) => void
   onStatus?: (msg: string) => void
   onExportedStl?: (path: string) => void
 }
@@ -258,8 +298,10 @@ export function DesignSessionProvider({
   const [features, setFeatures] = useState<PartFeaturesFile | null>(null)
   // Drawings sheet state hydrated from drawing.json on project-open. `null`
   // until the first load settles (or when no project is open). See the drawing
-  // load + persist block below.
+  // load + persist block below. `drawing` is the ACTIVE sheet's view state (per-
+  // sheet annotations); `drawingWorkspace` is the full sheet set + active id.
   const [drawing, setDrawing] = useState<DrawingViewState | null>(null)
+  const [drawingWorkspace, setDrawingWorkspace] = useState<DrawingWorkspaceState | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [selection, setSelection] = useState<DesignSelection>(null)
   const [solveReport, setSolveReport] = useState('')
@@ -300,15 +342,23 @@ export function DesignSessionProvider({
   // effect can NEVER reload drawing.json over unsaved in-memory drawing edits
   // (the Cycle-249 anti-clobber guard, applied to the Drawings sheet).
   const lastDrawingLoadKeyRef = useRef<string | null>(null)
-  // The freshest COMMITTED drawing state. The debounced save reads THIS (not a
-  // render-cycle closure) so it always persists the latest committed edits and
-  // never captures a stale eager-updater snapshot (Cycle-256). Updated
-  // synchronously by `onDrawingChange` before it schedules the save.
+  // The freshest COMMITTED drawing state (the ACTIVE sheet's view state). The
+  // debounced save reads THIS (not a render-cycle closure) so it always persists
+  // the latest committed edits and never captures a stale eager-updater snapshot
+  // (Cycle-256). Updated synchronously by `onDrawingChange` before it schedules
+  // the save.
   const drawingRef = useRef<DrawingViewState | null>(null)
   drawingRef.current = drawing
+  // The id of the ACTIVE Drawings sheet — the fold target so a secondary-tab
+  // edit lands on the right sheet (not always the primary). Kept in a ref so the
+  // debounced flush + the unmount flush read the freshest value without listing
+  // `drawingWorkspace` in their deps.
+  const drawingActiveSheetIdRef = useRef<string | null>(null)
+  drawingActiveSheetIdRef.current = drawingWorkspace?.activeSheetId ?? null
   // The LOADED-from-disk DrawingFile for the open project. The fold persists
   // onto this base so any sheets / sheet fields the renderer does not model are
-  // preserved across a save (additive, Safety Rule 2). Updated on each load.
+  // preserved across a save (additive, Safety Rule 2). Updated on each load AND
+  // on every persisted edit (so the next fold lands on the prior result).
   const drawingFileBaseRef = useRef<DrawingFile | null>(null)
   // Debounce timer for the drawing save; cleared on unmount + on every change so
   // a typing burst in the title block coalesces into ONE save.
@@ -398,7 +448,9 @@ export function DesignSessionProvider({
       lastDrawingLoadKeyRef.current = null
       drawingFileBaseRef.current = null
       drawingRef.current = null
+      drawingActiveSheetIdRef.current = null
       setDrawing(null)
+      setDrawingWorkspace(null)
       return
     }
     // Anti-clobber guard: only (re)load when the project actually changed.
@@ -410,9 +462,14 @@ export function DesignSessionProvider({
         const file = await fab.drawingLoad(projectDir)
         if (cancelled) return
         drawingFileBaseRef.current = file
-        const view = hydrateDrawingFile(file)
+        // The full sheet set + active id drive the tab strip; the ACTIVE sheet's
+        // view state drives the per-sheet annotation props.
+        const workspace = hydrateDrawingWorkspace(file)
+        const view = hydrateActiveSheet(file)
         drawingRef.current = view
+        drawingActiveSheetIdRef.current = workspace.activeSheetId
         setDrawing(view)
+        setDrawingWorkspace(workspace)
       } catch (e) {
         if (cancelled) return
         // Honest fallback: seed empty state so the workspace still renders, and
@@ -421,7 +478,9 @@ export function DesignSessionProvider({
         drawingFileBaseRef.current = null
         const empty = emptyDrawingViewState()
         drawingRef.current = empty
+        drawingActiveSheetIdRef.current = null
         setDrawing(empty)
+        setDrawingWorkspace(emptyDrawingWorkspaceState())
         onStatusRef.current?.(
           formatLoadRejection('drawing/drawing.json', e instanceof Error ? e : String(e))
         )
@@ -778,29 +837,45 @@ export function DesignSessionProvider({
   // sheet fields the renderer doesn't model are preserved (additive, Safety
   // Rule 2). Writes are serialized behind `drawingWriteChainRef` so two flushes
   // can't interleave. No-op without an open project.
-  // Fold the COMMITTED drawing state onto the loaded base file and enqueue a
-  // serialized `drawing:save`. Reads `drawingRef.current` (the freshest committed
-  // value, NOT a captured closure -- Cycle-256) + `projectDirRef.current` (so the
-  // unmount flush works under [] effect deps). The folded file is adopted as the
-  // new base so the next fold updates the primary sheet in place (idempotent)
-  // rather than re-appending it. Foreign sheets are preserved (additive,
-  // Safety Rule 2). No-op without an open project or before hydration.
+  // Enqueue a serialized `drawing:save` of an ALREADY-FOLDED file. Adopts the
+  // file as the new base so the next fold lands on the prior result, and writes
+  // behind `drawingWriteChainRef` so two flushes can't interleave. Shared by the
+  // active-sheet flush below and the sheet-structure ops (add/rename/delete/
+  // select). No-op without an open project (the project dir is read from the ref
+  // so the unmount flush works under [] effect deps).
+  const persistDrawingFile = useCallback(
+    (file: DrawingFile): void => {
+      const dir = projectDirRef.current
+      if (!dir) return
+      drawingFileBaseRef.current = file
+      drawingWriteChainRef.current = drawingWriteChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          try {
+            await fab.drawingSave(dir, JSON.stringify(file))
+          } catch (e) {
+            onStatusRef.current?.(e instanceof Error ? e.message : String(e))
+          }
+        })
+    },
+    [fab]
+  )
+
+  // Fold the COMMITTED active-sheet drawing state onto the loaded base file and
+  // enqueue a serialized `drawing:save`. Reads `drawingRef.current` (the freshest
+  // committed value, NOT a captured closure -- Cycle-256) + `projectDirRef.current`
+  // (so the unmount flush works under [] effect deps). The fold targets the ACTIVE
+  // sheet (`drawingActiveSheetIdRef`) so an edit made on a secondary tab lands on
+  // THAT sheet, never the primary; foreign sheets + the active id are preserved
+  // (additive, Safety Rule 2). No-op without an open project or before hydration.
   const flushDrawingSave = useCallback((): void => {
     const dir = projectDirRef.current
     const committed = drawingRef.current
     if (!dir || committed === null) return
-    const file = foldDrawingState(committed, drawingFileBaseRef.current ?? undefined)
-    drawingFileBaseRef.current = file
-    drawingWriteChainRef.current = drawingWriteChainRef.current
-      .catch(() => {})
-      .then(async () => {
-        try {
-          await fab.drawingSave(dir, JSON.stringify(file))
-        } catch (e) {
-          onStatusRef.current?.(e instanceof Error ? e.message : String(e))
-        }
-      })
-  }, [fab])
+    const activeId = drawingActiveSheetIdRef.current ?? undefined
+    const file = foldDrawingState(committed, drawingFileBaseRef.current ?? undefined, activeId)
+    persistDrawingFile(file)
+  }, [persistDrawingFile])
 
   const onDrawingChange = useCallback(
     (next: DrawingViewState): void => {
@@ -815,6 +890,76 @@ export function DesignSessionProvider({
       }, DRAWING_SAVE_DEBOUNCE_MS)
     },
     [projectDir, flushDrawingSave]
+  )
+
+  // ── Drawings sheet-structure ops (add / rename / delete / select) ────────────
+  //
+  // The renderer's tab strip reports add/rename/delete/switch INTENT; these turn
+  // it into a NEW `DrawingFile` via the pure `drawing-sheet-ops` algebra. Each op
+  // FIRST folds the committed active-sheet edits onto the base (so an uncommitted
+  // dimension is not lost when the sheet set is restructured), applies the op,
+  // then re-derives the active-sheet view + workspace state and persists. The
+  // active-sheet fold is what keeps a half-typed title block on the current tab
+  // safe across a sheet add/switch. No-op without an open project.
+  const applyDrawingSheetOp = useCallback(
+    (op: (file: DrawingFile) => DrawingFile): void => {
+      if (projectDirRef.current === null) return
+      // Cancel any pending debounced active-sheet flush — this op subsumes it
+      // (it folds the committed active-sheet state in before restructuring).
+      if (drawingSaveTimerRef.current !== null) {
+        clearTimeout(drawingSaveTimerRef.current)
+        drawingSaveTimerRef.current = null
+      }
+      const committed = drawingRef.current
+      const base = drawingFileBaseRef.current
+      const activeId = drawingActiveSheetIdRef.current ?? undefined
+      // Fold the live active-sheet edits in first (so they survive the restructure).
+      // `foldDrawingState` always returns a canonical, schema-valid file (creating a
+      // primary sheet when neither a base nor committed state exists yet), so `op`
+      // always receives a real `DrawingFile`.
+      const folded =
+        committed === null
+          ? base ?? foldDrawingState(emptyDrawingViewState())
+          : foldDrawingState(committed, base ?? undefined, activeId)
+      const next = op(folded)
+      // Re-derive the per-sheet view + the full workspace from the new file.
+      const view = hydrateActiveSheet(next)
+      const workspace = hydrateDrawingWorkspace(next)
+      drawingRef.current = view
+      drawingActiveSheetIdRef.current = workspace.activeSheetId
+      setDrawing(view)
+      setDrawingWorkspace(workspace)
+      persistDrawingFile(next)
+    },
+    [persistDrawingFile]
+  )
+
+  const onDrawingSelectSheet = useCallback(
+    (sheetId: string): void => {
+      applyDrawingSheetOp((file) => setDrawingActiveSheet(file, sheetId))
+    },
+    [applyDrawingSheetOp]
+  )
+
+  const onDrawingAddSheet = useCallback((): void => {
+    // Deterministic-enough unique id (the pure layer mints none); the engine op
+    // makes it active + names it with a numbered default when blank.
+    const id = `sheet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    applyDrawingSheetOp((file) => addDrawingSheet(file, id, ''))
+  }, [applyDrawingSheetOp])
+
+  const onDrawingRenameSheet = useCallback(
+    (sheetId: string, name: string): void => {
+      applyDrawingSheetOp((file) => renameDrawingSheet(file, sheetId, name))
+    },
+    [applyDrawingSheetOp]
+  )
+
+  const onDrawingDeleteSheet = useCallback(
+    (sheetId: string): void => {
+      applyDrawingSheetOp((file) => deleteDrawingSheet(file, sheetId))
+    },
+    [applyDrawingSheetOp]
   )
 
   // Flush-safety: on unmount (e.g. a route switch to a NON-CAD workspace that
@@ -1251,6 +1396,11 @@ export function DesignSessionProvider({
       solveReport,
       drawing,
       onDrawingChange,
+      drawingWorkspace,
+      onDrawingSelectSheet,
+      onDrawingAddSheet,
+      onDrawingRenameSheet,
+      onDrawingDeleteSheet,
       onStatus,
       onExportedStl
     }),
@@ -1290,6 +1440,11 @@ export function DesignSessionProvider({
       updateFeatureSuppressed,
       drawing,
       onDrawingChange,
+      drawingWorkspace,
+      onDrawingSelectSheet,
+      onDrawingAddSheet,
+      onDrawingRenameSheet,
+      onDrawingDeleteSheet,
       onStatus,
       onExportedStl
     ]

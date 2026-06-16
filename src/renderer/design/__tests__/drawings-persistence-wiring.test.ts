@@ -88,9 +88,14 @@ describe('drawing-sheet-schema — titleBlock additive field', () => {
 // ── (C) DesignSessionContext — load → hydrate (anti-clobber guard) ────────────
 
 describe('DesignSessionContext — drawing load hydrates on project-open', () => {
-  it('hydrates from fab.drawingLoad', () => {
+  it('hydrates from fab.drawingLoad (active sheet + full multi-sheet workspace)', () => {
     expect(SESSION_SRC).toContain('await fab.drawingLoad(projectDir)')
-    expect(SESSION_SRC).toContain('hydrateDrawingFile(file)')
+    // Multi-sheet upgrade: the session hydrates the ACTIVE sheet's view state
+    // (per-sheet annotation props) AND the full sheet set + active id (the tab
+    // strip). The single-sheet `hydrateDrawingFile` was promoted to
+    // `hydrateActiveSheet` so editing a secondary tab no longer reads the primary.
+    expect(SESSION_SRC).toContain('hydrateActiveSheet(file)')
+    expect(SESSION_SRC).toContain('hydrateDrawingWorkspace(file)')
   })
 
   it('guards the load by a (projectDir) load-key ref (Cycle-249 anti-clobber)', () => {
@@ -239,5 +244,85 @@ describe('DrawingView — onPersistTitleBlock seam + projection honesty', () => 
     // exactly once (the splice-double-apply guard)
     const count = DRAWING_VIEW_SRC.split('design-drawing__projection-caveat').length - 1
     expect(count).toBe(1)
+  })
+})
+
+// ── (H) MULTI-SHEET seam — session sheet ops, active-sheet fold, prop wiring ───
+//
+// The Cycle-259 round-trip is now multi-sheet: the session owns the full sheet
+// set, derives the ACTIVE sheet's view state (so per-sheet content swaps), and
+// folds an edit into the ACTIVE sheet (never always the primary). These pins keep
+// that wiring from regressing back to a single-sheet model. The DATA semantics
+// (fold→save/load→hydrate over N sheets + the active id) are unit-tested in
+// `src/shared/drawing-hydrate.test.ts`; this block pins the RENDERER↔SESSION seam.
+
+describe('DesignSessionContext — multi-sheet workspace SSOT', () => {
+  it('exposes the multi-sheet workspace + the four sheet-op callbacks', () => {
+    expect(SESSION_SRC).toContain('drawingWorkspace: DrawingWorkspaceState | null')
+    expect(SESSION_SRC).toContain('onDrawingSelectSheet: (sheetId: string) => void')
+    expect(SESSION_SRC).toContain('onDrawingAddSheet: () => void')
+    expect(SESSION_SRC).toContain('onDrawingRenameSheet: (sheetId: string, name: string) => void')
+    expect(SESSION_SRC).toContain('onDrawingDeleteSheet: (sheetId: string) => void')
+  })
+
+  it('folds the committed edit into the ACTIVE sheet, not always the primary', () => {
+    // The flush threads the active sheet id as the fold target.
+    expect(SESSION_SRC).toContain('const activeId = drawingActiveSheetIdRef.current ?? undefined')
+    expect(SESSION_SRC).toContain('foldDrawingState(committed, drawingFileBaseRef.current ?? undefined, activeId)')
+  })
+
+  it('the sheet ops run through the pure drawing-sheet-ops algebra', () => {
+    expect(SESSION_SRC).toContain('addDrawingSheet(file, id')
+    expect(SESSION_SRC).toContain('renameDrawingSheet(file, sheetId, name)')
+    expect(SESSION_SRC).toContain('deleteDrawingSheet(file, sheetId)')
+    expect(SESSION_SRC).toContain('setDrawingActiveSheet(file, sheetId)')
+  })
+
+  it('a sheet op folds the live active-sheet edits in BEFORE restructuring (no data loss)', () => {
+    // applyDrawingSheetOp folds committed → base, applies op, re-derives view +
+    // workspace, then persists. This is what keeps a half-typed title block on the
+    // current tab safe across an add/switch.
+    expect(SESSION_SRC).toContain('const applyDrawingSheetOp = useCallback')
+    expect(SESSION_SRC).toContain('foldDrawingState(committed, base ?? undefined, activeId)')
+    expect(SESSION_SRC).toContain('const view = hydrateActiveSheet(next)')
+    expect(SESSION_SRC).toContain('const workspace = hydrateDrawingWorkspace(next)')
+  })
+})
+
+describe('DesignWorkspace — threads the multi-sheet + BOM props into DrawingView', () => {
+  it('maps the session sheet set + active id onto DrawingView', () => {
+    expect(WORKSPACE_SRC).toContain('sheets={drawingSheets}')
+    expect(WORKSPACE_SRC).toContain('activeSheetId={drawingActiveSheetId}')
+  })
+
+  it('maps the four sheet-op intents onto DrawingView', () => {
+    expect(WORKSPACE_SRC).toContain('onSelectSheet={onDrawingSelectSheet}')
+    expect(WORKSPACE_SRC).toContain('onAddSheet={onDrawingAddSheet}')
+    expect(WORKSPACE_SRC).toContain('onRenameSheet={onDrawingRenameSheet}')
+    expect(WORKSPACE_SRC).toContain('onDeleteSheet={onDrawingDeleteSheet}')
+  })
+
+  it('passes the derived BOM rows into DrawingView', () => {
+    expect(WORKSPACE_SRC).toContain('bomLines={drawingBomLines}')
+  })
+})
+
+describe('DesignWorkspaceHost — threads the session multi-sheet seam + derives the BOM', () => {
+  it('maps session.drawingWorkspace.sheets down to the tab strip', () => {
+    expect(HOST_SRC).toContain('session.drawingWorkspace')
+    expect(HOST_SRC).toContain('drawingSheets={drawingSheets}')
+    expect(HOST_SRC).toContain('drawingActiveSheetId={drawingActiveSheetId}')
+  })
+
+  it('wires the four session sheet-op callbacks', () => {
+    expect(HOST_SRC).toContain('onDrawingSelectSheet={session.onDrawingSelectSheet}')
+    expect(HOST_SRC).toContain('onDrawingAddSheet={session.onDrawingAddSheet}')
+    expect(HOST_SRC).toContain('onDrawingRenameSheet={session.onDrawingRenameSheet}')
+    expect(HOST_SRC).toContain('onDrawingDeleteSheet={session.onDrawingDeleteSheet}')
+  })
+
+  it('derives the BOM through the engine deriveDrawingBom seam', () => {
+    expect(HOST_SRC).toContain('deriveDrawingBom(')
+    expect(HOST_SRC).toContain('drawingBomLines={drawingBomLines}')
   })
 })

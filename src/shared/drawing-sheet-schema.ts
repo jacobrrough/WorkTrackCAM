@@ -36,6 +36,76 @@ export const drawingViewPlaceholderSchema = z.object({
 
 export type DrawingViewPlaceholder = z.infer<typeof drawingViewPlaceholderSchema>
 
+// ---------------------------------------------------------------------------
+// Section view (cut-plane spec)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cut-plane axis for a section view. The plane is normal to this axis at
+ * {@link drawingSectionCutPlaneSchema}.offset. Mirrors the renderer's live
+ * `DrawingSectionPlane` (`DrawingView.tsx`) and the sidecar's `CadSectionAxis`
+ * (`sidecar-protocol.ts`) so a persisted spec threads straight into the real
+ * `cad.section_drawing` projector with no remapping.
+ */
+export const drawingSectionAxisSchema = z.enum(['x', 'y', 'z'])
+
+export type DrawingSectionAxis = z.infer<typeof drawingSectionAxisSchema>
+
+/** Which half of the cut the section keeps (mirrors `CadSectionKeepSide`). */
+export const drawingSectionKeepSideSchema = z.enum(['positive', 'negative'])
+
+export type DrawingSectionKeepSide = z.infer<typeof drawingSectionKeepSideSchema>
+
+/**
+ * A persistable cutting-plane spec. Byte-identical to the live
+ * `DrawingSectionPlane` the renderer's section toggle drives and to the
+ * `plane` payload `cad.section_drawing` accepts (`{ axis, offset, keepSide? }`),
+ * so hydrating this onto a sheet and pushing it into the projector needs no
+ * field remap. `offset` is finite mm in the body's coordinate frame.
+ */
+export const drawingSectionCutPlaneSchema = z.object({
+  axis: drawingSectionAxisSchema,
+  offset: z.number().finite(),
+  keepSide: drawingSectionKeepSideSchema.optional()
+})
+
+export type DrawingSectionCutPlane = z.infer<typeof drawingSectionCutPlaneSchema>
+
+/**
+ * One section-view entry on a sheet — the persisted form of the renderer's
+ * "Section: ON" state. A section view is a `view` of kind `section` paired with
+ * a {@link drawingSectionCutPlaneSchema cut-plane spec}; the renderer projects
+ * it through the real `cad.section_drawing` pipeline (the projector IS real —
+ * the renderer already drives it live; what was missing is *persistence* so the
+ * cut survives reload / a route switch).
+ *
+ *   - `id`       — stable section-view id (caller supplies; pure layer mints none).
+ *   - `name`     — display / cutting-plane label, e.g. "A-A". Threaded to the
+ *                  projector as the cutting-plane `label`. Capped to a drafting-
+ *                  sane length so a runaway string can't blow out the SVG `<text>`.
+ *   - `viewFrom` — which orthographic base direction the section is taken on
+ *                  (the projector's `view` axis; `front`/`top`/`right`/`iso`).
+ *   - `cutPlane` — the cutting plane (axis + offset + keepSide).
+ *   - `layout`   — optional sheet-frame box for export composition (same shape
+ *                  as a view placeholder's `layout`).
+ *
+ * Additive + carried in an `.optional()` array on `drawingSheetSchema` (same
+ * back-compat contract as `annotations` / `titleBlock` — no `.default(...)`, so
+ * a legacy `drawing.json` parses unchanged and save/load stays byte-faithful).
+ * Documentation metadata only (Safety Rule 1) — never read by CAM/G-code.
+ */
+export const drawingSectionViewSchema = z.object({
+  id: z.string(),
+  name: z.string().max(120).default(''),
+  /** Base projection direction the section is taken on (projector `view` axis). */
+  viewFrom: viewFromAxisSchema.default('front'),
+  cutPlane: drawingSectionCutPlaneSchema,
+  /** Optional sheet-frame box for export composition. */
+  layout: drawingViewLayoutSchema.optional()
+})
+
+export type DrawingSectionView = z.infer<typeof drawingSectionViewSchema>
+
 /**
  * Persistable title-block metadata for one sheet (mirrors the renderer's
  * `DrawingTitleBlock` in `DrawingView.tsx`: name / scale / author / date /
@@ -121,6 +191,15 @@ export const drawingSheetSchema = z.object({
    */
   annotations: drawingSheetAnnotationsSchema.optional(),
   /**
+   * Section views on this sheet (cut-plane specs the renderer projects through
+   * the real `cad.section_drawing` pipeline). Additive + `.optional()` (same
+   * no-`.default(...)` back-compat contract as `annotations` / `titleBlock`): a
+   * legacy `drawing.json` with no section views parses unchanged and save/load
+   * stays byte-faithful (absent in → absent out). Documentation metadata only
+   * (Safety Rule 1) — never read by CAM/G-code.
+   */
+  sectionViews: z.array(drawingSectionViewSchema).optional(),
+  /**
    * Title-block metadata (name / scale / author / date / sheet) the operator
    * fills in the Drawings title-block panel. Additive + `.optional()` (same
    * back-compat contract as `annotations` above — no `.default(...)`, so a
@@ -132,7 +211,19 @@ export const drawingSheetSchema = z.object({
 
 export const drawingFileSchema = z.object({
   version: z.literal(1),
-  sheets: z.array(drawingSheetSchema).default([])
+  sheets: z.array(drawingSheetSchema).default([]),
+  /**
+   * Id of the sheet the operator last had active (the multi-sheet tab the
+   * Drawings workspace re-selects on open). Additive + `.optional()` (same
+   * no-`.default(...)` back-compat contract as the additive sheet fields): a
+   * legacy `drawing.json` with no `activeSheetId` parses unchanged and save/load
+   * stays byte-faithful. The id is NOT cross-checked against `sheets` here (a
+   * pure schema can't enforce referential integrity without rejecting a legacy
+   * file mid-edit); consumers resolve it via `resolveActiveSheetId` in
+   * `drawing-sheet-ops.ts`, which falls back to the first sheet when the id is
+   * absent or dangling. Documentation metadata only (Safety Rule 1).
+   */
+  activeSheetId: z.string().optional()
 })
 
 export type DrawingSheet = z.infer<typeof drawingSheetSchema>
