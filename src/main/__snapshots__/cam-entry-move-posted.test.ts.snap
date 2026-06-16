@@ -1,0 +1,146 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`HELIX entry posted on Laguna Swift 5x10 (vcarve_mach3) > helix entry posted program is stable (snapshot) 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 24000 RPM
+; Operation: cnc_pocket
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+G0 Z6.000
+G0 X120.000 Y100.000
+G1 Z-2.000 F400
+G1 X100.000 Y100.000 Z-2.000 F1200
+G1 X140.000 Y100.000 F1200
+G0 Z6.000
+G0 X120.000 Y112.000
+G2 X114.000 Y112.000 Z5.556 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z5.111 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z4.667 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z4.222 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z3.778 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z3.333 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z2.889 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z2.444 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z2.000 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z1.556 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z1.111 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z0.667 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z0.222 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z-0.222 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z-0.667 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z-1.111 I3.000 J0.000 F400
+G2 X114.000 Y112.000 Z-1.556 I-3.000 J0.000 F400
+G2 X120.000 Y112.000 Z-2.000 I3.000 J0.000 F400
+G1 X120.000 Y112.000 Z-2.000 F400
+G1 X140.000 Y112.000 Z-2.000 F1200
+G1 X100.000 Y112.000 F1200
+G0 Z6.000
+G0 X120.000 Y124.000
+G2 X114.000 Y124.000 Z5.556 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z5.111 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z4.667 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z4.222 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z3.778 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z3.333 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z2.889 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z2.444 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z2.000 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z1.556 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z1.111 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z0.667 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z0.222 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z-0.222 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z-0.667 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z-1.111 I3.000 J0.000 F400
+G2 X114.000 Y124.000 Z-1.556 I-3.000 J0.000 F400
+G2 X120.000 Y124.000 Z-2.000 I3.000 J0.000 F400
+G1 X120.000 Y124.000 Z-2.000 F400
+G1 X100.000 Y124.000 Z-2.000 F1200
+G1 X140.000 Y124.000 F1200
+G0 Z6.000
+G0 X120.000 Y136.000
+G2 X117.500 Y136.000 Z5.800 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z5.600 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z5.400 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z5.200 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z5.000 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z4.800 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z4.600 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z4.400 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z4.200 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z4.000 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z3.800 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z3.600 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z3.400 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z3.200 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z3.000 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z2.800 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z2.600 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z2.400 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z2.200 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z2.000 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z1.800 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z1.600 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z1.400 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z1.200 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z1.000 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z0.800 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z0.600 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z0.400 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z0.200 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z0.000 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z-0.200 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z-0.400 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z-0.600 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z-0.800 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z-1.000 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z-1.200 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z-1.400 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z-1.600 I1.250 J0.000 F400
+G2 X117.500 Y136.000 Z-1.800 I-1.250 J0.000 F400
+G2 X120.000 Y136.000 Z-2.000 I1.250 J0.000 F400
+G1 X120.000 Y136.000 Z-2.000 F400
+G1 X140.000 Y136.000 Z-2.000 F1200
+G1 X100.000 Y136.000 F1200
+G0 Z6.000
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;

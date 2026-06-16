@@ -36,7 +36,9 @@ import {
   geometryJsonFieldValue,
   contourDriftState,
   opReadiness,
-  filterButtonClass
+  filterButtonClass,
+  machineSupportsArcOutput,
+  ARC_OUTPUT_DEFAULT_TOL_MM
 } from './manufacture-op-helpers'
 import { isOperationSourceMeshStale } from '../../shared/cam-source-stale'
 import { OFFERED_CAM_OP_KINDS } from '../../shared/manufacture-cam-gate'
@@ -1369,6 +1371,55 @@ export function ManufactureOperationList({
                 segments are short for the ramp angle. Output is unverified until post/machine checks (
                 <code>docs/MACHINES.md</code>).
               </p>
+            ) : null}
+            {/* -- TRUE-ARC output (G2/G3) -- Cycle-263 `arcTolMm` engine knob, surfaced. */}
+            {/* Router-only: shown for Laguna (mach3) / Carvera-3 (smoothieware) whose */}
+            {/* posts emit circular interpolation; hidden for K2 FDM and when no CNC */}
+            {/* machine is resolved (machineSupportsArcOutput). Enabling stamps a sane */}
+            {/* default arcTolMm; disabling clears arcTolMm + the optional min-sweep knob. */}
+            {(op.kind === 'cnc_contour' || op.kind === 'cnc_pocket') && machineSupportsArcOutput(camMachine) ? (
+              <div className="row row--mt-xs" data-testid={`op-arc-output-${op.id}`}>
+                <label
+                  className="chk"
+                  title="Collapse co-circular toolpath runs into true G2/G3 arcs (smaller program, smoother motion). Requires a controller that supports circular interpolation — honored by the Laguna RichAuto and Carvera 3-axis posts."
+                >
+                  <input
+                    type="checkbox"
+                    data-testid={`op-arc-output-toggle-${op.id}`}
+                    checked={typeof op.params?.['arcTolMm'] === 'number' && op.params['arcTolMm'] > 0}
+                    onChange={(e) => {
+                      const base: Record<string, unknown> = { ...(op.params ?? {}) }
+                      if (e.target.checked) base.arcTolMm = ARC_OUTPUT_DEFAULT_TOL_MM
+                      else {
+                        delete base.arcTolMm
+                        delete base.arcMinSweepDeg
+                      }
+                      onUpdateOp(i, { params: Object.keys(base).length ? base : undefined })
+                    }}
+                  />
+                  Output arcs (G2/G3)
+                </label>
+                {typeof op.params?.['arcTolMm'] === 'number' && op.params['arcTolMm'] > 0 ? (
+                  <label title="Max chord deviation from the fitted arc (mm). Smaller = tighter arcs that hug the linearized path; larger = fewer, longer arcs. Co-circular runs within this tolerance collapse to one G2/G3 move.">
+                    Arc tolerance (mm)
+                    <input
+                      type="number"
+                      min={0.001}
+                      max={1}
+                      step={0.001}
+                      data-testid={`op-arc-output-tol-${op.id}`}
+                      value={cutParamFieldValue(op, 'arcTolMm')}
+                      onChange={(e) => onSetCutParam(i, 'arcTolMm', e.target.value, 'positive')}
+                      placeholder={String(ARC_OUTPUT_DEFAULT_TOL_MM)}
+                    />
+                  </label>
+                ) : null}
+                <span className="msg msg--muted op-arc-output__note">
+                  Emits true <strong>G2/G3</strong> for circular loops &mdash; needs a controller that supports arcs (
+                  Laguna RichAuto / Carvera). Off = exact linearized <code>G1</code> path. Output is unverified until
+                  post/machine checks.
+                </span>
+              </div>
             ) : null}
             {op.kind === 'cnc_drill' ? (
               <p className="msg manufacture-op-hint">

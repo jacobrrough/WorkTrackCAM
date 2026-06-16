@@ -3,6 +3,7 @@ import type { StlBounds, Vec3 } from './stl'
 import { extractToolpathSegmentsFromGcode } from '../shared/cam-gcode-toolpath'
 import { CLIPPER_SCALE } from '../shared/sketch-boolean-offset'
 import { fitArcsFromPolyline, type ArcFitPoint } from './cam-arc-fit'
+import { buildEntryMoves, formatEntryMove, type EntryFallbackReason } from './cam-entry-move'
 
 export type ParallelFinishParams = {
   bounds: StlBounds
@@ -585,8 +586,16 @@ export type Pocket2dParams = {
   wallStockMm?: number
   /** Optional finish contour at each depth step (default false = final depth only). */
   finishEachDepth?: boolean
-  /** Pocket roughing entry mode per segment. */
-  entryMode?: 'plunge' | 'ramp'
+  /**
+   * Pocket roughing entry mode per segment.
+   * - `'plunge'` (default): straight vertical G1 plunge to the pass depth.
+   * - `'ramp'`: inclined ramp along the scanline segment (run bounded by the span).
+   * - `'helix'`: a region-clamped helical bore (G2 arcs) at the segment start,
+   *   delegated to {@link buildEntryMoves}. The helix radius is clamped so the
+   *   whole helix stays INSIDE the pocket (outer ring minus islands); if it cannot
+   *   fit it degrades to a ramp, then a plunge (NEVER-DEGRADE). Routers only.
+   */
+  entryMode?: 'plunge' | 'ramp' | 'helix'
   /** Ramp run length in XY (mm) when `entryMode` is `ramp`. */
   rampMm?: number
   /**
@@ -594,6 +603,23 @@ export type Pocket2dParams = {
    * atan2(|ΔZ|, run) ≤ this value when possible. Default 45.
    */
   rampMaxAngleDeg?: number
+  /**
+   * Requested helix radius (mm) when `entryMode` is `'helix'`. Clamped DOWN to fit
+   * the pocket region at the entry point (see {@link maxHelixRadiusForRegionMm}).
+   * Absent → the {@link buildEntryMoves} default (2 mm, then clamped).
+   */
+  helixRadiusMm?: number
+  /**
+   * Entry incline from horizontal (deg) for `'helix'` / `'ramp'` via
+   * {@link buildEntryMoves}. Clamped to the safe `[1, 30]` band. Absent → 3°.
+   * (Distinct from {@link rampMaxAngleDeg}, which governs the legacy per-row ramp.)
+   */
+  entryAngleDeg?: number
+  /**
+   * Tool radius (mm) for the helix region-fit margin (so the CUTTER, not just the
+   * tool centre, stays inside the pocket). Absent → centre-only fit.
+   */
+  toolRadiusMm?: number
 }
 
 export type Pocket2dGenerateResult = {
@@ -1165,7 +1191,7 @@ export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateR
   const depths = computeNegativeZDepthPasses(targetZ, stepDown)
   const stock = Math.max(0, params.wallStockMm ?? 0)
   const finishEachDepth = params.finishEachDepth === true
-  const entryMode = params.entryMode === 'ramp' ? 'ramp' : 'plunge'
+  const entryMode = params.entryMode === 'ramp' ? 'ramp' : params.entryMode === 'helix' ? 'helix' : 'plunge'
   const rampMm = Math.max(0.01, params.rampMm ?? 2)
   const rampMaxAngleDeg =
     typeof params.rampMaxAngleDeg === 'number' && Number.isFinite(params.rampMaxAngleDeg)
@@ -1173,6 +1199,11 @@ export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateR
       : 45
   let rampExtendedForAngle = false
   let rampSteepDespiteSpan = false
+  // Helix-entry telemetry (entryMode === 'helix' only): which downgrades happened
+  // so the operator hint is honest about any never-degrade fallback.
+  const helixFallbacks = new Set<EntryFallbackReason>()
+  let helixUsedCount = 0
+  let helixEntryCount = 0
   for (const z of depths) {
     const zDrop = Math.abs(params.safeZMm - z)
     const minRunForAngle = minRampRunForMaxAngleMm(zDrop, rampMaxAngleDeg)
@@ -1190,23 +1221,68 @@ export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateR
           if (b - a <= 1e-6) continue
           const x0 = reverseRow ? b : a
           const x1 = reverseRow ? a : b
-          lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
-          lines.push(`G0 X${x0.toFixed(3)} Y${y.toFixed(3)}`)
-          if (entryMode === 'ramp') {
-            const span = Math.abs(x1 - x0)
-            const requested = Math.min(rampMm, span)
-            let run: number
-            if (minRunForAngle > span + 1e-6) {
-              run = span
-              rampSteepDespiteSpan = true
+          if (entryMode === 'helix') {
+            // Region-clamped helical bore. A raster row STARTS on the pocket wall
+            // (zero clearance), where no helix fits; the most-interior point along
+            // the row is its MIDPOINT, so the helix is anchored there. It bores to
+            // depth inside the pocket (radius clamped so the whole helix stays in
+            // the pocket — never-degrade to ramp/plunge where it cannot fit), then
+            // a flat feed runs back to the row start x0 before the row is cut. The
+            // ramp fallback direction points INTO the longer side of the row so a
+            // ramp runs along clear pocket span.
+            helixEntryCount += 1
+            const midX = 0.5 * (x0 + x1)
+            const rampDir: CamPoint2d = [x1 >= x0 ? 1 : -1, 0]
+            const entryRes = buildEntryMoves({
+              entry: [midX, y],
+              safeZMm: params.safeZMm,
+              targetZMm: z,
+              plungeMmMin: params.plungeMmMin,
+              mode: 'helix',
+              region: params.contourPoints,
+              islandRings: islandRingsClean,
+              rampDir,
+              ...(typeof params.helixRadiusMm === 'number' ? { helixRadiusMm: params.helixRadiusMm } : {}),
+              ...(typeof params.entryAngleDeg === 'number' ? { rampAngleDeg: params.entryAngleDeg } : {}),
+              ...(typeof params.rampMm === 'number' ? { rampRunMm: params.rampMm } : {}),
+              ...(typeof params.toolRadiusMm === 'number' ? { toolRadiusMm: params.toolRadiusMm } : {})
+            })
+            if (entryRes.usedMode === 'helix') helixUsedCount += 1
+            if (entryRes.fallbackReason) helixFallbacks.add(entryRes.fallbackReason)
+            lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
+            lines.push(`G0 X${midX.toFixed(3)} Y${y.toFixed(3)}`)
+            if (entryRes.moves.length > 0) {
+              for (const mv of entryRes.moves) lines.push(formatEntryMove(mv, params.plungeMmMin))
             } else {
-              run = Math.min(span, Math.max(requested, minRunForAngle))
-              if (run > requested + 1e-3) rampExtendedForAngle = true
+              // Defensive: buildEntryMoves returns no moves only for a degenerate
+              // (zero) descent, which cannot happen here (zDrop > 0). Keep a
+              // straight plunge so a segment is never left without reaching depth.
+              lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
             }
-            const xr = reverseRow ? x0 - run : x0 + run
-            lines.push(`G1 X${xr.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+            // Feed from the (interior) bore back to the row start at depth, then cut
+            // the full span. This stays at depth inside the pocket (no rapid in
+            // stock); for the common single-segment row x0 is reached by feeding
+            // along the row from its midpoint.
+            lines.push(`G1 X${x0.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
           } else {
-            lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+            lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
+            lines.push(`G0 X${x0.toFixed(3)} Y${y.toFixed(3)}`)
+            if (entryMode === 'ramp') {
+              const span = Math.abs(x1 - x0)
+              const requested = Math.min(rampMm, span)
+              let run: number
+              if (minRunForAngle > span + 1e-6) {
+                run = span
+                rampSteepDespiteSpan = true
+              } else {
+                run = Math.min(span, Math.max(requested, minRunForAngle))
+                if (run > requested + 1e-3) rampExtendedForAngle = true
+              }
+              const xr = reverseRow ? x0 - run : x0 + run
+              lines.push(`G1 X${xr.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+            } else {
+              lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+            }
           }
           lines.push(`G1 X${x1.toFixed(3)} Y${y.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
         }
@@ -1237,6 +1313,22 @@ export function generatePocket2dLines(params: Pocket2dParams): Pocket2dGenerateR
     if (rampSteepDespiteSpan) {
       hints.push(
         `Pocket ramp: some segment spans are shorter than the horizontal run needed for rampMaxAngleDeg (${rampMaxAngleDeg.toFixed(0)}°); those entries may be steeper than the limit.`
+      )
+    }
+  }
+  if (entryMode === 'helix' && helixEntryCount > 0) {
+    if (helixUsedCount === helixEntryCount) {
+      hints.push(
+        `Pocket helix entry: ${helixUsedCount}/${helixEntryCount} entries descended on a region-clamped helix (radius clamped to fit inside the pocket).`
+      )
+    } else {
+      hints.push(
+        `Pocket helix entry: ${helixUsedCount}/${helixEntryCount} entries used a helix; the rest fell back to a ramp/plunge where a helix could not fit the pocket at that point (never-degrade).`
+      )
+    }
+    if (helixFallbacks.has('helix_radius_too_small_for_region')) {
+      hints.push(
+        'Pocket helix entry: some entry points were too close to a wall/island for a usable helix; those descended on a bounded ramp (or a plunge). Use a smaller tool or move the entry inward for a full helix.'
       )
     }
   }

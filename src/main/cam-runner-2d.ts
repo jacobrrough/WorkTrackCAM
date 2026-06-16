@@ -238,11 +238,23 @@ export async function dispatch2dStrategy(
     const contour = point2dList(p['contourPoints'])
     const wallStockMm = typeof p['wallStockMm'] === 'number' && Number.isFinite(p['wallStockMm']) ? Math.max(0, p['wallStockMm']) : 0
     const zStepMm = typeof p['zStepMm'] === 'number' && Number.isFinite(p['zStepMm']) ? Math.max(0.01, p['zStepMm']) : undefined
-    const entryMode = p['entryMode'] === 'ramp' ? 'ramp' : 'plunge'
+    // Pocket entry mode: 'helix' delegates to the region-clamped buildEntryMoves
+    // (helical bore that never exceeds the pocket; degrades to ramp/plunge when it
+    // cannot fit). 'ramp'/'plunge' keep the legacy per-row behaviour.
+    const entryMode = p['entryMode'] === 'ramp' ? 'ramp' : p['entryMode'] === 'helix' ? 'helix' : 'plunge'
     const rampMm = typeof p['rampMm'] === 'number' && Number.isFinite(p['rampMm']) ? Math.max(0.01, p['rampMm']) : undefined
     const rampMaxAngleDeg =
       typeof p['rampMaxAngleDeg'] === 'number' && Number.isFinite(p['rampMaxAngleDeg'])
         ? p['rampMaxAngleDeg']
+        : undefined
+    // Helix-entry knobs (only consumed when entryMode === 'helix'). Tool radius is
+    // derived from the op tool diameter so the CUTTER stays inside the pocket.
+    const helixRadiusMm = positiveParamNumber(p['helixRadiusMm'])
+    const entryAngleDeg =
+      typeof p['entryAngleDeg'] === 'number' && Number.isFinite(p['entryAngleDeg']) ? p['entryAngleDeg'] : undefined
+    const entryToolRadiusMm =
+      typeof job.toolDiameterMm === 'number' && Number.isFinite(job.toolDiameterMm) && job.toolDiameterMm > 0
+        ? job.toolDiameterMm / 2
         : undefined
     const finishPass = p['finishPass'] !== false
     const finishEachDepth = p['finishEachDepth'] === true
@@ -302,7 +314,9 @@ export async function dispatch2dStrategy(
             safeZMm: job.safeZMm,
             wallStockMm: regionWallStockMm,
             finishEachDepth,
-            entryMode,
+            // The offset-spiral path has no region-clamped helix; map a helix
+            // request to its inclined ramp entry (closest non-plunge it supports).
+            entryMode: entryMode === 'helix' ? 'ramp' : entryMode,
             rampMm,
             rampMaxAngleDeg
           })
@@ -319,7 +333,11 @@ export async function dispatch2dStrategy(
             finishEachDepth,
             entryMode,
             rampMm,
-            rampMaxAngleDeg
+            rampMaxAngleDeg,
+            // Helix-entry knobs (no-op unless entryMode === 'helix').
+            ...(helixRadiusMm != null ? { helixRadiusMm } : {}),
+            ...(entryAngleDeg != null ? { entryAngleDeg } : {}),
+            ...(entryToolRadiusMm != null ? { toolRadiusMm: entryToolRadiusMm } : {})
           })
     if (restMode.kind === 'rest') {
       // `wallStockMm` is applied INSIDE the rest solve (the region is inset by
@@ -363,6 +381,12 @@ export async function dispatch2dStrategy(
     if (pocketZCapped && pocketStockThickness != null) {
       pocketResultHints = [
         `Pocket: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${pocketStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
+        ...pocketResultHints
+      ]
+    }
+    if (entryMode === 'helix' && pocketStrategy === 'offset_spiral') {
+      pocketResultHints = [
+        'Pocket helix entry is only available with the raster clearing strategy; the offset-spiral strategy used an inclined ramp entry instead. Switch pocketStrategy to "raster" for a region-clamped helical bore.',
         ...pocketResultHints
       ]
     }

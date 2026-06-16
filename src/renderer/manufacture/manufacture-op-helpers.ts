@@ -27,6 +27,38 @@ export function cncOp(kind: ManufactureOperation['kind']): boolean {
   return kind.startsWith('cnc_')
 }
 
+/**
+ * Default true-arc chord tolerance (mm) stamped onto `arcTolMm` when the operator
+ * flips on "Output arcs (G2/G3)". 0.02 mm is a conservative, signage-friendly
+ * deviation cap for the router posts (well inside typical plywood/MDF tolerances
+ * and comfortably under the controllers' arc resolution).
+ */
+export const ARC_OUTPUT_DEFAULT_TOL_MM = 0.02
+
+/**
+ * G-code dialects whose controllers honor circular interpolation (G2/G3 with a
+ * G17 plane) for the My-Shop routers. The Cycle-263 true-arc path
+ * (`resolveArcFitOptions` -> `generateContour2dLines`) is 3-axis only and never
+ * carries A/B/C words, so it is only meaningful on these standard-dialect router
+ * posts:
+ *   - `mach3`        : Laguna Swift 5x10 (RichAuto A-series, Mach3 superset)
+ *   - `smoothieware` : Makera Carvera 3-axis (Smoothieware ATC)
+ * The K2 Plus FDM controller (`generic_mm`) and the 4-axis rotary dialects are
+ * intentionally excluded — the 2D contour/pocket arc-fit engine does not flow
+ * to them.
+ */
+export const ARC_OUTPUT_CAPABLE_DIALECTS: readonly MachineProfile['dialect'][] = ['mach3', 'smoothieware']
+
+/**
+ * Whether the resolved CAM machine is a router whose post emits true G2/G3 arcs.
+ * Pure + null-safe so the op editor can gate the "Output arcs" toggle (shown for
+ * Laguna / Carvera-3, hidden for K2 FDM and when no CNC machine is resolved).
+ */
+export function machineSupportsArcOutput(machine: MachineProfile | undefined): boolean {
+  if (!machine || machine.kind !== 'cnc') return false
+  return ARC_OUTPUT_CAPABLE_DIALECTS.includes(machine.dialect)
+}
+
 /** Human-readable stats for valid contourPoints arrays (setup WCS, mm). */
 export function contourPointsStats(raw: unknown): string | null {
   if (!Array.isArray(raw) || raw.length < 3) return null

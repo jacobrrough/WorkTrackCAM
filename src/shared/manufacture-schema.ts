@@ -498,10 +498,25 @@ export const manufactureOperationSchema = z.object({
    *   Contour ramp entry: `rampType` ('plunge'|'linear'|'helix', default 'plunge'),
    *   `rampAngleDeg` (default 3: ramp angle from horizontal in degrees).
    *   Contour: optional `zStepMm` when `zPassMm` is negative — multiple full contour passes stepped into material down to `zPassMm`.
-   *   Pocket can also set `zStepMm` (optional step-down increment), `entryMode` ('plunge'|'ramp'),
+   *   True-arc output (Cycle-263, opt-in + tolerance-gated; read by `resolveArcFitOptions`):
+   *   optional `arcTolMm` (max chord deviation in mm — when finite and > 0 the 2D contour/pocket
+   *   engine collapses co-circular linearized runs into true G2/G3 arcs; absent / <= 0 emits the
+   *   exact legacy G1 chain, byte-identical), plus optional refinements `arcMinSweepDeg` (min arc
+   *   sweep to fit, default 5) and `arcMinPoints` (min points per arc, default 4). 3-axis only —
+   *   flows through `generateContour2dLines` which never carries A/B/C words; meaningful only on
+   *   router posts that support circular interpolation (Laguna mach3 / Carvera-3 smoothieware).
+   *   Pocket can also set `zStepMm` (optional step-down increment), `entryMode` ('plunge'|'ramp'|'helix'),
    *   `rampMm`, optional `rampMaxAngleDeg` (default 45: max ramp angle from horizontal; XY run may grow),
    *   `wallStockMm` (rough stock to leave), `finishPass` (boolean, default true), and
    *   `finishEachDepth` (boolean, default false).
+   *   Pocket HELIX entry (`entryMode: 'helix'`, raster strategy only; routers only): the cut entry
+   *   descends on a region-clamped helical bore (G2 arcs via `buildEntryMoves`) instead of a straight
+   *   plunge -- the helix radius is clamped so the whole helix stays INSIDE the pocket (outer ring
+   *   minus islands), degrading to a bounded ramp then a straight plunge where it cannot fit
+   *   (never-degrade). Tunes: `helixRadiusMm` (requested radius, clamped down to fit) and
+   *   `entryAngleDeg` (incline from horizontal, clamped to 1-30 deg, default 3). The cutter radius
+   *   (from tool diameter) is folded into the fit margin. The offset_spiral strategy maps a helix
+   *   request to its inclined ramp entry (with a hint).
    *   Pocket islands + clearing strategy (additive): `islandRings: Array<Array<[xMm, yMm]>>`
    *   (interior keep-out islands subtracted from the clearable region -- raster rows split
    *   around them, the offset strategy grows them by the inset, and island walls get a

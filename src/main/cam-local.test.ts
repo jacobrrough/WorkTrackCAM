@@ -771,6 +771,136 @@ describe('2D toolpath generators', () => {
     expect(invalid.hints.join(' ')).toContain('rampMaxAngleDeg (45')
   })
 
+  // ── Pocket HELIX entry (region-clamped, never-degrade) ────────────────────
+  const bigPocket: [number, number][] = [
+    [0, 0],
+    [60, 0],
+    [60, 60],
+    [0, 60]
+  ]
+
+  it('NO-REGRESSION: omitting entryMode is byte-identical to entryMode plunge', () => {
+    const common = {
+      contourPoints: bigPocket,
+      stepoverMm: 8,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5
+    }
+    const implicit = generatePocket2dLines(common)
+    const explicit = generatePocket2dLines({ ...common, entryMode: 'plunge' })
+    expect(explicit.lines).toEqual(implicit.lines)
+    // And the implicit/plunge body still contains the straight vertical plunge.
+    expect(implicit.lines.some((l) => /^G1 Z-3\.000 F200$/.test(l))).toBe(true)
+  })
+
+  it('helix entry replaces the straight plunge with G2 arc descent', () => {
+    const plunge = generatePocket2dLines({
+      contourPoints: bigPocket,
+      stepoverMm: 8,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5
+    })
+    const helix = generatePocket2dLines({
+      contourPoints: bigPocket,
+      stepoverMm: 8,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      entryMode: 'helix',
+      helixRadiusMm: 3,
+      toolRadiusMm: 1.5
+    })
+    // Plunge body has NO arcs; helix body does.
+    expect(plunge.lines.some((l) => l.startsWith('G2'))).toBe(false)
+    expect(helix.lines.some((l) => l.startsWith('G2'))).toBe(true)
+    // The interior rows descend on a helix instead of a bare plunge, so the helix
+    // body has FEWER straight vertical plunges than the all-plunge body (only the
+    // wall-touching rows, where no helix fits, retain a plunge — never-degrade).
+    const plungeCount = (ls: string[]): number => ls.filter((l) => /^G1 Z-3\.000 F200$/.test(l)).length
+    expect(plungeCount(helix.lines)).toBeLessThan(plungeCount(plunge.lines))
+    // Honest hint reports the region-clamped helix.
+    expect(helix.hints.some((h) => /helix entry/i.test(h))).toBe(true)
+  })
+
+  it('helix descent uses the plunge feed and lands exactly on the pass depth', () => {
+    const { lines } = generatePocket2dLines({
+      contourPoints: bigPocket,
+      stepoverMm: 8,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      entryMode: 'helix',
+      helixRadiusMm: 3,
+      toolRadiusMm: 1.5
+    })
+    // Every G2 arc carries the plunge feed F200 (NOT the cut feed F600).
+    for (const l of lines.filter((l) => l.startsWith('G2'))) {
+      expect(l).toMatch(/F200$/)
+    }
+    // A helix arc reaches exactly Z-3.000 (the pass depth) before the cut feed move.
+    expect(lines.some((l) => l.startsWith('G2') && l.includes('Z-3.000'))).toBe(true)
+  })
+
+  it('helix entry keeps every descent XY inside the pocket footprint', () => {
+    const { lines } = generatePocket2dLines({
+      contourPoints: bigPocket,
+      stepoverMm: 8,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      entryMode: 'helix',
+      helixRadiusMm: 3,
+      toolRadiusMm: 1.5
+    })
+    // Parse every G2 arc endpoint; all must be within [0,60]×[0,60].
+    for (const l of lines.filter((l) => l.startsWith('G2'))) {
+      const xm = l.match(/X(-?\d+\.\d+)/)
+      const ym = l.match(/Y(-?\d+\.\d+)/)
+      if (xm && ym) {
+        const x = parseFloat(xm[1]!)
+        const y = parseFloat(ym[1]!)
+        expect(x).toBeGreaterThanOrEqual(-1e-6)
+        expect(x).toBeLessThanOrEqual(60 + 1e-6)
+        expect(y).toBeGreaterThanOrEqual(-1e-6)
+        expect(y).toBeLessThanOrEqual(60 + 1e-6)
+      }
+    }
+  })
+
+  it('helix entry degrades to plunge/ramp in a pocket too tight for a helix (never-degrade)', () => {
+    // 1.2 mm-wide channel: no usable helix anywhere; engine must not emit arcs and
+    // must still reach depth (a straight plunge), with an honest fallback hint.
+    const channel: [number, number][] = [
+      [0, 0],
+      [1.2, 0],
+      [1.2, 40],
+      [0, 40]
+    ]
+    const { lines, hints } = generatePocket2dLines({
+      contourPoints: channel,
+      stepoverMm: 0.5,
+      zPassMm: -2,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      entryMode: 'helix',
+      helixRadiusMm: 3,
+      toolRadiusMm: 0.5
+    })
+    expect(lines.length).toBeGreaterThan(0)
+    expect(lines.some((l) => l.startsWith('G2'))).toBe(false) // no helix fit anywhere
+    // Still reaches the cut depth (plunge fallback) on at least one entry.
+    expect(lines.some((l) => /Z-2\.000/.test(l))).toBe(true)
+    expect(hints.some((h) => /never-degrade|could not fit|too close/i.test(h))).toBe(true)
+  })
+
   it('emits drill canned cycles for each point', () => {
     const lines = generateDrill2dLines({
       drillPoints: [
