@@ -18986,3 +18986,35 @@ machine-specific safety lines (Laguna tape/cool-down, Carvera-3 ATC+G49, Carvera
 This closes the CAM-pillar correctness/posture work. Next: the four enhancement waves the user
 picked (CAM true-arcs, Assembly mate-types+interference, Drawings sheets/sections/BOM, CAM
 helical+4-axis-simultaneous).
+
+
+## Cycle 263 — CAM true-arc output: tolerance-gated G2/G3 from linearized contour loops (2026-06-16)
+
+**Focus area:** CAM engine (Gold-standard campaign, CAM enhancement #1 — user-picked). My-Shop-Only: Laguna Swift 5x10 (vcarve_mach3 / RichAuto) + Makera Carvera 3-axis (carvera_3axis / Smoothieware) — the two CNC routers that support arcs. K2 FDM excluded (no CNC G2/G3). Software-correctness only; hardware cert still pending (CAM has never cut real material).
+
+**Baseline:** typecheck clean; targeted CAM/arc suites green (237 across cam-local + cam-local-vcarve + shared/arc-fitting). Full suite floor 16,944.
+
+**Problem.** The 2D engine (`generateContour2dLines` in `src/main/cam-local.ts`) linearizes every curved loop into a dense G1 chain — a 72-vertex circular boundary posted 72 straight chords. Controllers that support arcs (RichAuto, Smoothieware) want G2/G3: smaller files, smoother finish. Cycle 261 fixed the lead-in/out arcs to be valid (|start-C| == |end-C| == r); this cycle brings true-arc output to the contour BODY.
+
+**Changes.**
+1. NEW pure module `src/main/cam-arc-fit.ts` — `fitArcsFromPolyline(points, opts)` returns an ordered list of line/arc segments (arc carries to, center, radius, dir). Greedy maximal least-squares (Kasa) circle fit over consecutive runs, accepted ONLY when (1) every point is within chordTolMm of the circle (this IS the |start-C|==|end-C|==r validity gate, the Cycle-261 lesson), (2) the run sweeps >= minArcSweepDeg (default 5 deg), AND (3) NO consecutive step subtends more than maxStepDeg (default 30 deg). Gate 3 is the decisive guard against a COARSE CO-CIRCULAR POLYGON — a rectangle's 4 corners lie on their circumscribed circle (90 deg steps) but the edges are straight chords, so it must stay G1. Pure, deterministic, no mutation. Collinear/near-straight runs rejected (sagitta + singular-fit guards). Tolerance <= 0 means pure linear passthrough (worst case == today).
+2. WIRED into `cam-local.ts`: `Contour2dParams` gains opt-in `arcFitChordTolMm` (+ arcFitMinSweepDeg / arcFitMinPoints). When set (> 0) and NO holding tabs are active, the closed contour body routes through `fitArcsFromPolyline` and emits G2/G3 (IJK = centre - segmentStart, G17 assumed — posts set it in the header) for fitted arcs, G1 for the rest. Absent/0 means BYTE-IDENTICAL legacy G1 chain (the else branch is preserved verbatim). Feed words + Z handling unchanged. (cam-local.ts > 800 lines so Python-splice per docs/EDIT-WORKFLOW.md, count==1, LF-safe.)
+3. PLUMBED through the live runner (`src/main/cam-runner.ts` `resolveArcFitOptions` + `src/main/cam-runner-2d.ts`): opt-in `arcTolMm` operation param flows into `cnc_contour` + the pocket/adaptive wall+island FINISH contours (raster clearing rows are straight by construction and never fit). 3-axis-only by construction (flows only through `generateContour2dLines`, which never carries A/B/C words — the cam-runner.ts legacy dispatch is dead code under `if (false)`). The post-process `applyArcFitting` rotary bypass [ID-0173] is untouched.
+
+**Tests added (3 files).**
+- `src/main/cam-arc-fit.test.ts` (21): perfect circle -> 1-4 arcs; CW vs CCW dir; semicircle/quarter; validity (reconstruct C, |start-C|==|end-C|==r); straight -> all lines; run just outside chordTol -> lines (the gate); same circle fits at loose tol, lines at tight tol; mixed line+arc+line; two separated arcs; tiny (r=0.6) + huge-radius guards; 2-point -> line; minPoints/minArcSweepDeg/maxStepDeg gates (incl. the rectangle-circumcircle + octagon coarse-polygon rejections); determinism + no-mutation.
+- `src/main/cam-arc-fit-posted.test.ts` (14): FULL pipeline through the REAL posts. Laguna + Carvera-3 each: circular contour emits G2/G3; every arc valid (C from IJK, |start-C|==|end-C|, real radius); G17 before first arc; body inside work envelope; safe-Z lift first; correct terminator (M30 Laguna / M2 Carvera, never crossed); Carvera no A-word; RECT byte-identical with vs without arcTolMm; fitted arc within chordTol of the true circle.
+- engine-level true-arc block appended to `src/main/cam-local.test.ts` (6): circular contour -> G2/G3; without param byte-identical; rect byte-identical with arc-fit ON; validity pin; arc-fit suppressed when tabs active.
+
+**gcode-safety verdict (skill run, references read for both machines).**
+- Laguna Swift 5x10 (vcarve_mach3 / RichAuto): PASS. Posted circular contour collapses a 72-chord loop to ONE `G3 X260 Y200 I-60 J-0 F1200` (C=(200,200) r=60, valid). Header % -> G21 -> G90 -> G17 -> G94 -> G54, M3+G4 P2.0, pre-cut G0 Z203, footer M5+G4 P3.0 -> G0 Z203 -> G0 X0 Y0 -> M30 (not M2) -> %. Rectangle stays 4 G1 edges (no arc). Within 1524x3048 envelope.
+- Makera Carvera 3-axis (carvera_3axis / Smoothieware): PASS. Posted circle -> ONE `G3 X150 Y100 I-30 J-0` (C=(120,100) r=30, valid). Header G21 -> G90 -> G17 -> G54, ATC M6 T1 + G43 H1, M3 S13000 + G4 P2, footer M5 -> G49 -> G0 Z140 -> G0 X0 Y0 -> M9 -> M2 (not M30) -> no % markers. Zero A-words. Within 360x240 envelope.
+- Snapshots changed: NONE. All existing snapshots are byte-identical (no existing test passes the opt-in param). The new G1-chain -> G2/G3 behaviour is proven by the new posted tests; non-circular paths confirmed byte-identical.
+
+**Post-flight:** typecheck clean (exit 0); full suite 17,032 passed | 1 skipped (> 16,944 floor); all 18 affected CAM/post suites green (645) + cam-runner/4-axis/carvera-pipeline (314). Zero regressions.
+
+**Note (concurrent work):** a parallel Assembly enhancement cycle (mate types / interference / BOM) was editing `src/renderer/design/*` + `src/shared/sidecar-protocol.ts` in the same worktree during this cycle. Those files are outside the CAM domain and were not touched by this cycle; their transient tsc errors resolved before post-flight.
+
+**Files:** NEW `src/main/cam-arc-fit.ts`, `src/main/cam-arc-fit.test.ts`, `src/main/cam-arc-fit-posted.test.ts`. MODIFIED `src/main/cam-local.ts`, `src/main/cam-runner.ts`, `src/main/cam-runner-2d.ts`, `src/main/cam-local.test.ts`.
+
+**Next cycle recommendation:** surface `arcTolMm` in the op-editor UI (an "Output arcs (G2/G3)" toggle + tolerance field for cnc_contour/cnc_pocket on the two router machines) so the feature is reachable from the live workflow, with an honest tooltip that it is software-validated / hardware-cert pending. Consider G18/G19 plane fitting only if a real op needs it (today's posts set G17; the module is XY-plane by design).

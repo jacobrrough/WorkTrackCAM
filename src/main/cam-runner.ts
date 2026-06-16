@@ -526,6 +526,38 @@ export function resolveContourPathOptions(operationParams?: Record<string, unkno
 }
 
 /**
+ * Resolve TRUE-ARC output knobs from raw operation params into the
+ * `generateContour2dLines` arc-fit fields. Opt-in + tolerance-gated: when
+ * `arcTolMm` is absent or <= 0, returns `{}` so the contour body emits the exact
+ * legacy G1 chain (byte-identical). Only `arcTolMm` enables fitting; the sweep /
+ * step / point knobs are optional refinements (the engine supplies safe
+ * defaults: 5 deg min sweep, 30 deg max per-step, 4 min points).
+ *
+ * G-code safety: this is a 3-axis-only feature (it flows ONLY through the 2D
+ * `generateContour2dLines` contour-body emission, which never carries A/B/C
+ * words). The 4-axis pipeline does NOT route through here.
+ */
+export function resolveArcFitOptions(operationParams?: Record<string, unknown>): {
+  arcFitChordTolMm?: number
+  arcFitMinSweepDeg?: number
+  arcFitMinPoints?: number
+} {
+  const p = operationParams ?? {}
+  const tol = p['arcTolMm']
+  if (!(typeof tol === 'number') || !Number.isFinite(tol) || tol <= 0) return {}
+  const out: { arcFitChordTolMm?: number; arcFitMinSweepDeg?: number; arcFitMinPoints?: number } = {
+    arcFitChordTolMm: tol
+  }
+  if (typeof p['arcMinSweepDeg'] === 'number' && Number.isFinite(p['arcMinSweepDeg'])) {
+    out.arcFitMinSweepDeg = p['arcMinSweepDeg']
+  }
+  if (typeof p['arcMinPoints'] === 'number' && Number.isFinite(p['arcMinPoints'])) {
+    out.arcFitMinPoints = p['arcMinPoints']
+  }
+  return out
+}
+
+/**
  * Resolve contour ramp entry parameters from raw operation params.
  * Returns `undefined` rampType when no ramp is configured (backward compatible default: plunge).
  */

@@ -399,6 +399,131 @@ describe('2D toolpath generators', () => {
     expect(joined).toMatch(/G0 Z10\.000/)
   })
 
+  // ── TRUE-ARC body output (opt-in arcFitChordTolMm) ──────────────────────
+  describe('true-arc body (arcFitChordTolMm)', () => {
+    /** Sample a closed circular polygon (CCW) of n vertices, radius r about (cx,cy). */
+    function circlePolygon(cx: number, cy: number, r: number, n: number): [number, number][] {
+      const pts: [number, number][] = []
+      for (let i = 0; i < n; i++) {
+        const a = (2 * Math.PI * i) / n
+        pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+      }
+      return pts
+    }
+
+    const RECT: [number, number][] = [
+      [0, 0],
+      [40, 0],
+      [40, 25],
+      [0, 25]
+    ]
+
+    it('a circular contour emits G2/G3 arcs when arc fitting is enabled', () => {
+      const lines = generateContour2dLines({
+        contourPoints: circlePolygon(0, 0, 20, 48),
+        zPassMm: -2,
+        feedMmMin: 600,
+        plungeMmMin: 200,
+        safeZMm: 5,
+        arcFitChordTolMm: 0.02
+      })
+      const joined = lines.join('\n')
+      // The dense G1 chain collapses to arcs (CCW ring → G3).
+      expect(joined).toMatch(/\bG3 /)
+      // Far fewer feed moves than the 48-vertex polygon would emit as G1.
+      const feedMoves = lines.filter((l) => /^G[123] X/.test(l))
+      expect(feedMoves.length).toBeLessThan(10)
+    })
+
+    it('WITHOUT the param, the circular contour is byte-identical (pure G1 chain)', () => {
+      const ring = circlePolygon(0, 0, 20, 48)
+      const base = {
+        contourPoints: ring,
+        zPassMm: -2,
+        feedMmMin: 600,
+        plungeMmMin: 200,
+        safeZMm: 5
+      }
+      const legacy = generateContour2dLines(base)
+      // No G2/G3 in the legacy emission.
+      expect(legacy.join('\n')).not.toMatch(/\bG[23] /)
+      // arcFitChordTolMm: 0 must reproduce the legacy output byte-for-byte.
+      const gated = generateContour2dLines({ ...base, arcFitChordTolMm: 0 })
+      expect(gated).toEqual(legacy)
+    })
+
+    it('a RECTANGULAR (non-circular) contour stays byte-identical G1 even WITH arc fitting on', () => {
+      const base = {
+        contourPoints: RECT,
+        zPassMm: -1.5,
+        feedMmMin: 700,
+        plungeMmMin: 250,
+        safeZMm: 6
+      }
+      const legacy = generateContour2dLines(base)
+      const withArc = generateContour2dLines({ ...base, arcFitChordTolMm: 0.05 })
+      // The four straight edges cannot fit a circle → identical output, no arcs.
+      expect(withArc).toEqual(legacy)
+      expect(withArc.join('\n')).not.toMatch(/\bG[23] /)
+    })
+
+    it('every emitted arc is VALID: |start-C| == |end-C| == radius (reconstruct C from IJK)', () => {
+      const lines = generateContour2dLines({
+        contourPoints: circlePolygon(10, -5, 15, 60),
+        zPassMm: -2,
+        feedMmMin: 600,
+        plungeMmMin: 200,
+        safeZMm: 5,
+        arcFitChordTolMm: 0.02
+      })
+      // Walk the feed moves tracking modal XY; for each G2/G3 reconstruct the
+      // centre from IJK (C = start + (I,J)) and assert both radii match.
+      let sx = 0
+      let sy = 0
+      let seenArc = false
+      let started = false
+      for (const l of lines) {
+        const m = l.match(/^(G[0123]) X(-?\d+\.\d+) Y(-?\d+\.\d+)(?: I(-?\d+\.\d+) J(-?\d+\.\d+))?/)
+        if (!m) continue
+        const code = m[1]
+        const ex = Number.parseFloat(m[2]!)
+        const ey = Number.parseFloat(m[3]!)
+        if ((code === 'G2' || code === 'G3') && m[4] && m[5]) {
+          seenArc = true
+          const cx = sx + Number.parseFloat(m[4]!)
+          const cy = sy + Number.parseFloat(m[5]!)
+          const rStart = Math.hypot(sx - cx, sy - cy)
+          const rEnd = Math.hypot(ex - cx, ey - cy)
+          // Equal start/end radii — the controller-executable arc contract.
+          expect(Math.abs(rStart - rEnd)).toBeLessThan(0.05)
+          // And the radius is the real geometry (~15 mm), not a degenerate value.
+          expect(rStart).toBeGreaterThan(10)
+        }
+        if (started || code !== 'G0') {
+          // Track modal position from the first positioned move onward.
+        }
+        sx = ex
+        sy = ey
+        started = true
+      }
+      expect(seenArc).toBe(true)
+    })
+
+    it('arc fitting is suppressed when holding tabs are active (tabbed pass stays G1)', () => {
+      const lines = generateContour2dLines({
+        contourPoints: circlePolygon(0, 0, 20, 48),
+        zPassMm: -2,
+        feedMmMin: 600,
+        plungeMmMin: 200,
+        safeZMm: 5,
+        arcFitChordTolMm: 0.02,
+        tabParams: { tabsMode: 'count', tabCount: 3, tabWidthMm: 4, tabHeightMm: 1.5 }
+      })
+      // Tabs modulate Z within the body, so the body is not arc-fitted.
+      expect(lines.join('\n')).not.toMatch(/\bG[23] /)
+    })
+  })
+
   it('computes min ramp run for max angle vs Z drop', () => {
     expect(minRampRunForMaxAngleMm(7, 45)).toBeCloseTo(7, 5)
     expect(minRampRunForMaxAngleMm(0, 45)).toBe(0)

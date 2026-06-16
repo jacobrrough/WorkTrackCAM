@@ -39,6 +39,7 @@ import { solveRestRegion } from './cam-rest-region'
 import { renderPost } from './post-process'
 import {
   extractPostProcessingOpts,
+  resolveArcFitOptions,
   resolveContourPathOptions,
   resolveContourRampOptions,
   resolveContourTabParams,
@@ -199,6 +200,9 @@ export async function dispatch2dStrategy(
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
     const { rampType, rampAngleDeg } = resolveContourRampOptions(p)
     const tabParams = resolveContourTabParams(p)
+    // TRUE-ARC output (opt-in `arcTolMm`): collapse co-circular ring runs into
+    // G2/G3. Tolerance-gated -> absent param yields the exact legacy G1 chain.
+    const arcFit = resolveArcFitOptions(p)
     const zStepContour =
       typeof p['zStepMm'] === 'number' && Number.isFinite(p['zStepMm']) ? Math.max(0.01, p['zStepMm']) : undefined
     const contourOpts = {
@@ -213,6 +217,7 @@ export async function dispatch2dStrategy(
       leadOutMode,
       rampType,
       rampAngleDeg,
+      ...arcFit,
       ...(tabParams ? { tabParams } : {})
     }
     if (job.zPassMm < 0 && zStepContour != null) {
@@ -257,6 +262,11 @@ export async function dispatch2dStrategy(
     const pocketZCapped = pocketStockThickness != null && job.zPassMm < -pocketStockThickness
     const pocketZPassMm = pocketZCapped && pocketStockThickness != null ? -pocketStockThickness : job.zPassMm
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
+    // TRUE-ARC output for the pocket finish traces (opt-in `arcTolMm`,
+    // tolerance-gated). Applies to the outer-wall AND island-wall finish
+    // contours; the raster clearing rows are straight by construction and never
+    // arc-fitted. Absent param -> byte-identical legacy G1 finish traces.
+    const arcFit = resolveArcFitOptions(p)
     // Stack C v1 -- REST MACHINING (`restPrevToolDiameterMm`): clear ONLY the
     // material a previous, larger tool could not reach. PLACEMENT NOTE
     // (verified): `applyPlacementToOperationParams2d` already ran at the top of
@@ -373,7 +383,8 @@ export async function dispatch2dStrategy(
           leadInMm,
           leadOutMm,
           leadInMode,
-          leadOutMode
+          leadOutMode,
+          ...arcFit
         })
       )
     }
@@ -391,7 +402,8 @@ export async function dispatch2dStrategy(
             feedMmMin: job.feedMmMin,
             plungeMmMin: job.plungeMmMin,
             safeZMm: job.safeZMm,
-            contourSide
+            contourSide,
+            ...arcFit
           })
         )
       }
@@ -449,6 +461,10 @@ export async function dispatch2dStrategy(
     const adaptiveZCapped = adaptiveStockThickness != null && job.zPassMm < -adaptiveStockThickness
     const adaptiveZPassMm = adaptiveZCapped && adaptiveStockThickness != null ? -adaptiveStockThickness : job.zPassMm
     const { contourSide, leadInMm, leadOutMm, leadInMode, leadOutMode } = resolveContourPathOptions(p)
+    // TRUE-ARC output for the adaptive finish traces (opt-in `arcTolMm`,
+    // tolerance-gated). Only reached on the adaptiveClearedToWalls === true gate
+    // below; absent param -> byte-identical legacy G1 finish traces.
+    const arcFit = resolveArcFitOptions(p)
     // Stack C v1 -- REST MACHINING for the adaptive family. Same placement
     // reasoning as cnc_pocket above: the placement transform already ran, so
     // the rest solve operates in placed coordinates (rigid transforms commute
@@ -561,7 +577,8 @@ export async function dispatch2dStrategy(
             leadInMm,
             leadOutMm,
             leadInMode,
-            leadOutMode
+            leadOutMode,
+            ...arcFit
           })
         )
         for (const ring of islandRings) {
@@ -572,7 +589,8 @@ export async function dispatch2dStrategy(
               feedMmMin: job.feedMmMin,
               plungeMmMin: job.plungeMmMin,
               safeZMm: job.safeZMm,
-              contourSide
+              contourSide,
+              ...arcFit
             })
           )
         }

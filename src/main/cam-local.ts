@@ -2,6 +2,7 @@ import ClipperLib, { type IntPoint } from 'clipper-lib'
 import type { StlBounds, Vec3 } from './stl'
 import { extractToolpathSegmentsFromGcode } from '../shared/cam-gcode-toolpath'
 import { CLIPPER_SCALE } from '../shared/sketch-boolean-offset'
+import { fitArcsFromPolyline, type ArcFitPoint } from './cam-arc-fit'
 
 export type ParallelFinishParams = {
   bounds: StlBounds
@@ -539,6 +540,27 @@ export type Contour2dParams = {
    * from shifting during the final cut-through.
    */
   tabParams?: TabParams
+  /**
+   * TRUE-ARC output (opt-in, tolerance-gated). When set to a POSITIVE value,
+   * the closed contour body is run through {@link fitArcsFromPolyline}: any run
+   * of ring vertices that lies on a common circle within this chord tolerance
+   * (mm) is emitted as ONE G2/G3 (IJK centre form, G17 plane assumed — the
+   * posts set it in the header) instead of the dense G1 chain. Runs that do NOT
+   * fit stay G1, so a non-circular loop is byte-identical to the legacy output
+   * (worst case == today). Absent / <= 0 => no arc fitting (pure G1 body).
+   *
+   * CNC routers only (Laguna / RichAuto, Carvera-3 / Smoothieware). The caller
+   * (cam-runner) must NOT enable this for any rotary / 4-axis program.
+   *
+   * NOTE: ignored while holding tabs are active (tab bridges modulate Z within
+   * the body, so the body is not a flat polyline to arc-fit) — the tabbed pass
+   * stays the exact legacy G1 emission.
+   */
+  arcFitChordTolMm?: number
+  /** Minimum sweep (deg) a run must subtend to become an arc. Default 5. */
+  arcFitMinSweepDeg?: number
+  /** Minimum vertices (incl. endpoints) in an arc run. Default 4, clamped >= 3. */
+  arcFitMinPoints?: number
 }
 
 export type Pocket2dParams = {
@@ -1058,11 +1080,48 @@ export function generateContour2dLines(params: Contour2dParams): string[] {
       lines.push(`G1 X${x0.toFixed(3)} Y${y0.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
     }
   } else {
-    for (let i = 1; i < ring.length; i++) {
-      const [x, y] = ring[i]!
-      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
+    const arcTol = params.arcFitChordTolMm
+    if (typeof arcTol === 'number' && Number.isFinite(arcTol) && arcTol > 0) {
+      // TRUE-ARC body: fit the CLOSED ring (vertices 0..n-1 then back to 0) and
+      // emit G2/G3 for fitted arcs, G1 for the rest. The fitter is tolerance-
+      // gated, so a non-circular loop comes back as all-line segments and the
+      // emitted G1 chain is byte-identical to the legacy branch below. Each
+      // arc's IJK = centre - segmentStart (segmentStart is the previous move's
+      // endpoint, ring[0] for the first), so |start-C| == |end-C| == radius by
+      // construction (the fitter only accepts runs whose endpoints sit on the
+      // fitted circle within arcTol) — the Cycle-261 malformed-arc guard.
+      const body: ArcFitPoint[] = ring.map((pt) => [pt[0], pt[1]] as ArcFitPoint)
+      body.push([x0, y0]) // close the loop so the final segment is considered
+      const segs = fitArcsFromPolyline(body, {
+        chordTolMm: arcTol,
+        ...(typeof params.arcFitMinSweepDeg === 'number' ? { minArcSweepDeg: params.arcFitMinSweepDeg } : {}),
+        ...(typeof params.arcFitMinPoints === 'number' ? { minPoints: params.arcFitMinPoints } : {})
+      })
+      let sx = x0
+      let sy = y0
+      const fw = `F${params.feedMmMin.toFixed(0)}`
+      for (const seg of segs) {
+        const [ex, ey] = seg.to
+        if (seg.kind === 'arc') {
+          const word = seg.dir === 'cw' ? 'G2' : 'G3'
+          const iOff = seg.center[0] - sx
+          const jOff = seg.center[1] - sy
+          lines.push(
+            `${word} X${ex.toFixed(3)} Y${ey.toFixed(3)} I${iOff.toFixed(3)} J${jOff.toFixed(3)} ${fw}`
+          )
+        } else {
+          lines.push(`G1 X${ex.toFixed(3)} Y${ey.toFixed(3)} ${fw}`)
+        }
+        sx = ex
+        sy = ey
+      }
+    } else {
+      for (let i = 1; i < ring.length; i++) {
+        const [x, y] = ring[i]!
+        lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
+      }
+      lines.push(`G1 X${x0.toFixed(3)} Y${y0.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
     }
-    lines.push(`G1 X${x0.toFixed(3)} Y${y0.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
   }
 
   // ── Lead-out ────────────────────────────────────────────────────────────
