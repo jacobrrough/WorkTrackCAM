@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { STARTER_SCRIPT, type DesignViewMode } from '../design/DesignWorkspace'
 import { DesignSessionProvider } from '../design/DesignSessionContext'
@@ -9,7 +9,14 @@ import { useProjectSession } from './useProjectSession'
 import { useMachineSession } from '../contexts/MachineSessionContext'
 import { useCamHandoff } from './CamHandoffContext'
 import { fab } from '../src/shop-types'
-import { runSendToCam, runPersistMate } from './workspace-host-handoff'
+import {
+  runSendToCam,
+  runPersistMate,
+  runHydrateAssembly,
+  runPersistAssemblyParts
+} from './workspace-host-handoff'
+import type { AssemblyPart } from '../design/AssemblyView'
+import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { WorkshopHost } from './WorkshopHost'
 import { UtilitiesHost } from './UtilitiesHost'
 import { ManufactureHost } from './ManufactureHost'
@@ -84,6 +91,47 @@ export function WorkspaceHost({
   const { setPendingCamImport } = useCamHandoff()
   const [designScript, setDesignScript] = useState<string>(STARTER_SCRIPT)
 
+  // CAD foundation (#9 reload surface) — the assembly's parts + durable mate
+  // constraints hydrated from `<projectDir>/assembly.json` when the `assemble`
+  // route is active. Seeded empty; the hydrate effect below fills them so a
+  // SAVED assembly shows its parts + mates (editable) after reload, and the
+  // mates flow into the solver. A `hydrateToken` bumps on each (route, project)
+  // change so the DesignWorkspaceHost remounts with the fresh seed (its
+  // `initialAssemblyParts` / `initialAssemblyMates` are mount-only).
+  const [assemblyParts, setAssemblyParts] = useState<readonly AssemblyPart[]>([])
+  const [assemblyMates, setAssemblyMates] = useState<readonly AssemblyMateConstraint[]>([])
+  const [hydrateToken, setHydrateToken] = useState(0)
+
+  // CAD foundation (#9) — hydrate the on-disk assembly when the assemble route
+  // is active. Guarded so it fires only on the assemble route + a (projectDir)
+  // change (not every render); a failure folds to a toast and leaves the parts
+  // empty (the AssemblyView shows its empty-state). On success it bumps
+  // hydrateToken so the inner host remounts with the fresh seed.
+  useEffect(() => {
+    if (active !== 'assemble') return
+    let cancelled = false
+    void (async () => {
+      const outcome = await runHydrateAssembly({
+        projectDir,
+        loadAssembly: (dir) => fab().assemblyLoad(dir)
+      })
+      if (cancelled) return
+      if (!outcome.ok) {
+        pushToast('err', outcome.reason)
+        return
+      }
+      setAssemblyParts(outcome.hydrated.parts)
+      setAssemblyMates(outcome.hydrated.mateConstraints)
+      setHydrateToken((t) => t + 1)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // pushToast is stable from the toast context; projectDir + active are the
+    // load-bearing deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, projectDir])
+
   // Serialize assembly-mate persistence. `runPersistMate` is a load→fold→save
   // over `assembly.json`, and `handleMateAdded` fires it fire-and-forget from
   // inside the AssemblyMatePanel solve callback (the Solve button re-enables the
@@ -147,6 +195,29 @@ export function WorkspaceHost({
     [projectDir, pushToast]
   )
 
+  // CAD foundation (#8) — persist the parts list into `assembly.json`
+  // `components` so a mate's part refs resolve against real saved components.
+  // Routed through the SAME matePersistChainRef as handleMateAdded so a
+  // parts-save and a mate-save can never stale-base each other's load (silent
+  // lost-update). SAFETY: assembly-data write only; no G-code.
+  const handleAssemblyPartsChange = useCallback(
+    (parts: readonly AssemblyPart[]): void => {
+      setAssemblyParts(parts)
+      matePersistChainRef.current = matePersistChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          const outcome = await runPersistAssemblyParts({
+            parts,
+            projectDir,
+            loadAssembly: (dir) => fab().assemblyLoad(dir),
+            saveAssembly: (dir, json) => fab().assemblySave(dir, json)
+          })
+          if (!outcome.ok) pushToast('err', `Assembly not saved: ${outcome.reason}`)
+        })
+    },
+    [projectDir, pushToast]
+  )
+
   switch (active) {
     case 'design':
     case 'assemble':
@@ -154,8 +225,14 @@ export function WorkspaceHost({
       return (
         <DesignSessionProvider projectDir={projectDir} onStatus={handleDesignStatus}>
           <DesignWorkspaceHost
+            // Remount with the freshly-hydrated assembly seed when the route /
+            // project changes (initialAssemblyParts/Mates are mount-only props).
+            key={`design-${active}-${hydrateToken}`}
             initialScript={designScript}
             initialViewMode={routeToViewMode(active)}
+            initialAssemblyParts={assemblyParts}
+            initialAssemblyMates={assemblyMates}
+            onAssemblyPartsChange={handleAssemblyPartsChange}
             onSave={(script) => {
               setDesignScript(script)
               pushToast('ok', 'Design script saved to session.')

@@ -40,8 +40,15 @@ import {
   type SolvedMateKind,
   type SolvedVec3
 } from '../../shared/assembly-mate-persist'
+import { persistParts } from '../../shared/assembly-hydrate'
 import type { SolvedMate } from '../design/AssemblyMatePanel'
 import type { MateFormDraft, VectorDraft } from '../design/assembly-mate-form'
+import {
+  hydrateAssembly,
+  partToView,
+  type HydratedAssembly
+} from '../design/assembly-part-bridge'
+import type { AssemblyPart } from '../design/AssemblyView'
 
 // ── Toast shape (matches ToastContext.pushToast) ─────────────────────────────
 
@@ -293,4 +300,128 @@ export async function runPersistMate(deps: PersistMateDeps): Promise<PersistMate
       message: `Mate saved (${result.constraint.kind}). ${count} mate${count === 1 ? '' : 's'} on this assembly.`
     }
   }
+}
+
+// ── (3) Assembly hydrate (reload surface) ─────────────────────────────────────
+
+/** Injected dependencies for {@link runHydrateAssembly}. */
+export interface HydrateAssemblyDeps {
+  /** Open project directory, or `null` when none is open. */
+  readonly projectDir: string | null
+  /** Load `<projectDir>/assembly.json` (`fab().assemblyLoad`). */
+  readonly loadAssembly: (projectDir: string) => Promise<AssemblyFile>
+}
+
+/** Discriminated result of {@link runHydrateAssembly}. */
+export type HydrateAssemblyOutcome =
+  | { readonly ok: true; readonly hydrated: HydratedAssembly }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Load the project's `assembly.json` and hydrate it into the renderer's
+ * view-model (parts + durable mate constraints) so a SAVED assembly shows its
+ * parts + mates after reload (closes #9). Pure orchestration over an injected
+ * `loadAssembly` so the host stays a thin adapter and this is unit-testable.
+ *
+ * Backward-compatible: a legacy `assembly.json` with no `components` /
+ * `mateConstraints` (the IPC returns an `emptyAssembly()` for ENOENT, and the
+ * schema defaults both arrays) hydrates to empty parts/mates — the AssemblyView
+ * then shows its own empty-state. No project open ⇒ a clean empty hydrate (no
+ * load, no error) so the assemble route still mounts.
+ */
+export async function runHydrateAssembly(
+  deps: HydrateAssemblyDeps
+): Promise<HydrateAssemblyOutcome> {
+  const { projectDir, loadAssembly } = deps
+  if (!projectDir) {
+    return {
+      ok: true,
+      hydrated: { name: 'Assembly', parts: [], mateConstraints: [], danglingMateIds: [] }
+    }
+  }
+  let assembly: AssemblyFile
+  try {
+    assembly = await loadAssembly(projectDir)
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Could not load assembly.json (${e instanceof Error ? e.message : String(e)}).`
+    }
+  }
+  return { ok: true, hydrated: hydrateAssembly(assembly) }
+}
+
+// ── (4) Assembly parts persistence (#8 — parts → components) ───────────────────
+
+/** Injected dependencies for {@link runPersistAssemblyParts}. */
+export interface PersistAssemblyPartsDeps {
+  /** The current part rows from the AssemblyView. */
+  readonly parts: readonly AssemblyPart[]
+  /** Open project directory, or `null` when none is open. */
+  readonly projectDir: string | null
+  /** Load `<projectDir>/assembly.json` (`fab().assemblyLoad`). */
+  readonly loadAssembly: (projectDir: string) => Promise<AssemblyFile>
+  /** Persist the updated assembly JSON (`fab().assemblySave`). */
+  readonly saveAssembly: (projectDir: string, json: string) => Promise<void>
+}
+
+/** Discriminated result of {@link runPersistAssemblyParts}. */
+export type PersistAssemblyPartsOutcome =
+  | { readonly ok: true; readonly componentCount: number }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Fold the renderer's parts list into the on-disk assembly's `components` and
+ * re-save (closes the write-only #8 gap so a mate's `part1Id`/`part2Id` resolve
+ * against real saved components).
+ *
+ * Loads the CURRENT assembly first so the existing `mateConstraints` (written by
+ * the mate-persist path) are PRESERVED — only `components` is replaced with the
+ * fresh rows. The host serializes this through the SAME promise chain as
+ * `runPersistMate` so a parts-save and a mate-save can never stale-base each
+ * other's load (a silent lost-update). Additive + backward-compatible (Safety
+ * Rule 2): the save payload round-trips through `assemblyFileSchema` in the
+ * `assembly:save` IPC, which re-validates before writing.
+ *
+ * No project open ⇒ a clean no-op success (in-memory only); a load/save failure
+ * folds to a reason the host can toast.
+ */
+export async function runPersistAssemblyParts(
+  deps: PersistAssemblyPartsDeps
+): Promise<PersistAssemblyPartsOutcome> {
+  const { parts, projectDir, loadAssembly, saveAssembly } = deps
+  if (!projectDir) {
+    return { ok: true, componentCount: 0 }
+  }
+  let assembly: AssemblyFile
+  try {
+    assembly = await loadAssembly(projectDir)
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Could not load assembly.json (${e instanceof Error ? e.message : String(e)}).`
+    }
+  }
+  // Fold the rows into `components` via the shared persistParts core (id-keyed,
+  // order-preserving; updates in place so prior component fields the renderer's
+  // row does not model — grounded / joint / BOM metadata — are PRESERVED on a
+  // re-persist). Adapt each renderer AssemblyPart onto the shared AssemblyPartView.
+  const folded = persistParts(assembly, parts.filter((p) => p.id?.trim().length).map(partToView))
+  // Drop any mate whose part refs no longer exist among the new components, so a
+  // removed part can't leave a dangling constraint on disk (the renderer already
+  // prunes its in-memory mates on remove; this keeps the persisted file in sync).
+  const componentIds = new Set(folded.components.map((c) => c.id))
+  const mateConstraints = (folded.mateConstraints ?? []).filter(
+    (m) => componentIds.has(m.part1Id) && componentIds.has(m.part2Id)
+  )
+  const next: AssemblyFile = { ...folded, mateConstraints }
+  try {
+    await saveAssembly(projectDir, JSON.stringify(next))
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Could not save assembly.json (${e instanceof Error ? e.message : String(e)}).`
+    }
+  }
+  return { ok: true, componentCount: folded.components.length }
 }

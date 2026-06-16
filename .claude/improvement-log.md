@@ -18788,3 +18788,37 @@ mateConstraints reference in-memory `part-<ts>` ids never written into assembly.
 (dangling); (#9) saved mateConstraints never reload into any renderer surface (write-only —
 invisible/uneditable after reload); (#11) handleAddPartToAssembly gives every added part the SAME
 firstMesh.handle → multi-part assemblies are N copies of one body. These define the next wave.
+
+## Cycle 258 — Assembly depth foundation: real multi-part round-trip (closes #8/#9/#11) (2026-06-15)
+
+**Focus:** gold-standard campaign, Assembly pillar. The shake-down found Assembly was barely real
+(write-only + degenerate); this makes it real end-to-end. One commit.
+
+**Baseline → result:** 16,744 → **16,809 pass / 1 skip / 0 fail** (+65); tsc clean; Cycle-249
+reload-guard + Cycle-257 fixes + sketch pins all intact (re-verified); the user's mate-serialization
+(matePersistChainRef) preserved.
+
+**Closed the audit's 3 real Assembly bugs (additive, backward-compatible per Safety Rule 2):**
+- **#11 distinct geometry:** handleAddPartToAssembly gave every added part the SAME
+  firstMesh.handle (N copies of one body). Each part now carries its OWN AssemblyGeometrySource
+  ({handle | designModelId | relPath}) + a distinct transform.
+- **#8 dangling mate refs:** parts were never written into assembly.json; now persisted as
+  `components` with stable ids (new pure `persistParts`, id-keyed, order-preserving, UI-as-truth)
+  so mateConstraints' part1Id/part2Id resolve.
+- **#9 write-only mates:** assembly.json was never read back (AssemblyView hardcoded
+  mateConstraints:[]). New pure `hydrateAssembly(file)` → { parts, mateConstraints, danglingMateIds }
+  is wired on load so a saved assembly shows its parts + mates, they're editable, and the EXISTING
+  solveMateConstraints kinematics solver positions them. Dangling refs are filtered + reported
+  (solver-safety: feeding a dangling mate would silently mis-report convergence).
+
+**New modules:** src/shared/assembly-hydrate.ts (persistParts + hydrateAssembly, 18 units),
+src/renderer/design/assembly-part-bridge.ts (AssemblyPart↔AssemblyPartView adapter) + DesignWorkspace
+.assembly-depth.test.tsx. assembly-schema gained optional geometrySource (additive; legacy files
+still parse). Independent verify probe: distinct-parts → mate-resolves → solver converges a mover to
+x=7 after a real JSON round-trip; schema rejects empty geometrySource; dangling ref filtered+no-crash.
+
+**Honest residuals (deferred, stated as follow-ups):** new mate TYPES beyond point/axis/plane
+(distance/angle/tangent have no Model-B form yet); a reloaded row's LIVE handle is blank (durable id
+rides geometrySource/designModelId — re-resolving the body from a stale session handle is a
+sidecar concern); interference detection, BOM depth, exploded views; the legacy in-component face-id
+Mates modal remains divergent (pre-existing, flagged). These define later Assembly waves.

@@ -67,6 +67,7 @@ import type { DesignFileV2 } from '../../shared/design-schema'
 import { buildViewportGeometry } from './viewport3d-geometry'
 import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
 import { AssemblyView, type AssemblyPart } from './AssemblyView'
+import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import { DrawingView } from './DrawingView'
 import type {
@@ -104,6 +105,13 @@ import {
   type SelectionKind,
   type SelectionSurface
 } from './selection-state'
+
+/**
+ * Default lateral offset (mm) between successive assembly instances of the
+ * SAME body, so two parts from one source mesh do not overlap in the viewport.
+ * The mate solver can still reposition them; this is only the initial spread.
+ */
+export const ASSEMBLY_PART_OFFSET_MM = 60
 
 /** Default starter script seeded when the user clicks the empty-state CTA. */
 export const STARTER_SCRIPT = `# WorkTrack3D CadQuery starter — a parametric box.
@@ -285,6 +293,26 @@ export interface DesignWorkspaceProps {
    * driving the "Add part" callback.
    */
   readonly initialAssemblyParts?: readonly AssemblyPart[]
+  /**
+   * CAD foundation — seed for the Assembly view's durable mate constraints
+   * (`assembly.json` `mateConstraints`, Model C). The host hydrates these from
+   * disk on the `assemble` route (via `hydrateAssembly` in
+   * `assembly-part-bridge`) so a SAVED assembly shows its mates after reload AND
+   * the solver actually positions the parts. Optional + additive: when omitted
+   * the Assembly view starts with no mates (legacy behaviour) — every existing
+   * render-pin holds.
+   */
+  readonly initialAssemblyMates?: readonly AssemblyMateConstraint[]
+  /**
+   * CAD foundation — fired whenever the assembly's parts list changes (add /
+   * remove). The host folds the rows into `assembly.json` `components` (via
+   * `partsToComponents` in `assembly-part-bridge`) and persists, so a mate's
+   * `part1Id`/`part2Id` resolve against real saved components (closes the
+   * write-only #8 gap).
+   * Optional — when omitted parts stay in-memory only (the splash preview, the
+   * render-pin tests), so every existing pin holds.
+   */
+  readonly onAssemblyPartsChange?: (parts: readonly AssemblyPart[]) => void
   /**
    * CAD V1 mate-wiring — render-pin escape hatch that seeds the assembly
    * handle the {@link AssemblyMatePanel} threads into
@@ -558,6 +586,8 @@ export function DesignWorkspace({
   initialSelection = null,
   initialViewMode = 'part',
   initialAssemblyParts = [],
+  initialAssemblyMates = [],
+  onAssemblyPartsChange,
   initialAssemblyHandle = null,
   onMateAdded,
   kernelOps,
@@ -616,6 +646,15 @@ export function DesignWorkspace({
    * with a hint while it is null.
    */
   const [assemblyHandle, setAssemblyHandle] = useState<string | null>(initialAssemblyHandle)
+  /**
+   * CAD foundation — durable mate constraints (Model C) for the Assembly view.
+   * Seeded from the host's hydrated `assembly.json` so a saved assembly shows
+   * its mates after reload and the solver positions parts. Mutated when a part
+   * is removed (its dangling mates are pruned so the picker + solver never see
+   * a ref to a part that is gone).
+   */
+  const [assemblyMates, setAssemblyMates] =
+    useState<readonly AssemblyMateConstraint[]>(initialAssemblyMates)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastTessellation, setLastTessellation] = useState<CadExecuteScriptResult | null>(null)
@@ -975,19 +1014,68 @@ export function DesignWorkspace({
     }
     setAssemblyParts((prev) => {
       const idx = prev.length + 1
+      // #11 DISTINCT GEOMETRY — each added part references its OWN geometry
+      // source, never a silent alias of `firstMesh.handle`.
+      //   • When the last Run produced MULTIPLE bodies, the Nth add cycles to
+      //     the Nth mesh so distinct bodies land as distinct parts (round-robin
+      //     so adds beyond the body count still spread across the real meshes).
+      //   • When only one body exists, the 2nd+ add is an honest distinct
+      //     INSTANCE of that body (its own id + a non-overlapping offset
+      //     transform), with `geometrySource` set to the body's handle so the
+      //     persistence seam records WHICH body it is — not a fake new body.
+      const meshes = lastTessellation?.meshes ?? []
+      const sourceMesh = meshes.length > 0 ? meshes[prev.length % meshes.length] : firstMesh
+      const handle = sourceMesh?.handle ?? firstMesh.handle
+      // Stack instances along +X so two parts from one body do not overlap in
+      // the viewport (the assembly solver can still move them via mates).
+      const offsetX = prev.length * ASSEMBLY_PART_OFFSET_MM
+      const position: readonly [number, number, number] = [offsetX, 0, 0]
       const next: AssemblyPart = {
         id: `part-${Date.now().toString(36)}-${idx}`,
         name: `Part ${idx}`,
-        handle: firstMesh.handle,
-        transformSummary: 'identity',
+        handle,
+        // Durable geometry identity: the body's handle is the source token even
+        // when it is the SAME body as a sibling instance (distinct instance,
+        // shared source — documented, never silently aliased).
+        geometrySource: handle,
+        transform: offsetX !== 0 ? { position } : undefined,
+        transformSummary: offsetX !== 0 ? `@(${offsetX}, 0, 0)` : 'identity',
       }
       return [...prev, next]
     })
-  }, [firstMesh, toast])
+  }, [firstMesh, lastTessellation, toast])
 
   const handleRemoveAssemblyPart = useCallback((id: string): void => {
     setAssemblyParts((prev) => prev.filter((p) => p.id !== id))
+    // Prune any mate that referenced the removed part so the solver + the mate
+    // pickers never see a dangling part ref (the row is gone, the constraint
+    // would be unsolvable). Idempotent: a part with no mates leaves this a no-op.
+    setAssemblyMates((prev) =>
+      prev.filter((m) => m.part1Id !== id && m.part2Id !== id),
+    )
   }, [])
+
+  /**
+   * CAD foundation (#8) — persist the parts list whenever it changes so the
+   * rows land in `assembly.json` `components` and a mate's part refs resolve.
+   * The host (DesignWorkspaceHost) folds the rows via `partsToComponents` and
+   * writes them. Skipped entirely when the host did not wire the callback (the
+   * splash preview, the render-pin tests). Guarded by a ref so a re-created
+   * callback identity never re-fires the persist on an unchanged parts list.
+   */
+  const onAssemblyPartsChangeRef = useRef(onAssemblyPartsChange)
+  onAssemblyPartsChangeRef.current = onAssemblyPartsChange
+  const assemblyPartsDidMount = useRef(false)
+  useEffect(() => {
+    // Skip the mount pass: the initial list came FROM the host (hydrate /
+    // initialAssemblyParts), so echoing it straight back would be a redundant
+    // write. Only operator-driven add/remove after mount should persist.
+    if (!assemblyPartsDidMount.current) {
+      assemblyPartsDidMount.current = true
+      return
+    }
+    onAssemblyPartsChangeRef.current?.(assemblyParts)
+  }, [assemblyParts])
 
   /**
    * Drawing view delegates exports to the sidecar's `cad.exportDrawing`
@@ -1414,6 +1502,7 @@ export function DesignWorkspace({
         >
           <AssemblyView
             parts={assemblyParts}
+            mateConstraints={assemblyMates}
             onAddPart={handleAddPartToAssembly}
             onRemovePart={handleRemoveAssemblyPart}
             onAssemblyHandle={setAssemblyHandle}

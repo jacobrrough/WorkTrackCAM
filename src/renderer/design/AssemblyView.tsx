@@ -59,6 +59,8 @@ import {
 } from 'react'
 import { EmptyState } from '../src/EmptyState'
 import { fab } from '../src/shop-types'
+import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
+import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 
 /**
  * One row in the assembly's parts list.
@@ -81,8 +83,24 @@ export type AssemblyPart = {
   readonly id: string
   /** Display name shown in the row's left cell. */
   readonly name: string
-  /** Opaque CadQuery handle from a prior `cad.execute_script`. */
+  /**
+   * Opaque CadQuery handle from a prior `cad.execute_script`. Live-session only —
+   * NOT durable. A row hydrated from disk (after reload) carries an empty handle
+   * (`''`) until the operator rebuilds / re-sends the part; the view renders an
+   * honest "geometry not loaded" placeholder for those rather than aliasing
+   * another body or crashing. Use {@link geometrySource} for the durable identity.
+   */
   readonly handle: string
+  /**
+   * Durable, renderer-owned token naming WHICH geometry source this instance
+   * references (a design-model / mesh id), persisted as the component's
+   * `partPath`. Distinct from the per-instance `id`: two instances of the SAME
+   * source share one `geometrySource` but keep distinct ids + transforms (so
+   * adding a second part is never a silent alias of one body — #11). Optional +
+   * additive: when omitted the persistence seam derives a stable token from the
+   * row id so the instance still round-trips as a distinct row.
+   */
+  readonly geometrySource?: string
   /**
    * Optional 4×4 transform applied before the part is welded into the
    * assembly. Omit for identity. The summary string below is what the
@@ -203,6 +221,18 @@ export interface AssemblyViewProps {
    * shows "Not solved" (gray) until the operator clicks "Solve".
    */
   readonly initialConvergenceReport?: ConvergenceReport | null
+  /**
+   * CAD foundation — durable mate constraints (Model C; `assembly.json`
+   * `mateConstraints`) the host hydrates from disk. Fed straight into the
+   * `assembly:solve` IPC input so the iterative `solveMateConstraints` solver
+   * actually positions the parts (the solver runs whenever this is non-empty —
+   * see `solveAssemblyKinematics`). Optional + additive: defaults to `[]`, in
+   * which case the solve input carries no constraints exactly as before — every
+   * existing Phase-3 render-pin holds. (The `assembly:solve` handler also filters
+   * suppressed components + ignores unknown part refs, so a stale constraint is
+   * harmless.)
+   */
+  readonly mateConstraints?: readonly AssemblyMateConstraint[]
 }
 
 /**
@@ -390,6 +420,7 @@ export function AssemblyView({
   onRemoveMate,
   initialMateModalOpen = false,
   initialConvergenceReport = null,
+  mateConstraints = [],
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
@@ -656,6 +687,10 @@ export function AssemblyView({
       components: parts.map((part) => ({
         id: part.id,
         name: part.name,
+        // `assembly:solve` re-parses this through `parseAssemblyFile`, whose
+        // component schema requires a non-empty `partPath`; derive the durable
+        // geometry token so the solve round-trip reaches the mate solver.
+        partPath: partPathForRow(part),
         grounded: false,
         transform: {
           x: part.transform?.position?.[0] ?? 0,
@@ -666,7 +701,10 @@ export function AssemblyView({
           rzDeg: part.transform?.rotation?.[2] ?? 0,
         }
       })),
-      mateConstraints: []
+      // #9 — feed the hydrated durable constraints so the solver positions the
+      // parts. Empty by default (legacy single-pass FK path runs); non-empty
+      // triggers the iterative solveMateConstraints solver in the main process.
+      mateConstraints,
     }
     void bridge(assemblyInput).then((res) => {
       setSolving(false)
@@ -678,7 +716,7 @@ export function AssemblyView({
       const message = e instanceof Error ? e.message : String(e)
       setError(`Solve threw: ${message}`)
     })
-  }, [parts, solving])
+  }, [parts, solving, mateConstraints])
 
   // ── Empty-state branch ────────────────────────────────────────────────────
   if (parts.length === 0) {
@@ -840,6 +878,15 @@ export function AssemblyView({
                   >
                     <span className="design-assembly__row-name">{part.name}</span>
                     <span className="design-assembly__row-summary">{summary}</span>
+                    {!partHasLiveGeometry(part) && (
+                      <span
+                        className="design-assembly__row-nogeo"
+                        data-testid={`${rowId}-nogeo`}
+                        title="This part was loaded from a saved assembly. Re-run or re-send its source model to rebuild its geometry; its placement and mates are preserved."
+                      >
+                        geometry not loaded
+                      </span>
+                    )}
                   </button>
                   {onRemovePart && (
                     <button
@@ -969,6 +1016,14 @@ export function AssemblyView({
                 ? 'Building assembly…'
                 : triangleSummary ?? `${parts.length} part${parts.length === 1 ? '' : 's'}`}
             </div>
+            {mateConstraints.length > 0 && (
+              <div
+                className="design-assembly__viewport-mates"
+                data-testid="design-assembly-mate-count"
+              >
+                {`${mateConstraints.length} mate${mateConstraints.length === 1 ? '' : 's'} positioning parts`}
+              </div>
+            )}
             {tessellation?.stlPath && (
               <div
                 className="design-assembly__viewport-path"

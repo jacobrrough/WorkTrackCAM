@@ -29,6 +29,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   deriveSourceNameFromStlPath,
+  runHydrateAssembly,
+  runPersistAssemblyParts,
   runPersistMate,
   runSendToCam,
   solvedMateToInput,
@@ -36,6 +38,7 @@ import {
 } from '../workspace-host-handoff'
 import type { SolvedMate } from '../../design/AssemblyMatePanel'
 import type { MateFormDraft } from '../../design/assembly-mate-form'
+import type { AssemblyPart } from '../../design/AssemblyView'
 import {
   assemblyFileSchema,
   parseAssemblyFile,
@@ -433,5 +436,216 @@ describe('WorkspaceHost serializes mate persistence (source pin)', () => {
     expect(HOST_SRC).toContain('matePersistChainRef.current = matePersistChainRef.current')
     // The pre-fix fire-and-forget shape (an un-chained IIFE) must be gone.
     expect(HOST_SRC).not.toContain('void (async () => {\n        const outcome = await runPersistMate(')
+  })
+
+  it('routes assembly parts persistence through the SAME chain (no parts/mate stale-base)', () => {
+    // The #8 parts-persist write must serialize against the mate-persist write,
+    // else a parts-save + a mate-save could load the same stale base and one
+    // would drop the other. Pin that handleAssemblyPartsChange reuses the chain.
+    expect(HOST_SRC).toContain('runPersistAssemblyParts')
+    expect(HOST_SRC).toContain('const handleAssemblyPartsChange = useCallback(')
+    // Both handlers advance the SAME ref (so they cannot interleave).
+    const chainAdvances = HOST_SRC.split(
+      'matePersistChainRef.current = matePersistChainRef.current'
+    ).length - 1
+    expect(chainAdvances).toBeGreaterThanOrEqual(2)
+  })
+
+  it('hydrates the assembly on the assemble route and threads the seed down', () => {
+    expect(HOST_SRC).toContain('runHydrateAssembly')
+    // The hydrate result seeds the inner DesignWorkspaceHost (mount-only props).
+    expect(HOST_SRC).toContain('initialAssemblyParts={assemblyParts}')
+    expect(HOST_SRC).toContain('initialAssemblyMates={assemblyMates}')
+    expect(HOST_SRC).toContain('onAssemblyPartsChange={handleAssemblyPartsChange}')
+  })
+})
+
+// ── (5) runHydrateAssembly — load → hydrate (the #9 reload surface seam) ───────
+
+describe('runHydrateAssembly — load → hydrate', () => {
+  it('loads assembly.json and hydrates components → parts + mates', async () => {
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'Bracket assy',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'design/base.json', transform: { x: 0, y: 0, z: 0 }, grounded: true },
+        { id: 'arm', name: 'Arm', partPath: 'design/arm.json', transform: { x: 60, y: 0, z: 0 } }
+      ],
+      mateConstraints: [
+        {
+          id: 'm1',
+          kind: 'coincident',
+          part1Id: 'base',
+          feature1: { x: 0, y: 0, z: 0 },
+          part2Id: 'arm',
+          feature2: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    })
+    const loadAssembly = vi.fn(async () => loaded)
+    const outcome = await runHydrateAssembly({ projectDir: 'C:/proj', loadAssembly })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(loadAssembly).toHaveBeenCalledWith('C:/proj')
+    expect(outcome.hydrated.parts.map((p) => p.id)).toEqual(['base', 'arm'])
+    expect(outcome.hydrated.mateConstraints).toHaveLength(1)
+    // Mate refs resolve against the hydrated rows (no dangling).
+    const ids = new Set(outcome.hydrated.parts.map((p) => p.id))
+    expect(ids.has(outcome.hydrated.mateConstraints[0]!.part1Id)).toBe(true)
+  })
+
+  it('no open project → clean empty hydrate, NO load', async () => {
+    const loadAssembly = vi.fn(async () => twoPartAssembly())
+    const outcome = await runHydrateAssembly({ projectDir: null, loadAssembly })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(loadAssembly).not.toHaveBeenCalled()
+    expect(outcome.hydrated.parts).toEqual([])
+    expect(outcome.hydrated.mateConstraints).toEqual([])
+  })
+
+  it('surfaces a load failure as a reason (no throw)', async () => {
+    const outcome = await runHydrateAssembly({
+      projectDir: 'C:/proj',
+      loadAssembly: async () => {
+        throw new Error('assembly.json — boom')
+      }
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.reason).toContain('boom')
+  })
+})
+
+// ── (6) runPersistAssemblyParts — parts → components (#8) ──────────────────────
+
+describe('runPersistAssemblyParts — fold rows into components, preserve mates', () => {
+  const ROWS: readonly AssemblyPart[] = [
+    { id: 'base', name: 'Base', handle: 'script:1', geometrySource: 'design/base.json' },
+    {
+      id: 'arm',
+      name: 'Arm',
+      handle: 'script:1',
+      geometrySource: 'design/arm.json',
+      transform: { position: [60, 0, 0] }
+    }
+  ]
+
+  it('loads, replaces components from rows, and saves a schema-valid assembly', async () => {
+    const loaded = parseAssemblyFile({ version: 2, name: 'A', components: [], mateConstraints: [] })
+    const loadAssembly = vi.fn(async () => loaded)
+    const saveAssembly = vi.fn(async (_dir: string, _json: string) => {})
+
+    const outcome = await runPersistAssemblyParts({
+      parts: ROWS,
+      projectDir: 'C:/proj',
+      loadAssembly,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.componentCount).toBe(2)
+    expect(saveAssembly).toHaveBeenCalledTimes(1)
+    const [, jsonArg] = saveAssembly.mock.calls[0]!
+    const reparsed = assemblyFileSchema.parse(JSON.parse(jsonArg as string))
+    expect(reparsed.components.map((c) => c.id)).toEqual(['base', 'arm'])
+    // Each component carries its OWN durable geometry source (#11) — the renderer
+    // row's geometrySource rides through as the structured `geometrySource.handle`.
+    expect(reparsed.components.map((c) => c.geometrySource?.handle)).toEqual([
+      'design/base.json',
+      'design/arm.json'
+    ])
+    // Every component has a non-empty partPath (schema requirement) — synthesized
+    // from the id when the row carried no explicit path.
+    expect(reparsed.components.every((c) => c.partPath.length > 0)).toBe(true)
+  })
+
+  it('PRESERVES existing mateConstraints whose refs still resolve', async () => {
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'A',
+      components: [],
+      mateConstraints: [
+        {
+          id: 'm1',
+          kind: 'coincident',
+          part1Id: 'base',
+          feature1: { x: 0, y: 0, z: 0 },
+          part2Id: 'arm',
+          feature2: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    })
+    let onDisk = loaded
+    const outcome = await runPersistAssemblyParts({
+      parts: ROWS,
+      projectDir: 'C:/proj',
+      loadAssembly: async () => onDisk,
+      saveAssembly: async (_dir, json) => {
+        onDisk = assemblyFileSchema.parse(JSON.parse(json))
+      }
+    })
+    expect(outcome.ok).toBe(true)
+    // The mate referencing base↔arm survives because both rows persisted.
+    expect(onDisk.mateConstraints).toHaveLength(1)
+  })
+
+  it('PRUNES a mate whose part ref no longer exists among the rows', async () => {
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'A',
+      components: [],
+      mateConstraints: [
+        {
+          id: 'stale',
+          kind: 'coincident',
+          part1Id: 'base',
+          feature1: { x: 0, y: 0, z: 0 },
+          part2Id: 'ghost', // 'ghost' is NOT in ROWS
+          feature2: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    })
+    let onDisk = loaded
+    await runPersistAssemblyParts({
+      parts: ROWS,
+      projectDir: 'C:/proj',
+      loadAssembly: async () => onDisk,
+      saveAssembly: async (_dir, json) => {
+        onDisk = assemblyFileSchema.parse(JSON.parse(json))
+      }
+    })
+    // The dangling constraint is dropped so the persisted file stays consistent.
+    expect(onDisk.mateConstraints).toHaveLength(0)
+  })
+
+  it('no open project → clean no-op success, NO load/save', async () => {
+    const loadAssembly = vi.fn(async () => twoPartAssembly())
+    const saveAssembly = vi.fn(async () => {})
+    const outcome = await runPersistAssemblyParts({
+      parts: ROWS,
+      projectDir: null,
+      loadAssembly,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.componentCount).toBe(0)
+    expect(loadAssembly).not.toHaveBeenCalled()
+    expect(saveAssembly).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a save failure as a reason (no throw)', async () => {
+    const outcome = await runPersistAssemblyParts({
+      parts: ROWS,
+      projectDir: 'C:/proj',
+      loadAssembly: async () => parseAssemblyFile({ version: 2, name: 'A', components: [], mateConstraints: [] }),
+      saveAssembly: async () => {
+        throw new Error('disk full')
+      }
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.reason).toContain('disk full')
   })
 })

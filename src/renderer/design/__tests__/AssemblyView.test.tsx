@@ -24,6 +24,8 @@
  * touched in the test — keeping the suite hermetic.
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -562,5 +564,123 @@ describe('AssemblyView — Phase 3 solver-status badge render contract', () => {
     )
     expect(html).toContain('design-assembly__solver-badge--error')
     expect(html).toContain('max iterations reached')
+  })
+})
+
+// ── (G) CAD foundation: durable mate constraints + hydrated-row honesty ──────
+//
+// The reload surface (#9) feeds the AssemblyView a `mateConstraints` array
+// (durable Model-C constraints hydrated from assembly.json). These pins prove:
+//   - the constraints are surfaced (a visible "N mates positioning parts"
+//     readout), so a SAVED assembly demonstrably shows its mates;
+//   - the prop is additive — omitting it leaves the legacy render untouched;
+//   - a part hydrated from disk (blank `handle`) renders an honest
+//     "geometry not loaded" placeholder rather than crashing or faking a body.
+
+describe('AssemblyView — durable mate constraints (reload surface feed)', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+  const mateConstraints = [
+    {
+      id: 'm1',
+      kind: 'coincident' as const,
+      part1Id: 'p1',
+      feature1: { x: 0, y: 0, z: 0 },
+      part2Id: 'p2',
+      feature2: { x: 0, y: 0, z: 0 },
+    },
+  ]
+
+  it('surfaces a mate-count readout when durable mateConstraints are present', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, mateConstraints }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-count"')
+    expect(html).toContain('1 mate positioning parts')
+  })
+
+  it('pluralizes the mate-count readout', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mateConstraints: [
+          mateConstraints[0]!,
+          { ...mateConstraints[0]!, id: 'm2' },
+        ],
+      }),
+    )
+    expect(html).toContain('2 mates positioning parts')
+  })
+
+  it('omits the mate-count readout entirely when no mateConstraints are supplied (additive)', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts }),
+    )
+    expect(html).not.toContain('data-testid="design-assembly-mate-count"')
+  })
+
+  it('the solve-input component mapping includes partPath (else parseAssemblyFile rejects it)', () => {
+    // Source pin: `assembly:solve` re-parses the input through parseAssemblyFile,
+    // whose component schema requires a non-empty partPath. handleSolve must
+    // carry it so feeding real mateConstraints actually reaches the solver
+    // instead of throwing a ZodError. A refactor that drops partPath here would
+    // silently break "mates position parts" — pin it.
+    const src = readFileSync(join(__dirname, '..', 'AssemblyView.tsx'), 'utf-8')
+    expect(src).toContain('partPath: partPathForRow(part)')
+  })
+})
+
+describe('AssemblyView — hydrated-row honesty (geometry not loaded)', () => {
+  it('renders an honest placeholder for a row with a blank handle', () => {
+    // A row hydrated from disk carries an empty handle until its source is
+    // rebuilt; the view must say so, not pretend the body is in memory.
+    const parts: readonly AssemblyPart[] = [
+      { id: 'h1', name: 'FromDisk', handle: '', geometrySource: 'design/x.json' },
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-part-h1-nogeo"')
+    expect(html).toContain('geometry not loaded')
+  })
+
+  it('does NOT render the placeholder for a row carrying a live handle', () => {
+    const parts: readonly AssemblyPart[] = [
+      { id: 'live1', name: 'Live', handle: 'script:abc' },
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).not.toContain('data-testid="design-assembly-part-live1-nogeo"')
+  })
+
+  it('does not emit console errors rendering a hydrated (blank-handle) assembly', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => { /* swallow */ })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ })
+    try {
+      renderToStaticMarkup(
+        createElement(AssemblyView, {
+          parts: [
+            { id: 'h1', name: 'FromDisk', handle: '', geometrySource: 'design/x.json' },
+            { id: 'h2', name: 'FromDisk2', handle: '', geometrySource: 'design/y.json' },
+          ],
+          mateConstraints: [
+            {
+              id: 'm1',
+              kind: 'coincident' as const,
+              part1Id: 'h1',
+              feature1: { x: 0, y: 0, z: 0 },
+              part2Id: 'h2',
+              feature2: { x: 0, y: 0, z: 0 },
+            },
+          ],
+          onRemovePart: vi.fn(),
+          onToast: vi.fn(),
+        }),
+      )
+      expect(errSpy).not.toHaveBeenCalled()
+      expect(warnSpy).not.toHaveBeenCalled()
+    } finally {
+      errSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
   })
 })

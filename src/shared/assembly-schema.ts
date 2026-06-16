@@ -96,12 +96,56 @@ export const assemblyJointLimitsSchema = z
   })
   .optional()
 
+/**
+ * Per-component **geometry source** — the body THIS instance is built from.
+ *
+ * Closes the "N copies of one body" defect (#11): every assembly component must
+ * carry its *own* geometry reference instead of all rows pointing at one shared
+ * handle. The three (all optional) refs cover every way a part can name its
+ * geometry, so the renderer can persist whatever it has on hand:
+ *
+ *   - `handle`        — opaque CadQuery session handle from a prior
+ *                       `cad.execute_script` (the live in-session body; matches
+ *                       `AssemblyPart.handle`). Ephemeral — does NOT survive an
+ *                       app restart, so it is a *hint*, not the durable source.
+ *   - `designModelId` — stable id of a `DesignModel` saved in the project
+ *                       (`project-schema.ts` `designModels[].id`). The durable
+ *                       cross-session reference: re-resolves the script/body
+ *                       after reload.
+ *   - `relPath`       — project-relative path to an exported body (e.g. an STL
+ *                       under `assets/designs/<id>/`). The portable on-disk ref.
+ *
+ * At least one ref must be present when the object exists (an empty source is
+ * meaningless). The object itself is `.optional()` so a legacy `assembly.json`
+ * with no `geometrySource` on its rows parses unchanged (Safety Rule 2).
+ */
+export const assemblyGeometrySourceSchema = z
+  .object({
+    /** Opaque CadQuery session handle (ephemeral; in-session body hint). */
+    handle: z.string().trim().min(1).optional(),
+    /** Stable `DesignModel.id` (project `designModels`) — durable cross-session ref. */
+    designModelId: z.string().trim().min(1).optional(),
+    /** Project-relative path to an exported body (portable on-disk ref). */
+    relPath: z.string().trim().min(1).optional()
+  })
+  .refine((g) => g.handle != null || g.designModelId != null || g.relPath != null, {
+    message: 'A geometry source must carry at least one of handle / designModelId / relPath.'
+  })
+
+export type AssemblyGeometrySource = z.infer<typeof assemblyGeometrySourceSchema>
+
 export const assemblyComponentSchema = z.object({
   id: z.string().trim().min(1),
   /** Display name */
   name: z.string().trim().min(1),
   /** Relative path to part folder or `design/sketch.json` root */
   partPath: z.string().trim().min(1),
+  /**
+   * This instance's OWN geometry source (handle / designModelId / relPath).
+   * Optional + additive: legacy rows (no source) still parse. Closes #11 — each
+   * added part carries a distinct body ref instead of a shared handle.
+   */
+  geometrySource: assemblyGeometrySourceSchema.optional(),
   transform: transformSchema.default({}),
   /** If true, acts like Fusion grounded component */
   grounded: z.boolean().default(false),

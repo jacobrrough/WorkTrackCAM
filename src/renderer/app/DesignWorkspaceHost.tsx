@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import DesignWorkspace, { type DesignViewMode } from '../design/DesignWorkspace'
 import type { SolvedMate } from '../design/AssemblyMatePanel'
+import type { AssemblyPart } from '../design/AssemblyView'
+import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { useDesignSession } from '../design/DesignSessionContext'
 import {
   registerDesignCommands,
@@ -75,7 +77,10 @@ export function DesignWorkspaceHost({
   onSendToCam,
   onToast,
   initialViewMode,
-  onMateAdded
+  onMateAdded,
+  initialAssemblyParts,
+  initialAssemblyMates,
+  onAssemblyPartsChange
 }: {
   readonly initialScript: string
   readonly onSave: (script: string) => void
@@ -97,6 +102,20 @@ export function DesignWorkspaceHost({
    * follow-up.
    */
   readonly onMateAdded?: (mate: SolvedMate) => void
+  /**
+   * CAD foundation (#9) — assembly parts hydrated from `assembly.json` by the
+   * WorkspaceHost, forwarded to DesignWorkspace so a SAVED assembly shows its
+   * parts on the assemble route. Optional — omitted by the SSR pins (the
+   * Assembly view then starts empty).
+   */
+  readonly initialAssemblyParts?: readonly AssemblyPart[]
+  /** CAD foundation (#9) — durable mate constraints hydrated from disk. */
+  readonly initialAssemblyMates?: readonly AssemblyMateConstraint[]
+  /**
+   * CAD foundation (#8) — fired when the parts list changes so the WorkspaceHost
+   * persists `assembly.json` `components`. Optional.
+   */
+  readonly onAssemblyPartsChange?: (parts: readonly AssemblyPart[]) => void
 }): ReactElement {
   const session = useDesignSession()
   // Provider-tolerant: the host is rendered in isolation by node-env SSR pins
@@ -324,6 +343,9 @@ export function DesignWorkspaceHost({
       onToast={onToast}
       initialViewMode={initialViewMode}
       onMateAdded={onMateAdded}
+      initialAssemblyParts={initialAssemblyParts}
+      initialAssemblyMates={initialAssemblyMates}
+      onAssemblyPartsChange={onAssemblyPartsChange}
       kernelOps={session.features?.kernelOps}
       rolledBackTo={session.features?.rolledBackTo}
       onKernelMove={(index, delta) => {
