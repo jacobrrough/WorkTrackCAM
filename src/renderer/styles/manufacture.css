@@ -3569,6 +3569,54 @@
   text-align: right;
 }
 
+/* ============================================================
+   StockRemovalHeatmap — Simulate-stage voxel-approximation
+   remaining-stock heatmap. Theme tokens only; the canvas is
+   painted by stock-heatmap-canvas.ts (OffscreenCanvas 2D).
+   ============================================================ */
+.stock-removal-sim {
+  display: block;
+  margin: var(--sp-6) 0 0;
+}
+.stock-removal-sim__heading {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+.stock-removal-sim__canvas-wrap {
+  position: relative;
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  overflow: hidden;
+}
+.stock-removal-sim__canvas {
+  display: block;
+  width: 240px;
+  height: 160px;
+}
+.stock-removal-sim__canvas-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  background: var(--bg2);
+}
+.stock-removal-sim__stats {
+  margin-top: var(--sp-4);
+}
+.stock-removal-sim__caveat {
+  margin-top: var(--sp-3);
+  font-size: var(--text-xs);
+}
+
 
 /* ============================================================
    RotaryOrientGizmo — Carvera 4-axis part-orientation control

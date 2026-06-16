@@ -74,6 +74,37 @@ export type StockSimulationProgressMesh = {
   gouges: GougeFinding[]
 }
 
+/**
+ * Top-down remaining-stock height field — a lightweight 2.5D summary of the
+ * carved voxel grid suitable for a flat (no-Three.js) heatmap render.
+ *
+ * For each XY column (looking straight down the Z axis at the stock top) the
+ * grid records the world-Z height of the highest remaining solid voxel. A
+ * column that was carved all the way to the stock floor records `floorZ`; a
+ * fully-uncut column records the original stock top (`topZ`). The values are
+ * world-Z (matching the G-code WCS where Z=0 is the stock top and cuts go
+ * negative) so a consumer can colour by absolute depth without re-deriving the
+ * origin.
+ */
+export type StockHeightGrid = {
+  /** Number of columns along X. */
+  cols: number
+  /** Number of columns along Y. */
+  rows: number
+  /** Voxel cell size in mm (column pitch in both X and Y). */
+  cellMm: number
+  /** World-Z of the original stock top surface (cuts go below this). */
+  topZ: number
+  /** World-Z of the stock floor (a fully-cut-through column reaches here). */
+  floorZ: number
+  /**
+   * Row-major (`k = j * cols + i`) world-Z height of the highest remaining
+   * solid voxel per column. Equal to `floorZ` for a column carved through to
+   * the bottom, `topZ` for an uncut column.
+   */
+  heights: Float32Array
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -435,6 +466,59 @@ export class StockSimulator {
     }
 
     return { positions, normals, triangleCount: triCount }
+  }
+
+  // -------------------------------------------------------------------------
+  // Top-down height field (2.5D heatmap summary)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Project the remaining (solid) voxels straight down onto the XY plane,
+   * recording the world-Z of the highest remaining voxel per column. Produces
+   * a {@link StockHeightGrid} — a flat, no-Three.js renderable form used by the
+   * Simulate stage's voxel-approximation heatmap.
+   *
+   * A column with no remaining solid voxels (carved all the way through) records
+   * `floorZ`; a column that was never touched records `topZ`.
+   */
+  getColumnHeightGrid(): StockHeightGrid {
+    const floorZ = this.originZ - this.layers * this.cellMm
+    if (!this._initialized) {
+      return {
+        cols: 0,
+        rows: 0,
+        cellMm: this.cellMm,
+        topZ: this.originZ,
+        floorZ: this.originZ,
+        heights: new Float32Array(0)
+      }
+    }
+
+    const heights = new Float32Array(this.cols * this.rows)
+    // Default every column to the floor; raised below when a solid voxel is found.
+    heights.fill(floorZ)
+
+    for (let j = 0; j < this.rows; j++) {
+      for (let i = 0; i < this.cols; i++) {
+        // Scan top-down (highest layer first) for the first solid voxel.
+        for (let k = this.layers - 1; k >= 0; k--) {
+          if (this.grid[idx3(i, j, k, this.cols, this.rows)]) {
+            // Top face of this voxel = its world-Z surface height.
+            heights[j * this.cols + i] = floorZ + (k + 1) * this.cellMm
+            break
+          }
+        }
+      }
+    }
+
+    return {
+      cols: this.cols,
+      rows: this.rows,
+      cellMm: this.cellMm,
+      topZ: this.originZ,
+      floorZ,
+      heights
+    }
   }
 
   // -------------------------------------------------------------------------

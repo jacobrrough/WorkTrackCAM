@@ -298,6 +298,61 @@ describe('ToolpathSimulationBody — CNC "simulate" stage body', () => {
   })
 })
 
+describe('ToolpathSimulationBody — stock-removal voxel approximation', () => {
+  it('shows the no-stock note when G-code is present but no stock box is set', () => {
+    const html = renderSimulate({ camOut: CARVERA_GCODE })
+    expect(html).toContain('data-testid="workflow-stage-simulate-no-stock"')
+    expect(html).not.toContain('data-testid="stock-removal-sim"')
+  })
+
+  it('renders the voxel heatmap + removal stats when a box stock is provided', () => {
+    const html = renderSimulate({
+      camOut: CARVERA_GCODE,
+      stockBox: { x: 40, y: 40, z: 10 },
+      toolDiameterMm: 6,
+      toolShape: 'flat'
+    })
+    // Still shows the legacy motion stats...
+    expect(html).toContain('data-testid="workflow-stage-simulate-stats"')
+    // ...plus the new voxel-approximation block.
+    expect(html).toContain('data-testid="stock-removal-sim"')
+    expect(html).toContain('data-testid="stock-removal-sim-canvas"')
+    expect(html).toContain('data-testid="stock-removal-sim-stats"')
+    expect(html).toContain('data-testid="stock-removal-sim-removed"')
+    expect(html).toContain('data-testid="stock-removal-sim-resolution"')
+    expect(html).not.toContain('data-testid="workflow-stage-simulate-no-stock"')
+  })
+
+  it('labels the preview as a voxel approximation (honesty caveat)', () => {
+    const html = renderSimulate({
+      camOut: CARVERA_GCODE,
+      stockBox: { x: 40, y: 40, z: 10 }
+    })
+    expect(html).toContain('voxel approximation')
+    expect(html).toMatch(/Approximation only/i)
+  })
+
+  it('shows a skip message when the stock box is invalid', () => {
+    const html = renderSimulate({
+      camOut: CARVERA_GCODE,
+      stockBox: { x: 40, y: 0, z: 10 }
+    })
+    expect(html).toContain('data-testid="stock-removal-sim-skip"')
+    expect(html).not.toContain('data-testid="stock-removal-sim-canvas"')
+  })
+
+  it('shows a skip message when the G-code has stock but no machinable motion', () => {
+    // `camOut` is non-empty (has spindle M-codes) so the outer body renders its
+    // stats, but the voxel sim finds no G0/G1/G2/G3 motion → skip branch.
+    const html = renderSimulate({
+      camOut: 'G21 G90\nM3 S12000\nM5\nM30',
+      stockBox: { x: 40, y: 40, z: 10 }
+    })
+    expect(html).toContain('data-testid="stock-removal-sim-skip"')
+    expect(html).not.toContain('data-testid="stock-removal-sim-canvas"')
+  })
+})
+
 describe('Stage-body data-testid contracts', () => {
   it('LayerPreviewBody always carries the workflow-stage-body-preview testid', () => {
     const empty = renderPreview({ layerBreakdown: null, lastSliceGcodePath: null })

@@ -406,6 +406,68 @@ describe('StockSimulator', () => {
   })
 
   // -----------------------------------------------------------------------
+  // Top-down height grid
+  // -----------------------------------------------------------------------
+
+  describe('getColumnHeightGrid', () => {
+    it('returns an empty grid for an uninitialized simulator', () => {
+      const sim = new StockSimulator()
+      const grid = sim.getColumnHeightGrid()
+      expect(grid.cols).toBe(0)
+      expect(grid.rows).toBe(0)
+      expect(grid.heights.length).toBe(0)
+    })
+
+    it('reports full stock height for every column when uncut', () => {
+      const sim = new StockSimulator()
+      sim.initializeStock({ widthMm: 6, heightMm: 6, depthMm: 4, resolutionMm: 2 })
+      const grid = sim.getColumnHeightGrid()
+      expect(grid.cols).toBe(3)
+      expect(grid.rows).toBe(3)
+      expect(grid.cellMm).toBe(2)
+      expect(grid.topZ).toBeCloseTo(0, 5)
+      expect(grid.floorZ).toBeCloseTo(-4, 5)
+      for (const h of grid.heights) {
+        expect(h).toBeCloseTo(grid.topZ, 5)
+      }
+    })
+
+    it('lowers the height of carved columns and leaves the rest at the top', () => {
+      const sim = new StockSimulator()
+      sim.initializeStock({ widthMm: 20, heightMm: 20, depthMm: 10, resolutionMm: 2 })
+      // A flat tool carves voxels at/below its tip, so a constant-depth cut
+      // never removes the surface voxels above it. Plunge from the top at
+      // (10,10) so the tip sweeps through the surface and the column height
+      // drops there; corners away from the plunge stay at full height.
+      sim.applyToolpath(
+        [{ kind: 'feed', x0: 10, y0: 10, z0: 0, x1: 10, y1: 10, z1: -6 }],
+        6
+      )
+      const grid = sim.getColumnHeightGrid()
+      const cutJ = Math.floor(10 / grid.cellMm)
+      const cutI = Math.floor(10 / grid.cellMm)
+      expect(grid.heights[cutJ * grid.cols + cutI]!).toBeLessThan(grid.topZ)
+      // A corner column far from the cut stays at full height.
+      expect(grid.heights[0]!).toBeCloseTo(grid.topZ, 5)
+    })
+
+    it('reports floor height for a column carved clean through', () => {
+      const sim = new StockSimulator()
+      sim.initializeStock({ widthMm: 8, heightMm: 8, depthMm: 8, resolutionMm: 2 })
+      // Plunge a large ball tool straight down through one spot.
+      sim.applyToolpath(
+        [{ kind: 'feed', x0: 4, y0: 4, z0: 0, x1: 4, y1: 4, z1: -8 }],
+        6,
+        { toolShape: 'ball' }
+      )
+      const grid = sim.getColumnHeightGrid()
+      const ci = Math.floor(4 / grid.cellMm)
+      const cj = Math.floor(4 / grid.cellMm)
+      expect(grid.heights[cj * grid.cols + ci]!).toBeCloseTo(grid.floorZ, 5)
+    })
+  })
+
+  // -----------------------------------------------------------------------
   // Normals correctness
   // -----------------------------------------------------------------------
 

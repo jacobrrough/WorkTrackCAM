@@ -21,6 +21,9 @@ import type {
   FdmLayerBreakdownResult
 } from '../../shared/fdm-gcode-layer-breakdown'
 import { formatDistanceMm, parseToolpathStats } from './gcode-toolpath-stats'
+import type { StockRemovalBox } from '../../shared/stock-removal-sim'
+import { resolveCamToolDiameterMm, resolveCamToolType } from '../../shared/cam-tool-resolve'
+import { StockRemovalHeatmap } from './StockRemovalHeatmap'
 import { resolveManufactureSetupForCam } from '../../shared/cam-cut-params'
 import { MESH_IMPORT_FILE_EXTENSIONS } from '../../shared/mesh-import-formats'
 import type { ManufactureFile, ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
@@ -492,9 +495,26 @@ export function LayerPreviewBody({
 export interface ToolpathSimulationBodyProps {
   /** G-code text from the most recent `cam:run` (empty when no toolpath yet). */
   readonly camOut: string
+  /**
+   * Active setup's rectangular stock box (mm). When present alongside G-code,
+   * the body runs the pure voxel stock-removal simulation and shows a top-down
+   * remaining-stock heatmap (VOXEL APPROXIMATION). Optional — omitting it keeps
+   * the legacy stats-only summary (and the render-pin tests that mount with just
+   * `camOut` keep passing).
+   */
+  readonly stockBox?: StockRemovalBox | null
+  /** Cutting-tool diameter (mm) for the voxel sweep. Defaults internally. */
+  readonly toolDiameterMm?: number
+  /** Cutting-tool shape for the voxel sweep. Defaults to `'flat'`. */
+  readonly toolShape?: 'flat' | 'ball'
 }
 
-export function ToolpathSimulationBody({ camOut }: ToolpathSimulationBodyProps): ReactNode {
+export function ToolpathSimulationBody({
+  camOut,
+  stockBox,
+  toolDiameterMm,
+  toolShape
+}: ToolpathSimulationBodyProps): ReactNode {
   const trimmed = camOut.trim()
   if (trimmed.length === 0) {
     return (
@@ -612,6 +632,19 @@ export function ToolpathSimulationBody({ camOut }: ToolpathSimulationBodyProps):
           </div>
         </div>
       </dl>
+      {stockBox ? (
+        <StockRemovalHeatmap
+          gcode={camOut}
+          stockBox={stockBox}
+          toolDiameterMm={toolDiameterMm}
+          toolShape={toolShape}
+        />
+      ) : (
+        <p className="msg msg--muted" data-testid="workflow-stage-simulate-no-stock">
+          Set a box stock (X/Y/Z) on the active setup to preview remaining stock
+          as a voxel approximation.
+        </p>
+      )}
     </section>
   )
 }
@@ -1848,6 +1881,40 @@ export function ManufactureWorkspace({
     return i >= 0 ? i : 0
   }, [effectiveMfg.setups, camResolvedSetup])
 
+  /**
+   * Rectangular box stock for the Simulate-stage voxel removal preview, taken
+   * from the CAM-resolved setup. Only the `box` kind carries explicit X/Y/Z
+   * here; `fromExtents`/`cylinder` need part bounds / radial handling the
+   * lightweight stage body does not load (the full 3D panel below covers those),
+   * so they resolve to `null` and the body shows the stats-only fallback.
+   */
+  const simulateStockBox = useMemo<StockRemovalBox | null>(() => {
+    const st = effectiveMfg.setups[camResolvedSetupIdx]?.stock
+    if (!st || st.kind !== 'box') return null
+    const x = st.x ?? 0
+    const y = st.y ?? 0
+    const z = st.z ?? 0
+    if (!(x > 0) || !(y > 0) || !(z > 0)) return null
+    return { x, y, z }
+  }, [effectiveMfg.setups, camResolvedSetupIdx])
+
+  /** Cutting tool (diameter + shape) for the Simulate-stage voxel preview. */
+  const simulateToolOp = useMemo(() => {
+    const sel = effectiveMfg.operations[selectedOpIndex]
+    if (sel && !sel.suppressed && sel.kind.startsWith('cnc_')) return sel
+    return effectiveMfg.operations.find((o) => !o.suppressed && o.kind.startsWith('cnc_'))
+  }, [effectiveMfg.operations, selectedOpIndex])
+
+  const simulateToolDiameterMm = useMemo(
+    () => resolveCamToolDiameterMm({ operation: simulateToolOp, tools: tools ?? undefined }),
+    [simulateToolOp, tools]
+  )
+
+  const simulateToolShape = useMemo<'flat' | 'ball'>(() => {
+    const tt = resolveCamToolType({ operation: simulateToolOp, tools: tools ?? undefined })
+    return tt === 'ball' ? 'ball' : 'flat'
+  }, [simulateToolOp, tools])
+
   const camResolvedMachineName = useMemo(() => {
     if (!camResolvedSetup) return undefined
     return machines.find((m) => m.id === camResolvedSetup.machineId)?.name ?? camResolvedSetup.machineId
@@ -2720,7 +2787,12 @@ export function ManufactureWorkspace({
       className="workspace-stage-body workspace-stage-body--simulate-stage"
       data-testid="workflow-stage-body-simulate-stage"
     >
-      <ToolpathSimulationBody camOut={camOut} />
+      <ToolpathSimulationBody
+        camOut={camOut}
+        stockBox={simulateStockBox}
+        toolDiameterMm={simulateToolDiameterMm}
+        toolShape={simulateToolShape}
+      />
       {projectDir ? (
         <ManufactureCamSimulationPanel
           projectDir={projectDir}
