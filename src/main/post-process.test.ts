@@ -102,32 +102,82 @@ describe('renderPost', () => {
 })
 
 // ─── cnc_generic_mm.hbs safety structure ──────────────────────────────────────
+//
+// The generic post is now dialect-aware about its program-end terminator (CAM
+// geometry-safety pass): Smoothieware/GRBL (Carvera family) -> M2, Mach3/
+// RichAuto/Fanuc -> M30. These tests assert the terminator on a real CODE line
+// (comments stripped) so a stray "M30" in a comment can't false-pass.
 describe('renderPost — cnc_generic_mm.hbs safety structure', () => {
-  it('emits M30 program end', async () => {
+  /** Last non-comment line that is exactly a program-end terminator. */
+  const lastTerminatorLine = (g: string): string | undefined => {
+    const codeLines = g
+      .split('\n')
+      .map((l) => {
+        const semi = l.indexOf(';')
+        return (semi >= 0 ? l.slice(0, semi) : l).trim()
+      })
+      .filter((l) => l === 'M2' || l === 'M30')
+    return codeLines[codeLines.length - 1]
+  }
+
+  it('grbl dialect emits M2 program end (NOT M30 — Smoothieware SD-delete gotcha)', async () => {
+    // machine.dialect is 'grbl' (Carvera family) -> M2.
     const { gcode: g } = await renderPost(resourcesRoot, machine, [])
-    expect(g).toContain('M30')
+    expect(lastTerminatorLine(g)).toBe('M2')
+    // And there must be no bare M30 terminator on any code line.
+    const hasM30Code = g
+      .split('\n')
+      .some((l) => (l.indexOf(';') >= 0 ? l.slice(0, l.indexOf(';')) : l).trim() === 'M30')
+    expect(hasM30Code).toBe(false)
   })
 
-  it('emits safe Z retract using machine workAreaMm.z before M30', async () => {
+  it('mach3 dialect emits M30 program end (RichAuto/Mach3 rewind)', async () => {
+    const mMach3: MachineProfile = { ...machine, dialect: 'mach3' }
+    const { gcode: g } = await renderPost(resourcesRoot, mMach3, [])
+    expect(lastTerminatorLine(g)).toBe('M30')
+  })
+
+  it('fanuc dialect emits M30 program end', async () => {
+    const mFanuc: MachineProfile = { ...machine, dialect: 'fanuc' }
+    const { gcode: g } = await renderPost(resourcesRoot, mFanuc, [])
+    expect(lastTerminatorLine(g)).toBe('M30')
+  })
+
+  it('emits a pre-cut safe-Z lift after spindle-on + dwell and before the toolpath', async () => {
+    const lines = ['G1 X10 Y10 F800']
+    const { gcode: g } = await renderPost(resourcesRoot, machine, lines)
+    const spindleIdx = g.indexOf('M3')
+    const dwellIdx = g.indexOf('G4 P2')
+    const safeZLiftIdx = g.indexOf(`G0 Z${machine.workAreaMm.z}`)
+    const firstCutIdx = g.indexOf('G1 X10 Y10 F800')
+    expect(spindleIdx).toBeGreaterThan(-1)
+    expect(dwellIdx).toBeGreaterThan(spindleIdx) // dwell after spindle-on
+    expect(safeZLiftIdx).toBeGreaterThan(dwellIdx) // pre-cut lift after dwell
+    expect(firstCutIdx).toBeGreaterThan(safeZLiftIdx) // and before the first cut
+  })
+
+  it('emits safe Z retract using machine workAreaMm.z before the terminator', async () => {
     const { gcode: g } = await renderPost(resourcesRoot, machine, [])
     expect(g).toContain(`G0 Z${machine.workAreaMm.z}`)
-    const zRetractIdx = g.indexOf(`G0 Z${machine.workAreaMm.z}`)
-    const m30Idx = g.lastIndexOf('M30')
-    expect(zRetractIdx).toBeLessThan(m30Idx)
+    const zRetractIdx = g.lastIndexOf(`G0 Z${machine.workAreaMm.z}`)
+    const endIdx = g.lastIndexOf(lastTerminatorLine(g)!)
+    expect(zRetractIdx).toBeLessThan(endIdx)
   })
 
-  it('emits park XY (G0 X0 Y0) before M30', async () => {
+  it('emits park XY (G0 X0 Y0) before the terminator', async () => {
     const { gcode: g } = await renderPost(resourcesRoot, machine, [])
     expect(g).toContain('G0 X0 Y0')
     const parkIdx = g.indexOf('G0 X0 Y0')
-    const m30Idx = g.lastIndexOf('M30')
-    expect(parkIdx).toBeLessThan(m30Idx)
+    const endIdx = g.lastIndexOf(lastTerminatorLine(g)!)
+    expect(parkIdx).toBeLessThan(endIdx)
   })
 
-  it('safe Z retract appears after spindle off (M5)', async () => {
+  it('final safe Z retract appears after spindle off (M5)', async () => {
     const { gcode: g } = await renderPost(resourcesRoot, machine, [])
     const m5Idx = g.lastIndexOf('M5')
-    const zRetractIdx = g.indexOf(`G0 Z${machine.workAreaMm.z}`)
+    // lastIndexOf: the FINAL safe-Z retract, after M5 (there is also a pre-cut
+    // lift before M5 now, so indexOf would point at the wrong one).
+    const zRetractIdx = g.lastIndexOf(`G0 Z${machine.workAreaMm.z}`)
     expect(m5Idx).toBeGreaterThan(-1)
     expect(zRetractIdx).toBeGreaterThan(m5Idx)
   })
@@ -174,12 +224,17 @@ describe('renderPost — carvera_4axis_grbl.hbs safety structure', () => {
     axisCount: 4
   }
 
-  it('emits M30 program end', async () => {
+  it('emits M2 program end (NOT M30 — Smoothieware SD-delete gotcha; corrected in the CAM geometry-safety pass)', async () => {
     const { gcode: g } = await renderPost(resourcesRoot, machine4ax, [])
-    expect(g).toContain('M30')
+    // Terminator on a real CODE line must be M2, and no bare M30 terminator.
+    const codeLines = g
+      .split('\n')
+      .map((l) => (l.indexOf(';') >= 0 ? l.slice(0, l.indexOf(';')) : l).trim())
+    expect(codeLines).toContain('M2')
+    expect(codeLines).not.toContain('M30')
   })
 
-  it('emits safe Z retract using machine workAreaMm.z before M30', async () => {
+  it('emits safe Z retract using machine workAreaMm.z before the terminator', async () => {
     // carvera_4axis_grbl.hbs uses {{machine.workAreaMm.z}} for the clearance retract
     const { gcode: g } = await renderPost(resourcesRoot, machine4ax, [])
     expect(g).toContain(`G0 Z${machine4ax.workAreaMm.z}`)
@@ -196,15 +251,16 @@ describe('renderPost — carvera_4axis_grbl.hbs safety structure', () => {
     expect(g).toContain('4-AXIS')
   })
 
-  it('toolpath lines appear after spindle on and before M30', async () => {
+  it('toolpath lines appear after spindle on and before the M2 terminator', async () => {
     const lines = ['G0 X10 Y0 A0', 'G1 X10 Y10 A45 F800']
     const { gcode: g } = await renderPost(resourcesRoot, machine4ax, lines)
     const spindleOnIdx = g.indexOf('M3 S12000')
     const line1Idx = g.indexOf('G0 X10 Y0 A0')
-    const m30Idx = g.lastIndexOf('M30')
+    // Final terminator is now M2 on its own code line.
+    const m2Idx = g.lastIndexOf('\nM2')
     expect(spindleOnIdx).toBeGreaterThan(-1)
     expect(line1Idx).toBeGreaterThan(spindleOnIdx)
-    expect(m30Idx).toBeGreaterThan(line1Idx)
+    expect(m2Idx).toBeGreaterThan(line1Idx)
   })
 
   it('injects WCS offset line when workCoordinateIndex is set', async () => {

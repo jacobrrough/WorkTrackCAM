@@ -154,18 +154,23 @@ describe('Full CAM pipeline integration — cnc_parallel', () => {
       // ── Footer safety ──
       expect(gcode).toContain(`G0 Z${testMill.workAreaMm.z}`) // safe Z retract
       expect(gcode).toContain('G0 X0 Y0')     // park XY
-      expect(gcode).toContain('M30')           // program end
+      // testMill is grbl -> M2 terminator (CAM geometry-safety pass made the
+      // generic post dialect-aware; grbl/Smoothieware uses M2, not M30).
+      expect(gcode).toContain('\nM2')          // program end
 
-      // ── Ordering: spindle on -> toolpath -> spindle off -> retract -> M30 ──
+      // ── Ordering: spindle on -> toolpath -> spindle off -> retract -> M2 ──
       const spindleOnIdx = gcode.indexOf('M3 S12000')
       const spindleOffIdx = gcode.lastIndexOf('M5')
-      const m30Idx = gcode.lastIndexOf('M30')
-      const retractIdx = gcode.indexOf(`G0 Z${testMill.workAreaMm.z}`)
+      const endIdx = gcode.lastIndexOf('\nM2')
+      // lastIndexOf: the generic post now also emits a PRE-CUT safe-Z lift
+      // before the toolpath, so the FINAL retract (after spindle-off) is the
+      // last occurrence.
+      const retractIdx = gcode.lastIndexOf(`G0 Z${testMill.workAreaMm.z}`)
 
       expect(spindleOnIdx).toBeGreaterThan(-1)
       expect(spindleOffIdx).toBeGreaterThan(spindleOnIdx)
       expect(retractIdx).toBeGreaterThan(spindleOffIdx)
-      expect(m30Idx).toBeGreaterThan(retractIdx)
+      expect(endIdx).toBeGreaterThan(retractIdx)
     } finally {
       await unlink(stlPath).catch(() => {})
       await unlink(outPath).catch(() => {})

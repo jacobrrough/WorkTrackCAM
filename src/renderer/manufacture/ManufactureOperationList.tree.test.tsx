@@ -25,6 +25,7 @@ import {
   getOpSetupId
 } from './ManufactureOperationList'
 import type { ManufactureOperation, ManufactureSetup } from '../../shared/manufacture-schema'
+import { OFFERED_CAM_OP_KINDS, DEAD_ENGINE_CAM_KINDS } from '../../shared/manufacture-cam-gate'
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 
@@ -268,5 +269,34 @@ describe('ManufactureOperationList — tree rendering (UX MOVE 6)', () => {
     // .op-tree may still wrap an empty group list; the contract here is that
     // there is no group <details> rendered.
     expect(html).not.toContain('data-testid="op-tree-setup-')
+  })
+})
+
+// ── Capability-honesty: the kind <select> is derived from the SSOT ──────────
+describe('ManufactureOperationList — op-kind picker is honest (CAM ENHANCE)', () => {
+  it('offers an <option> for every runnable kind in OFFERED_CAM_OP_KINDS', () => {
+    const op = makeOp({ kind: 'cnc_parallel' })
+    const html = render(makeProps({ operations: [op], filteredOps: [op], setups: [] }))
+    for (const { kind } of OFFERED_CAM_OP_KINDS) {
+      expect(html, `picker missing option for ${kind}`).toContain(`<option value="${kind}"`)
+    }
+  })
+
+  it('offers NO <option> for any dead-engine kind (no dishonest capability in the picker)', () => {
+    const op = makeOp({ kind: 'cnc_parallel' })
+    const html = render(makeProps({ operations: [op], filteredOps: [op], setups: [] }))
+    for (const dead of DEAD_ENGINE_CAM_KINDS) {
+      expect(html, `picker still offers dead kind ${dead}`).not.toContain(`<option value="${dead}"`)
+    }
+  })
+
+  it('a legacy op carrying a now-blocked kind still shows its value as a trailing "unsupported" option', () => {
+    // A project saved before the gate could hold e.g. cnc_5axis_contour. The
+    // <select> must surface that value (so the operator can switch away) without
+    // re-offering it to other ops.
+    const op = makeOp({ kind: 'cnc_5axis_contour' as ManufactureOperation['kind'] })
+    const html = render(makeProps({ operations: [op], filteredOps: [op], setups: [] }))
+    expect(html).toContain('<option value="cnc_5axis_contour"')
+    expect(html).toContain('unsupported')
   })
 })

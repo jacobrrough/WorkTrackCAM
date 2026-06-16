@@ -18902,3 +18902,54 @@ full solve. Two resolvers exist intentionally: the TS strict-equality one is the
 authority; the Python scoring resolve_pick_id is pure/tested/exported but deliberately NOT wired
 into build_part's select-op path (avoids altering G-code-adjacent build behavior) — a follow-up
 if build-side resolution is ever wanted.
+
+## Cycle 261 — CAM correctness: malformed arcs fixed + 4-axis clearZ + dishonest op-kinds gated (2026-06-15)
+
+**Focus:** gold-standard campaign, CAM pillar — the validate→enhance fixes from the shake-down
+(audit wnrhxi700). The validate-first discipline paid off hardest here: a real arc-geometry bug
+on the BUNDLED machines that the tests had PINNED as correct. One commit. gcode-safety-gated.
+
+**Baseline → result:** 16,905 → **16,943 pass / 1 skip / 0 fail** (+38); tsc clean; no CRLF;
+43 snapshot diffs reviewed; per-machine gcode-safety verdict ALL PASS.
+
+**Machines covered:** Laguna (mach3 generic fallback), Carvera-3 (smoothieware generic fallback),
+Carvera-4 (carvera_4axis_grbl CPS post + cam-axis4 engine), K2 (copy only). BUNDLED default posts
+(vcarve_mach3, carvera_3axis, carvera_4axis, fdm_passthrough toolpath) UNCHANGED.
+
+**Geometry-safety fixes:**
+- **Malformed G2/G3 arc lead-in/out** (cam-local.ts, Laguna+Carvera-3): the lead-in put the arc
+  CENTER at the arc ENDPOINT with mismatched start/end radii — an invalid arc. Replaced with a
+  true tangential quarter-arc (center = S±n·arcR, entry/exit = C±t·arcR) so |start−C|==|end−C|==
+  arcR; G2/G3 letters + X/Y endpoints preserved, only I/J corrected. **The old tests pinned the
+  malformed output** — re-baselined + added a regression guard that reconstructs the center from
+  I/J and asserts equal radii (the malformed-arc bug class). Independent probe proved the old
+  formula produced center==endpoint and the new one is valid for 5 geometries.
+- **Carvera-4 clearZ below the stock OD** (cam-axis4/emit.ts): clearZ derived from workAreaMm.z
+  (maxZ−1) could sit 1mm below the stock OD at near-max diameter → rapid/A-rotate INSIDE the
+  stock. Now floored at stockRadius + minRadialLiftMm (default 2mm); warns when that exceeds
+  reachable Z (clears above, the lesser evil) rather than rotating into stock.
+- **inverseTimeFeed crash** (cam-axis4): G93 was emitted while feeds stayed mm/min. runAxis4 now
+  strips inverseTimeFeed with an honest "unsupported by the bundled engine" warning (engine feeds
+  are mm/min); pinned (no G93/G94 from the engine path).
+- **CPS-path post terminators:** carvera_4axis_grbl.hbs M30→M2 (Smoothieware SD-delete gotcha;
+  re-baselined the 4axis-integration programEnd pin). cnc_generic_mm.hbs gained a dialect-aware
+  terminator (resolveGenericProgramEnd: grbl/smoothieware→M2, mach3/fanuc→M30), a G4 P2 dwell
+  after spindle-on, and a pre-cut G0 Z safe-Z lift — matching the three bundled CNC posts.
+
+**Honesty fixes (no G-code geometry):** 7 op kinds offered in the picker but routing to a deleted
+engine / no impl (cnc_steep_shallow, cnc_auto_select, cnc_spiral_finish, cnc_morphing_finish,
+cnc_scallop_finish, cnc_thread_mill, cnc_5axis_*) → flipped to runnable:false + removed from the
+op-kind <select> (single source of truth so it can't drift back) + blocked in manufacture-cam-gate.
+Stale CuraEngine/Creality-Print copy (fdm_passthrough.hbs comments + the cam-gate "Slice
+(CuraEngine)" hint) → OrcaSlicer reality.
+
+**gcode-safety (Step 5 record):** skill run; all 4 references walked; every snapshot G/M-word delta
+justified (M30→M2 dialect-correct, G4 P2 + safe-Z added, arc I/J malformed→valid); contract pins
+added per fix (arc equal-radii guard, clearZ floor, no-G93, dialect terminator, runnable
+single-source). New helper resolveGenericProgramEnd + PostContext.programEnd + EmitterOpts
+.minRadialLiftMm.
+
+**Deferred v2 (reported, the enhance menu — NOT built):** true G2/G3 for linearized engine loops
+(pocket/ridge/4-axis contour), G54 emitted when no workCoordinateIndex, helical/ramp entry,
+4-axis true-simultaneous interpolation. A cosmetic stale-doc fragment in carvera_4axis_grbl.hbs
+(lines 40-41 still say "M30") + an empty cam-axis4/strategies dir noted (pre-existing).

@@ -527,11 +527,30 @@ export async function runAxis4(job: Axis4JobConfig): Promise<Axis4Result> {
   }
 
   // ── Post-process ──────────────────────────────────────────────────────────
+  // SAFETY: the bundled 4-axis engine emits every F-word in mm/min (feed per
+  // minute). The inverse-time-feed flag (G93) makes the controller read F as
+  // 1/time, so emitting G93 around mm/min feeds would make every cutting feed
+  // wildly wrong on the machine — a crash. Until a real inverse-time F
+  // conversion exists, strip `inverseTimeFeed` here so G93 is NEVER emitted
+  // with unconverted feeds, and surface an honest warning that the bundled
+  // engine does not support it. (The flag stays in the schema / extractor for
+  // a future converting path; this guard is specific to the TS 4-axis engine.)
+  const postOpts = extractPostProcessingOpts(job.operationParams)
+  const inverseTimeFeedWarnings: string[] = []
+  if (postOpts.inverseTimeFeed) {
+    delete postOpts.inverseTimeFeed
+    inverseTimeFeedWarnings.push(
+      'Inverse-time feed (G93) was requested but is NOT supported by the bundled 4-axis engine: ' +
+        'its feeds are emitted in mm/min and would be misread under G93. G93 was suppressed and the ' +
+        'program posts in feed-per-minute (G94) mode. Remove the inverse-time option or supply a ' +
+        'post that converts F to inverse-time.'
+    )
+  }
   const postResult = await renderPost(job.resourcesRoot, job.machine, lines, {
     workCoordinateIndex: job.workCoordinateIndex,
     operationLabel: job.operationLabel ?? opKind,
     toolNumber: job.toolSlot,
-    ...extractPostProcessingOpts(job.operationParams)
+    ...postOpts
   })
   const gcode = postResult.gcode
   await writeFile(job.outputGcodePath, gcode, 'utf-8')
@@ -600,7 +619,8 @@ export async function runAxis4(job: Axis4JobConfig): Promise<Axis4Result> {
     ...validationWarnings,
     ...stratWarnings,
     ...postResult.warnings,
-    ...collisionWarnings
+    ...collisionWarnings,
+    ...inverseTimeFeedWarnings
   ]
 
   return {

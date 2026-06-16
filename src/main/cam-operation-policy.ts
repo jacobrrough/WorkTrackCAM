@@ -91,13 +91,9 @@ export function describeCamOperationKind(kind: string | undefined): {
         '**2D Chamfer** — cuts a chamfer along a closed contour using a V-bit or chamfer mill. Requires `contourPoints: [x,y][]` and `chamferDepthMm`. `chamferAngleDeg` defaults to 45° (half-angle of tool). Feed/plunge from cut params. G-code is **unverified** until post/machine checks (docs/MACHINES.md).'
     }
   }
-  if (kind === 'cnc_thread_mill') {
-    return {
-      runnable: true,
-      hint:
-        '**Thread Milling** — helical thread entry along a bore or contour. Requires `contourPoints`, `threadPitchMm`, `threadDepthMm`, and `toolDiameterMm`. `threadDirection` defaults to right-hand (\'right\'). G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
+  // cnc_thread_mill is BLOCKED by the gate (no thread-milling engine — it would
+  // fall through to a flat parallel finish, which is not a thread). See
+  // getManufactureCamRunBlock in ../shared/manufacture-cam-gate.
   if (kind === 'cnc_laser') {
     return {
       runnable: false,
@@ -113,20 +109,12 @@ export function describeCamOperationKind(kind: string | undefined): {
     }
   }
   // ── v4.0 Toolpath Engine strategies ──
-  if (kind === 'cnc_spiral_finish') {
-    return {
-      runnable: true,
-      hint:
-        '**Spiral finishing** — continuous spiral toolpath for smooth freeform surfaces. Minimal retracts, low vibration. Best for gently curved parts with low curvature variance. Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
-  if (kind === 'cnc_morphing_finish') {
-    return {
-      runnable: true,
-      hint:
-        '**Morphing finish** — automatic blend between waterline and raster based on local surface angle. Seamless steep-to-shallow transitions without manual region selection. Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
+  // cnc_spiral_finish / cnc_morphing_finish / cnc_steep_shallow /
+  // cnc_scallop_finish / cnc_auto_select are BLOCKED by the gate — their Python
+  // toolpath_engine was deleted in the 2026-05-27 pivot and they have no
+  // fallback, so cam:run always hard-fails. See getManufactureCamRunBlock.
+  // cnc_trochoidal_hsm stays runnable: it has a real 2D contour engine (and an
+  // honest parallel-finish fallback in mesh mode).
   if (kind === 'cnc_trochoidal_hsm') {
     return {
       runnable: true,
@@ -134,20 +122,8 @@ export function describeCamOperationKind(kind: string | undefined): {
         '**Trochoidal HSM** — constant chip-load trochoidal slot clearing for high-speed machining. Reduces tool wear and heat in slotting. Set `zPassMm` for depth, `stepoverMm` for advance per circle. Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
     }
   }
-  if (kind === 'cnc_steep_shallow') {
-    return {
-      runnable: true,
-      hint:
-        '**Steep-and-shallow** — classifies mesh into steep and shallow regions, applies waterline to steep walls and raster to gentle surfaces with overlap band for seamless blending. Best for mixed-angle geometry. Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
-  if (kind === 'cnc_scallop_finish') {
-    return {
-      runnable: true,
-      hint:
-        '**Scallop finishing** — adapts XY pass spacing based on local surface angle to maintain uniform residual cusp height. Produces the best surface finish quality on mixed-curvature freeform parts. Set `surfaceFinishRaUm` for target Ra (default 3.2 µm). Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
+  // cnc_steep_shallow / cnc_scallop_finish: BLOCKED by the gate (deleted engine,
+  // no fallback). See getManufactureCamRunBlock.
   if (kind === 'cnc_4axis_continuous') {
     return {
       runnable: true,
@@ -155,34 +131,9 @@ export function describeCamOperationKind(kind: string | undefined): {
         '**4-axis continuous** — simultaneous 4-axis machining with cylindrical heightmap. Tool addresses workpiece radially with helical ramp entries and zigzag axial sweeps. Both roughing and finishing in one pass. Requires `axisCount: 4` and Python toolpath engine. G-code is **unverified** — run an air cut first (docs/MACHINES.md).'
     }
   }
-  if (kind === 'cnc_5axis_contour') {
-    return {
-      runnable: true,
-      hint:
-        '**5-axis contour** — simultaneous 5-axis normal-following with BVH collision avoidance. Tool tilts to follow surface normals for optimal cutter contact. Requires `axisCount: 5` and Python toolpath engine. G-code is **unverified** — verify on machine with air cut first (docs/MACHINES.md).'
-    }
-  }
-  if (kind === 'cnc_5axis_swarf') {
-    return {
-      runnable: true,
-      hint:
-        '**5-axis swarf** — flank milling for steep/vertical walls. Tool tilts into wall along contour tangent for efficient wall finishing. Best for ruled or near-vertical surfaces. Requires `axisCount: 5` and Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
-  if (kind === 'cnc_5axis_flowline') {
-    return {
-      runnable: true,
-      hint:
-        '**5-axis flowline** — follows dominant surface direction with smooth angular rate limits. Continuous tool orientation for complex freeform surfaces. Requires `axisCount: 5` and Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
-  if (kind === 'cnc_auto_select') {
-    return {
-      runnable: true,
-      hint:
-        '**Auto-select** — analyzes mesh geometry (surface angles, curvature, aspect ratio) and automatically selects the optimal machining strategy. The chosen strategy and confidence level are reported in the G-code output. Requires Python toolpath engine. G-code is **unverified** (docs/MACHINES.md).'
-    }
-  }
+  // cnc_5axis_contour / cnc_5axis_swarf / cnc_5axis_flowline: BLOCKED by the gate
+  // (no 5-axis machine in shop scope + deleted engine). cnc_auto_select: BLOCKED
+  // (deleted engine, no fallback). See getManufactureCamRunBlock.
   if (kind === 'cnc_3d_rough') {
     return {
       runnable: true,

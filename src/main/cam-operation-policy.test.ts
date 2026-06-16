@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { describeCamOperationKind } from './cam-operation-policy'
+import {
+  DEAD_ENGINE_CAM_KINDS,
+  OFFERED_CAM_OP_KINDS,
+  isManufactureKindBlockedFromCam
+} from '../shared/manufacture-cam-gate'
 
 describe('describeCamOperationKind', () => {
   it('allows undefined and unknown kinds without blocking', () => {
@@ -96,12 +101,11 @@ describe('describeCamOperationKind', () => {
     expect(r.hint).toMatch(/MACHINES/i)
   })
 
-  it('allows thread_mill with thread params doc', () => {
+  it('BLOCKS thread_mill (no thread-milling engine — would silently emit a flat parallel finish)', () => {
     const r = describeCamOperationKind('cnc_thread_mill')
-    expect(r.runnable).toBe(true)
+    expect(r.runnable).toBe(false)
+    expect(r.error).toMatch(/thread/i)
     expect(r.hint).toMatch(/thread/i)
-    expect(r.hint).toMatch(/threadPitchMm|threadDepthMm/i)
-    expect(r.hint).toMatch(/MACHINES/i)
   })
 
   it('blocks laser with actionable redirect', () => {
@@ -131,27 +135,34 @@ describe('describeCamOperationKind', () => {
     }
   })
 
-  it('allows all 5-axis kinds with Python engine requirement in doc', () => {
+  it('BLOCKS all 5-axis kinds (no 5-axis machine in shop scope + deleted engine)', () => {
     const kinds = ['cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline'] as const
     for (const kind of kinds) {
       const r = describeCamOperationKind(kind)
-      expect(r.runnable).toBe(true)
-      expect(r.hint).toMatch(/5-axis|axisCount.*5/i)
-      expect(r.hint).toMatch(/Python|toolpath engine/i)
-      expect(r.hint).toMatch(/MACHINES/i)
+      expect(r.runnable).toBe(false)
+      expect(r.error).toMatch(/5-axis/i)
+      expect(r.hint).toMatch(/5-axis|dedicated/i)
     }
   })
 
-  it('allows all v4.0 Python engine strategies', () => {
+  it('BLOCKS the deleted-engine freeform finishing strategies (spiral / morphing / steep-shallow / scallop / auto-select)', () => {
     const kinds = [
-      'cnc_spiral_finish', 'cnc_morphing_finish', 'cnc_trochoidal_hsm',
-      'cnc_steep_shallow', 'cnc_scallop_finish', 'cnc_4axis_continuous',
-      'cnc_auto_select'
+      'cnc_spiral_finish', 'cnc_morphing_finish',
+      'cnc_steep_shallow', 'cnc_scallop_finish', 'cnc_auto_select'
     ] as const
     for (const kind of kinds) {
       const r = describeCamOperationKind(kind)
+      expect(r.runnable).toBe(false)
+      expect(r.error).toMatch(/removed|not available/i)
+      // Honest redirect points the operator at a runnable 3D finish.
+      expect(r.hint).toMatch(/cnc_waterline|cnc_raster|cnc_pencil|cnc_3d_finish/i)
+    }
+  })
+
+  it('keeps the strategies with a REAL path runnable (trochoidal HSM 2D engine, 4-axis continuous TS engine)', () => {
+    for (const kind of ['cnc_trochoidal_hsm', 'cnc_4axis_continuous'] as const) {
+      const r = describeCamOperationKind(kind)
       expect(r.runnable).toBe(true)
-      expect(r.hint).toMatch(/Python|toolpath engine/i)
       expect(r.hint).toMatch(/MACHINES/i)
     }
   })
@@ -170,5 +181,108 @@ describe('describeCamOperationKind', () => {
     expect(r.hint).toMatch(/finishStrategy|raster|waterline/i)
     expect(r.hint).toMatch(/finishScallopMm|scallop/i)
     expect(r.hint).toMatch(/MACHINES/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Capability-honesty single-source-of-truth (CAM ENHANCE)
+//
+// The op-kind picker derives its <select> from OFFERED_CAM_OP_KINDS. These pins
+// keep that list and the runnable/blocked policy in lockstep so a dead-engine
+// kind can never drift back into the picker advertising a capability the app
+// does not have.
+// ---------------------------------------------------------------------------
+// The two NON-CNC rows the picker legitimately offers. They are honestly
+// blocked from `cam:run` (they route through their own paths — fdm_slice →
+// OrcaSlicer, export_stl → mesh export), so they are NOT a capability lie.
+const OFFERED_NON_CAM_KINDS = new Set(['fdm_slice', 'export_stl'])
+
+describe('capability honesty — offered/runnable/blocked single source of truth', () => {
+  it('EVERY offered CNC kind is runnable (no dishonest toolpath options)', () => {
+    for (const { kind } of OFFERED_CAM_OP_KINDS) {
+      if (OFFERED_NON_CAM_KINDS.has(kind)) continue // non-CAM rows route elsewhere
+      const r = describeCamOperationKind(kind)
+      expect(r.runnable, `${kind} is offered as a CNC toolpath but not runnable`).toBe(true)
+      expect(r.error, `${kind} is offered but carries a block error`).toBeUndefined()
+    }
+  })
+
+  it('the two offered non-CAM rows are honestly blocked from cam:run (route elsewhere)', () => {
+    for (const kind of OFFERED_NON_CAM_KINDS) {
+      const r = describeCamOperationKind(kind)
+      expect(r.runnable, `${kind} should be blocked from cam:run`).toBe(false)
+      // ...but they are NOT dead-engine kinds — they have a real non-cam:run path.
+      expect(DEAD_ENGINE_CAM_KINDS).not.toContain(kind)
+    }
+  })
+
+  it('NO offered kind is in the dead-engine set (the dishonest-capability gate)', () => {
+    const dead = new Set<string>(DEAD_ENGINE_CAM_KINDS)
+    for (const { kind } of OFFERED_CAM_OP_KINDS) {
+      expect(dead.has(kind), `${kind} is a dead-engine kind but offered in the picker`).toBe(false)
+    }
+  })
+
+  it('EVERY dead-engine kind is blocked (runnable:false) by the policy', () => {
+    for (const kind of DEAD_ENGINE_CAM_KINDS) {
+      const r = describeCamOperationKind(kind)
+      expect(r.runnable, `${kind} should be blocked`).toBe(false)
+      expect(typeof r.error).toBe('string')
+      expect((r.error ?? '').length).toBeGreaterThan(0)
+      expect(typeof r.hint).toBe('string')
+      expect((r.hint ?? '').length).toBeGreaterThan(0)
+      expect(isManufactureKindBlockedFromCam(kind)).toBe(true)
+    }
+  })
+
+  it('the exact dead-engine roster is pinned (rename/addition/removal forces a deliberate update)', () => {
+    expect([...DEAD_ENGINE_CAM_KINDS].sort()).toEqual(
+      [
+        'cnc_5axis_contour',
+        'cnc_5axis_flowline',
+        'cnc_5axis_swarf',
+        'cnc_auto_select',
+        'cnc_morphing_finish',
+        'cnc_scallop_finish',
+        'cnc_spiral_finish',
+        'cnc_steep_shallow',
+        'cnc_thread_mill'
+      ].sort()
+    )
+  })
+
+  it('the picker offers the expected runnable roster (and excludes every dead kind)', () => {
+    const offered = OFFERED_CAM_OP_KINDS.map((o) => o.kind)
+    // FDM + the runnable CNC family + export. Order is operator-facing.
+    expect(offered).toEqual([
+      'fdm_slice',
+      'cnc_parallel',
+      'cnc_contour',
+      'cnc_pocket',
+      'cnc_vcarve',
+      'cnc_drill',
+      'cnc_adaptive',
+      'cnc_waterline',
+      'cnc_raster',
+      'cnc_pencil',
+      'cnc_trochoidal_hsm',
+      'cnc_4axis_roughing',
+      'cnc_4axis_finishing',
+      'cnc_4axis_contour',
+      'cnc_4axis_indexed',
+      'cnc_4axis_continuous',
+      'export_stl'
+    ])
+    // Belt-and-suspenders: the historically-offered dead kinds are gone.
+    for (const dead of ['cnc_spiral_finish', 'cnc_morphing_finish', 'cnc_steep_shallow', 'cnc_scallop_finish', 'cnc_auto_select', 'cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline']) {
+      expect(offered).not.toContain(dead)
+    }
+  })
+
+  it('every offered kind has a non-empty human label for the <select>', () => {
+    for (const { kind, label } of OFFERED_CAM_OP_KINDS) {
+      expect(typeof label, `${kind} label`).toBe('string')
+      expect(label.trim().length, `${kind} label is empty`).toBeGreaterThan(0)
+    }
   })
 })

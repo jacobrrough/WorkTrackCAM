@@ -7,6 +7,10 @@
  *   - Modal state tracking (X/Y/Z/A/F) so we can reason about deltas
  *   - "Never rotate A at cutting depth" — `rotateA()` requires retract first
  *   - Chuck-face safety: never emit X < 0
+ *   - Radial clearZ floor: the inter-pass clear height is derived from the
+ *     RADIAL clearance budget (stockRadius + a minimum positive lift), never
+ *     just the linear Z. Capping clearZ at `maxZMm - 1` must NEVER drop it
+ *     below the stock OD, or a rapid / A-rotation would sweep INSIDE the stock.
  *   - Plunge feed vs cutting feed selection (deeper Z move at > 0.5 mm uses
  *     plunge feed, otherwise the lateral cut feed)
  *   - Pre-emission angular velocity adaptation via `kinematics.ts`
@@ -28,6 +32,15 @@ export type EmitterOpts = {
   safeZMm: number
   /** Hard cap on clearZ (machine work area Z, optional). */
   maxZMm?: number
+  /**
+   * Minimum positive lift (mm) the clear height must keep ABOVE the stock OD.
+   * The clearZ derivation guarantees `clearZ >= stockRadius + minRadialLiftMm`
+   * so a rapid / A-rotation can never sweep inside the stock at near-max
+   * diameter. Defaults to 2 mm. If `stockRadius + minRadialLiftMm` exceeds the
+   * reachable Z (`maxZMm - 1`), the setup is out of envelope and a warning is
+   * recorded (the tool is kept above the stock rather than clamped into it).
+   */
+  minRadialLiftMm?: number
   /** Lateral cutting feed (mm/min). */
   feedMmMin: number
   /** Z plunge feed (mm/min). */
@@ -66,8 +79,34 @@ export class Emitter {
   constructor(opts: EmitterOpts) {
     this.stockRadius = opts.stockRadius
     this.safeZMm = opts.safeZMm
+    // clearZ is a RADIAL clearance for the rotary axis: A rotates around X, so
+    // the tool must clear the stock's outer radius before any rapid or A move.
+    // Requested clear = stockRadius + safeZMm. The machine Z envelope can cap
+    // this (maxZMm - 1, leaving 1 mm of slop below the Z hard stop), BUT the
+    // cap must never pull clearZ down to or below the stock OD — that would put
+    // a rapid / A-rotation INSIDE the stock at near-max diameter. So we floor
+    // clearZ at `stockRadius + minRadialLiftMm`. When that floor itself exceeds
+    // the reachable Z, the setup cannot be cleared within the machine envelope:
+    // we keep the tool ABOVE the stock (the lesser evil vs. crashing into it)
+    // and record a loud warning instead of silently clamping into the stock.
+    const minRadialLiftMm = opts.minRadialLiftMm != null ? Math.max(0, opts.minRadialLiftMm) : 2
     const rawClear = opts.stockRadius + opts.safeZMm
-    this.clearZ = opts.maxZMm != null ? Math.min(rawClear, opts.maxZMm - 1) : rawClear
+    const radialFloor = opts.stockRadius + minRadialLiftMm
+    if (opts.maxZMm != null) {
+      const reachableZ = opts.maxZMm - 1
+      const capped = Math.min(rawClear, reachableZ)
+      this.clearZ = Math.max(capped, radialFloor)
+      if (radialFloor > reachableZ + 1e-9) {
+        this._warnings.push(
+          `4-axis clearance unsafe: stock OD (radius ${opts.stockRadius.toFixed(1)} mm) + ` +
+            `${minRadialLiftMm.toFixed(1)} mm lift = ${radialFloor.toFixed(1)} mm exceeds the reachable Z ` +
+            `(${reachableZ.toFixed(1)} mm = workArea Z ${opts.maxZMm.toFixed(1)} - 1). The tool is held above ` +
+            `the stock but ABOVE the Z envelope — reduce stock diameter or use a machine with more Z travel.`
+        )
+      }
+    } else {
+      this.clearZ = Math.max(rawClear, radialFloor)
+    }
     this.feedMmMin = opts.feedMmMin
     this.plungeMmMin = opts.plungeMmMin
     this.stockDiameterMm = opts.stockDiameterMm

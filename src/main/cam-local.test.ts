@@ -1110,6 +1110,131 @@ describe('generateContour2dLines — lead-in/lead-out arcs (Feature B)', () => {
     expect(lines[lines.length - 1]).toBe('G0 Z5.000')
   })
 
+  // ── Malformed-arc regression guard (CAM geometry-safety pass) ──────────────
+  // The lead-in/lead-out arcs were previously emitted with centre == arc
+  // endpoint, so |endpoint - centre| == 0 != arcR — a malformed arc the
+  // controller rejects or mis-cuts. This pin proves BOTH arcs are real
+  // circular arcs: |start - centre| == |end - centre| == arcR to tolerance.
+  // It is the regression guard for the whole malformed-arc class.
+  const arcMoveRadii = (
+    lines: string[]
+  ): { kind: 'G2' | 'G3'; rStart: number; rEnd: number }[] => {
+    const parseXY = (l: string): [number, number] | null => {
+      const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
+      const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
+      return mx && my ? [Number(mx[1]), Number(my[1])] : null
+    }
+    // Track the most recent commanded XY so each arc knows its start point.
+    let cur: [number, number] | null = null
+    const out: { kind: 'G2' | 'G3'; rStart: number; rEnd: number }[] = []
+    for (const l of lines) {
+      const isArc = l.startsWith('G2 ') || l.startsWith('G3 ')
+      if (isArc) {
+        const end = parseXY(l)
+        const mi = l.match(/I(-?\d+(?:\.\d+)?)/)
+        const mj = l.match(/J(-?\d+(?:\.\d+)?)/)
+        if (cur && end && mi && mj) {
+          const i = Number(mi[1])
+          const j = Number(mj[1])
+          // I/J is the offset from the arc START to the centre.
+          const cx = cur[0] + i
+          const cy = cur[1] + j
+          const rStart = Math.hypot(cur[0] - cx, cur[1] - cy)
+          const rEnd = Math.hypot(end[0] - cx, end[1] - cy)
+          out.push({ kind: l.startsWith('G2') ? 'G2' : 'G3', rStart, rEnd })
+        }
+        if (end) cur = end
+        continue
+      }
+      const xy = parseXY(l)
+      if (xy) cur = xy
+    }
+    return out
+  }
+
+  it('lead-in (G2) and lead-out (G3) arcs are TRUE arcs: |start-centre| == |end-centre| == arcR', () => {
+    const arcR = 3
+    const lines = generateContour2dLines({
+      contourPoints: square,
+      zPassMm: -2,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      leadInMm: arcR,
+      leadInMode: 'arc',
+      leadOutMm: arcR,
+      leadOutMode: 'arc'
+    })
+    const arcs = arcMoveRadii(lines)
+    const g2 = arcs.find((a) => a.kind === 'G2')
+    const g3 = arcs.find((a) => a.kind === 'G3')
+    expect(g2).toBeDefined()
+    expect(g3).toBeDefined()
+    // Lead-in radii both equal arcR.
+    expect(g2!.rStart).toBeCloseTo(arcR, 6)
+    expect(g2!.rEnd).toBeCloseTo(arcR, 6)
+    expect(g2!.rStart).toBeCloseTo(g2!.rEnd, 6)
+    // Lead-out radii both equal arcR.
+    expect(g3!.rStart).toBeCloseTo(arcR, 6)
+    expect(g3!.rEnd).toBeCloseTo(arcR, 6)
+    expect(g3!.rStart).toBeCloseTo(g3!.rEnd, 6)
+  })
+
+  it('arc radius equality holds for a non-axis-aligned first segment + different radii', () => {
+    // A triangle whose first edge runs at 45° — exercises a tangent that is
+    // not axis-aligned so the normal math is genuinely tested, and uses a
+    // different lead-in vs lead-out radius to prove each is self-consistent.
+    const tri: [number, number][] = [
+      [0, 0],
+      [10, 10],
+      [0, 20]
+    ]
+    const lines = generateContour2dLines({
+      contourPoints: tri,
+      zPassMm: -1,
+      feedMmMin: 500,
+      plungeMmMin: 150,
+      safeZMm: 6,
+      leadInMm: 2,
+      leadInMode: 'arc',
+      leadOutMm: 4,
+      leadOutMode: 'arc'
+    })
+    const arcs = arcMoveRadii(lines)
+    const g2 = arcs.find((a) => a.kind === 'G2')!
+    const g3 = arcs.find((a) => a.kind === 'G3')!
+    // 2-decimal tolerance: the G-code emits coordinates at .toFixed(3), so a
+    // 45° tangent (components ≈ 0.7071) reconstructs to ~1e-3 radius error
+    // after rounding. The malformed-arc bug this guards produced a radius
+    // error equal to arcR itself (2.0 / 4.0) — orders of magnitude larger —
+    // so 2-decimal equality still catches the whole bug class decisively.
+    expect(g2.rStart).toBeCloseTo(2, 2)
+    expect(g2.rEnd).toBeCloseTo(2, 2)
+    expect(g2.rStart).toBeCloseTo(g2.rEnd, 2)
+    expect(g3.rStart).toBeCloseTo(4, 2)
+    expect(g3.rEnd).toBeCloseTo(4, 2)
+    expect(g3.rStart).toBeCloseTo(g3.rEnd, 2)
+  })
+
+  it('arc lead-in WITH a linear ramp also emits a true (equal-radius) approach arc', () => {
+    const arcR = 3
+    const lines = generateContour2dLines({
+      contourPoints: square,
+      zPassMm: -3,
+      feedMmMin: 600,
+      plungeMmMin: 200,
+      safeZMm: 5,
+      leadInMm: arcR,
+      leadInMode: 'arc',
+      rampType: 'linear',
+      rampAngleDeg: 5
+    })
+    const arcs = arcMoveRadii(lines)
+    const g2 = arcs.find((a) => a.kind === 'G2')!
+    expect(g2.rStart).toBeCloseTo(arcR, 6)
+    expect(g2.rEnd).toBeCloseTo(arcR, 6)
+  })
+
   it('linear lead-in extends entry point backward along tangent', () => {
     const lines = generateContour2dLines({
       contourPoints: square,

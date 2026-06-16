@@ -45,7 +45,13 @@ function op(
   return { id, kind, label: label ?? id.toUpperCase(), suppressed }
 }
 
-/** All currently-runnable CNC kinds shipped by the schema (cnc_* and NOT in BLOCKED). */
+/**
+ * All currently-runnable CNC kinds shipped by the schema (cnc_* and NOT in
+ * BLOCKED). The capability-honesty gate (DEAD_ENGINE_CAM_KINDS in
+ * manufacture-cam-gate) moved the deleted-toolpath_engine freeform finishes,
+ * the out-of-scope 5-axis family, and cnc_thread_mill OUT of this list — they
+ * always hard-fail, so they can never be a CAM driving op.
+ */
 const RUNNABLE_CNC_KINDS: ManufactureOperation['kind'][] = [
   'cnc_parallel',
   'cnc_contour',
@@ -62,20 +68,11 @@ const RUNNABLE_CNC_KINDS: ManufactureOperation['kind'][] = [
   'cnc_3d_rough',
   'cnc_3d_finish',
   'cnc_chamfer',
-  'cnc_thread_mill',
   'cnc_pcb_isolation',
   'cnc_pcb_drill',
   'cnc_pcb_contour',
-  'cnc_spiral_finish',
-  'cnc_morphing_finish',
   'cnc_trochoidal_hsm',
-  'cnc_steep_shallow',
-  'cnc_scallop_finish',
-  'cnc_4axis_continuous',
-  'cnc_5axis_contour',
-  'cnc_5axis_swarf',
-  'cnc_5axis_flowline',
-  'cnc_auto_select'
+  'cnc_4axis_continuous'
 ]
 
 /** All BLOCKED kinds the gate refuses to run via cam:run. */
@@ -84,14 +81,33 @@ const BLOCKED_KINDS: ManufactureOperation['kind'][] = [
   'export_stl',
   'cnc_laser',
   'cnc_lathe_turn',
-  'cnc_probe'
+  'cnc_probe',
+  // Capability-honesty: deleted-engine / out-of-scope kinds (DEAD_ENGINE_CAM_KINDS).
+  'cnc_thread_mill',
+  'cnc_spiral_finish',
+  'cnc_morphing_finish',
+  'cnc_steep_shallow',
+  'cnc_scallop_finish',
+  'cnc_auto_select',
+  'cnc_5axis_contour',
+  'cnc_5axis_swarf',
+  'cnc_5axis_flowline'
 ]
 
 /** BLOCKED kinds that ARE cnc_* prefixed (would-be runnable but for the BLOCKED set). */
 const BLOCKED_CNC_PREFIX_KINDS: ManufactureOperation['kind'][] = [
   'cnc_laser',
   'cnc_lathe_turn',
-  'cnc_probe'
+  'cnc_probe',
+  'cnc_thread_mill',
+  'cnc_spiral_finish',
+  'cnc_morphing_finish',
+  'cnc_steep_shallow',
+  'cnc_scallop_finish',
+  'cnc_auto_select',
+  'cnc_5axis_contour',
+  'cnc_5axis_swarf',
+  'cnc_5axis_flowline'
 ]
 
 /** Non-CNC kinds (do not start with `cnc_`). */
@@ -534,8 +550,10 @@ describe('J. cnc_* prefix predicate -- exhaustive runnable schema kinds', () => 
     if (r.ok) expect(r.op.kind).toBe(kind)
   })
 
-  it('runnable-kind count matches schema (29 currently shipped runnable cnc_* kinds)', () => {
-    expect(RUNNABLE_CNC_KINDS.length).toBe(29)
+  it('runnable-kind count matches schema (20 runnable cnc_* kinds after the capability-honesty gate)', () => {
+    // Was 29 before DEAD_ENGINE_CAM_KINDS gated out the 9 deleted-engine /
+    // out-of-scope kinds (thread_mill, 5 freeform finishes, 3 5-axis).
+    expect(RUNNABLE_CNC_KINDS.length).toBe(20)
   })
 
   it('no overlap between RUNNABLE_CNC_KINDS and BLOCKED_KINDS', () => {

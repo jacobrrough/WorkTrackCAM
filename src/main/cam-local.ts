@@ -979,16 +979,20 @@ export function generateContour2dLines(params: Contour2dParams): string[] {
   if (rampType === 'linear' || rampType === 'helix') {
     const rampAngle = params.rampAngleDeg ?? 3
     if (useArc) {
-      // Arc lead-in approach first (at safe Z), then ramp to depth
+      // TRUE tangential quarter-arc approach at safe Z, then ramp to depth at the
+      // contour start. Same geometry as the no-ramp arc branch: centre C one
+      // radius off S on the right-normal side, entry P one radius back along the
+      // tangent, CW (G2) arc P->S tangent to +t. |S-C| == |P-C| == arcR.
       const arcR = leadIn
-      const entryX = x0 + nx * arcR
-      const entryY = y0 + ny * arcR
+      const cx = x0 - nx * arcR
+      const cy = y0 - ny * arcR
+      const entryX = cx - tx * arcR
+      const entryY = cy - ty * arcR
       lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
       lines.push(`G0 X${entryX.toFixed(3)} Y${entryY.toFixed(3)}`)
-      // Arc approach at safe Z, then ramp entry at the contour start
-      const iOff = -nx * arcR
-      const jOff = -ny * arcR
-      lines.push(`G1 X${entryX.toFixed(3)} Y${entryY.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
+      // Arc approach at safe Z; I/J = C - P. The ramp entry below descends.
+      const iOff = cx - entryX
+      const jOff = cy - entryY
       lines.push(`G2 X${x0.toFixed(3)} Y${y0.toFixed(3)} I${iOff.toFixed(3)} J${jOff.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
     }
     lines.push(
@@ -999,17 +1003,25 @@ export function generateContour2dLines(params: Contour2dParams): string[] {
       )
     )
   } else if (useArc) {
-    // Arc lead-in: approach from the perpendicular direction, arc into contour
+    // Arc lead-in: a TRUE tangential quarter-arc that joins the contour moving
+    // along +t at the start S=(x0,y0). The arc centre C sits one radius off S on
+    // the RIGHT-normal side (C = S - n*arcR); the entry point P is one radius
+    // back along the tangent (P = C - t*arcR). The tool rapids to P, plunges,
+    // then a CW (G2) arc P->S lands tangent to the contour. By construction
+    // |S-C| == |P-C| == arcR, so the I/J vector (offset from the arc START P to
+    // the centre C) describes a circle the controller can actually execute —
+    // unlike the prior centre==endpoint emission (|end-centre|==0, malformed).
     const arcR = leadIn
-    const entryX = x0 + nx * arcR
-    const entryY = y0 + ny * arcR
+    const cx = x0 - nx * arcR
+    const cy = y0 - ny * arcR
+    const entryX = cx - tx * arcR
+    const entryY = cy - ty * arcR
     lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
     lines.push(`G0 X${entryX.toFixed(3)} Y${entryY.toFixed(3)}`)
     lines.push(`G1 Z${params.zPassMm.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
-    // Arc from entry point to first contour point; centre offset = -nx*arcR, -ny*arcR
-    // CW (G2) sweeps from normal toward tangent
-    const iOff = -nx * arcR
-    const jOff = -ny * arcR
+    // I/J = C - P (offset from arc start to centre).
+    const iOff = cx - entryX
+    const jOff = cy - entryY
     lines.push(`G2 X${x0.toFixed(3)} Y${y0.toFixed(3)} I${iOff.toFixed(3)} J${jOff.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
   } else {
     const entryX = x0 - tx * leadIn
@@ -1056,13 +1068,21 @@ export function generateContour2dLines(params: Contour2dParams): string[] {
   // ── Lead-out ────────────────────────────────────────────────────────────
   const useArcOut = params.leadOutMode === 'arc' && leadOut > 0.05
   if (useArcOut) {
-    // Arc lead-out: depart tangentially into the normal direction via G3 (CCW)
+    // Arc lead-out: a TRUE tangential quarter-arc that departs the contour end
+    // S=(x0,y0) still moving along +t, mirroring the lead-in. The centre C sits
+    // one radius off S on the LEFT-normal side (C = S + n*arcR); the exit point E
+    // is one radius further along the tangent (E = C + t*arcR). A CCW (G3) arc
+    // S->E leaves tangent to the contour. The I/J vector is the offset from the
+    // arc START S to the centre C, so |S-C| == |E-C| == arcR — replacing the
+    // prior centre==endpoint emission (start radius arcR, end radius 0; malformed).
     const arcR = leadOut
-    const exitX = x0 + nx * arcR
-    const exitY = y0 + ny * arcR
-    // Centre is at (x0 + nx*arcR, y0 + ny*arcR) → offset from start = (nx*arcR, ny*arcR)
-    const iOff = nx * arcR
-    const jOff = ny * arcR
+    const cx = x0 + nx * arcR
+    const cy = y0 + ny * arcR
+    const exitX = cx + tx * arcR
+    const exitY = cy + ty * arcR
+    // I/J = C - S (offset from arc start to centre).
+    const iOff = cx - x0
+    const jOff = cy - y0
     lines.push(`G3 X${exitX.toFixed(3)} Y${exitY.toFixed(3)} I${iOff.toFixed(3)} J${jOff.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
   } else if (leadOut > 0) {
     const outX = x0 + tx * leadOut

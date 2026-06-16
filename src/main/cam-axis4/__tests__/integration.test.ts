@@ -458,4 +458,76 @@ describe('4-axis CAM pipeline — end-to-end machine-frame contract', () => {
     const xs = segs.flatMap((s) => [s.x0, s.x1])
     expect(minOf(xs)).toBeGreaterThanOrEqual(0)
   }, 15_000)
+
+  // ── G93 inverse-time feed strip (CAM geometry-safety pass) ────────────────
+  it('requesting inverseTimeFeed does NOT emit G93/G94 (bundled engine feeds are mm/min) and warns', async () => {
+    const stlPath = scratch('axis4-int-g93.stl')
+    const outPath = scratch('axis4-int-g93.nc')
+    await writeFile(stlPath, buildCenteredRingStl(15, 60, 16))
+
+    const result = await runCamPipeline(
+      baseJob({
+        stlPath,
+        outputGcodePath: outPath,
+        operationKind: 'cnc_4axis_roughing',
+        rotaryStockLengthMm: 60,
+        rotaryStockDiameterMm: 40,
+        stepoverMm: 3,
+        // The op opts into inverse-time feed; the bundled engine cannot honor
+        // it (its F-words are mm/min), so the post must NOT emit G93/G94.
+        operationParams: { inverseTimeFeed: true }
+      })
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    // G93 (inverse-time ON) and G94 (restore) must both be absent — emitting
+    // G93 around mm/min feeds would make every cutting feed wildly wrong.
+    const codeLines = result.gcode
+      .split('\n')
+      .map((l) => (l.indexOf(';') >= 0 ? l.slice(0, l.indexOf(';')) : l).trim())
+    expect(codeLines.some((l) => /\bG93\b/.test(l))).toBe(false)
+    expect(codeLines.some((l) => /\bG94\b/.test(l))).toBe(false)
+
+    // And an honest warning must surface explaining the suppression.
+    const warnings = result.warnings ?? []
+    expect(warnings.some((w) => /inverse-time feed/i.test(w) && /G93/i.test(w))).toBe(true)
+  }, 15_000)
+
+  // ── Carvera-4 radial clearZ floor surfaces end-to-end ─────────────────────
+  it('near-max-diameter stock on a low-Z rotary machine warns that clearance exceeds the Z envelope', async () => {
+    // Carvera-4 real envelope: workArea.z = 46, chuck OD ~46. A 90 mm-dia
+    // stock (radius 45) cannot be cleared within Z (45 + 2 lift = 47 > 45
+    // reachable). The radial-floor guard keeps the tool above the stock and
+    // surfaces a loud warning rather than silently A-rotating into the stock.
+    const lowZcarvera: MachineProfile = {
+      ...carvera4ax,
+      workAreaMm: { x: 240, y: 92, z: 46 },
+      rotaryChuckOuterRadiusMm: 46
+    }
+    const stlPath = scratch('axis4-int-clearz.stl')
+    const outPath = scratch('axis4-int-clearz.nc')
+    // Mesh radius (44) must stay under the stock radius (45) or the engine
+    // rejects it as out-of-stock before clearZ matters.
+    await writeFile(stlPath, buildCenteredRingStl(44, 40, 16))
+
+    const result = await runCamPipeline(
+      baseJob({
+        stlPath,
+        outputGcodePath: outPath,
+        machine: lowZcarvera,
+        operationKind: 'cnc_4axis_roughing',
+        rotaryStockLengthMm: 40,
+        rotaryStockDiameterMm: 90, // radius 45, near the chuck max
+        stepoverMm: 3,
+        safeZMm: 5
+      })
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const warnings = result.warnings ?? []
+    expect(warnings.some((w) => /clearance unsafe/i.test(w) && /reachable Z/i.test(w))).toBe(true)
+  }, 15_000)
 })

@@ -10,9 +10,13 @@
  *   documented runnable/error/hint shape for each kind. Behavior:
  *     * Blocked kinds (delegated to `getManufactureCamRunBlock`):
  *       `fdm_slice`, `export_stl`, `cnc_laser`, `cnc_lathe_turn`,
- *       `cnc_probe` -- each returns `{ runnable: false, error, hint }`
- *       sourced from the shared gate.
- *     * Branded CNC kinds: 30+ string literals each return
+ *       `cnc_probe`, PLUS the capability-honesty `DEAD_ENGINE_CAM_KINDS`
+ *       (`cnc_thread_mill`, the deleted-toolpath_engine freeform finishes
+ *       `cnc_spiral_finish` / `cnc_morphing_finish` / `cnc_steep_shallow` /
+ *       `cnc_scallop_finish` / `cnc_auto_select`, and the out-of-scope
+ *       `cnc_5axis_*` family) -- each returns `{ runnable: false, error,
+ *       hint }` sourced from the shared gate.
+ *     * Runnable CNC kinds: string literals that each return
  *       `{ runnable: true, hint: '<documented copy>' }` with stable
  *       text -- the hints surface in the Manufacture UI as the
  *       authoritative explanation of what the engine does.
@@ -23,13 +27,13 @@
  * Three-machine impact: DIRECT cross-cut. Every non-FDM job across
  * Laguna Swift 5x10 (3-axis) + Makera Carvera 3-axis + Carvera 4-axis
  * Rotary routes through this policy gate before the CAM engine runs.
- * The `cnc_4axis_*` family (4 kinds) gates the entire Carvera 4-axis
- * Rotary toolpath set; the `cnc_5axis_*` family (3 kinds) is reserved
- * for future hardware -- no current shop machine runs 5-axis but the
- * runnable=true branch is documented so a future post can pick them up
- * without a policy edit. The `fdm_slice` blocked branch is what keeps
- * the K2 Plus FDM jobs out of the CNC `cam:run` path (they go through
- * `slicer.ts` / CuraEngine instead).
+ * The `cnc_4axis_*` family (5 kinds incl. continuous) gates the entire
+ * Carvera 4-axis Rotary toolpath set. The `cnc_5axis_*` family is BLOCKED
+ * (capability honesty): no shop machine runs 5-axis and the 5-axis
+ * toolpath engine was deleted in the 2026-05-27 pivot, so offering it
+ * would advertise a capability the app cannot deliver. The `fdm_slice`
+ * blocked branch keeps K2 Plus FDM jobs out of the CNC `cam:run` path
+ * (they go through OrcaSlicer via src/main/slicer/orca-wrapper.ts).
  *
  * This pin co-locates with the existing behavioral test
  * `cam-operation-policy.test.ts`. The pin is exhaustive against every
@@ -104,11 +108,13 @@ describe('B. Default fallthrough -- IPC backward-compatibility', () => {
 // C. Blocked kinds (delegated to manufacture-cam-gate)
 // ---------------------------------------------------------------------------
 describe('C. Blocked kinds delegated to getManufactureCamRunBlock', () => {
-  it('fdm_slice is BLOCKED (K2 Plus FDM goes through CuraEngine, not cam:run)', () => {
+  it('fdm_slice is BLOCKED from cam:run (K2 Plus FDM goes through OrcaSlicer, not cam:run)', () => {
     const r = describeCamOperationKind('fdm_slice')
     expect(r.runnable).toBe(false)
     expect(r.error).toBe('FDM slicing is not available through Generate CAM.')
-    expect(r.hint).toContain('CuraEngine')
+    // Post-pivot the FDM path is OrcaSlicer (the CuraEngine bundle was deleted).
+    expect(r.hint).toContain('OrcaSlicer')
+    expect(r.hint).not.toContain('CuraEngine')
   })
 
   it('export_stl is BLOCKED (planning-only kind)', () => {
@@ -145,6 +151,29 @@ describe('C. Blocked kinds delegated to getManufactureCamRunBlock', () => {
     expect(r.runnable).toBe(false)
     expect(r.error).toContain('probe:generate')
     expect(r.hint).toContain('singleSurface')
+  })
+
+  it('cnc_thread_mill is BLOCKED (deleted-engine / capability honesty)', () => {
+    const r = describeCamOperationKind('cnc_thread_mill')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('Thread milling is not posted')
+  })
+
+  it('the deleted freeform finishing kinds are BLOCKED with a redirect to a runnable finish', () => {
+    for (const k of ['cnc_spiral_finish', 'cnc_morphing_finish', 'cnc_steep_shallow', 'cnc_scallop_finish', 'cnc_auto_select']) {
+      const r = describeCamOperationKind(k)
+      expect(r.runnable, k).toBe(false)
+      expect(r.error).toContain('toolpath engine was removed')
+      expect(r.hint).toMatch(/cnc_waterline|cnc_raster|cnc_pencil|cnc_3d_finish/)
+    }
+  })
+
+  it('the 5-axis kinds are BLOCKED (no 5-axis hardware in shop scope + deleted engine)', () => {
+    for (const k of ['cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline']) {
+      const r = describeCamOperationKind(k)
+      expect(r.runnable, k).toBe(false)
+      expect(r.error).toContain('5-axis is not supported')
+    }
   })
 })
 
@@ -208,11 +237,11 @@ describe('D. Standard 3-axis CNC kinds (Laguna + Carvera 3-axis)', () => {
     expect(r.hint).toContain('chamferAngleDeg')
   })
 
-  it('cnc_thread_mill is runnable and references helical thread entry', () => {
+  it('cnc_thread_mill is BLOCKED (no thread-milling engine — would emit a flat parallel finish)', () => {
     const r = describeCamOperationKind('cnc_thread_mill')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('helical')
-    expect(r.hint).toContain('threadPitchMm')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('Thread milling is not posted')
+    expect(r.hint).toContain('thread')
   })
 
   it('cnc_pcb_isolation, cnc_pcb_drill, cnc_pcb_contour share a single PCB hint', () => {
@@ -286,47 +315,42 @@ describe('E. Carvera 4-axis Rotary kinds -- require axisCount: 4', () => {
 // ---------------------------------------------------------------------------
 // F. v4.0 toolpath engine kinds (Python-engine-backed surface strategies)
 // ---------------------------------------------------------------------------
-describe('F. v4.0 toolpath engine kinds -- Python engine + freeform finishing', () => {
-  it('cnc_spiral_finish is runnable and references continuous spiral', () => {
+describe('F. v4.0 toolpath engine kinds -- deleted-engine kinds BLOCKED, real-path kinds runnable', () => {
+  it('cnc_spiral_finish is BLOCKED (deleted toolpath_engine, no fallback)', () => {
     const r = describeCamOperationKind('cnc_spiral_finish')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('Spiral finishing')
-    expect(r.hint).toContain('Python toolpath engine')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('toolpath engine was removed')
   })
 
-  it('cnc_morphing_finish is runnable and references waterline/raster blend', () => {
+  it('cnc_morphing_finish is BLOCKED (deleted toolpath_engine, no fallback)', () => {
     const r = describeCamOperationKind('cnc_morphing_finish')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('Morphing finish')
-    expect(r.hint).toContain('waterline and raster')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('toolpath engine was removed')
   })
 
-  it('cnc_trochoidal_hsm is runnable and references constant chip-load', () => {
+  it('cnc_trochoidal_hsm STAYS runnable (real 2D contour engine + parallel-finish fallback)', () => {
     const r = describeCamOperationKind('cnc_trochoidal_hsm')
     expect(r.runnable).toBe(true)
     expect(r.hint).toContain('Trochoidal HSM')
     expect(r.hint).toContain('chip-load')
   })
 
-  it('cnc_steep_shallow is runnable and classifies steep vs shallow regions', () => {
+  it('cnc_steep_shallow is BLOCKED (deleted toolpath_engine, no fallback)', () => {
     const r = describeCamOperationKind('cnc_steep_shallow')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('Steep-and-shallow')
-    expect(r.hint).toContain('steep walls')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('toolpath engine was removed')
   })
 
-  it('cnc_scallop_finish is runnable and adapts XY pass spacing to surface angle', () => {
+  it('cnc_scallop_finish is BLOCKED (deleted toolpath_engine, no fallback)', () => {
     const r = describeCamOperationKind('cnc_scallop_finish')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('Scallop finishing')
-    expect(r.hint).toContain('surfaceFinishRaUm')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('toolpath engine was removed')
   })
 
-  it('cnc_auto_select is runnable and picks an optimal strategy from mesh geometry', () => {
+  it('cnc_auto_select is BLOCKED (deleted toolpath_engine, no fallback)', () => {
     const r = describeCamOperationKind('cnc_auto_select')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('Auto-select')
-    expect(r.hint).toContain('confidence level')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('toolpath engine was removed')
   })
 
   it('cnc_3d_rough is runnable and references stockAllowanceMm default 0.5 mm', () => {
@@ -349,34 +373,30 @@ describe('F. v4.0 toolpath engine kinds -- Python engine + freeform finishing', 
 // ---------------------------------------------------------------------------
 // G. 5-axis kinds (reserved -- no current shop hardware runs 5-axis)
 // ---------------------------------------------------------------------------
-describe('G. 5-axis kinds -- reserved for future hardware (axisCount: 5)', () => {
-  it('cnc_5axis_contour is runnable and requires axisCount: 5', () => {
+describe('G. 5-axis kinds -- BLOCKED (no 5-axis hardware in shop scope + deleted engine)', () => {
+  it('cnc_5axis_contour is BLOCKED', () => {
     const r = describeCamOperationKind('cnc_5axis_contour')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('axisCount: 5')
-    expect(r.hint).toContain('BVH collision avoidance')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('5-axis is not supported')
   })
 
-  it('cnc_5axis_swarf is runnable and references flank milling', () => {
+  it('cnc_5axis_swarf is BLOCKED', () => {
     const r = describeCamOperationKind('cnc_5axis_swarf')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('flank milling')
-    expect(r.hint).toContain('axisCount: 5')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('5-axis is not supported')
   })
 
-  it('cnc_5axis_flowline is runnable and follows dominant surface direction', () => {
+  it('cnc_5axis_flowline is BLOCKED', () => {
     const r = describeCamOperationKind('cnc_5axis_flowline')
-    expect(r.runnable).toBe(true)
-    expect(r.hint).toContain('flowline')
-    expect(r.hint).toContain('axisCount: 5')
+    expect(r.runnable).toBe(false)
+    expect(r.error).toContain('5-axis is not supported')
   })
 
-  it('all three 5-axis hints reference axisCount: 5 + Python engine', () => {
+  it('all three 5-axis hints redirect to dedicated 5-axis CAM (no false capability)', () => {
     for (const k of ['cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline']) {
       const r = describeCamOperationKind(k)
-      expect(r.runnable).toBe(true)
-      expect(r.hint).toContain('axisCount: 5')
-      expect(r.hint).toContain('Python toolpath engine')
+      expect(r.runnable).toBe(false)
+      expect(r.hint).toMatch(/5-axis CAM|dedicated/i)
     }
   })
 })
@@ -385,10 +405,10 @@ describe('G. 5-axis kinds -- reserved for future hardware (axisCount: 5)', () =>
 // H. Three-machine cross-cut realism
 // ---------------------------------------------------------------------------
 describe('H. Three-machine cross-cut realism', () => {
-  it('K2 Plus FDM kind is BLOCKED -- the slicer.ts CuraEngine path handles it', () => {
+  it('K2 Plus FDM kind is BLOCKED -- the OrcaSlicer path handles it (not cam:run)', () => {
     const r = describeCamOperationKind('fdm_slice')
     expect(r.runnable).toBe(false)
-    expect(r.hint).toContain('CuraEngine')
+    expect(r.hint).toContain('OrcaSlicer')
   })
 
   it('Laguna Swift 5x10 -- typical full-sheet kinds are all runnable', () => {
@@ -401,10 +421,12 @@ describe('H. Three-machine cross-cut realism', () => {
   })
 
   it('Carvera 3-axis -- typical desktop kinds are all runnable', () => {
+    // NOTE: cnc_thread_mill is intentionally absent — it is now BLOCKED (no
+    // thread-milling engine; it would emit a flat parallel finish, not a thread).
     const carvera3Kinds = [
       'cnc_parallel', 'cnc_adaptive', 'cnc_waterline', 'cnc_pencil',
       'cnc_contour', 'cnc_pocket', 'cnc_drill', 'cnc_3d_rough', 'cnc_3d_finish',
-      'cnc_thread_mill', 'cnc_pcb_isolation'
+      'cnc_pcb_isolation'
     ]
     for (const k of carvera3Kinds) {
       expect(describeCamOperationKind(k).runnable).toBe(true)
@@ -421,16 +443,22 @@ describe('H. Three-machine cross-cut realism', () => {
   })
 
   it('every blocked kind returns runnable: false; every runnable kind returns runnable: true', () => {
-    const blocked = ['fdm_slice', 'export_stl', 'cnc_laser', 'cnc_lathe_turn', 'cnc_probe']
+    const blocked = [
+      'fdm_slice', 'export_stl', 'cnc_laser', 'cnc_lathe_turn', 'cnc_probe',
+      // Capability-honesty gate (deleted toolpath_engine / out-of-scope 5-axis /
+      // no thread engine): these always hard-fail, so they are blocked.
+      'cnc_thread_mill',
+      'cnc_spiral_finish', 'cnc_morphing_finish', 'cnc_steep_shallow', 'cnc_scallop_finish', 'cnc_auto_select',
+      'cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline'
+    ]
     const runnable = [
       'cnc_parallel', 'cnc_adaptive', 'cnc_waterline', 'cnc_raster', 'cnc_pencil',
       'cnc_contour', 'cnc_pocket', 'cnc_drill',
       'cnc_4axis_roughing', 'cnc_4axis_finishing', 'cnc_4axis_contour', 'cnc_4axis_indexed', 'cnc_4axis_continuous',
-      'cnc_chamfer', 'cnc_thread_mill',
+      'cnc_chamfer',
       'cnc_pcb_isolation', 'cnc_pcb_drill', 'cnc_pcb_contour',
-      'cnc_spiral_finish', 'cnc_morphing_finish', 'cnc_trochoidal_hsm', 'cnc_steep_shallow', 'cnc_scallop_finish',
-      'cnc_5axis_contour', 'cnc_5axis_swarf', 'cnc_5axis_flowline',
-      'cnc_auto_select', 'cnc_3d_rough', 'cnc_3d_finish'
+      'cnc_trochoidal_hsm',
+      'cnc_3d_rough', 'cnc_3d_finish'
     ]
     for (const k of blocked) {
       expect(describeCamOperationKind(k).runnable).toBe(false)
@@ -465,9 +493,11 @@ describe('I. Source-text whitelist + structural invariants', () => {
     // the safety-rule-1 surface visible to the user. Pin via source-text.
     const docsRefs = SOURCE.match(/docs\/MACHINES\.md/g)
     expect(docsRefs).not.toBeNull()
-    // The module references docs/MACHINES.md many times -- one per
-    // runnable branch. Floor at 20 to detect a wholesale removal.
-    expect(docsRefs!.length).toBeGreaterThanOrEqual(20)
+    // The module references docs/MACHINES.md many times -- one per runnable
+    // branch. Floor at 12 to detect a wholesale removal (the count dropped from
+    // ~25 to 16 when the dead-engine branches were gated out for capability
+    // honesty — see DEAD_ENGINE_CAM_KINDS in manufacture-cam-gate).
+    expect(docsRefs!.length).toBeGreaterThanOrEqual(12)
   })
 
   it('the public function returns an object literal with at most three keys (runnable/error/hint)', () => {
@@ -502,7 +532,7 @@ describe('J. Type-level parity -- describeCamOperationKind return shape', () => 
   })
 
   it('runnable kinds return error === undefined', () => {
-    for (const k of ['cnc_parallel', 'cnc_adaptive', 'cnc_4axis_indexed', 'cnc_3d_rough', 'cnc_5axis_swarf']) {
+    for (const k of ['cnc_parallel', 'cnc_adaptive', 'cnc_4axis_indexed', 'cnc_3d_rough', 'cnc_3d_finish']) {
       const r = describeCamOperationKind(k)
       expect(r.runnable).toBe(true)
       expect(r.error).toBeUndefined()

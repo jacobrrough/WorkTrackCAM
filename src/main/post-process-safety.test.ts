@@ -150,7 +150,10 @@ const dialects: DialectConfig[] = [
       aAxisRangeDeg: 360,
     },
     lines: fourAxisLines,
-    programEnd: 'M30',
+    // CAM geometry-safety pass: carvera_4axis_grbl.hbs now ends with M2 (NOT
+    // M30) — grbl_4axis is Carvera-flavored Smoothieware where M30 can delete
+    // the running file from the SD card. Matches the production carvera_4axis.hbs.
+    programEnd: 'M2',
     hasG43: false,
     hasM6: false,
     hasM9: false,
@@ -801,12 +804,18 @@ describe('Safety: combined options do not break safety invariants', () => {
     // Init
     expect(gcode).toContain('G21')
     expect(gcode).toContain('G90')
-    // Inverse time
+    // Inverse time (raw renderPost path still emits the template G93/G94 block;
+    // the bundled-engine strip lives in runAxis4, not here).
     expect(gcode).toContain('G93')
     expect(gcode).toContain('G94')
-    // Footer
+    // Footer — terminator is M2 on a real code line (NOT M30; comment-text is
+    // excluded so a "M30" mention in the footer comment can't false-pass).
     expect(gcode).toContain('M5')
-    expect(gcode).toContain('M30')
+    const codeLines = gcode
+      .split('\n')
+      .map((l) => (l.indexOf(';') >= 0 ? l.slice(0, l.indexOf(';')) : l).trim())
+    expect(codeLines).toContain('M2')
+    expect(codeLines).not.toContain('M30')
     expect(gcode).toContain(`G0 Z${grbl4ax.workAreaMm.z}`)
   })
 })
@@ -993,9 +1002,14 @@ describe('Safety: 4-axis ATC-bypass + wood-routing inverseTimeFeed isolation [ID
     })
     expect(gcode).not.toContain('M6')
     expect(gcode).not.toMatch(/T5\s*M6/)
-    // Footer / safety still intact (GRBL 4-axis ends with M30).
+    // Footer / safety still intact. GRBL 4-axis now ends with M2 (NOT M30 —
+    // Smoothieware SD-delete gotcha); assert on a real code line, not comment text.
     expect(gcode).toContain('M5')
-    expect(gcode).toContain('M30')
+    const codeLines = gcode
+      .split('\n')
+      .map((l) => (l.indexOf(';') >= 0 ? l.slice(0, l.indexOf(';')) : l).trim())
+    expect(codeLines).toContain('M2')
+    expect(codeLines).not.toContain('M30')
   })
 
   // ── (b) Wood-routing inverseTimeFeed isolation invariants ─────────────────

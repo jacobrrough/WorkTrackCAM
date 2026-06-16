@@ -115,17 +115,18 @@ describe('Emitter -- constructor + clearZ derivation [ID-0164]', () => {
   })
 
   it('clearZ is capped at maxZMm - 1 when maxZMm is the binding constraint', () => {
-    // DOC PIN: the source comment + body reference an explicit Math.min
-    // against maxZMm - 1 (-1 mm of slop below the work-area Z so a rapid
-    // never crashes the Z hard stop).
-    expect(EMIT_SOURCE).toContain(
-      'opts.maxZMm != null ? Math.min(rawClear, opts.maxZMm - 1) : rawClear'
-    )
+    // DOC PIN: the body still references the Math.min against the reachable
+    // Z (maxZMm - 1, -1 mm of slop below the work-area Z so a rapid never
+    // crashes the Z hard stop), now expressed via the `reachableZ` local.
+    expect(EMIT_SOURCE).toContain('const reachableZ = opts.maxZMm - 1')
+    expect(EMIT_SOURCE).toContain('const capped = Math.min(rawClear, reachableZ)')
 
     // RUNTIME PIN: 25 + 100 would be 125 but maxZMm=46 (Carvera Z work
-    // area) caps it to 45.
+    // area) caps it to 45. The radial floor (25 + 2 = 27) is non-binding here,
+    // so the cap still wins.
     const e = makeEmitter({ stockRadius: 25, safeZMm: 100, maxZMm: 46 })
     expect(e.clearZ).toBe(45)
+    expect(e.warnings()).toEqual([])
   })
 
   it('clearZ uses raw stockRadius+safeZMm when maxZMm is non-binding', () => {
@@ -133,6 +134,37 @@ describe('Emitter -- constructor + clearZ derivation [ID-0164]', () => {
     // so clearZ stays at 35.
     const e = makeEmitter({ stockRadius: 25, safeZMm: 10, maxZMm: 46 })
     expect(e.clearZ).toBeCloseTo(35, 9)
+  })
+
+  it('clearZ never drops below the stock OD + minRadialLift even when the Z cap would (rotary-safety bug-class guard)', () => {
+    // DOC PIN: the radial floor is derived from stockRadius + minRadialLiftMm
+    // and clearZ is floored at it via Math.max, so a near-max-diameter stock
+    // can never have a rapid / A-rotation swept INSIDE it.
+    expect(EMIT_SOURCE).toContain('const radialFloor = opts.stockRadius + minRadialLiftMm')
+    expect(EMIT_SOURCE).toContain('this.clearZ = Math.max(capped, radialFloor)')
+
+    // RUNTIME PIN: Carvera-4 envelope (maxZMm=46 -> reachable 45) with a
+    // near-max-diameter stock (radius 45). The OLD code did
+    // min(rawClear, 45) = 45, which sits AT the stock OD (zero lift) and at
+    // radius>45 would sit BELOW the OD -> A-rotate inside the stock. The fix
+    // floors clearZ at 45 + 2 = 47 (radialFloor) and warns it's out of
+    // envelope.
+    const e = makeEmitter({ stockRadius: 45, safeZMm: 1, maxZMm: 46 })
+    expect(e.clearZ).toBeCloseTo(47, 9) // 45 + 2 minRadialLift, NOT the 45 cap
+    expect(e.clearZ).toBeGreaterThan(45) // strictly above the stock OD
+    const w = e.warnings()
+    expect(w.length).toBe(1)
+    expect(w[0]).toMatch(/clearance unsafe/)
+    expect(w[0]).toMatch(/exceeds the reachable Z/)
+  })
+
+  it('respects a custom minRadialLiftMm floor', () => {
+    // RUNTIME PIN: minRadialLiftMm overrides the 2 mm default. stockRadius=20,
+    // safeZMm=1 -> rawClear=21; floor 20+5=25 binds -> clearZ=25 (no cap, no
+    // warning because no maxZMm).
+    const e = makeEmitter({ stockRadius: 20, safeZMm: 1, minRadialLiftMm: 5 })
+    expect(e.clearZ).toBeCloseTo(25, 9)
+    expect(e.warnings()).toEqual([])
   })
 
   it('maxRotaryRpm defaults to 0 (feed adaptation disabled) when omitted', () => {

@@ -27,7 +27,7 @@
  *     M-codes / non-toolpath G-codes leak through fdm_passthrough.hbs even
  *     when `renderPost` opts populate spindle / WCS / tool / dust-collection
  *     / cutter-comp fields (which the FDM template MUST IGNORE so the
- *     CuraEngine-emitted toolpath is the source of truth -- per the
+ *     OrcaSlicer-emitted toolpath is the source of truth -- per the
  *     template's own `; This is a passthrough` disclaimer block).
  *   - Safety Rule 2 (no churn for existing saved projects): the structural
  *     pins assert exact-byte landmarks for the bundled K2 Plus profile so
@@ -276,10 +276,10 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
       const machine = bareFdm()
       const { gcode } = await renderPost(RESOURCES_ROOT, machine, [...SAMPLE_TOOLPATH])
       expect(gcode).toContain(
-        '; This is a passthrough — slicing is performed by CuraEngine and the resulting'
+        '; This is a passthrough — slicing is performed by OrcaSlicer and the resulting'
       )
       expect(gcode).toContain('; G-code is the source of truth. Verify start/end macros, bed/nozzle temps,')
-      expect(gcode).toContain('; and home/park sequences match your Creality firmware before printing.')
+      expect(gcode).toContain('; and home/park sequences match your Creality Klipper firmware before printing.')
     })
 
     it('disclaimer lines appear strictly between the second and third ruler lines', async () => {
@@ -301,14 +301,17 @@ describe('fdm_passthrough.hbs paired-pin contract [ID-0204]', () => {
       expect(homeIdx).toBeLessThan(r2)
     })
 
-    it('disclaimer block names CuraEngine, bed/nozzle temps, and home/park sequences (audit-trail content pin)', () => {
+    it('disclaimer block names OrcaSlicer, bed/nozzle temps, and home/park sequences (audit-trail content pin)', () => {
       // Source-text pin keeps the disclaimer's substantive operator-safety
-      // claims locked. If any future edit weakens or removes the
-      // "CuraEngine is the source of truth" phrasing, the pin trips.
-      expect(TEMPLATE_SOURCE).toContain('CuraEngine')
+      // claims locked. Post-2026-05-27 pivot the slicer is OrcaSlicer (not the
+      // deleted CuraEngine bundle); if any future edit weakens or removes the
+      // "OrcaSlicer is the source of truth" phrasing, the pin trips.
+      expect(TEMPLATE_SOURCE).toContain('OrcaSlicer')
       expect(TEMPLATE_SOURCE).toContain('bed/nozzle temps')
       expect(TEMPLATE_SOURCE).toContain('home/park sequences')
-      expect(TEMPLATE_SOURCE).toContain('Creality firmware')
+      expect(TEMPLATE_SOURCE).toContain('Creality Klipper firmware')
+      // The deleted CuraEngine bundle must NOT be referenced in the template.
+      expect(TEMPLATE_SOURCE).not.toContain('CuraEngine')
     })
 
     it('disclaimer block has exactly 3 disclaimer comment lines (no creep)', async () => {

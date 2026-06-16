@@ -71,7 +71,11 @@ type DialectConfig = {
 }
 
 const DIALECTS: DialectConfig[] = [
-  { dialect: 'grbl_4axis', postTemplate: 'carvera_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M30' }
+  // programEnd re-baselined M30 -> M2 in the CAM geometry-safety pass: the
+  // grbl_4axis dialect family is Carvera-flavored Smoothieware, where M30 can
+  // delete the running file from the SD card. carvera_4axis_grbl.hbs now ends
+  // with M2 (matching the production carvera_4axis.hbs). Intended snapshot drift.
+  { dialect: 'grbl_4axis', postTemplate: 'carvera_4axis_grbl.hbs', label: 'GRBL 4-axis', spindleOn: 'M3 S12000', commentStyle: 'semicolon', programEnd: 'M2' }
 ]
 
 // ─── Common safety structure tests (all 6 dialects) ──────────────────────────

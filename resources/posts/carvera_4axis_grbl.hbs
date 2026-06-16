@@ -56,13 +56,17 @@
       on Carvera; tool changes are operator-initiated via M0/M1 pause).
     - M5 spindle-off before final retract.
     - Final retract uses `G0 Z<workAreaZ>` then `G0 X0 Y0` park.
-    - Program end via M30 (this template) -- `carvera_4axis.hbs` uses M2
-      instead because Smoothieware community firmware may delete the file
-      from SD on M30; this fallback template ships M30 because the legacy
-      `grbl_4axis` dialect contract has emitted M30 since [ID-0156], and a
-      unilateral switch here would change pinned snapshots. The Carvera
-      production post is the safe path for actual Carvera hardware; this
-      template is fallback-only for CPS-imported foreign dialects.
+    - Program end via M2 (matches `carvera_4axis.hbs`). The `grbl_4axis`
+      dialect family is Carvera-flavored Smoothieware, and Smoothieware
+      community firmware can read M30 as "program end AND delete the file
+      from the SD card" -- silently destroying the program at the moment the
+      operator most wants to re-run it. This template historically shipped
+      M30 ([ID-0156]); that was the malformed-emission bug the CAM
+      geometry-safety pass corrected. The intended snapshot drift (M30 -> M2)
+      is re-baselined in `post-process-4axis-integration.test.ts`. This
+      terminator now also satisfies the post-pipeline end-program validator
+      ([ID-0108], `preferredProgramEndForDialect` -> M2 for grbl_4axis), so
+      the previous self-inflicted END_DIALECT_MISMATCH warning is gone.
 
   Related contracts:
     - `src/main/post-process-carvera-4axis-contract.test.ts`
@@ -127,5 +131,6 @@ G93              ; inverse-time feed mode ON
 ;  this final retract ensures the tool is at machine-max Z for unload.)
 G0 Z{{machine.workAreaMm.z}} ; full retract for unload
 G0 X0 Y0        ; park X, re-center Y on rotation axis
-; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
-M30
+; Program end. M2 (NOT M30): Smoothieware-family firmware (Carvera) can read
+; M30 as "program end and delete the file from the SD card".
+M2

@@ -164,6 +164,10 @@ G54
 ; Operation: WCS G54
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -177,7 +181,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -209,6 +213,10 @@ G57
 ; Operation: WCS G57
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -222,7 +230,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -254,6 +262,10 @@ G59
 ; Operation: WCS G59
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -267,7 +279,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -297,6 +309,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Arc Fitting Disabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X10 Y0 Z0
 G1 X8.6603 Y5.0000 Z0 F600
@@ -311,7 +327,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -341,6 +357,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Arc Fitting Enabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X10 Y0 Z0
 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
@@ -350,7 +370,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -380,6 +400,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Arc Fitting Tolerance 0.01mm
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X10 Y0 Z0
 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
@@ -389,7 +413,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -421,19 +445,23 @@ N25 G54
 ; Operation: All Options Fanuc
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N30 M3 S8000
-N35 G0 X0 Y0 Z10
-N40 G0 X5 Y5 Z5
-N45 G41 D1
-N50 G1 X15 Y5 Z0 F800
-N55 G3 X5 Y5 Z0 I-5 J5 F800
-N60 G40
-N65 G0 Z10
+N35 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N40 G0 Z100 ; safe Z lift before first toolpath move
+N45 G0 X0 Y0 Z10
+N50 G0 X5 Y5 Z5
+N55 G41 D1
+N60 G1 X15 Y5 Z0 F800
+N65 G3 X5 Y5 Z0 I-5 J5 F800
+N70 G40
+N75 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N70 M5
+N80 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N75 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N80 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N85 M30
+N85 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N90 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N95 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -465,6 +493,10 @@ G56
 ; Operation: Arc + Comp + WCS
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X10 Y0 Z0
 G42 D2
@@ -476,7 +508,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -506,16 +538,20 @@ N120 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Arc + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N130 M3 S12000
-N140 G0 X0 Y0 Z10
-N150 G0 X10 Y0 Z0
-N160 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
-N170 G0 Z10
+N140 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N150 G0 Z100 ; safe Z lift before first toolpath move
+N160 G0 X0 Y0 Z10
+N170 G0 X10 Y0 Z0
+N180 G3 X-10 Y0 Z0 I-8.6603 J-5 F600
+N190 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N180 M5
+N200 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N190 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N200 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N210 M30
+N210 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N220 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N230 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -545,22 +581,26 @@ N30 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Comp + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N40 M3 S12000
-N50 G0 X0 Y0 Z10
-N60 G0 X5 Y5 Z5
-N70 G41 D7
-N80 G1 Z-1.000 F300
-N90 G1 X15 Y5 F800
-N100 G1 X15 Y15 F800
-N110 G1 X5 Y15 F800
-N120 G1 X5 Y5 F800
-N130 G40
-N140 G0 Z10
+N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N60 G0 Z100 ; safe Z lift before first toolpath move
+N70 G0 X0 Y0 Z10
+N80 G0 X5 Y5 Z5
+N90 G41 D7
+N100 G1 Z-1.000 F300
+N110 G1 X15 Y5 F800
+N120 G1 X15 Y15 F800
+N130 G1 X5 Y15 F800
+N140 G1 X5 Y5 F800
+N150 G40
+N160 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N150 M5
+N170 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N180 M30
+N180 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N190 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N200 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -590,23 +630,27 @@ N30 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Subs + Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N40 M3 S10000
-N50 G0 X0 Y0 Z10
+N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N60 G0 Z100 ; safe Z lift before first toolpath move
+N70 G0 X0 Y0 Z10
 ; --- Subroutine call (4x repeat) ---
-N60 M98 P1000 L4
-N70 G0 Z10
+N80 M98 P1000 L4
+N90 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N80 M5
+N100 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N90 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N100 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N110 M30
+N110 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N120 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N130 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 
 ; --- SUBROUTINE DEFINITIONS ---
-N120 O1000 (SUBROUTINE 1000)
-N130 G0 Z5
-N140 G1 Z-1.000 F300
-N150 G1 X10 Y0 F800
-N160 M99
+N140 O1000 (SUBROUTINE 1000)
+N150 G0 Z5
+N160 G1 Z-1.000 F300
+N170 G1 X10 Y0 F800
+N180 M99
 "
 `;
 
@@ -636,6 +680,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Cutter Comp Left (G41)
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G41
@@ -651,7 +699,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -681,6 +729,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Cutter Comp G41 D5
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G41 D5
@@ -696,7 +748,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -726,6 +778,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Cutter Comp None
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -739,7 +795,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -769,6 +825,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Cutter Comp Right (G42)
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G42
@@ -784,7 +844,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -814,6 +874,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Cutter Comp G42 D3
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G42 D3
@@ -829,7 +893,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -859,6 +923,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Comp + Arc Fitting
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X10 Y0 Z0
 G41
@@ -870,7 +938,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1014,6 +1082,10 @@ G56
 ; Operation: Comprehensive Dialect Test
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S9000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1027,7 +1099,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1059,6 +1131,10 @@ G56
 ; Operation: Comprehensive Dialect Test
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S9000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1072,7 +1148,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1127,8 +1203,9 @@ M5
 ;  this final retract ensures the tool is at machine-max Z for unload.)
 G0 Z100 ; full retract for unload
 G0 X0 Y0        ; park X, re-center Y on rotation axis
-; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
-M30
+; Program end. M2 (NOT M30): Smoothieware-family firmware (Carvera) can read
+; M30 as "program end and delete the file from the SD card".
+M2
 "
 `;
 
@@ -1160,6 +1237,10 @@ G56
 ; Operation: Comprehensive Dialect Test
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S9000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1173,7 +1254,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1205,6 +1286,10 @@ G56
 ; Operation: Comprehensive Dialect Test
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S9000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1218,7 +1303,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1250,6 +1335,10 @@ G56
 ; Operation: Comprehensive Dialect Test
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S9000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1263,7 +1352,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1316,8 +1405,9 @@ M5
 ;  this final retract ensures the tool is at machine-max Z for unload.)
 G0 Z100 ; full retract for unload
 G0 X0 Y0        ; park X, re-center Y on rotation axis
-; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
-M30
+; Program end. M2 (NOT M30): Smoothieware-family firmware (Carvera) can read
+; M30 as "program end and delete the file from the SD card".
+M2
 "
 `;
 
@@ -1376,8 +1466,9 @@ M5
 ;  this final retract ensures the tool is at machine-max Z for unload.)
 G0 Z100 ; full retract for unload
 G0 X0 Y0        ; park X, re-center Y on rotation axis
-; M30 or M2 if your Grbl build supports program end (comment out if unsupported)
-M30
+; Program end. M2 (NOT M30): Smoothieware-family firmware (Carvera) can read
+; M30 as "program end and delete the file from the SD card".
+M2
 "
 `;
 
@@ -1459,6 +1550,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Line Numbering Off
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1472,7 +1567,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1502,20 +1597,24 @@ N30 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Line Numbering On
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N40 M3 S12000
-N50 G0 X0 Y0 Z10
-N60 G0 X5 Y5 Z5
-N70 G1 Z-1.000 F300
-N80 G1 X15 Y5 F800
-N90 G1 X15 Y15 F800
-N100 G1 X5 Y15 F800
-N110 G1 X5 Y5 F800
-N120 G0 Z10
+N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N60 G0 Z100 ; safe Z lift before first toolpath move
+N70 G0 X0 Y0 Z10
+N80 G0 X5 Y5 Z5
+N90 G1 Z-1.000 F300
+N100 G1 X15 Y5 F800
+N110 G1 X15 Y15 F800
+N120 G1 X5 Y15 F800
+N130 G1 X5 Y5 F800
+N140 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N130 M5
+N150 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N140 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N150 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N160 M30
+N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N180 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1545,20 +1644,24 @@ N30 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Fanuc Line Numbering
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N40 M3 S10000
-N50 G0 X0 Y0 Z10
-N60 G0 X5 Y5 Z5
-N70 G1 Z-1.000 F300
-N80 G1 X15 Y5 F800
-N90 G1 X15 Y15 F800
-N100 G1 X5 Y15 F800
-N110 G1 X5 Y5 F800
-N120 G0 Z10
+N50 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N60 G0 Z100 ; safe Z lift before first toolpath move
+N70 G0 X0 Y0 Z10
+N80 G0 X5 Y5 Z5
+N90 G1 Z-1.000 F300
+N100 G1 X15 Y5 F800
+N110 G1 X15 Y15 F800
+N120 G1 X5 Y15 F800
+N130 G1 X5 Y5 F800
+N140 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N130 M5
+N150 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N140 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N150 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N160 M30
+N160 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N180 M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1588,20 +1691,24 @@ N110 G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Custom Line Numbers
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 N115 M3 S12000
-N120 G0 X0 Y0 Z10
-N125 G0 X5 Y5 Z5
-N130 G1 Z-1.000 F300
-N135 G1 X15 Y5 F800
-N140 G1 X15 Y15 F800
-N145 G1 X5 Y15 F800
-N150 G1 X5 Y5 F800
-N155 G0 Z10
+N120 G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+N125 G0 Z100 ; safe Z lift before first toolpath move
+N130 G0 X0 Y0 Z10
+N135 G0 X5 Y5 Z5
+N140 G1 Z-1.000 F300
+N145 G1 X15 Y5 F800
+N150 G1 X15 Y15 F800
+N155 G1 X5 Y15 F800
+N160 G1 X5 Y5 F800
+N165 G0 Z10
 ; Spindle off (dialect snippet — usually M5)
-N160 M5
+N170 M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
-N165 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
-N170 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-N175 M30
+N175 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
+N180 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
+N185 M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1631,6 +1738,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: RPM Clamped Min
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S6000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1644,7 +1755,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1674,6 +1785,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: RPM Clamped Max
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S15000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1687,7 +1802,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1717,6 +1832,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: RPM 10000
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 X5 Y5 Z5
 G1 Z-1.000 F300
@@ -1730,7 +1849,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1760,6 +1879,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Subroutines Disabled
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S12000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 G0 Z5
 G1 Z-1.000 F300
@@ -1779,7 +1902,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M2               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 "
 `;
 
@@ -1809,6 +1932,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Subroutines Fanuc
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 ; --- Subroutine call (4x repeat) ---
 M98 P1000 L4
@@ -1818,7 +1945,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 
 ; --- SUBROUTINE DEFINITIONS ---
 O1000 (SUBROUTINE 1000)
@@ -1855,6 +1982,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Subroutines Mach3
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 ; --- Subroutine call (4x repeat) ---
 M98 P1000 L4
@@ -1864,7 +1995,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 
 ; --- SUBROUTINE DEFINITIONS ---
 O1000 sub
@@ -1901,6 +2032,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Operation: Subroutines Siemens
 ; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 M3 S10000
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z100 ; safe Z lift before first toolpath move
 G0 X0 Y0 Z10
 ; --- Subroutine call (4x repeat) ---
 CALL L1000 REP 4
@@ -1910,7 +2045,7 @@ M5
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z100 ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+M30               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
 
 ; --- SUBROUTINE DEFINITIONS ---
 ; Subroutine L1000

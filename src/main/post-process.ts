@@ -45,6 +45,16 @@ export type PostContext = {
   spindleOn: string
   spindleOff: string
   units: 'G21' | 'G20'
+  /**
+   * Dialect-correct program-end terminator (`M2` or `M30`) for templates that
+   * support more than one controller family (e.g. the generic `cnc_generic_mm.hbs`
+   * post). Smoothieware/GRBL families MUST use `M2` because `M30` can delete the
+   * running file from the Carvera SD card; Mach3/RichAuto + Fanuc use `M30`
+   * (program end + rewind). Resolved by `resolveGenericProgramEnd(dialect)`.
+   * Templates that hard-code their own terminator (the Carvera/Laguna posts)
+   * ignore this field and stay byte-identical.
+   */
+  programEnd: 'M2' | 'M30'
   /** e.g. G54…G59 when workCoordinateIndex 1–6 was supplied to the post. */
   wcsLine?: string
   /** Optional human-readable operation label injected as a comment near the top of the file. */
@@ -182,6 +192,37 @@ export type PostContext = {
  * Returns the (possibly clamped) RPM and an optional warning string
  * describing any adjustment that was made.
  */
+/**
+ * Dialect-correct program-end terminator for multi-dialect templates.
+ *
+ * - `grbl` / `grbl_4axis` / `smoothieware` (Makera Carvera family) -> `M2`.
+ *   Smoothieware community firmware can read `M30` as "program end AND delete
+ *   the file from the SD card", silently destroying the program the operator
+ *   is about to re-run. Use `M2`.
+ * - `mach3` / `mach3_4axis` (RichAuto A-series, Laguna Swift) and `fanuc` ->
+ *   `M30` (program end + rewind; Mach3 relies on the rewind side-effect).
+ * - Everything else defaults to `M30`, the RS274NGC program-end+rewind
+ *   terminator accepted by the broadest set of controllers.
+ *
+ * Mirrors `preferredProgramEndForDialect` in
+ * `src/shared/gcode-end-program-invariants.ts` so the generic template emits
+ * exactly the terminator the post-pipeline end-program validator prefers (no
+ * self-inflicted END_DIALECT_MISMATCH warning).
+ */
+export function resolveGenericProgramEnd(
+  dialect: MachineProfile['dialect']
+): 'M2' | 'M30' {
+  switch (dialect) {
+    case 'grbl':
+    case 'grbl_4axis':
+    case 'smoothieware':
+      return 'M2'
+    default:
+      // mach3 / mach3_4axis / fanuc / siemens / heidenhain / generic_mm
+      return 'M30'
+  }
+}
+
 export function clampSpindleRpm(
   rpm: number,
   machine: MachineProfile
@@ -1092,12 +1133,15 @@ export async function renderPost(
     carveraProbingBlock = buildCarveraProbingBlock(opts.carveraProbing, ax)
   }
 
+  const programEnd = resolveGenericProgramEnd(machine.dialect)
+
   const ctx: PostContext = {
     machine,
     toolpathLines: processedLines,
     spindleOn,
     spindleOff: off,
     units,
+    programEnd,
     ...(wcsLine ? { wcsLine } : {}),
     ...(opts?.operationLabel ? { operationLabel: opts.operationLabel } : {}),
     ...(spindleWarning ? { spindleWarning } : {}),

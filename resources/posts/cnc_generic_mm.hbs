@@ -32,6 +32,10 @@ G17              ; XY plane (typical for G2/G3 arcs)
 {{#if operationLabel}}; Operation: {{operationLabel}}
 {{/if}}; Spindle on (dialect from machine profile — change profile if M3/S/RPM differ)
 {{spindleOn}}
+G4 P2            ; dwell 2s so the spindle reaches commanded RPM before the first cut
+; Pre-cut safe-Z lift so the first move starts from a known clearance,
+; regardless of where the previous job left Z or what Z the controller booted into.
+G0 Z{{machine.workAreaMm.z}} ; safe Z lift before first toolpath move
 {{#each toolpathLines}}
 {{this}}
 {{/each}}
@@ -40,4 +44,4 @@ G17              ; XY plane (typical for G2/G3 arcs)
 ; Retract Z to safe clearance and park (adjust to your machine's preferred home)
 G0 Z{{machine.workAreaMm.z}} ; safe Z retract — adjust to your actual safe clearance
 G0 X0 Y0                     ; park X Y — adjust to your preferred home position
-M30
+{{programEnd}}               ; program end — M2 for Smoothieware/GRBL (Carvera), M30 for Mach3/RichAuto/Fanuc
