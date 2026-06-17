@@ -3799,3 +3799,18 @@
 .fdm-device-cancel:not(:disabled):hover {
   background: var(--err-dim);
 }
+
+
+/* Feeds & Speeds reference card (CNC manufacture aux panel) — Cycle 271 */
+.util-fs-card { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.util-fs-controls { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
+.util-fs-controls .util-panel-control { flex: 1 1 8rem; }
+.util-fs-controls input[type="number"] { width: 100%; }
+.util-fs-aggr { display: flex; gap: var(--sp-1, 4px); }
+.util-fs-aggr-btn { flex: 1 1 0; text-transform: capitalize; }
+.util-fs-aggr-btn[aria-pressed="true"] { background: var(--accent, #3b82f6); color: var(--accent-fg, #fff); border-color: var(--accent, #3b82f6); }
+.util-fs-readout { display: grid; grid-template-columns: auto 1fr; gap: 2px var(--sp-3, 12px); margin: var(--sp-2, 8px) 0 0; }
+.util-fs-row { display: contents; }
+.util-fs-row dt { color: var(--text-muted, #888); }
+.util-fs-row dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.util-fs-notes { margin: var(--sp-2, 8px) 0 0; padding-left: var(--sp-3, 12px); display: flex; flex-direction: column; gap: 2px; }

@@ -42,7 +42,7 @@ For the shop's real workflow — parametric CAD → CAM + FDM for these three ma
 ### Tier 1 — felt in daily use
 1. **Editable feature timeline** — reorder / suppress / delete / (later) edit-and-rebuild. The #1 Fusion CAD differentiator. *(In progress.)*
 2. **Verified 3D finishing** — ✅ **done (Cycle 268)** for the always-on parallel finish; true z-level Waterline + scallop remain follow-ons (need OpenCAMLib or new engines). *(OCL feasibility in progress.)*
-3. **Click-to-select faces/edges** for fillet/chamfer/hole (selection primitives exist — wire them to feature ops instead of "all edges").
+3. ✅ **Click-to-select faces/edges** for fillet/chamfer — DONE (audit was stale): FilletDialog/ChamferDialog emit `fillet_select.pickedEdgeIds` from the live edge pick, mounted via FeatureDialogHost in DesignWorkspace.
 4. **Material-removal simulation** in the CAM verify step — "simulate before you cut". *(In progress.)*
 
 ### Tier 2 — strong value, narrower
@@ -72,6 +72,7 @@ NURBS/surface + sculpt/T-spline, FEA/simulation, render, generative design, PCB/
   - **Material-removal Simulate view** — voxel removal heatmap from posted G-code (`b137197`). Heatmap pixels still need a hands-on Electron verify.
   - **Editable feature timeline** — kernel-op delete wired end-to-end + pure utils (`9c68411`); move/suppress/roll-back were already live.
   - **OpenCAMLib scaffolding + AdaptiveWaterline crash-guard** (`d2db2b6`) — feasibility verified (3.7–3.11 wheels only); install script + gated smoke. NOT yet enabled for the user (manual: run the script against the 3.11 sidecar venv).
-- ⏭️ **Next candidates:** hands-on verify the removal heatmap · enable OCL on the 3.11 venv → true Waterline (extend the Cycle-268 posted contract to the OCL path) · click-to-select feature editing · assembly rotational solver · drawings HLR + hole tables.
+- ✅ **Cycle 271 (2026-06-16)** — feeds & speeds calculator (CNC aux panel): pure `computeFeedsAndSpeeds` over the existing reference tables, machine-clamped, self-contained card mounted in `CamManufacturePanel`.
+- ⏭️ **Next candidates:** "Apply to op" for the feeds/speeds calc · drawings surface-finish symbols (mirror the GD&T model) + hole tables + detail/aux views · assembly rotational solver (foundational — translation-only solver today, and the E-vs-F heuristic refuses under-determined systems) · enable OCL on the 3.11 venv → true Waterline.
 
 > This file is a living roadmap. Each cycle that closes a row should update the status table above and the improvement log.

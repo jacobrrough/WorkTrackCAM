@@ -16,6 +16,7 @@ import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
 import { EmptyState } from '../src/EmptyState'
 import { ProfileStack, type ProfileStackDisplayMode } from './ProfileStack'
+import { FeedsSpeedsCard } from './FeedsSpeedsCard'
 import {
   runCarveraUploadSurface,
   runK2PushSurface,
@@ -424,6 +425,16 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
         On the <strong>Plan</strong> tab, picking a <strong>library tool</strong> fills diameter and suggests a rough feed (mm/min)
         when the tool has surface speed and chipload set — always verify before running on hardware.
       </p>
+      {activeCnc && (
+        <FeedsSpeedsCard
+          machine={{
+            name: activeCnc.name,
+            maxFeedMmMin: activeCnc.maxFeedMmMin,
+            minSpindleRpm: activeCnc.minSpindleRpm,
+            maxSpindleRpm: activeCnc.maxSpindleRpm
+          }}
+        />
+      )}
       <h3 className="subh util-section-heading" id="mfg-cam-run-heading">
         Generate toolpath
       </h3>
