@@ -2760,7 +2760,7 @@ export function ManufactureWorkspace({
           onChangeQualityPreset={handleChangeQualityPreset}
         />
       ) : null}
-      <SliceManufacturePanel {...auxPanelProps} />
+      <SliceManufacturePanel {...auxPanelProps} showSendButton={false} />
       <FdmDeviceControls
         printerUrl={settings?.moonrakerUrl ?? ''}
         onStatus={onStatus}
@@ -2833,7 +2833,7 @@ export function ManufactureWorkspace({
       className="workspace-stage-body workspace-stage-body--send"
       data-testid="workflow-stage-body-send"
     >
-      <CamManufacturePanel {...auxPanelProps} />
+      <CamManufacturePanel {...auxPanelProps} showSendButton={false} />
       <ProfileStack
         machineMode="cnc"
         machine={activeMachine ?? null}

@@ -19213,3 +19213,19 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Scope note:** angle/tangent solve for the **revolute** case (`E === F`). A free-floating (no-joint) part + angle is still under-constrained by count (no rotational DOF added there); full SE(3) free-body rotation + under-determined solving remains the larger "full-vision" enhancement.
 
 **Next cycle recommendation:** wire the authoring picker to OFFER angle/tangent when a selected part has a revolute joint (the two-axis + target-angle inputs + Model-C persist fold) so the now-working solver capability is user-reachable; OR the feeds/speeds "Apply to op"; OR drawings surface-finish symbols.
+
+## Cycle 273 — UI cleanup: de-duplicate the Manufacture send buttons (one send per view) (2026-06-16)
+
+**Focus:** user report — "lots of duplicate buttons; every function should have ONE accessible button." Ran a 4-region UI audit (chrome / Design / Manufacture / legacy src), then fact-checked it. **Honest findings:** chrome is clean (one button each); the Design feature-picker "duplicates" are a legitimate 2-step flow (pick → configure → apply), NOT dupes; one auditor **hallucinated** the deleted ShopApp-shell files as "mounted" (verified MISSING). The real, user-visible duplicate: in the workflow **Device/Send stages**, `SliceManufacturePanel`/`CamManufacturePanel` render their OWN send button right next to the **ProfileStack** send — two identical "Send to K2 Plus" / "Upload to Carvera" buttons in one view.
+
+**Fix (low-risk, contract-preserving):** added `showSendButton?` (default `true`) to the aux-panel props; gated each panel's send button on it; the Device/Send stage bodies pass `showSendButton={false}` (ProfileStack provides the single send there). Shared controls the send depends on — the CFS slot picker, the Carvera connection/device pickers — stay visible. The legacy slice/cam sub-tabs keep the panel's send (it's the sole send there → no orphan).
+
+**Why gate, not delete:** the panel K2-send is the contract-pinned **[P2-K2-PUSH]** button, and ProfileStack's send is ALSO pin-covered (`ProfileStack.test.tsx` asserts the Send button + enable/disable gating). Gating (vs deleting the handler) keeps the panel send for its standalone sub-tab, avoids a dangling-handler cascade, and keeps every existing pin green (default props still render the button). The send IPC surfaces (`runK2PushSurface`/`runCarveraUploadSurface`) are untouched.
+
+**Tests:** +1 dedup pin (`showSendButton=false` hides the K2 button but keeps the section + CFS picker). All [P2-K2-PUSH] pins + ProfileStack send pins stay green. tsc clean; full suite ****17,301 pass / 1 skip / 0 fail****. Renderer-only — no G-code emission (gcode-safety not triggered).
+
+**Audit findings FILED (deliberately not done this cycle — each is its own careful change):**
+- **Dead legacy code** orphaned by the P5 shell cutover (0 live importers): `LeftPanel` / `PropertyPanel` / `OpSequencer` / `ToolLibraryPanel` / `FeedsCalcModal`. Deletion is coupled to source-tree-walking pin tests (`renderer-svg-accessibility` reads `LeftPanel.tsx`; `renderer-select-textarea-controlled` has count floors) — those pins must be updated alongside.
+- **Two parallel Manufacture tab systems** (legacy `panelTab` sub-tabs + the workflow-stage tabs) both render the panels — the deeper structural duplication; a larger consolidation.
+
+**Next cycle recommendation:** delete the dead legacy cluster + update the coupled source-walking pins; OR consolidate the two Manufacture tab systems; OR continue Fusion-parity (drawings surface-finish symbols / authoring picker for the revolute angle mates).

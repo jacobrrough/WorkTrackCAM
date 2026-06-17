@@ -72,6 +72,16 @@ export type ManufactureAuxPanelsProps = {
   importText: string
   onImportTextChange: (value: string) => void
   onSaveSettingsField: (partial: Partial<AppSettings>) => void
+  /**
+   * When `false`, the panel hides its OWN machine-send button ("Send to K2 Plus" /
+   * "Upload to Carvera"). The workflow Device/Send stages pass `false` because the
+   * ProfileStack rendered alongside already provides the single send button — so the
+   * same view never shows two identical send buttons. Defaults to `true` (the legacy
+   * slice/cam sub-tabs render the panel standalone, where its send is the only one).
+   * Shared controls the send depends on (CFS slot picker, Carvera connection picker)
+   * stay visible regardless, since ProfileStack's send consumes them.
+   */
+  showSendButton?: boolean
   onRunSlice: () => void
   onRunCam: () => void
   onImportTools: (kind: 'csv' | 'json' | 'fusion' | 'fusion_csv', target?: 'project' | 'machine') => void
@@ -301,14 +311,16 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
               {`Using CFS slot ${cfsSlotId} for the next Send (override via the buttons above).`}
             </p>
           </fieldset>
-          <button
-            type="button"
-            data-testid="k2-send-to-printer-button"
-            disabled={!canSendToK2 || k2SendBusy}
-            onClick={() => void sendToK2Plus()}
-          >
-            {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
-          </button>
+          {p.showSendButton !== false ? (
+            <button
+              type="button"
+              data-testid="k2-send-to-printer-button"
+              disabled={!canSendToK2 || k2SendBusy}
+              onClick={() => void sendToK2Plus()}
+            >
+              {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
+            </button>
+          ) : null}
         </section>
       ) : null}
       {p.sliceOut.trim().length > 0 ? (
@@ -641,14 +653,16 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
             aria-describedby="mfg-carvera-hint"
           />
         </label>
-        <button
-          type="button"
-          className="secondary"
-          disabled={!p.projectDir || !p.camOut?.trim() || carveraBusy}
-          onClick={() => void uploadToCarvera()}
-        >
-          {carveraBusy ? 'Uploading…' : 'Upload to Carvera'}
-        </button>
+        {p.showSendButton !== false ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={!p.projectDir || !p.camOut?.trim() || carveraBusy}
+            onClick={() => void uploadToCarvera()}
+          >
+            {carveraBusy ? 'Uploading…' : 'Upload to Carvera'}
+          </button>
+        ) : null}
       </div>
       {isCarvera ? (
         <CarveraSetupPanel

@@ -103,6 +103,17 @@ describe('SliceManufacturePanel — K2 Plus Send button gating', () => {
     expect(html).toContain('Send to K2 Plus')
   })
 
+  it('hides the Send button (but keeps the K2 section + CFS picker) when showSendButton=false', () => {
+    // Dedup: in the workflow Device stage the panel renders next to a ProfileStack
+    // that already provides the single "Send to K2 Plus" button, so the panel's own
+    // send button is suppressed (showSendButton=false) to avoid two identical sends
+    // in one view. The K2 section + CFS slot picker stay (ProfileStack's send uses
+    // the persisted slot).
+    const html = render(baseProps({ activeMachine: k2Plus, showSendButton: false }))
+    expect(html).toContain('data-testid="k2-send-to-printer-section"')
+    expect(html).not.toContain('data-testid="k2-send-to-printer-button"')
+  })
+
   it('omits the Send section when active machine is Laguna Swift CNC', () => {
     const html = render(baseProps({ activeMachine: lagunaSwift }))
     expect(html).not.toContain('data-testid="k2-send-to-printer-section"')
