@@ -111,12 +111,12 @@ export const DEFERRED_MATE_KINDS: ReadonlyArray<{
   {
     kind: 'angle',
     reason:
-      'The assembly solver currently exposes only translational degrees of freedom, so it cannot rotate a part to hit an angle target. Available once rotational DOF land.',
+      'The solver now rotates a revolute-jointed part about its hinge axis to satisfy an angle target (assembly-solver-core, Cycle 272). What is still deferred is the authoring form — it does not yet offer angle/tangent or gate them on a revolute joint; coming with the revolute-gated picker + angle inputs.',
   },
   {
     kind: 'tangent',
     reason:
-      'Tangency is a rotational/contact condition; the foundation solver has no rotational DOF to satisfy it yet. Deferred until rotational DOF land.',
+      'Tangency is a rotational/contact condition; it now solves on a revolute hinge in the solver, but is still deferred from the authoring form until the revolute-gated picker + tangent inputs land.',
   },
 ]
 

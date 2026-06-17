@@ -279,18 +279,52 @@ function totalEnergy(
  * (Foundation moves translation only; jointed-but-no-mate components are short-circuited as
  * under-constrained before the loop runs, so they never need scalar handles here.)
  */
-type FreeVar = { componentId: string; axis: 'x' | 'y' | 'z' }
+type FreeVarAxis = 'x' | 'y' | 'z' | 'rx' | 'ry' | 'rz'
+type FreeVar = { componentId: string; axis: FreeVarAxis }
 
 function readVar(transforms: Map<string, AssemblyTransform6>, fv: FreeVar): number {
   const t = transforms.get(fv.componentId)!
-  return fv.axis === 'x' ? t.x : fv.axis === 'y' ? t.y : t.z
+  switch (fv.axis) {
+    case 'x':
+      return t.x
+    case 'y':
+      return t.y
+    case 'z':
+      return t.z
+    // Rotational handles operate in RADIANS so their gradient is the same O(1)
+    // scale as the (mm) translational handles — a single learning rate then
+    // converges both without ill-conditioning.
+    case 'rx':
+      return t.rxDeg * DEG2RAD
+    case 'ry':
+      return t.ryDeg * DEG2RAD
+    case 'rz':
+      return t.rzDeg * DEG2RAD
+  }
 }
 
 function writeVar(transforms: Map<string, AssemblyTransform6>, fv: FreeVar, value: number): void {
   const t = transforms.get(fv.componentId)!
-  if (fv.axis === 'x') transforms.set(fv.componentId, { ...t, x: value })
-  else if (fv.axis === 'y') transforms.set(fv.componentId, { ...t, y: value })
-  else transforms.set(fv.componentId, { ...t, z: value })
+  switch (fv.axis) {
+    case 'x':
+      transforms.set(fv.componentId, { ...t, x: value })
+      return
+    case 'y':
+      transforms.set(fv.componentId, { ...t, y: value })
+      return
+    case 'z':
+      transforms.set(fv.componentId, { ...t, z: value })
+      return
+    case 'rx':
+      transforms.set(fv.componentId, { ...t, rxDeg: value / DEG2RAD })
+      return
+    case 'ry':
+      transforms.set(fv.componentId, { ...t, ryDeg: value / DEG2RAD })
+      return
+    case 'rz':
+      transforms.set(fv.componentId, { ...t, rzDeg: value / DEG2RAD })
+      return
+  }
 }
 
 function buildReport(
@@ -359,11 +393,21 @@ export function solveMateConstraints(
     if (c.grounded) continue
     const dof = jointDof(c.joint)
     freeDof += dof
-    // Only no-joint, mate-referenced components get translational handles the loop can move.
-    if (c.joint == null && referenced.has(c.id)) {
+    if (!referenced.has(c.id)) continue
+    if (c.joint == null) {
+      // No-joint, mate-referenced: translational handles the loop can move.
       freeVars.push({ componentId: c.id, axis: 'x' })
       freeVars.push({ componentId: c.id, axis: 'y' })
       freeVars.push({ componentId: c.id, axis: 'z' })
+    } else if (c.joint === 'revolute') {
+      // Revolute (1 rotational DOF): wire the single rotation about the joint's
+      // world axis (`revolutePreviewAxis`, default +Z) as a movable handle, so an
+      // angle/tangent mate on a hinge converges (E===F=1) instead of stalling at
+      // max_iterations with no handle to move. Other joint kinds stay
+      // DOF-counted-but-unwired (foundation — see jointDof).
+      const ax = c.revolutePreviewAxis
+      const rot: FreeVarAxis = ax === 'x' ? 'rx' : ax === 'y' ? 'ry' : 'rz'
+      freeVars.push({ componentId: c.id, axis: rot })
     }
   }
 
@@ -397,6 +441,22 @@ export function solveMateConstraints(
       report: buildReport(activeMates, transforms, 0, 'under_constrained', {
         freeVariableCount: freeDof - equationCount
       })
+    }
+  }
+
+  // Anti-singularity seed: a cos-based angle/tangent residual has a ZERO gradient
+  // when the two axes start exactly aligned or perpendicular (sin = 0 at the
+  // extremum), which would stall a rotational handle at its start pose. If we are
+  // not already converged, nudge each rotational handle a deterministic 2° to
+  // break the symmetry so gradient descent has a slope to follow. Harmless when
+  // already near the target (the loop corrects it); skipped once energy < tol, and
+  // never touches translational handles.
+  if (totalEnergy(activeMates, transforms) >= energyTol) {
+    const seedRad = 2 * DEG2RAD
+    for (const fv of freeVars) {
+      if (fv.axis === 'rx' || fv.axis === 'ry' || fv.axis === 'rz') {
+        writeVar(transforms, fv, readVar(transforms, fv) + seedRad)
+      }
     }
   }
 

@@ -19193,3 +19193,23 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Honest scope note:** the parity audit overstated several gaps (fillet/chamfer pick, editable timeline, material-removal sim are all in — the roadmap doc was corrected for fillet/chamfer in spirit). The genuinely-deferred remaining items (codebase-confirmed) are the assembly ROTATIONAL solver (translation-only foundation + the E-vs-F heuristic refuses under-determined systems — a foundational redesign, not a one-cycle slice) and drawings detail/aux views + hole tables + surface-finish/weld symbols.
 
 **Next cycle recommendation:** (a) add an "Apply to op" action so the calculator one-click sets feed/RPM on the selected op (once the op-tool surface is confirmed); (b) drawings surface-finish symbols (mirror the existing GD&T model — clean additive); or (c) the assembly rotational solver as its own dedicated multi-step effort.
+
+## Cycle 272 — Assembly solver: revolute-joint angle/tangent mates now converge (2026-06-16)
+
+**Focus:** Fusion-parity push — closed **Cycle 264's explicit deferral** ("angle + tangent mates DEFERRED; the foundation solver exposes only translational free variables, so it provably cannot reduce a rotational residual"). The fix is contained: a REVOLUTE joint is 1 rotational DOF and an angle mate is 1 equation — exactly the `E === F` regime the solver already runs; the only gap was that the revolute DOF wasn't wired as a movable handle. CAD-only (no G-code emission). One commit.
+
+**Baseline → result:** full suite ****17,300 pass / 1 skip / 0 fail****; tsc clean. (On `main` 2b7933f + this.)
+
+**What landed — `src/shared/assembly-solver-core.ts`:**
+- Wired the revolute joint's single rotational DOF as a solver free variable, mapped from the joint's world axis (`revolutePreviewAxis` +X/+Y/+Z → an `rx`/`ry`/`rz` handle). The angle/tangent residual already existed (cos-based) — it just had nothing to move.
+- Rotational handles operate in **radians** so a single learning rate converges both translation (mm) and rotation without ill-conditioning.
+- **Anti-singularity seed:** a cos residual has a ZERO gradient when axes start exactly aligned/perpendicular (sin = 0 at the extremum); a deterministic 2° nudge (only when energy > tol, only on rotational handles) breaks the symmetry so gradient descent has a slope. No `Math.random`/`Date.now` — determinism preserved.
+- Other joint kinds (slider/planar/cylindrical/...) stay DOF-counted-but-unwired (foundation) — out of scope.
+
+**Tests:** NEW `assembly-solver-revolute.test.ts` (7): Z-hinge angle 90° from an **exactly-aligned start** (exercises the seed), 45° (dot → cos45°), tangent, X-hinge (rotates about `rx`), plus no-regression (no-mate revolute still `under_constrained`; translational coincident unchanged with **no rotation introduced**). Existing `assembly-solver-core.test.ts` (12) stays green.
+
+**Honesty / reachability:** the AUTHORING form still defers angle/tangent (`DEFERRED_MATE_KINDS`) — the solver does them now, but OFFERING them in the picker needs revolute-gating + two-axis/target-angle inputs + a Model-C persist fold (a follow-on). Updated the deferral reason strings to say exactly that (solver does it; the form is what's pending), keeping the picker honest.
+
+**Scope note:** angle/tangent solve for the **revolute** case (`E === F`). A free-floating (no-joint) part + angle is still under-constrained by count (no rotational DOF added there); full SE(3) free-body rotation + under-determined solving remains the larger "full-vision" enhancement.
+
+**Next cycle recommendation:** wire the authoring picker to OFFER angle/tangent when a selected part has a revolute joint (the two-axis + target-angle inputs + Model-C persist fold) so the now-working solver capability is user-reachable; OR the feeds/speeds "Apply to op"; OR drawings surface-finish symbols.
