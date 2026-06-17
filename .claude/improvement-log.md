@@ -19229,3 +19229,19 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 - **Two parallel Manufacture tab systems** (legacy `panelTab` sub-tabs + the workflow-stage tabs) both render the panels — the deeper structural duplication; a larger consolidation.
 
 **Next cycle recommendation:** delete the dead legacy cluster + update the coupled source-walking pins; OR consolidate the two Manufacture tab systems; OR continue Fusion-parity (drawings surface-finish symbols / authoring picker for the revolute angle mates).
+
+## Cycle 274 — Legacy dead-code removal: 8 orphaned ShopApp-era files deleted (2026-06-16)
+
+**Focus:** user — "clean up the legacy code." Did a COMPREHENSIVE orphan sweep of `src/renderer/src` (importer analysis, not the prior audit's partial list — and the audit had hallucinated some files). Deleted the post-P5-cutover dead UI: files with **zero live importers** (verified — tsc stays clean after deletion).
+
+**Deleted (8 source + 2 dedicated tests):** `LeftPanel`, `PropertyPanel`, `OpSequencer`, `ToolLibraryPanel`, `FeedsCalcModal` (the old ShopApp left-panel / property / op-sequencer / tool-library / feeds-modal cluster) + `OnboardingOverlay`, `MoonrakerPreviewBanner`, `FirstLaunchWizard` (all reference the retired ShopApp; unmounted in the new shell). Plus their dedicated tests `MoonrakerPreviewBanner.test.tsx` + `FirstLaunchWizard.test.tsx`.
+
+**KEPT deliberately:** `WorkspaceErrorBoundary` — 0 importers BUT no ShopApp reference + a "Workspace" (new-shell) name → likely **intended new-shell error-boundary infra that should be WIRED, not deleted**. Flagged. (Did not delete intended-but-unwired work — the "built-but-unreachable" trap.)
+
+**Source-walking pin tests retuned (4):** the renderer-wide regression-FLOOR pins count elements across `src/renderer/src`; deleting files legitimately dropped the counts below their floors. Rebaselined: buttons 60→30 (now ~37), inputs 30→10 (~13), selects 15→10 (~12); removed the `<svg>` ≥1-floor + the LeftPanel-specific aria-hidden anchor (LeftPanel held the only `<svg>`; now 0 — the missing-a11y-attribute guard for any FUTURE `<svg>` stays). Floor comments updated to the new baseline.
+
+**Verification:** tsc clean (no live importer broke → confirms true orphans); the 4 retuned pins green; full suite ****17,256 pass / 1 skip / 0 fail** (-45: the deleted dead-component tests + 2 obsolete svg sub-tests; 0 failures)**. Renderer-only — no G-code (gcode-safety n/a).
+
+**Honest note:** deleting FirstLaunchWizard/OnboardingOverlay removed the (already-unmounted) legacy onboarding — the new shell currently wires NO first-launch flow (a pre-existing gap this surfaces, not causes). Worth re-adding a new-shell onboarding.
+
+**Next cycle recommendation:** wire `WorkspaceErrorBoundary` into AppShell (or confirm-delete); add a new-shell onboarding/first-launch; OR the deeper structural duplication — consolidate the two parallel Manufacture tab systems (legacy `panelTab` vs workflow-stage tabs), which is the real source of the "I keep seeing the same thing twice" feel.

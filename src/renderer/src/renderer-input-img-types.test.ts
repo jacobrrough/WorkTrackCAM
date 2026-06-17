@@ -192,10 +192,10 @@ describe('renderer-wide <input> type= pin [ID-0163]', () => {
     for (const file of files) {
       total += extractOpeningTags(readFileSync(file, 'utf-8'), 'input').length
     }
-    // Cycle 74 baseline: 36 <input> tags across the renderer source tree.
-    // Floor at 30 to allow conditional-render variants the parser counts
-    // once per source occurrence.
-    expect(total).toBeGreaterThanOrEqual(30)
+    // Rebaselined Cycle 274 after the legacy ShopApp-era file deletion:
+    // ~13 <input> tags remain in src/renderer/src. Floor at 10 to flag a
+    // wholesale removal or a broken walker.
+    expect(total).toBeGreaterThanOrEqual(10)
   })
 })
 

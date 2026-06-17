@@ -156,11 +156,12 @@ describe('renderer-wide button type="button" pin [ID-0152-extended]', () => {
     for (const file of files) {
       total += extractButtonOpeningTags(readFileSync(file, 'utf-8')).length
     }
-    // Cycle 71 baseline: 62 buttons in non-toolbar renderer + 13 toolbar
-    // tb-btn / tb-machine-badge in ShopApp.tsx (tb-btn family pinned by
-    // a sibling test) = 75 minimum. Floor at 60 to allow conditional-render
-    // variants the parser counts once per source occurrence.
-    expect(total).toBeGreaterThanOrEqual(60)
+    // Rebaselined Cycle 274 after deleting the legacy ShopApp-era files
+    // (LeftPanel/PropertyPanel/OpSequencer/ToolLibraryPanel/FeedsCalcModal/
+    // OnboardingOverlay/MoonrakerPreviewBanner/FirstLaunchWizard): ~37 buttons
+    // remain in src/renderer/src. Floor at 30 to flag a wholesale removal or a
+    // broken walker while allowing conditional-render variance.
+    expect(total).toBeGreaterThanOrEqual(30)
   })
 
   it('the parser correctly handles brace-balanced JSX attributes (regression smoke)', () => {

@@ -197,12 +197,11 @@ describe('renderer-wide <select> controlled-or-defaulted pin [ID-0167]', () => {
     for (const file of files) {
       total += extractOpeningTags(readFileSync(file, 'utf-8'), 'select').length
     }
-    // Cycle 80 baseline: 20 <select> tags across the renderer source tree
-    // (FeedsCalcModal 3, LeftPanel 3, LibraryView 7, ShopApp 2,
-    // ToolLibraryPanel 4, others 1). Floor at 15 to allow a small number
-    // of selects to be removed via genuine simplification while flagging
-    // a wholesale removal that would suggest the walker silently broke.
-    expect(total).toBeGreaterThanOrEqual(15)
+    // Rebaselined Cycle 274 after the legacy ShopApp-era file deletion
+    // (removed FeedsCalcModal/LeftPanel/ToolLibraryPanel selects): ~12
+    // <select> tags remain (LibraryView 7, others). Floor at 10 to flag a
+    // wholesale removal or a broken walker.
+    expect(total).toBeGreaterThanOrEqual(10)
   })
 })
 

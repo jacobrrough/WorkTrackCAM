@@ -201,30 +201,12 @@ describe('renderer-wide <svg> accessibility pin [ID-0175]', () => {
     ).toBe(0)
   })
 
-  it('finds at least 1 <svg> opening tag across the renderer (regression-floor pin)', () => {
-    // Cycle 89 baseline: 1 <svg> tag (LeftPanel.tsx post-arrangement
-    // visual diagram, fixed up with aria-hidden="true" in this cycle).
-    // Floor at 1 to detect the accidental removal of the only currently
-    // pinned SVG (which would suggest the walker is broken or the
-    // diagram was deleted entirely).
-    let total = 0
-    for (const file of files) {
-      total += extractOpeningTags(readFileSync(file, 'utf-8'), 'svg').length
-    }
-    expect(total).toBeGreaterThanOrEqual(1)
-  })
-
-  it('the LeftPanel post-arrangement diagram specifically has aria-hidden="true"', () => {
-    // Anchor pin for the only SVG currently in the renderer: explicitly
-    // assert the production fix landed in this cycle survives.
-    const leftPanelSrc = readFileSync(
-      join(RENDERER_ROOT, 'LeftPanel.tsx'),
-      'utf-8'
-    )
-    const tags = extractOpeningTags(leftPanelSrc, 'svg')
-    expect(tags.length).toBe(1)
-    expect(getAttributeValue(tags[0], 'aria-hidden')).toBe('true')
-  })
+  // Cycle 274: the only pinned <svg> lived in the legacy LeftPanel.tsx
+  // post-arrangement diagram, deleted with the ShopApp-era cleanup. There are
+  // now 0 <svg> tags in src/renderer/src, so the former "≥1 floor" pin + the
+  // LeftPanel-specific aria-hidden anchor were removed. The missing-a11y-attr
+  // check above still guards any future <svg>; the walker brace/quote
+  // regressions below are unaffected (they use inline source strings).
 })
 
 describe('walker brace-balance + quote regressions [ID-0175]', () => {
