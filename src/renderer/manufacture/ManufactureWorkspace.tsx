@@ -116,6 +116,24 @@ import { useNavigationGuard } from '../app/NavigationGuardContext'
 export type WorkflowStageFdm = 'prepare' | 'preview' | 'device'
 export type WorkflowStageCnc = 'setup' | 'toolpaths' | 'simulate' | 'probing' | 'send'
 export type WorkflowStage = WorkflowStageFdm | WorkflowStageCnc
+
+/**
+ * Whether a workflow stage shows the legacy panelTab sub-tab strip. The strip is the
+ * FINE navigation that the `prepare`/`setup`/`toolpaths` stages delegate to via
+ * `panelTabBody`; the dedicated-body stages (preview/device/simulate/probing/send)
+ * render their own content, so the strip is hidden there (it would be disconnected
+ * from what's shown). Step toward retiring the strip — workflow-stage tabs are the
+ * canonical navigation. Pure; pinned by `ManufactureWorkspace.subtab-visibility.test.ts`.
+ */
+export function stageShowsSubTabStrip(stage: WorkflowStage): boolean {
+  return (
+    stage !== 'preview' &&
+    stage !== 'device' &&
+    stage !== 'simulate' &&
+    stage !== 'probing' &&
+    stage !== 'send'
+  )
+}
 export type WorkflowEnv = 'fdm' | 'cnc'
 
 type WorkflowStageDef<T extends WorkflowStage> = {
@@ -2875,6 +2893,11 @@ export function ManufactureWorkspace({
       break
   }
 
+  // Hide the legacy sub-tab strip in the dedicated-body stages (where it would be
+  // disconnected from what's shown); keep it in the prepare/setup/toolpaths stages
+  // that delegate to panelTabBody. See stageShowsSubTabStrip (pure, pinned).
+  const showSubTabStrip = stageShowsSubTabStrip(workflowStage)
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -2891,7 +2914,7 @@ export function ManufactureWorkspace({
         onSlicePlate={(plateId) => void slicePlateById(plateId)}
         onSliceAllPlates={() => void sliceAllPlatesSequential()}
       />
-      <ManufactureSubTabStrip tab={panelTab} onChange={onPanelTabChange} />
+      {showSubTabStrip ? <ManufactureSubTabStrip tab={panelTab} onChange={onPanelTabChange} /> : null}
       <CamProgressBar running={camRunning} onCancel={() => void handleCamCancel()} />
       <div
         id="manufacture-workspace-panel"

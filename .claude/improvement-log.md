@@ -19245,3 +19245,15 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Honest note:** deleting FirstLaunchWizard/OnboardingOverlay removed the (already-unmounted) legacy onboarding — the new shell currently wires NO first-launch flow (a pre-existing gap this surfaces, not causes). Worth re-adding a new-shell onboarding.
 
 **Next cycle recommendation:** wire `WorkspaceErrorBoundary` into AppShell (or confirm-delete); add a new-shell onboarding/first-launch; OR the deeper structural duplication — consolidate the two parallel Manufacture tab systems (legacy `panelTab` vs workflow-stage tabs), which is the real source of the "I keep seeing the same thing twice" feel.
+
+## Cycle 275 — UI: hide the legacy panelTab sub-tab strip in the dedicated workflow stages (2026-06-16)
+
+**Focus:** user — "consolidate onto the workflow-stage tabs; retire the legacy panelTab strip." **Investigation finding:** the two tab systems are COUPLED, not independent — the `prepare`/`setup`/`toolpaths` stages delegate to `panelTabBody` and use the sub-tab strip for FINE navigation (Plan/Setup/CAM/Simulate/Slice/Calibrate/Tools); the 5 dedicated-body stages (preview/device/simulate/probing/send) render their own content but the strip STILL rendered — a disconnected, duplicate tab row.
+
+**Safe consolidation step:** hide the sub-tab strip in the dedicated-body stages (where it's disconnected from what's shown), keep it in the 3 `panelTabBody` stages (where it's the load-bearing content nav). Extracted the rule into the pure exported `stageShowsSubTabStrip(stage)` + pinned it. **No content orphaned** — every sub-tab stays reachable in its panelTabBody stage (calibrate/tools/slice via prepare/setup/toolpaths).
+
+**Why not full retirement this cycle:** the workflow stages are COARSER than the 7 sub-tabs; fully retiring the strip means re-homing plan/calibrate/tools into the stage model — a UX-design restructure of the core CAM workspace, too risky to rush at this depth. This step removes the visible duplicate tab-row in 5 of ~8 stages safely; full retirement is the remaining dedicated effort.
+
+**Tests:** +2 pins (`stageShowsSubTabStrip`: shown in prepare/setup/toolpaths; hidden in preview/device/simulate/probing/send). No manufacture test pinned the strip's presence, so nothing broke. tsc clean; full suite ****17,258 pass / 1 skip / 0 fail** (+2 pins)**. Renderer-only — no G-code.
+
+**Next cycle recommendation:** the full panelTab retirement (re-home the finer sub-tabs into the coarser stage model) as a dedicated UX effort; wire `WorkspaceErrorBoundary` into AppShell; add a new-shell onboarding/first-launch flow (the legacy one was deleted in Cycle 274).
