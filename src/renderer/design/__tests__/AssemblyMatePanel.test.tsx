@@ -38,6 +38,20 @@ if (gAsRecord['fab'] === undefined) {
 const part = (id: string, name: string): AssemblyPart => ({ id, name, handle: `script:${id}` })
 const TWO_PARTS: readonly AssemblyPart[] = [part('p1', 'Bracket'), part('p2', 'Plate')]
 
+/** A driven part that PASSES the rotational gate: non-grounded revolute hinge. */
+const revolutePart = (id: string, name: string): AssemblyPart => ({
+  id,
+  name,
+  handle: `script:${id}`,
+  joint: 'revolute',
+  grounded: false,
+})
+/** Part 1 reference (grounded base) + Part 2 driven revolute hinge — the solver's converging case. */
+const REVOLUTE_PARTS: readonly AssemblyPart[] = [
+  { ...part('p1', 'Base'), grounded: true },
+  revolutePart('p2', 'Arm'),
+]
+
 describe('AssemblyMatePanel — surface', () => {
   it('renders the root testid + BEM class', () => {
     const html = renderToStaticMarkup(
@@ -209,46 +223,139 @@ describe('AssemblyMatePanel — no console errors on render', () => {
   })
 })
 
-// ── Mate-kind picker: SSOT-derived options (solver-backed only) ───────────────
+// ── Mate-kind picker: SSOT-derived options + the rotational gate ──────────────
 //
-// The picker must offer EXACTLY the engine's OFFERED_MATE_KINDS (the single
-// source of truth) — including the new solver-backed `distance` — and must NOT
-// offer the deferred rotational kinds (angle / tangent), which the foundation
-// solver cannot position. These pins fail loudly if the picker drifts from the
-// SSOT or if someone slips a non-solver-backed kind into the dropdown.
+// HONESTY PIN (updated Cycle 276): the picker offers EXACTLY the engine's
+// OFFERED_MATE_KINDS (the single source of truth) — now SIX kinds, including the
+// once-deferred rotational `angle` / `tangent`. Those two are no longer withheld;
+// instead they are GATED: their <option> renders for every part (SSOT-complete)
+// but is DISABLED unless the driven part (Part 2) is a non-grounded revolute
+// hinge, the only case the solver converges. These pins fail loudly if the picker
+// drifts from the SSOT, drops a kind, or stops gating the rotational kinds.
 
 describe('AssemblyMatePanel — kind picker reflects the solver-backed SSOT', () => {
-  it('renders one <option> per OFFERED_MATE_KIND (point/axis/plane/distance)', () => {
+  it('renders one <option> per OFFERED_MATE_KIND (all six, incl. angle/tangent)', () => {
     const html = renderToStaticMarkup(
-      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+      createElement(AssemblyMatePanel, { parts: REVOLUTE_PARTS, assemblyHandle: 'asm:1' }),
     )
     for (const kind of OFFERED_MATE_KINDS) {
       expect(html).toContain(`value="${kind}"`)
     }
-    // distance is the new solver-backed kind — explicitly present.
-    expect(OFFERED_MATE_KINDS).toContain('distance')
-    expect(html).toContain('value="distance"')
+    // The rotational kinds are now part of the SSOT — explicitly present.
+    expect(OFFERED_MATE_KINDS).toContain('angle')
+    expect(OFFERED_MATE_KINDS).toContain('tangent')
+    expect(html).toContain('value="angle"')
+    expect(html).toContain('value="tangent"')
   })
 
-  it('does NOT offer the deferred rotational kinds (angle / tangent)', () => {
+  it('DEFERRED_MATE_KINDS is now empty — nothing is withheld from the picker', () => {
+    // The old "deferred coming-soon" surface is retired; angle/tangent are offered.
+    expect(DEFERRED_MATE_KINDS).toEqual([])
+  })
+
+  it('DISABLES the angle/tangent options when the driven part is NOT a revolute hinge', () => {
+    // TWO_PARTS has no joint → the gate fails → the rotational options carry
+    // `disabled` (present for SSOT completeness, but not selectable).
     const html = renderToStaticMarkup(
       createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
     )
-    for (const { kind } of DEFERRED_MATE_KINDS) {
-      // No selectable <option value="angle"> / <option value="tangent">.
-      expect(html).not.toContain(`value="${kind}"`)
+    expect(html).toMatch(/<option value="angle"[^>]*disabled/)
+    expect(html).toMatch(/<option value="tangent"[^>]*disabled/)
+    // The positional kinds are never gated.
+    expect(html).not.toMatch(/<option value="point"[^>]*disabled/)
+    expect(html).not.toMatch(/<option value="distance"[^>]*disabled/)
+  })
+
+  it('ENABLES the angle/tangent options when the driven part IS a non-grounded revolute hinge', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: REVOLUTE_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    expect(html).not.toMatch(/<option value="angle"[^>]*disabled/)
+    expect(html).not.toMatch(/<option value="tangent"[^>]*disabled/)
+  })
+
+  it('renders the rotational-gate status note honestly per the driven part', () => {
+    const gated = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    expect(gated).toContain('data-testid="assembly-mate-rotational-gate"')
+    expect(gated).toContain('angle / tangent')
+    expect(gated).toMatch(/revolute/i)
+
+    const enabled = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, { parts: REVOLUTE_PARTS, assemblyHandle: 'asm:1' }),
+    )
+    expect(enabled).toContain('data-testid="assembly-mate-rotational-gate"')
+    expect(enabled).toMatch(/available/i)
+  })
+})
+
+// ── Angle / tangent: axis-picker + degrees inputs (gated on a revolute part) ──
+
+describe('AssemblyMatePanel — angle/tangent authoring inputs', () => {
+  const angleDraft = () => ({ ...makeMateFormDraft('p1', 'p2'), kind: 'angle' as const })
+  const tangentDraft = () => ({ ...makeMateFormDraft('p1', 'p2'), kind: 'tangent' as const })
+
+  it('renders a cardinal axis picker per part AND the degrees input for an angle mate', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: REVOLUTE_PARTS,
+        assemblyHandle: 'asm:1',
+        initialDraft: angleDraft(),
+      }),
+    )
+    expect(html).toContain('data-testid="assembly-mate-axis1-cardinal"')
+    expect(html).toContain('data-testid="assembly-mate-axis2-cardinal"')
+    // The degrees target is unique to the angle kind.
+    expect(html).toContain('data-testid="assembly-mate-angle"')
+    expect(html).toContain('Target angle (degrees)')
+    // No free 3-vector cells for a rotational mate.
+    expect(html).not.toContain('data-testid="assembly-mate-point1-0"')
+    expect(html).not.toContain('data-testid="assembly-mate-axis1-0"')
+  })
+
+  it('renders the axis pickers but NO degrees input for a tangent mate', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: REVOLUTE_PARTS,
+        assemblyHandle: 'asm:1',
+        initialDraft: tangentDraft(),
+      }),
+    )
+    expect(html).toContain('data-testid="assembly-mate-axis1-cardinal"')
+    expect(html).toContain('data-testid="assembly-mate-axis2-cardinal"')
+    // Tangent has no numeric target.
+    expect(html).not.toContain('data-testid="assembly-mate-angle"')
+  })
+
+  it('the axis picker offers exactly x / y / z options', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyMatePanel, {
+        parts: REVOLUTE_PARTS,
+        assemblyHandle: 'asm:1',
+        initialDraft: angleDraft(),
+      }),
+    )
+    for (const ax of ['x', 'y', 'z']) {
+      expect(html).toContain(`value="${ax}"`)
     }
   })
 
-  it('documents the deferred kinds honestly (coming-soon note)', () => {
+  it('ENABLES the submit for an angle mate with NO assembly handle (persist-only)', () => {
+    // An angle mate folds straight to a Model-C constraint — no live B-rep.
     const html = renderToStaticMarkup(
-      createElement(AssemblyMatePanel, { parts: TWO_PARTS, assemblyHandle: 'asm:1' }),
+      createElement(AssemblyMatePanel, {
+        parts: REVOLUTE_PARTS,
+        assemblyHandle: null,
+        initialDraft: angleDraft(),
+      }),
     )
-    expect(html).toContain('data-testid="assembly-mate-deferred"')
-    // Names the deferred kinds so the operator knows they are coming, not broken.
-    for (const { kind } of DEFERRED_MATE_KINDS) {
-      expect(html).toContain(kind)
-    }
+    const match = html.match(/data-testid="assembly-mate-solve"[^>]*>/)
+    expect(match).not.toBeNull()
+    const tagWithoutAria = match?.[0].replace(/aria-disabled="[^"]*"/, '') ?? ''
+    expect(/[\s"]disabled(=|>|\s|$)/.test(tagWithoutAria)).toBe(false)
+    // Persist-only path labels the action "Add mate".
+    expect(html).toContain('Add mate')
   })
 })
 

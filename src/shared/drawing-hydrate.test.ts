@@ -40,6 +40,7 @@ import type { DrawingSectionView } from './drawing-sheet-schema'
 import type {
   DrawingDimension,
   GdtFeatureControlFrame,
+  SurfaceFinishSymbol,
   DrawingNote,
   DrawingRevision,
   DrawingBomRow
@@ -85,6 +86,16 @@ const GDT_FRAME: GdtFeatureControlFrame = {
   placement: { x: 8, y: 8 }
 }
 
+const SURFACE_FINISH: SurfaceFinishSymbol = {
+  id: 'sf-1',
+  material: 'required',
+  ra: 1.6,
+  machiningAllowanceMm: 0.5,
+  lay: 'perpendicular',
+  anchor: ANCHOR('e1', 20, 8),
+  placement: { x: 20, y: 8 }
+}
+
 const TITLE_BLOCK: DrawingTitleBlock = {
   name: 'Bracket',
   scale: '1:1',
@@ -113,11 +124,12 @@ const BOM_ROW: DrawingBomRow = {
   description: 'Aluminium plate'
 }
 
-/** A fully-populated renderer drawing state (all six pieces non-empty). */
+/** A fully-populated renderer drawing state (all seven pieces non-empty). */
 function fullViewState(): DrawingViewState {
   return {
     dimensions: [LINEAR_DIM, RADIAL_DIM],
     featureControlFrames: [GDT_FRAME],
+    surfaceFinishes: [SURFACE_FINISH],
     titleBlock: TITLE_BLOCK,
     notes: [NOTE],
     revisions: [REVISION],
@@ -136,6 +148,7 @@ describe('foldDrawingState — shape', () => {
     expect(sheet.id).toBe(PRIMARY_DRAWING_SHEET_ID)
     expect(sheet.annotations?.dimensions).toHaveLength(2)
     expect(sheet.annotations?.featureControlFrames).toHaveLength(1)
+    expect(sheet.annotations?.surfaceFinishes).toHaveLength(1)
     expect(sheet.annotations?.notes).toHaveLength(1)
     expect(sheet.annotations?.revisions).toHaveLength(1)
     expect(sheet.annotations?.bom).toHaveLength(1)
@@ -225,6 +238,22 @@ describe('fold → save/load → hydrate round-trip', () => {
     expect(hydrated.titleBlock).toEqual(TITLE_BLOCK)
   })
 
+  it('surface-finish symbols survive the round-trip (anchor refId intact)', () => {
+    const bare: SurfaceFinishSymbol = {
+      id: 'sf-bare',
+      material: 'any',
+      anchor: ANCHOR('', 1, 2),
+      placement: { x: 1, y: 2 }
+    }
+    const state: DrawingViewState = {
+      ...emptyDrawingViewState(),
+      surfaceFinishes: [SURFACE_FINISH, bare]
+    }
+    const hydrated = hydrateDrawingFile(saveLoadRoundTrip(foldDrawingState(state)))
+    expect(hydrated.surfaceFinishes).toEqual([SURFACE_FINISH, bare])
+    expect(hydrated.surfaceFinishes[0]?.anchor.refId).toBe('e1')
+  })
+
   it('re-folding the hydrated state is a fixed point (idempotent normalization)', () => {
     const state = fullViewState()
     const file1 = saveLoadRoundTrip(foldDrawingState(state))
@@ -252,6 +281,7 @@ describe('hydrateDrawingFile — legacy / empty back-compat', () => {
     const hydrated = hydrateDrawingFile(legacy)
     expect(hydrated.dimensions).toEqual([])
     expect(hydrated.featureControlFrames).toEqual([])
+    expect(hydrated.surfaceFinishes).toEqual([])
     expect(hydrated.notes).toEqual([])
     expect(hydrated.revisions).toEqual([])
     expect(hydrated.bom).toEqual([])

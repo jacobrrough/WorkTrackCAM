@@ -1,0 +1,123 @@
+/* ============================================================
+   WorkTrack3D — First-run onboarding picker (FirstRunOnboarding.tsx).
+
+   The new-shell replacement for the deleted FirstLaunchWizard's
+   first-run trigger. Additive on top of the shared `.onboarding-overlay`
+   / `.onboarding-card` base (workspace.css) so it inherits the modal
+   chrome, fade-in, and Graphite-Pro dark surface; the `.fro-*` BEM
+   classes below only lay out the 4-option grid + footer.
+
+   All colors come from the themed tokens (themes.css) so the picker
+   reskins with the theme picker exactly like the rest of the shell.
+   ============================================================ */
+
+.fro-card {
+  width: min(720px, 94vw);
+}
+
+/* 2×2 starter-option grid (collapses to a single column on narrow widths). */
+.fro-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-8) var(--sp-6) var(--sp-8);
+}
+
+@media (max-width: 560px) {
+  .fro-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A starter card. Reuses the `.onboarding-step` look (bg2 tile, accent
+   hover) but as a real <button> so keyboard/focus work out of the box. */
+.fro-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: var(--sp-2);
+  padding: var(--sp-6) var(--sp-5);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font);
+  color: var(--txt0);
+  transition: border-color var(--transition-fast), background var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.fro-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg3);
+}
+
+.fro-option:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.fro-option:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* The parametric-design card is the primary "fresh start" path — tint it
+   with the accent so it reads as the recommended fast lane. */
+.fro-option--design {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.fro-option--disabled,
+.fro-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fro-option__glyph {
+  font-size: 28px;
+  line-height: 1;
+  margin-bottom: var(--sp-1);
+}
+
+.fro-option__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+
+.fro-option__subtitle {
+  font-size: var(--text-xs);
+  color: var(--txt1);
+  line-height: var(--leading-normal);
+}
+
+.fro-option__hint {
+  font-size: var(--text-xs);
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+/* Inline read-failure / not-installed alert above the footer. */
+.fro-error {
+  margin: 0 var(--sp-8) var(--sp-4) var(--sp-8);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--danger-dim, rgba(255, 90, 90, 0.12));
+  border: 1px solid var(--danger, #ff5a5a);
+  border-radius: var(--radius);
+  color: var(--txt0);
+  font-size: var(--text-sm);
+}
+
+/* Footer: Skip control on the left, a soft reassurance note on the right.
+   Inherits `.onboarding-footer` for the top border + padding. */
+.fro-footer__spacer {
+  flex: 1 1 auto;
+}
+
+.fro-footer__note {
+  font-size: var(--text-xs);
+  color: var(--txt2, var(--txt1));
+}

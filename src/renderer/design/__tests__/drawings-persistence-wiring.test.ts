@@ -189,9 +189,18 @@ describe('DesignWorkspace — DrawingView wires onPersist* to the persisting onD
     expect(WORKSPACE_SRC).not.toContain('onPersistGdt={setDrawingGdtFrames}')
   })
 
+  it('the DrawingView onPersistSurfaceFinishes is the folding handler, NOT a bare setState', () => {
+    // Surface-finish symbols are threaded IDENTICALLY to GD&T frames so a placed
+    // symbol survives reload + a Drawings↔other-route switch (the toolbar was inert
+    // until the host threaded these props).
+    expect(WORKSPACE_SRC).toContain('onPersistSurfaceFinishes={handlePersistDrawingSurfaceFinishes}')
+    expect(WORKSPACE_SRC).not.toContain('onPersistSurfaceFinishes={setDrawingSurfaceFinishes}')
+  })
+
   it('the folding handlers route to onDrawing in controlled mode', () => {
     expect(WORKSPACE_SRC).toContain('onDrawing?.({ ...base, dimensions: next })')
     expect(WORKSPACE_SRC).toContain('onDrawing?.({ ...base, featureControlFrames: next })')
+    expect(WORKSPACE_SRC).toContain('onDrawing?.({ ...base, surfaceFinishes: next })')
     expect(WORKSPACE_SRC).toContain('onDrawing?.({ ...base, titleBlock: next })')
   })
 
@@ -205,6 +214,14 @@ describe('DesignWorkspace — DrawingView wires onPersist* to the persisting onD
     expect(WORKSPACE_SRC).toContain('persistedDimensions={effectiveDrawingDimensions}')
     expect(WORKSPACE_SRC).toContain('persistedGdtFrames={effectiveDrawingGdtFrames}')
     expect(WORKSPACE_SRC).toContain('const effectiveDrawing = drawingControlled')
+  })
+
+  it('renders the hydrated surface finishes (effective state) sourced from the drawing', () => {
+    // `surfaceFinishes` rides the same effective-state seam as GD&T: from the
+    // controlled drawing when present, else the local fallback state.
+    expect(WORKSPACE_SRC).toContain('persistedSurfaceFinishes={effectiveDrawingSurfaceFinishes}')
+    expect(WORKSPACE_SRC).toContain('const effectiveDrawingSurfaceFinishes = effectiveDrawing')
+    expect(WORKSPACE_SRC).toContain('? effectiveDrawing.surfaceFinishes')
   })
 })
 

@@ -43,7 +43,6 @@ import { CamManufacturePanel, SliceManufacturePanel, ToolsManufacturePanel } fro
 import { CalibrationPanel } from './CalibrationPanel'
 import { ManufactureSetupStrip } from './ManufactureSetupStrip'
 import { ManufactureCamSimulationPanel } from './ManufactureCamSimulationPanel'
-import { ManufactureSubTabStrip } from './ManufactureSubTabStrip'
 import { PlateTabs } from './PlateTabs'
 import {
   addPlate as addPlateState,
@@ -117,23 +116,6 @@ export type WorkflowStageFdm = 'prepare' | 'preview' | 'device'
 export type WorkflowStageCnc = 'setup' | 'toolpaths' | 'simulate' | 'probing' | 'send'
 export type WorkflowStage = WorkflowStageFdm | WorkflowStageCnc
 
-/**
- * Whether a workflow stage shows the legacy panelTab sub-tab strip. The strip is the
- * FINE navigation that the `prepare`/`setup`/`toolpaths` stages delegate to via
- * `panelTabBody`; the dedicated-body stages (preview/device/simulate/probing/send)
- * render their own content, so the strip is hidden there (it would be disconnected
- * from what's shown). Step toward retiring the strip — workflow-stage tabs are the
- * canonical navigation. Pure; pinned by `ManufactureWorkspace.subtab-visibility.test.ts`.
- */
-export function stageShowsSubTabStrip(stage: WorkflowStage): boolean {
-  return (
-    stage !== 'preview' &&
-    stage !== 'device' &&
-    stage !== 'simulate' &&
-    stage !== 'probing' &&
-    stage !== 'send'
-  )
-}
 export type WorkflowEnv = 'fdm' | 'cnc'
 
 type WorkflowStageDef<T extends WorkflowStage> = {
@@ -2283,7 +2265,19 @@ export function ManufactureWorkspace({
     carveraConn,
     onCarveraConnChange: setCarveraConn,
     carveraDevice,
-    onCarveraDeviceChange: setCarveraDevice
+    onCarveraDeviceChange: setCarveraDevice,
+    // Wave C — Feeds & Speeds "Apply to op". The CamManufacturePanel's
+    // FeedsSpeedsCard hands the machine-CLAMPED spindle RPM + cutting feed back
+    // here; we write them straight onto the selected op's params via the
+    // existing updateOp path (no re-clamp — the card already clamped to the
+    // active machine envelope). activeOpLabel surfaces the target op in the
+    // card's apply hint. Absent selection ⇒ index 0 (clamped by the op-select
+    // effect) so this never throws on an empty plan.
+    onApplyFeedsSpeedsToActiveOp: ({ spindleRpm, feedMmMin }: { spindleRpm: number; feedMmMin: number }) => {
+      const op = effectiveMfg.operations[selectedOpIndex]
+      updateOp(selectedOpIndex, { params: { ...(op?.params ?? {}), spindleRpm, feedMmMin } })
+    },
+    activeOpLabel: effectiveMfg.operations[selectedOpIndex]?.label
   }
 
   // ── Plan body (the main "Plan" sub-tab) ───────────────────────────────────────
@@ -2508,7 +2502,7 @@ export function ManufactureWorkspace({
 
   // ── Workflow-stage content (UX MOVE 5) ───────────────────────────────────────
   //
-  // The chrome (WorkflowStageTabs / PlateTabs / ManufactureSubTabStrip /
+  // The chrome (WorkflowStageTabs / PlateTabs /
   // CamProgressBar) renders unchanged across all stages. The body inside
   // `#manufacture-workspace-panel` swaps based on `workflowStage`:
   //
@@ -2671,80 +2665,232 @@ export function ManufactureWorkspace({
       : null
 
 
-  // Existing `panelTab` dispatch — extracted into a local variable so the
-  // workflow-stage switch can reuse it for the "primary" stages.
-  const panelTabBody: ReactNode = (
-    panelTab === 'plan' ? (
-      planBody
-    ) : panelTab === 'setup' ? (
-      <ManufactureSetupTab
+  // ── Re-homed legacy sub-tab content (Wave D) ──────────────────────────────────
+  //
+  // The legacy global `ManufactureSubTabStrip` (Plan/Setup/CAM/Simulate/Slice/
+  // Calibrate/Tools) was retired — the workflow-stage tabs (WorkflowStageTabs)
+  // are now the SOLE primary navigation. Every panel the 7 legacy sub-tabs used
+  // to reach is re-homed into the workflow stage it belongs to, with ZERO loss:
+  //
+  //   FDM (K2 Plus):
+  //     - Prepare → Job tree (planBody) + Slice + Calibrate + Tools, reachable
+  //                 via a stage-scoped secondary selector (`panelTab`).
+  //     - Preview → LayerPreviewBody.
+  //     - Device  → Process editor + Slice/Send + live job controls + ProfileStack.
+  //   CNC (Laguna / Carvera 3/4-axis):
+  //     - Setup     → Job tree (planBody) + ManufactureSetupTab (stock / WCS /
+  //                   4-axis gizmo / Multi-Setup Wizard), both stacked.
+  //     - Toolpaths → CAM (generate + G-code output) + Tools, reachable via a
+  //                   stage-scoped secondary selector (`panelTab`).
+  //     - Simulate  → ToolpathSimulationBody stats + the full R3F
+  //                   ManufactureCamSimulationPanel 3D playback.
+  //     - Probing   → ProbeCyclePanel.
+  //     - Send      → CAM send surface + ProfileStack.
+  //
+  // `panelTab` survives as a STAGE-SCOPED secondary-view key (not a second global
+  // strip): each multi-view stage renders only its own relevant secondary tabs,
+  // so the operator never sees the same row twice. The host's CAM/FDM ribbon
+  // commands (setPanelTab('setup'|'cam'|'tools'|'simulate')) still drive it.
+
+  // The full-screen 3D toolpath viewer (formerly the legacy `simulate` sub-tab).
+  // Reused verbatim by the CNC Simulate stage so the R3F playback panel — the
+  // removal heatmap + feed/rapid tubes — is the PRIMARY Simulate-stage content.
+  const camSimulationViewer: ReactNode =
+    projectDir ? (
+      <ManufactureCamSimulationPanel
         projectDir={projectDir}
         mfg={effectiveMfg}
-        machines={machines}
-        selectedSetupIndex={selectedSetupIndex}
-        selectedOpIndex={selectedOpIndex}
-        fitStockPadMm={fitStockPadMm}
-        assetStlOptions={assetStlOptions}
-        onSetSelectedSetupIndex={setSelectedSetupIndex}
-        onAddSetup={addSetup}
-        onRemoveSetup={removeSetup}
-        onUpdateSetup={updateSetup}
-        onUpdateSetupStock={updateSetupStock}
-        onUpdateSetupMaterialType={updateSetupMaterialType}
-        onUpdateSetupWcsOrigin={updateSetupWcsOrigin}
-        onUpdateSetupAxisMode={updateSetupAxisMode}
-        onFitStockPadChange={setFitStockPadMm}
-        onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
-        onSave={() => void save()}
-        onUpdateSetupRotaryPlacement={updateSetupRotaryPlacement}
-        onReplaceSetups={replaceSetups}
-        onAppendSetup={appendSetup}
-        onStatus={onStatus}
-      />
-    ) : panelTab === 'simulate' ? (
-      /* -- SIMULATE TAB: full-screen 3D toolpath viewer -- */
-      <section className="makera-simulate-panel" aria-labelledby="mfg-simulate-heading">
-        <div className="makera-simulate-header">
-          <h2 id="mfg-simulate-heading" className="makera-simulate-heading">3D Toolpath Simulation</h2>
-          <p className="msg msg--muted makera-simulate-hint">
-            Visualizes the generated G-code as feed (cyan) and rapid (amber) tubes over the part mesh.
-            Generate a toolpath first via the <strong>CAM</strong> tab.
-          </p>
-        </div>
-        <div className="makera-simulate-canvas-wrap">
-          {projectDir ? (
-            <ManufactureCamSimulationPanel
-              projectDir={projectDir}
-              mfg={effectiveMfg}
-              tools={tools ?? null}
-              machine={camSimMachine}
-              layout="workspace"
-              stockSetupIndex={camResolvedSetupIdx}
-              previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
-              previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
-              camOut={camOut}
-              camStaleMeshRelativePaths={camStaleMeshRelativePaths}
-            />
-          ) : (
-            <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>CAM</strong> tab to visualize it here.</p>
-          )}
-        </div>
-      </section>
-    ) : panelTab === 'slice' ? (
-      <SliceManufacturePanel {...auxPanelProps} />
-    ) : panelTab === 'cam' ? (
-      <CamManufacturePanel {...auxPanelProps} />
-    ) : panelTab === 'calibrate' ? (
-      <CalibrationPanel
-        activeMachine={activeMachine}
-        settings={settings}
-        projectDir={projectDir}
-        onStatus={onStatus}
-        onGoSettings={onGoSettings}
+        tools={tools ?? null}
+        machine={camSimMachine}
+        layout="workspace"
+        stockSetupIndex={camResolvedSetupIdx}
+        previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
+        previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
+        camOut={camOut}
+        camStaleMeshRelativePaths={camStaleMeshRelativePaths}
       />
     ) : (
-      <ToolsManufacturePanel {...auxPanelProps} />
+      <p className="msg">No project is open. Load a project and generate a toolpath from the <strong>Toolpaths</strong> stage to visualize it here.</p>
     )
+
+  const setupTabBody: ReactNode = (
+    <ManufactureSetupTab
+      projectDir={projectDir}
+      mfg={effectiveMfg}
+      machines={machines}
+      selectedSetupIndex={selectedSetupIndex}
+      selectedOpIndex={selectedOpIndex}
+      fitStockPadMm={fitStockPadMm}
+      assetStlOptions={assetStlOptions}
+      onSetSelectedSetupIndex={setSelectedSetupIndex}
+      onAddSetup={addSetup}
+      onRemoveSetup={removeSetup}
+      onUpdateSetup={updateSetup}
+      onUpdateSetupStock={updateSetupStock}
+      onUpdateSetupMaterialType={updateSetupMaterialType}
+      onUpdateSetupWcsOrigin={updateSetupWcsOrigin}
+      onUpdateSetupAxisMode={updateSetupAxisMode}
+      onFitStockPadChange={setFitStockPadMm}
+      onFitStockFromPart={(si) => void fitStockFromPartOnSetup(si)}
+      onSave={() => void save()}
+      onUpdateSetupRotaryPlacement={updateSetupRotaryPlacement}
+      onReplaceSetups={replaceSetups}
+      onAppendSetup={appendSetup}
+      onStatus={onStatus}
+    />
+  )
+
+  const calibrationBody: ReactNode = (
+    <CalibrationPanel
+      activeMachine={activeMachine}
+      settings={settings}
+      projectDir={projectDir}
+      onStatus={onStatus}
+      onGoSettings={onGoSettings}
+    />
+  )
+
+  // ── Stage-scoped secondary-view selector (replaces the global sub-tab strip) ──
+  //
+  // A compact, stage-local tab row that lets a multi-view stage expose its
+  // secondary panels without resurrecting the retired global 7-tab strip. It
+  // reuses the existing `.utility-strip` / `.manufacture-subtab-strip` styling
+  // (owned by manufacture.css) and the same roving-tabindex pattern, but only
+  // ever renders the handful of options that belong to the CURRENT stage. The
+  // selected key IS `panelTab`, so the host ribbon commands keep working.
+  type StageSubView = { id: ManufacturePanelTab; label: string; title: string }
+  const renderStageSubNav = (views: ReadonlyArray<StageSubView>, ariaLabel: string): ReactNode => {
+    const onSubNavKeyDown = (
+      e: ReactKeyboardEvent<HTMLButtonElement>,
+      viewId: ManufacturePanelTab
+    ): void => {
+      const i = views.findIndex((v) => v.id === viewId)
+      if (i < 0) return
+      let next = -1
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        next = (i + 1) % views.length
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        next = (i - 1 + views.length) % views.length
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        next = 0
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        next = views.length - 1
+      }
+      if (next < 0) return
+      const target = views[next]!
+      onPanelTabChange(target.id)
+      queueMicrotask(() => document.getElementById(`mfg-stage-subview-${target.id}`)?.focus())
+    }
+    return (
+      <div className="utility-strip-outer">
+        <div
+          className="utility-strip manufacture-subtab-strip manufacture-stage-subnav"
+          role="tablist"
+          aria-label={ariaLabel}
+          aria-orientation="horizontal"
+          data-testid="manufacture-stage-subnav"
+        >
+          {views.map((v, index) => (
+            <button
+              key={v.id}
+              id={`mfg-stage-subview-${v.id}`}
+              type="button"
+              role="tab"
+              aria-selected={panelTab === v.id}
+              aria-controls="manufacture-workspace-panel"
+              aria-posinset={index + 1}
+              aria-setsize={views.length}
+              tabIndex={panelTab === v.id ? 0 : -1}
+              className={panelTab === v.id ? 'active' : ''}
+              title={v.title}
+              data-testid={`mfg-stage-subview-${v.id}`}
+              onClick={() => onPanelTabChange(v.id)}
+              onKeyDown={(e) => onSubNavKeyDown(e, v.id)}
+            >
+              <span className="mfg-subtab-label">{v.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  // FDM 'prepare' stage body — the job tree (planBody) is the anchor; a
+  // stage-scoped selector reveals the Slice, Calibrate (K2 Plus only), and
+  // Tools secondary panels. Re-homes the legacy plan / slice / calibrate /
+  // tools sub-tabs for the FDM env with zero loss.
+  const isK2PlusActive = activeMachine?.id === 'creality-k2-plus'
+  const fdmPrepareViews: StageSubView[] = [
+    { id: 'plan', label: 'Job', title: 'Job plan — WCS setups and operation list' },
+    { id: 'slice', label: 'Slice', title: 'FDM slicer (OrcaSlicer) — filament + quality preset' },
+    ...(isK2PlusActive
+      ? ([{ id: 'calibrate', label: 'Calibrate', title: 'K2 Plus calibration: temp tower / flow / pressure advance' }] as StageSubView[])
+      : []),
+    { id: 'tools', label: 'Tools', title: 'Tool library import and management' }
+  ]
+  // The selected secondary view. `panelTab` is the source of truth, but a stage
+  // only knows a subset of tabs — when the current `panelTab` is not one of THIS
+  // stage's views (e.g. a stale 'cam' from the CNC env), fall back to the first
+  // view so the body always renders something coherent.
+  const fdmPrepareActive: ManufacturePanelTab =
+    fdmPrepareViews.some((v) => v.id === panelTab) ? panelTab : 'plan'
+  const prepareStageBody: ReactNode = (
+    <div
+      className="workspace-stage-body workspace-stage-body--prepare"
+      data-testid="workflow-stage-body-prepare"
+    >
+      {renderStageSubNav(fdmPrepareViews, 'Prepare secondary views')}
+      {fdmPrepareActive === 'slice' ? (
+        <SliceManufacturePanel {...auxPanelProps} />
+      ) : panelTab === 'calibrate' ? (
+        calibrationBody
+      ) : fdmPrepareActive === 'tools' ? (
+        <ToolsManufacturePanel {...auxPanelProps} />
+      ) : (
+        planBody
+      )}
+    </div>
+  )
+
+  // CNC 'setup' stage body — the job tree (planBody) plus the stock / WCS /
+  // 4-axis-gizmo / Multi-Setup-Wizard ManufactureSetupTab, stacked. Re-homes the
+  // legacy plan + setup sub-tabs for the CNC env (they are complementary, not
+  // alternatives, so they stack rather than toggle).
+  const setupStageBody: ReactNode = (
+    <div
+      className="workspace-stage-body workspace-stage-body--setup"
+      data-testid="workflow-stage-body-setup"
+    >
+      {planBody}
+      {setupTabBody}
+    </div>
+  )
+
+  // CNC 'toolpaths' stage body — CAM generation + G-code output is the anchor; a
+  // stage-scoped selector reveals the Tools secondary panel. Re-homes the legacy
+  // cam + tools sub-tabs for the CNC env.
+  const cncToolpathsViews: StageSubView[] = [
+    { id: 'cam', label: 'CAM', title: 'Generate G-code toolpaths' },
+    { id: 'tools', label: 'Tools', title: 'Tool library import and management' }
+  ]
+  const cncToolpathsActive: ManufacturePanelTab =
+    cncToolpathsViews.some((v) => v.id === panelTab) ? panelTab : 'cam'
+  const toolpathsStageBody: ReactNode = (
+    <div
+      className="workspace-stage-body workspace-stage-body--toolpaths"
+      data-testid="workflow-stage-body-toolpaths"
+    >
+      {renderStageSubNav(cncToolpathsViews, 'Toolpaths secondary views')}
+      {cncToolpathsActive === 'tools' ? (
+        <ToolsManufacturePanel {...auxPanelProps} />
+      ) : (
+        <CamManufacturePanel {...auxPanelProps} />
+      )}
+    </div>
   )
 
   // FDM 'preview' stage body — focused layer-preview summary. The
@@ -2764,7 +2910,6 @@ export function ManufactureWorkspace({
   // controls, and the ProfileStack. The FdmProcessPanel is only meaningful
   // for the K2 Plus; for any other FDM machine we still show the slice +
   // device surfaces but omit the K2-specific process editor.
-  const isK2PlusActive = activeMachine?.id === 'creality-k2-plus'
   const deviceStageBody: ReactNode = (
     <div
       className="workspace-stage-body workspace-stage-body--device"
@@ -2796,10 +2941,11 @@ export function ManufactureWorkspace({
     </div>
   )
 
-  // CNC 'simulate' stage body — stats summary + full 3D simulation panel.
-  // Both `ToolpathSimulationBody` (text stats / empty-state) and
-  // `ManufactureCamSimulationPanel` (R3F 3D canvas) render together.
-  // The panel is guarded by `projectDir` since it needs a file-system path.
+  // CNC 'simulate' stage body — the full R3F 3D playback panel
+  // (`ManufactureCamSimulationPanel` — feed/rapid tubes + voxel removal
+  // heatmap) is the PRIMARY content, anchored by the at-a-glance
+  // `ToolpathSimulationBody` stats/empty-state summary above it. The panel is
+  // guarded by `projectDir` (it needs a file-system path) via camSimulationViewer.
   const simulateStageBody: ReactNode = (
     <div
       className="workspace-stage-body workspace-stage-body--simulate-stage"
@@ -2811,24 +2957,21 @@ export function ManufactureWorkspace({
         toolDiameterMm={simulateToolDiameterMm}
         toolShape={simulateToolShape}
       />
-      {projectDir ? (
-        <ManufactureCamSimulationPanel
-          projectDir={projectDir}
-          mfg={effectiveMfg}
-          tools={tools ?? null}
-          machine={camSimMachine}
-          layout="workspace"
-          stockSetupIndex={camResolvedSetupIdx}
-          previewMeshRelativePath={effectiveMfg.operations[selectedOpIndex]?.sourceMesh?.trim() ?? null}
-          previewOperation={effectiveMfg.operations[selectedOpIndex] ?? null}
-          camOut={camOut}
-          camStaleMeshRelativePaths={camStaleMeshRelativePaths}
-        />
-      ) : null}
+      <section className="makera-simulate-panel" aria-labelledby="mfg-simulate-heading">
+        <div className="makera-simulate-header">
+          <h2 id="mfg-simulate-heading" className="makera-simulate-heading">3D Toolpath Simulation</h2>
+          <p className="msg msg--muted makera-simulate-hint">
+            Visualizes the generated G-code as feed (cyan) and rapid (amber) tubes over the part mesh.
+            Generate a toolpath first from the <strong>Toolpaths</strong> stage.
+          </p>
+        </div>
+        <div className="makera-simulate-canvas-wrap">
+          {camSimulationViewer}
+        </div>
+      </section>
     </div>
   )
 
-  // CNC 'send' stage body — Carvera upload + Laguna setup sheet + ProfileStack.
   // CNC 'probing' stage body (Wave 3a) -- mounts the formerly-dead
   // ProbeCyclePanel (5 cycle types: single-surface / bore / boss / corner /
   // tool-length). The panel generates safe touch-probe G-code via the
@@ -2846,6 +2989,7 @@ export function ManufactureWorkspace({
     </section>
   )
 
+  // CNC 'send' stage body — Carvera upload + Laguna setup sheet + ProfileStack.
   const sendStageBody: ReactNode = (
     <div
       className="workspace-stage-body workspace-stage-body--send"
@@ -2865,16 +3009,26 @@ export function ManufactureWorkspace({
     </div>
   )
 
-  // Stage-level body selector. Primary stages fall through to the existing
-  // panelTab dispatch so the operator can still drill into Plan / Setup /
-  // Simulate / Slice / CAM / Calibrate / Tools sub-tabs.
+  // Stage-level body selector. The workflow-stage tabs are the SOLE primary
+  // navigation; every stage renders a dedicated body that re-homes the panels
+  // the retired global sub-tab strip used to reach (Plan/Setup/CAM/Simulate/
+  // Slice/Calibrate/Tools), with zero functionality loss.
   let stageBody: ReactNode
   switch (workflowStage) {
+    case 'prepare':
+      stageBody = prepareStageBody
+      break
     case 'preview':
       stageBody = previewStageBody
       break
     case 'device':
       stageBody = deviceStageBody
+      break
+    case 'setup':
+      stageBody = setupStageBody
+      break
+    case 'toolpaths':
+      stageBody = toolpathsStageBody
       break
     case 'simulate':
       stageBody = simulateStageBody
@@ -2885,18 +3039,10 @@ export function ManufactureWorkspace({
     case 'send':
       stageBody = sendStageBody
       break
-    case 'prepare':
-    case 'setup':
-    case 'toolpaths':
     default:
-      stageBody = panelTabBody
+      stageBody = prepareStageBody
       break
   }
-
-  // Hide the legacy sub-tab strip in the dedicated-body stages (where it would be
-  // disconnected from what's shown); keep it in the prepare/setup/toolpaths stages
-  // that delegate to panelTabBody. See stageShowsSubTabStrip (pure, pinned).
-  const showSubTabStrip = stageShowsSubTabStrip(workflowStage)
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -2914,12 +3060,11 @@ export function ManufactureWorkspace({
         onSlicePlate={(plateId) => void slicePlateById(plateId)}
         onSliceAllPlates={() => void sliceAllPlatesSequential()}
       />
-      {showSubTabStrip ? <ManufactureSubTabStrip tab={panelTab} onChange={onPanelTabChange} /> : null}
       <CamProgressBar running={camRunning} onCancel={() => void handleCamCancel()} />
       <div
         id="manufacture-workspace-panel"
         role="tabpanel"
-        aria-labelledby={`mfg-subtab-${panelTab}`}
+        aria-labelledby={`workflow-stage-${workflowStage}`}
         data-stage-content={workflowStage}
       >
         {stageBody}

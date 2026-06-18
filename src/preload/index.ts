@@ -15,7 +15,11 @@ import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-
 import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
-import type { AssemblyFile } from '../shared/assembly-schema'
+import type {
+  AssemblyFile,
+  AssemblyInterferenceReport,
+  AssemblySummaryReport
+} from '../shared/assembly-schema'
 import type { DrawingFile } from '../shared/drawing-sheet-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { KernelPickFile } from '../shared/kernel-pick-file'
@@ -297,6 +301,50 @@ export type Api = {
     diagnostics: unknown
     convergenceReport?: unknown
   }>
+  /**
+   * Assembly interference detection over the SAVED `<projectDir>/assembly.json`.
+   * Loads + resolves each component's binary STL, runs the broad-phase AABB +
+   * narrow-phase triangle-SAT mesh check (placement heuristic when no usable
+   * mesh), and returns the {@link AssemblyInterferenceReport} (conflicting pairs
+   * + diagnostics). Delegates to `assembly:interferenceCheck`. SAFETY: read-only
+   * analysis — never emits G-code.
+   */
+  assemblyInterferenceCheck: (projectDir: string) => Promise<AssemblyInterferenceReport>
+  /**
+   * Like {@link assemblyInterferenceCheck} but runs the kinematic solver over the
+   * SUPPLIED in-memory assembly first, then checks interference at the SOLVED
+   * placements (so a motion-study pose can be clash-checked without a save).
+   * `assemblyInput` is re-validated through `parseAssemblyFile` main-side.
+   * Delegates to `assembly:interferenceCheckSimulated`.
+   */
+  assemblyInterferenceCheckSimulated: (
+    projectDir: string,
+    assemblyInput: unknown
+  ) => Promise<AssemblyInterferenceReport>
+  /**
+   * Export the SAVED assembly's bill of materials to `<projectDir>/output/bom.csv`
+   * (flat, one line per active component). Returns the absolute output path.
+   * Delegates to `assembly:exportBom`. SAFETY: data-only — writes a CSV.
+   */
+  assemblyExportBom: (projectDir: string) => Promise<string>
+  /**
+   * Export the SAVED assembly's BOM as an indented hierarchical text tree to
+   * `<projectDir>/output/bom-hierarchical.txt`. Returns the absolute output path.
+   * Delegates to `assembly:exportBomHierarchical`.
+   */
+  assemblyExportBomHierarchical: (projectDir: string) => Promise<string>
+  /**
+   * Export the SAVED assembly's BOM as a structured JSON hierarchy to
+   * `<projectDir>/output/bom-hierarchy.json`. Returns the absolute output path.
+   * Delegates to `assembly:exportBomHierarchyJson`.
+   */
+  assemblyExportBomHierarchyJson: (projectDir: string) => Promise<string>
+  /**
+   * Roll-up summary of the SAVED assembly (component/active/suppressed counts,
+   * joint tallies, BOM totals, parent-graph + duplicate-PN diagnostics) WITHOUT
+   * writing any file. Delegates to `assembly:summary`. SAFETY: read-only.
+   */
+  assemblySummary: (projectDir: string) => Promise<AssemblySummaryReport>
   meshPreviewStlBase64: (sourcePath: string, pythonPath: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string; detail?: string }>
   featuresLoad: (projectDir: string) => Promise<PartFeaturesFile>
   featuresSave: (projectDir: string, json: string) => Promise<void>
@@ -981,6 +1029,13 @@ const api: Api = {
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),
   assemblySolve: (assemblyInput) => ipcRenderer.invoke('assembly:solve', assemblyInput),
   assemblySimulate: (assemblyInput, sampleCount) => ipcRenderer.invoke('assembly:simulate', assemblyInput, sampleCount),
+  assemblyInterferenceCheck: (projectDir) => ipcRenderer.invoke('assembly:interferenceCheck', projectDir),
+  assemblyInterferenceCheckSimulated: (projectDir, assemblyInput) =>
+    ipcRenderer.invoke('assembly:interferenceCheckSimulated', projectDir, assemblyInput),
+  assemblyExportBom: (projectDir) => ipcRenderer.invoke('assembly:exportBom', projectDir),
+  assemblyExportBomHierarchical: (projectDir) => ipcRenderer.invoke('assembly:exportBomHierarchical', projectDir),
+  assemblyExportBomHierarchyJson: (projectDir) => ipcRenderer.invoke('assembly:exportBomHierarchyJson', projectDir),
+  assemblySummary: (projectDir) => ipcRenderer.invoke('assembly:summary', projectDir),
   meshPreviewStlBase64: (sourcePath, pythonPath) => ipcRenderer.invoke('mesh:previewStlBase64', sourcePath, pythonPath),
   featuresLoad: (projectDir) => ipcRenderer.invoke('features:load', projectDir),
   featuresSave: (projectDir, json) => ipcRenderer.invoke('features:save', projectDir, json),

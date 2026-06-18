@@ -97,11 +97,20 @@ import {
   gdtFramesToSpecs,
   reanchorGdtFrames,
 } from './drawing-gdt-model'
+import {
+  buildSurfaceFinish,
+  composeSurfaceFinishIntoSvg,
+  reanchorSurfaceFinishes,
+  SURFACE_FINISH_LAY_LABELS,
+} from './drawing-surface-finish-model'
 import type {
   DrawingBomRow,
   DrawingDimension,
   GdtCharacteristic,
   GdtFeatureControlFrame,
+  SurfaceFinishLay,
+  SurfaceFinishMaterial,
+  SurfaceFinishSymbol,
 } from '../../shared/drawing-annotation-schema'
 
 /**
@@ -238,6 +247,26 @@ export interface DrawingViewProps {
    * when omitted the GD&T toolbar still renders but placement is inert.
    */
   readonly onPersistGdt?: (next: readonly GdtFeatureControlFrame[]) => void
+  /**
+   * CAD V1.5 Surface finish -- the persisted, associative ISO 1302 / ASME Y14.36
+   * surface-texture symbols for this sheet (`sheet.annotations.surfaceFinishes`).
+   * When supplied (controlled mode), the surface-finish tool is enabled: a
+   * one-click anchored placement mints a `SurfaceFinishSymbol` pushed up via
+   * {@link onPersistSurfaceFinishes}, and the symbols compose onto the projection
+   * client-side (a pure SVG `<g>` overlay -- no sidecar round-trip, unlike GD&T).
+   * Each anchor's `refId` is re-resolved against fresh geometry on every
+   * re-projection (dangling badge), mirroring the GD&T frame path exactly.
+   */
+  readonly persistedSurfaceFinishes?: readonly SurfaceFinishSymbol[]
+  /**
+   * CAD V1.5 Surface finish -- called whenever the persisted surface-finish list
+   * changes (a new symbol placed, the list cleared, or anchors refreshed /
+   * flagged dangling after a re-projection). The host writes the result into
+   * `sheet.annotations.surfaceFinishes`. Optional + readonly (additive): when
+   * omitted the surface-finish toolbar still renders but placement is inert
+   * (mirrors `onPersistGdt`).
+   */
+  readonly onPersistSurfaceFinishes?: (next: readonly SurfaceFinishSymbol[]) => void
   /**
    * CAD V1.5 Detail -- called when a detail (crop) view is produced. The host
    * owns what to do with the magnified crop SVG (open in a new sheet, export,
@@ -450,6 +479,38 @@ export const GDT_CHARACTERISTIC_LABELS: Record<GdtCharacteristic, string> = {
   circular_runout: 'Circular Runout',
   total_runout: 'Total Runout',
 }
+
+/**
+ * Surface-finish material-removal variants in the toolbar dropdown order
+ * (ISO 1302 / ASME Y14.36). Mirrors `surfaceFinishMaterialSchema`. Exported for
+ * the model-level test pin.
+ */
+export const SURFACE_FINISH_MATERIAL_ORDER: readonly SurfaceFinishMaterial[] = [
+  'any',
+  'required',
+  'prohibited',
+] as const
+
+/** Human labels for the surface-finish material dropdown. */
+export const SURFACE_FINISH_MATERIAL_LABELS: Record<SurfaceFinishMaterial, string> = {
+  any: 'Any process',
+  required: 'Removal required',
+  prohibited: 'Removal prohibited',
+}
+
+/** Surface-finish lay-direction ids in the toolbar dropdown order (after "none"). */
+export const SURFACE_FINISH_LAY_ORDER: readonly SurfaceFinishLay[] = [
+  'parallel',
+  'perpendicular',
+  'crossed',
+  'multidirectional',
+  'circular',
+  'radial',
+  'particulate',
+] as const
+
+/** Sentinel select value meaning "no lay specified". */
+export const SURFACE_FINISH_LAY_NONE = 'none'
 
 /**
  * Parse the operator's datum free-text field into an ordered, de-duplicated,
@@ -875,6 +936,7 @@ function buildAnchoredDimension(
 type ToolMode =
   | null
   | { readonly tool: 'gdt' }
+  | { readonly tool: 'surface-finish' }
   | { readonly tool: 'detail'; readonly step: 0 }
   | { readonly tool: 'detail'; readonly step: 1; readonly center: { readonly x: number; readonly y: number } }
 
@@ -906,6 +968,8 @@ export function DrawingView({
   bomColumns,
   persistedGdtFrames,
   onPersistGdt,
+  persistedSurfaceFinishes,
+  onPersistSurfaceFinishes,
   onDetail,
   onPersistTitleBlock,
   sheets,
@@ -1002,6 +1066,29 @@ export function DrawingView({
    * the latest fetched geometry (badged `dangling`). Recomputed on every fetch.
    */
   const [gdtDanglingIds, setGdtDanglingIds] = useState<ReadonlySet<string>>(new Set())
+
+  // -- CAD V1.5 Surface-finish form + tool state ----------------------------
+
+  /** Whether this instance is in CONTROLLED (persisted) surface-finish mode. */
+  const surfaceFinishControlled = persistedSurfaceFinishes !== undefined
+
+  /** Material-removal variant the next placed symbol will carry (ISO 1302). */
+  const [surfaceFinishMaterial, setSurfaceFinishMaterial] =
+    useState<SurfaceFinishMaterial>('required')
+  /** Primary roughness value Ra (µm) for the next placed symbol. */
+  const [surfaceFinishRa, setSurfaceFinishRa] = useState<number>(1.6)
+  /** Optional machining-allowance value (mm) for the next placed symbol. */
+  const [surfaceFinishAllowance, setSurfaceFinishAllowance] = useState<number>(0)
+  /** Optional lay-direction symbol for the next placed symbol (`null` = none). */
+  const [surfaceFinishLay, setSurfaceFinishLay] = useState<SurfaceFinishLay | null>(null)
+
+  /**
+   * Ids of persisted surface-finish symbols whose anchor link no longer resolves
+   * against the latest fetched geometry (badged `dangling`). Recomputed on every
+   * fetch (mirrors `gdtDanglingIds`).
+   */
+  const [surfaceFinishDanglingIds, setSurfaceFinishDanglingIds] =
+    useState<ReadonlySet<string>>(new Set())
 
   // -- CAD V2 placement state -----------------------------------------------
 
@@ -1202,6 +1289,44 @@ export function DrawingView({
   )
 
   /**
+   * Commit a surface-finish symbol from a single resolved click. Mints an
+   * anchored {@link SurfaceFinishSymbol} (reusing the same snap machinery GD&T
+   * frames use) carrying the current material / Ra / allowance / lay, then pushes
+   * it onto the persisted list. Every field is a number or a closed enum -- there
+   * is no operator free-text, so (unlike GD&T datums) there is no escaping
+   * surface. No-op when surface-finish is not controlled.
+   */
+  const commitSurfaceFinish = useCallback(
+    (click: ResolvedClick): void => {
+      if (!surfaceFinishControlled) {
+        toast('warn', 'Surface-finish placement is unavailable -- no persistence host wired.')
+        return
+      }
+      const symbol = buildSurfaceFinish(click, {
+        material: surfaceFinishMaterial,
+        ra: Number.isFinite(surfaceFinishRa) && surfaceFinishRa >= 0 ? surfaceFinishRa : undefined,
+        machiningAllowanceMm:
+          Number.isFinite(surfaceFinishAllowance) && surfaceFinishAllowance > 0
+            ? surfaceFinishAllowance
+            : undefined,
+        ...(surfaceFinishLay !== null ? { lay: surfaceFinishLay } : {}),
+      })
+      onPersistSurfaceFinishes?.([...(persistedSurfaceFinishes ?? []), symbol])
+      toast('ok', `${SURFACE_FINISH_MATERIAL_LABELS[surfaceFinishMaterial]} surface finish added.`)
+    },
+    [
+      surfaceFinishControlled,
+      surfaceFinishMaterial,
+      surfaceFinishRa,
+      surfaceFinishAllowance,
+      surfaceFinishLay,
+      onPersistSurfaceFinishes,
+      persistedSurfaceFinishes,
+      toast,
+    ]
+  )
+
+  /**
    * Run a detail (crop) view from a centre + radius via `cad.detailDrawing`. The
    * sidecar projects the parent ONCE, crops the circular window, magnifies it by
    * `detailScale`, and stamps the escaped `detailLabel`. The resulting SVG is
@@ -1287,6 +1412,17 @@ export function DrawingView({
           commitGdtFrame(resolvedClick)
           return
         }
+        if (toolMode.tool === 'surface-finish') {
+          // One-click anchored placement (mirrors the GD&T tool).
+          const resolvedClick: ResolvedClick = {
+            point: { x: clickSvg.x, y: clickSvg.y },
+            sourceId,
+          }
+          setToolMode(null)
+          setHoveredSnap(null)
+          commitSurfaceFinish(resolvedClick)
+          return
+        }
         // detail: two clicks -- centre, then a point defining the radius.
         if (toolMode.step === 0) {
           setToolMode({ tool: 'detail', step: 1, center: { x: clickSvg.x, y: clickSvg.y } })
@@ -1318,7 +1454,15 @@ export function DrawingView({
         commitPlacement(completed.kind, clicks)
       }
     },
-    [placementState, toolMode, resolveCursorSvg, commitPlacement, commitGdtFrame, runDetail]
+    [
+      placementState,
+      toolMode,
+      resolveCursorSvg,
+      commitPlacement,
+      commitGdtFrame,
+      commitSurfaceFinish,
+      runDetail,
+    ]
   )
 
   /**
@@ -1371,6 +1515,27 @@ export function DrawingView({
     setToolMode(null)
     setHoveredSnap(null)
   }, [onPersistGdt])
+
+  /**
+   * Start the surface-finish one-click anchored placement. Cancels any dimension
+   * placement (mirrors {@link startGdt}). Toggling the active surface-finish tool
+   * off returns to idle.
+   */
+  const startSurfaceFinish = useCallback((): void => {
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) =>
+      prev !== null && prev.tool === 'surface-finish' ? null : { tool: 'surface-finish' },
+    )
+  }, [])
+
+  /** Remove every surface-finish symbol overlay (controlled mode only). */
+  const clearSurfaceFinish = useCallback((): void => {
+    onPersistSurfaceFinishes?.([])
+    setToolMode(null)
+    setHoveredSnap(null)
+  }, [onPersistSurfaceFinishes])
 
   const toggleSection = useCallback((): void => {
     setSectionEnabled((prev) => {
@@ -1578,6 +1743,24 @@ export function DrawingView({
     if (persistedGdtFrames === undefined || persistedGdtFrames.length === 0) return []
     return gdtFramesToSpecs(persistedGdtFrames)
   }, [persistedGdtFrames])
+
+  /**
+   * The SVG actually painted into the canvas: the base projection (`svg`) with
+   * the surface-finish symbols composed in CLIENT-SIDE as a pure `<g>` overlay.
+   * Unlike GD&T (which composes through the `cad.annotateGdt` sidecar in the
+   * async projection effect), the surface-finish glyph is fully deterministic, so
+   * it is composed synchronously at render time -- this keeps a surface-finish
+   * edit from re-firing the whole async projection pipeline and matches the
+   * "documentation overlays only" Safety Rule 1 (no sidecar / G-code touch).
+   * When there are no symbols (or no base SVG) this is `svg` verbatim.
+   */
+  const displaySvg = useMemo<string | null>(() => {
+    if (svg === null) return null
+    if (persistedSurfaceFinishes === undefined || persistedSurfaceFinishes.length === 0) {
+      return svg
+    }
+    return composeSurfaceFinishIntoSvg(svg, persistedSurfaceFinishes, surfaceFinishDanglingIds)
+  }, [svg, persistedSurfaceFinishes, surfaceFinishDanglingIds])
 
   // Re-project whenever `partHandle` or the active view changes.
   useEffect(() => {
@@ -1864,6 +2047,32 @@ export function DrawingView({
     }
   }, [geometryLoaded, freshSnapPoints, persistedGdtFrames, onPersistGdt])
 
+  // -- CAD V1.5 Surface-finish -- re-anchor persisted symbols against fresh geometry
+  //
+  // Mirror of the GD&T re-anchor pass: whenever a fresh projection lands or the
+  // persisted symbol list changes, re-resolve every symbol's anchor (refresh its
+  // cachedPoint + placement, badge a vanished anchor `dangling`). Push the
+  // refreshed list up only when a symbol actually moved (deep-equality guard) so
+  // a placement->re-render->re-resolve cycle converges instead of looping.
+  useEffect(() => {
+    if (persistedSurfaceFinishes === undefined) return
+    if (!geometryLoaded) {
+      setSurfaceFinishDanglingIds(new Set())
+      return
+    }
+    const { symbols: reanchored, danglingIds: nextDangling } = reanchorSurfaceFinishes(
+      persistedSurfaceFinishes,
+      freshSnapPoints,
+    )
+    setSurfaceFinishDanglingIds(nextDangling)
+    if (
+      onPersistSurfaceFinishes !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedSurfaceFinishes)
+    ) {
+      onPersistSurfaceFinishes(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedSurfaceFinishes, onPersistSurfaceFinishes])
+
   // -- Empty-state branch ---------------------------------------------------
   if (partHandle === null) {
     return (
@@ -1921,17 +2130,26 @@ export function DrawingView({
   const gdtDanglingCount = gdtDanglingIds.size
   /** Whether the GD&T one-click tool is armed. */
   const gdtPlacing = toolMode !== null && toolMode.tool === 'gdt'
+  /** Whether the surface-finish one-click tool is armed. */
+  const surfaceFinishPlacing = toolMode !== null && toolMode.tool === 'surface-finish'
   /** Whether the Detail tool is armed (either step). */
   const detailPlacing = toolMode !== null && toolMode.tool === 'detail'
 
-  /** Status line for the GD&T / detail tool area. */
+  /** Persisted surface-finish count (controlled mode). Drives the count readout + Clear. */
+  const surfaceFinishCount = (persistedSurfaceFinishes ?? []).length
+  /** How many surface-finish symbols are currently dangling. */
+  const surfaceFinishDanglingCount = surfaceFinishDanglingIds.size
+
+  /** Status line for the GD&T / surface-finish / detail tool area. */
   const toolStatusLabel: string | null = gdtPlacing
     ? `Placing ${GDT_CHARACTERISTIC_LABELS[gdtCharacteristic]} frame -- click the feature`
-    : detailPlacing
-      ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
-        ? 'Detail view -- click the crop centre'
-        : 'Detail view -- click to set the crop radius'
-      : null
+    : surfaceFinishPlacing
+      ? `Placing ${SURFACE_FINISH_MATERIAL_LABELS[surfaceFinishMaterial]} finish -- click the feature`
+      : detailPlacing
+        ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
+          ? 'Detail view -- click the crop centre'
+          : 'Detail view -- click to set the crop radius'
+        : null
 
   return (
     <div className="design-drawing" data-testid="design-drawing-view">
@@ -2281,6 +2499,144 @@ export function DrawingView({
         )}
       </div>
 
+      {/* CAD V1.5 -- Surface-finish (ISO 1302 / ASME Y14.36) toolbar */}
+      <div
+        className="design-drawing__gdt-toolbar design-drawing__surface-finish-toolbar"
+        role="toolbar"
+        aria-label="Surface finish symbols"
+        data-testid="design-drawing-surface-finish-toolbar"
+      >
+        <div
+          className="design-drawing__gdt-group"
+          role="group"
+          aria-label="Place a surface-finish symbol"
+        >
+          <label className="design-drawing__gdt-field">
+            Finish:
+            <select
+              className="design-drawing__gdt-characteristic"
+              data-testid="design-drawing-surface-finish-material"
+              value={surfaceFinishMaterial}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                const next = e.target.value as SurfaceFinishMaterial
+                if ((SURFACE_FINISH_MATERIAL_ORDER as readonly string[]).includes(next)) {
+                  setSurfaceFinishMaterial(next)
+                }
+              }}
+            >
+              {SURFACE_FINISH_MATERIAL_ORDER.map((m) => (
+                <option key={m} value={m}>
+                  {SURFACE_FINISH_MATERIAL_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="design-drawing__gdt-field">
+            Ra (um):
+            <input
+              type="number"
+              className="design-drawing__gdt-tolerance"
+              data-testid="design-drawing-surface-finish-ra"
+              value={surfaceFinishRa}
+              min={0}
+              step={0.1}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const next = parseFloat(e.target.value)
+                if (Number.isFinite(next) && next >= 0) setSurfaceFinishRa(next)
+              }}
+            />
+          </label>
+          <label className="design-drawing__gdt-field">
+            Allow (mm):
+            <input
+              type="number"
+              className="design-drawing__gdt-tolerance"
+              data-testid="design-drawing-surface-finish-allowance"
+              value={surfaceFinishAllowance}
+              min={0}
+              step={0.1}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const next = parseFloat(e.target.value)
+                if (Number.isFinite(next) && next >= 0) setSurfaceFinishAllowance(next)
+              }}
+            />
+          </label>
+          <label className="design-drawing__gdt-field">
+            Lay:
+            <select
+              className="design-drawing__gdt-characteristic"
+              data-testid="design-drawing-surface-finish-lay"
+              value={surfaceFinishLay ?? SURFACE_FINISH_LAY_NONE}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                const next = e.target.value
+                if (next === SURFACE_FINISH_LAY_NONE) {
+                  setSurfaceFinishLay(null)
+                } else if ((SURFACE_FINISH_LAY_ORDER as readonly string[]).includes(next)) {
+                  setSurfaceFinishLay(next as SurfaceFinishLay)
+                }
+              }}
+            >
+              <option value={SURFACE_FINISH_LAY_NONE}>None</option>
+              {SURFACE_FINISH_LAY_ORDER.map((l) => (
+                <option key={l} value={l}>
+                  {SURFACE_FINISH_LAY_LABELS[l]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className={
+              surfaceFinishPlacing
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-surface-finish-place"
+            aria-pressed={surfaceFinishPlacing}
+            onClick={startSurfaceFinish}
+            title={
+              surfaceFinishControlled
+                ? 'Click, then click a feature to anchor a surface-finish symbol there'
+                : 'Surface-finish placement needs a persistence host'
+            }
+          >
+            {surfaceFinishPlacing ? 'Click feature...' : 'Surface finish'}
+          </button>
+          {surfaceFinishCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-surface-finish-clear"
+              onClick={clearSurfaceFinish}
+              title="Remove every surface-finish symbol overlay"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div
+          className="design-drawing__gdt-count"
+          data-testid="design-drawing-surface-finish-count"
+          aria-live="polite"
+        >
+          {toolStatusLabel !== null && surfaceFinishPlacing
+            ? toolStatusLabel
+            : surfaceFinishCount === 0
+              ? 'No surface finishes'
+              : `${surfaceFinishCount} surface finish${surfaceFinishCount === 1 ? '' : 'es'}`}
+        </div>
+        {surfaceFinishDanglingCount > 0 && (
+          <div
+            className="design-drawing__gdt-dangling"
+            data-testid="design-drawing-surface-finish-dangling"
+            role="status"
+            title="These symbols lost their anchored feature on rebuild and are drawn from the last-known position."
+          >
+            {`${surfaceFinishDanglingCount} dangling`}
+          </div>
+        )}
+      </div>
+
       {/* CAD V1.5 -- Detail (crop) view tool */}
       {onDetail && (
         <div
@@ -2436,8 +2792,8 @@ export function DrawingView({
             }
             data-testid="design-drawing-svg"
             data-placement-active={placementState !== null || toolMode !== null ? 'true' : undefined}
-            // eslint-disable-next-line react/no-danger -- sidecar-trusted SVG; see file-header rationale
-            dangerouslySetInnerHTML={{ __html: svg }}
+            // eslint-disable-next-line react/no-danger -- sidecar-trusted SVG + client-composed surface-finish layer (markup-safe by construction); see file-header rationale
+            dangerouslySetInnerHTML={{ __html: displaySvg ?? svg }}
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
           />

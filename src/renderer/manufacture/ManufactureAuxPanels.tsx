@@ -16,7 +16,8 @@ import { FilamentPicker } from './FilamentPicker'
 import type { FilamentRecord } from '../../shared/filament-schema'
 import { EmptyState } from '../src/EmptyState'
 import { ProfileStack, type ProfileStackDisplayMode } from './ProfileStack'
-import { FeedsSpeedsCard } from './FeedsSpeedsCard'
+import { FeedsSpeedsCard, type AppliedFeedsSpeeds } from './FeedsSpeedsCard'
+import { LagunaVacuumPanel } from './LagunaVacuumPanel'
 import {
   runCarveraUploadSurface,
   runK2PushSurface,
@@ -123,6 +124,18 @@ export type ManufactureAuxPanelsProps = {
   onCarveraConnChange?: (conn: 'auto' | 'wifi' | 'usb') => void
   carveraDevice?: string
   onCarveraDeviceChange?: (device: string) => void
+  /**
+   * Wave C — Feeds & Speeds "Apply to op". When supplied, the CNC CAM panel's
+   * FeedsSpeedsCard renders an "Apply to op" button that hands these
+   * machine-CLAMPED feeds/speeds (spindle RPM + cutting feed) to the host so it
+   * can write them onto the currently-selected operation. The op-update mechanism
+   * () +  live in ManufactureWorkspace, so the host
+   * supplies a thin closure here. Absent ⇒ the card stays advisory-only (the
+   * legacy behavior; standalone mounts + render-pin tests pass no callback).
+   */
+  onApplyFeedsSpeedsToActiveOp?: (applied: AppliedFeedsSpeeds) => void
+  /** Operator label for the selected op (e.g. "Op 2 · Contour"), shown in the apply hint. */
+  activeOpLabel?: string
 }
 
 /**
@@ -445,6 +458,8 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
             minSpindleRpm: activeCnc.minSpindleRpm,
             maxSpindleRpm: activeCnc.maxSpindleRpm
           }}
+          onApplyToActiveOp={p.onApplyFeedsSpeedsToActiveOp}
+          activeOpLabel={p.activeOpLabel}
         />
       )}
       <h3 className="subh util-section-heading" id="mfg-cam-run-heading">
@@ -540,6 +555,22 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
               : `${lagunaActiveZones.length} of 6 zones engaged: ${lagunaActiveZones.join(', ')}.`}
           </p>
         </section>
+      ) : null}
+      {/*
+       * Wave C [ID-0020]: Laguna 6-zone vacuum ALLOCATOR. Companions the manual
+       * toggle picker above — the operator picks the job's sheet planform and the
+       * allocator (src/shared/laguna-vacuum-allocator.ts) computes which zones the
+       * stock footprint actually covers, then "Assign" writes that engaged set onto
+       * the SAME appSettings.lagunaActiveZones the toggles + the M8/M9 P<n> post
+       * emission read. Gated inside the same isLaguna branch so it never bleeds into
+       * the K2 / Carvera renders. Emits no G-code (allocator returns metadata only).
+       */}
+      {isLaguna ? (
+        <LagunaVacuumPanel
+          onAssignZones={(zoneNumbers) =>
+            p.onSaveSettingsField({ lagunaActiveZones: zoneNumbers })
+          }
+        />
       ) : null}
       {/*
        * Phase 2 Cycle 351 -- Laguna Swift 5x10 spec card. Read-only surface

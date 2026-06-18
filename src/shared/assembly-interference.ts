@@ -31,6 +31,24 @@
  *     follow-up — treat a reported clash as "worth a look", not "certified
  *     collision".
  *
+ * ## Broad-phase / narrow-phase delegation (optional)
+ *
+ * The bbox test is a perfect **broad phase**: it is cheap and never misses a real
+ * clash, but it over-reports. A caller that owns true geometry (e.g. the Electron
+ * main process, which loads each part's binary STL and runs the spatial-grid +
+ * triangle–triangle SAT in `src/main/assembly-mesh-interference.ts`) can pass a
+ * {@link NarrowPhaseDelegate} to {@link detectInterferences}. Then:
+ *   1. bbox overlap is the pre-filter — only overlapping pairs reach the delegate;
+ *   2. the delegate returns `true` only for a confirmed narrow-phase hit;
+ *   3. pairs the delegate clears are dropped, **eliminating the bbox false
+ *      positives**, and the report's `fidelity` becomes `'bbox+narrow'`.
+ * With NO delegate the result is byte-identical to the pure bbox path
+ * (`fidelity: 'bbox'`). This module never imports the mesh code itself — it stays
+ * pure and the geometry-owning layer injects the narrow phase. The narrow phase is
+ * gated on real per-part geometry that this module does not (yet) carry: an
+ * `InterferencePart` exposes only a `localBox`, so the dims/mesh threading needed to
+ * run narrow phase *inside* the shared layer is an upstream input, owned elsewhere.
+ *
  * This module is **pure**: no React, no DOM, no IPC, no `Date.now` / `crypto`.
  * Deterministic — inputs are sorted by id, and the output pair order is stable.
  */
@@ -81,11 +99,36 @@ export type InterferencePair = {
   readonly bId: string
 }
 
+/**
+ * Fidelity of an {@link InterferenceReport}:
+ *   - `'bbox'` — pure broad-phase AABB overlap; clashes are conservative (possible
+ *     false positives). This is the value whenever no narrow-phase delegate ran.
+ *   - `'bbox+narrow'` — a {@link NarrowPhaseDelegate} confirmed each reported clash
+ *     against true geometry; bbox-only false positives were dropped.
+ */
+export type InterferenceFidelity = 'bbox' | 'bbox+narrow'
+
+/**
+ * Optional narrow-phase confirmer injected by a geometry-owning caller. Invoked
+ * **only** for unordered pairs whose world AABBs already overlap (broad phase). The
+ * pair is passed canonically (`aId < bId`).
+ *
+ * Return:
+ *   - `true`  → confirmed clash (kept in `clashingPairs`);
+ *   - `false` → no true intersection (dropped — a bbox false positive);
+ *   - `'indeterminate'` → the narrow phase could not decide (e.g. missing mesh,
+ *     budget exceeded). Such a pair is KEPT (conservative — never silently drop a
+ *     possible clash) and listed in {@link InterferenceReport.indeterminatePairs}.
+ */
+export type NarrowPhaseDelegate = (aId: string, bId: string) => boolean | 'indeterminate'
+
 /** Result of {@link detectInterferences}. */
 export type InterferenceReport = {
   /**
-   * Clashing pairs at the **bbox level** (see module docstring for the honesty
-   * caveats). Deterministic order: sorted by `aId` then `bId`.
+   * Reported clashes. At `fidelity: 'bbox'` these are conservative broad-phase
+   * overlaps (see the honesty caveats above). At `fidelity: 'bbox+narrow'` each was
+   * confirmed (or left indeterminate) by the narrow-phase delegate. Deterministic
+   * order: sorted by `aId` then `bId`.
    */
   readonly clashingPairs: InterferencePair[]
   /** Number of parts actually evaluated (non-suppressed, with a valid box). */
@@ -96,11 +139,24 @@ export type InterferenceReport = {
    */
   readonly skippedIds: string[]
   /**
-   * Fidelity tag — always `'bbox'` for this implementation. A future mesh- or
-   * B-rep-level pass would surface a different tag so consumers can label results
-   * honestly without inspecting the algorithm.
+   * Fidelity tag — `'bbox'` when no narrow-phase delegate ran (conservative), or
+   * `'bbox+narrow'` when one did. Lets consumers label results honestly without
+   * inspecting the algorithm.
    */
-  readonly fidelity: 'bbox'
+  readonly fidelity: InterferenceFidelity
+  /**
+   * Present only at `fidelity: 'bbox+narrow'`: broad-phase pairs the delegate
+   * returned `'indeterminate'` for (kept in `clashingPairs` conservatively). Lets
+   * the UI mark them "could not verify" instead of "confirmed". Omitted when empty
+   * or when no delegate ran.
+   */
+  readonly indeterminatePairs?: InterferencePair[]
+  /**
+   * Present only at `fidelity: 'bbox+narrow'`: broad-phase overlaps the delegate
+   * CLEARED (true `false`) — i.e. bbox false positives that were dropped. Useful for
+   * diagnostics / telemetry. Omitted when empty or when no delegate ran.
+   */
+  readonly narrowPhaseClearedPairs?: InterferencePair[]
 }
 
 const DEG2RAD = Math.PI / 180
@@ -207,17 +263,41 @@ export function worldAabbsOverlap(a: WorldAabb, b: WorldAabb): boolean {
   )
 }
 
+/** Options for {@link detectInterferences}. */
+export type DetectInterferencesOptions = {
+  /**
+   * Optional narrow-phase confirmer. When provided, bbox overlap becomes the broad
+   * phase and only overlapping pairs are handed to this delegate; cleared pairs are
+   * dropped and the report fidelity becomes `'bbox+narrow'`. See
+   * {@link NarrowPhaseDelegate}. Omit for the pure conservative bbox result.
+   */
+  readonly narrowPhase?: NarrowPhaseDelegate
+}
+
 /**
- * Detect bbox-level interferences among positioned parts.
+ * Detect interferences among positioned parts.
  *
  * Suppressed parts and parts with a malformed `localBox` are excluded (and listed
  * in {@link InterferenceReport.skippedIds}). Every remaining unordered pair is
- * tested for world-AABB overlap; overlapping pairs are returned in deterministic
- * order.
+ * tested for world-AABB overlap (the **broad phase**).
+ *
+ * - With no `narrowPhase` delegate, overlapping pairs are returned directly
+ *   (`fidelity: 'bbox'`) — conservative, possible false positives.
+ * - With a `narrowPhase` delegate, each overlapping pair is confirmed against true
+ *   geometry: `true` keeps it, `false` drops it (a bbox false positive),
+ *   `'indeterminate'` keeps it but flags it. Fidelity becomes `'bbox+narrow'`.
+ *
+ * Output pair order is deterministic (sorted by `aId` then `bId`); the delegate is
+ * invoked in that same canonical order so an impure delegate still yields a stable
+ * report.
  *
  * @param parts the assembly's positioned parts (any order; sorted by id internally)
+ * @param options optional narrow-phase delegation
  */
-export function detectInterferences(parts: readonly InterferencePart[]): InterferenceReport {
+export function detectInterferences(
+  parts: readonly InterferencePart[],
+  options?: DetectInterferencesOptions
+): InterferenceReport {
   // Deterministic input ordering.
   const sorted = [...parts].sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0))
 
@@ -231,22 +311,51 @@ export function detectInterferences(parts: readonly InterferencePart[]): Interfe
     evaluated.push({ id: part.id, world: worldAabbOf(part.localBox, part.transform) })
   }
 
-  const clashingPairs: InterferencePair[] = []
+  // Broad phase: every world-AABB overlap, in canonical (aId < bId) order.
+  const broadPhasePairs: InterferencePair[] = []
   for (let i = 0; i < evaluated.length; i++) {
     for (let j = i + 1; j < evaluated.length; j++) {
       const a = evaluated[i]!
       const b = evaluated[j]!
       if (worldAabbsOverlap(a.world, b.world)) {
         // a.id < b.id by construction (sorted), so the pair is already canonical.
-        clashingPairs.push({ aId: a.id, bId: b.id })
+        broadPhasePairs.push({ aId: a.id, bId: b.id })
       }
     }
+  }
+
+  const narrowPhase = options?.narrowPhase
+  if (narrowPhase == null) {
+    // Pure broad-phase result — byte-identical to the historical bbox-only path.
+    return {
+      clashingPairs: broadPhasePairs,
+      evaluatedCount: evaluated.length,
+      skippedIds,
+      fidelity: 'bbox'
+    }
+  }
+
+  // Narrow phase: confirm / clear / flag each broad-phase pair against true geometry.
+  const clashingPairs: InterferencePair[] = []
+  const indeterminatePairs: InterferencePair[] = []
+  const narrowPhaseClearedPairs: InterferencePair[] = []
+  for (const pair of broadPhasePairs) {
+    const verdict = narrowPhase(pair.aId, pair.bId)
+    if (verdict === false) {
+      narrowPhaseClearedPairs.push(pair)
+      continue
+    }
+    // true OR 'indeterminate' → keep the pair (conservative). Flag indeterminate ones.
+    clashingPairs.push(pair)
+    if (verdict === 'indeterminate') indeterminatePairs.push(pair)
   }
 
   return {
     clashingPairs,
     evaluatedCount: evaluated.length,
     skippedIds,
-    fidelity: 'bbox'
+    fidelity: 'bbox+narrow',
+    ...(indeterminatePairs.length > 0 ? { indeterminatePairs } : {}),
+    ...(narrowPhaseClearedPairs.length > 0 ? { narrowPhaseClearedPairs } : {})
   }
 }

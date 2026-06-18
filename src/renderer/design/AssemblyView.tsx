@@ -59,6 +59,12 @@ import {
 } from 'react'
 import { EmptyState } from '../src/EmptyState'
 import { fab } from '../src/shop-types'
+import { useDesignSessionOptional } from './DesignSessionContext'
+import type {
+  AssemblyComponent,
+  AssemblyInterferenceReport,
+  AssemblySummaryReport,
+} from '../../shared/assembly-schema'
 import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import {
@@ -124,6 +130,24 @@ export type AssemblyPart = {
    * transform changes.
    */
   readonly transformSummary?: string
+  /**
+   * Optional joint kind for this instance, mirroring the durable
+   * `AssemblyComponent.joint` (`'revolute'`, `'slider'`, …). Drives the
+   * AssemblyMatePanel's rotational-mate gate: `angle` / `tangent` mates are only
+   * offered when the **driven** part is a non-grounded **revolute** hinge — the
+   * one rotational DOF the foundation solver wires (`assembly-solver-core.ts`).
+   * Optional + additive: a row with no joint is treated as free-floating (no
+   * rotational DOF), so the gate withholds angle/tangent — exactly the case the
+   * solver cannot converge. Backward-compatible (existing rows omit it).
+   */
+  readonly joint?: AssemblyComponent['joint']
+  /**
+   * Whether this instance is grounded (fixed in space), mirroring the durable
+   * `AssemblyComponent.grounded`. A grounded part has no free DOF, so the
+   * rotational-mate gate also withholds angle/tangent for it. Optional +
+   * additive; defaults to "not grounded" when omitted.
+   */
+  readonly grounded?: boolean
 }
 
 /**
@@ -241,6 +265,16 @@ export interface AssemblyViewProps {
    * harmless.)
    */
   readonly mateConstraints?: readonly AssemblyMateConstraint[]
+  /**
+   * Open project directory. The SAVED-assembly IPC actions (Check
+   * Interference / Export BOM / Summary) read `<projectDir>/assembly.json` in
+   * the main process, so they need the dir. Optional + additive: when omitted
+   * the component falls back to the {@link useDesignSessionOptional} context's
+   * `projectDir`, so the live `assemble` route reaches the actions without
+   * the parent wiring a new prop. When neither is available the actions stay
+   * disabled with an honest hint (never a silent no-op).
+   */
+  readonly projectDir?: string | null
 }
 
 /**
@@ -417,6 +451,92 @@ function readAssemblyBridges(): AssemblyBridges {
   }
 }
 
+/**
+ * The slice of the `window.fab` bridge the AssemblyView's SAVED-assembly IPC
+ * actions need. Narrowed to exactly the four methods so the helpers below stay
+ * honest about their dependency and the tests can supply a tiny mock. Mirrors
+ * the wire types in `src/preload/index.ts` / `shop-types.ts`.
+ */
+export type AssemblyActionBridge = {
+  readonly assemblyInterferenceCheck: (projectDir: string) => Promise<AssemblyInterferenceReport>
+  readonly assemblyInterferenceCheckSimulated: (
+    projectDir: string,
+    assemblyInput: unknown,
+  ) => Promise<AssemblyInterferenceReport>
+  readonly assemblyExportBom: (projectDir: string) => Promise<string>
+  readonly assemblySummary: (projectDir: string) => Promise<AssemblySummaryReport>
+}
+
+/** Read the {@link AssemblyActionBridge} off the live `fab()` bridge. */
+function readAssemblyActionBridge(): AssemblyActionBridge {
+  const f = fab() as unknown as AssemblyActionBridge
+  return {
+    assemblyInterferenceCheck: f.assemblyInterferenceCheck,
+    assemblyInterferenceCheckSimulated: f.assemblyInterferenceCheckSimulated,
+    assemblyExportBom: f.assemblyExportBom,
+    assemblySummary: f.assemblySummary,
+  }
+}
+
+/**
+ * Run the SAVED-assembly interference check via the main process. Pure wrapper
+ * over the bridge: validates the dir is present, awaits the IPC, and never
+ * throws (a rejected promise folds into `{ ok: false, error }`). Exported for
+ * the co-located bridge test.
+ */
+export async function runAssemblyInterferenceCheck(
+  bridge: AssemblyActionBridge,
+  projectDir: string | null | undefined,
+): Promise<
+  { ok: true; report: AssemblyInterferenceReport } | { ok: false; error: string }
+> {
+  if (!projectDir) return { ok: false, error: 'no_project_dir' }
+  try {
+    const report = await bridge.assemblyInterferenceCheck(projectDir)
+    return { ok: true, report }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Export the SAVED-assembly BOM CSV via the main process. Returns the absolute
+ * output path on success. Never throws. Exported for the co-located test.
+ */
+export async function runAssemblyBomExport(
+  bridge: AssemblyActionBridge,
+  projectDir: string | null | undefined,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  if (!projectDir) return { ok: false, error: 'no_project_dir' }
+  try {
+    const path = await bridge.assemblyExportBom(projectDir)
+    return { ok: true, path }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * One-line human summary of an {@link AssemblyInterferenceReport} for the
+ * IPC-result readout + toast. Surfaces the conflicting-pair COUNT (the headline
+ * the operator scans for) and folds in the same-transform heuristic when the
+ * mesh check found no usable geometry. Pure + exported so the test pins the
+ * count phrasing without re-mounting the component.
+ */
+export function formatInterferenceResultSummary(report: AssemblyInterferenceReport): string {
+  const pairs = report.conflictingPairs.length
+  const head =
+    pairs === 0
+      ? 'No interferences detected'
+      : `${pairs} interfering pair${pairs === 1 ? '' : 's'} detected`
+  const resolved = report.meshResolvedCount
+  const meshBit =
+    typeof resolved === 'number' && resolved > 0
+      ? ` (${resolved} mesh${resolved === 1 ? '' : 'es'} checked)`
+      : ' (placement heuristic — no usable meshes)'
+  return `${head}${meshBit}`
+}
+
 export function AssemblyView({
   parts,
   onAddPart,
@@ -430,6 +550,7 @@ export function AssemblyView({
   initialMateModalOpen = false,
   initialConvergenceReport = null,
   mateConstraints = [],
+  projectDir,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
@@ -750,6 +871,151 @@ export function AssemblyView({
     })
   }, [parts, solving, mateConstraints])
 
+  // ── SAVED-assembly IPC actions (interference / BOM / summary) ───────────────
+  // These read `<projectDir>/assembly.json` in the main process, so they need
+  // the open project dir. Prefer the explicit prop; fall back to the design
+  // session context so the live `assemble` route (wrapped by
+  // DesignSessionProvider) reaches the actions without the parent passing a new
+  // prop. `null` when no project is open — the buttons disable with a hint.
+  const sessionProjectDir = useDesignSessionOptional()?.projectDir ?? null
+  const effectiveProjectDir = projectDir ?? sessionProjectDir
+  const hasProjectDir = typeof effectiveProjectDir === 'string' && effectiveProjectDir.length > 0
+
+  // Result of the last main-process interference check (distinct from the pure
+  // bbox-level `interferenceReport` above — THIS is the mesh-accurate IPC
+  // result). `null` until the operator runs it.
+  const [ipcInterference, setIpcInterference] = useState<AssemblyInterferenceReport | null>(null)
+  const [checkingInterference, setCheckingInterference] = useState(false)
+  const [exportingBom, setExportingBom] = useState(false)
+  const [summarizing, setSummarizing] = useState(false)
+
+  const handleCheckInterference = useCallback((): void => {
+    if (checkingInterference || !hasProjectDir) return
+    setCheckingInterference(true)
+    setError(null)
+    void runAssemblyInterferenceCheck(readAssemblyActionBridge(), effectiveProjectDir)
+      .then((res) => {
+        setCheckingInterference(false)
+        if (!res.ok) {
+          if (res.error !== 'no_project_dir') setError(`Interference check failed: ${res.error}`)
+          return
+        }
+        setIpcInterference(res.report)
+        toast(
+          res.report.conflictingPairs.length === 0 ? 'ok' : 'warn',
+          formatInterferenceResultSummary(res.report),
+        )
+      })
+      .catch((e: unknown) => {
+        setCheckingInterference(false)
+        setError(`Interference check threw: ${e instanceof Error ? e.message : String(e)}`)
+      })
+  }, [checkingInterference, hasProjectDir, effectiveProjectDir, toast])
+
+  const handleExportBom = useCallback((): void => {
+    if (exportingBom || !hasProjectDir) return
+    setExportingBom(true)
+    setError(null)
+    void runAssemblyBomExport(readAssemblyActionBridge(), effectiveProjectDir)
+      .then((res) => {
+        setExportingBom(false)
+        if (!res.ok) {
+          if (res.error !== 'no_project_dir') setError(`BOM export failed: ${res.error}`)
+          return
+        }
+        toast('ok', `BOM exported to ${res.path}`)
+      })
+      .catch((e: unknown) => {
+        setExportingBom(false)
+        setError(`BOM export threw: ${e instanceof Error ? e.message : String(e)}`)
+      })
+  }, [exportingBom, hasProjectDir, effectiveProjectDir, toast])
+
+  // ── Motion study — mirrors `handleSolve` exactly, but calls the sibling
+  // `assemblySimulate` bridge (stepped poses across each jointed component's
+  // limit range). Builds the same in-memory assembly input as the solve path
+  // (partPath is required by `parseAssemblyFile` main-side) and folds the final
+  // pose's convergence into the existing solver badge. Errors fold into the
+  // error banner; never thrown. Disabled when empty or a study is in flight.
+  const [motionStudying, setMotionStudying] = useState(false)
+  const [motionSampleCount, setMotionSampleCount] = useState<number | null>(null)
+  const handleMotionStudy = useCallback((): void => {
+    if (parts.length === 0 || motionStudying) return
+    const simulateBridgeAny = (fab() as unknown) as {
+      assemblySimulate?: (
+        assemblyInput: unknown,
+        sampleCount?: number,
+      ) => Promise<{
+        ok: boolean
+        sampleCount: number
+        poses: Array<{ sample: number; transforms: Array<{ id: string; transform: unknown }> }>
+        diagnostics?: { convergenceReport?: ConvergenceReport }
+        convergenceReport?: ConvergenceReport
+      }>
+    }
+    const bridge = simulateBridgeAny.assemblySimulate
+    if (!bridge) {
+      setError('assemblySimulate bridge not available — IPC handler pending.')
+      return
+    }
+    setMotionStudying(true)
+    setError(null)
+    const assemblyInput = {
+      version: 2,
+      name: '',
+      components: parts.map((part) => ({
+        id: part.id,
+        name: part.name,
+        partPath: partPathForRow(part),
+        grounded: false,
+        transform: {
+          x: part.transform?.position?.[0] ?? 0,
+          y: part.transform?.position?.[1] ?? 0,
+          z: part.transform?.position?.[2] ?? 0,
+          rxDeg: part.transform?.rotation?.[0] ?? 0,
+          ryDeg: part.transform?.rotation?.[1] ?? 0,
+          rzDeg: part.transform?.rotation?.[2] ?? 0,
+        },
+      })),
+      mateConstraints,
+    }
+    void bridge(assemblyInput)
+      .then((res) => {
+        setMotionStudying(false)
+        if (!res.ok) return
+        setMotionSampleCount(res.sampleCount)
+        const report = res.convergenceReport ?? res.diagnostics?.convergenceReport ?? null
+        if (report) setConvergenceReport(report)
+        toast('ok', `Motion study: ${res.sampleCount} pose${res.sampleCount === 1 ? '' : 's'} computed`)
+      })
+      .catch((e: unknown) => {
+        setMotionStudying(false)
+        setError(`Motion study threw: ${e instanceof Error ? e.message : String(e)}`)
+      })
+  }, [parts, motionStudying, mateConstraints, toast])
+
+  // ── Summary — read-only assembly roll-up (no file write). Surfaces the
+  // headline counts as a toast. Folds errors into the banner; never throws.
+  const handleSummary = useCallback((): void => {
+    if (summarizing || !hasProjectDir) return
+    setSummarizing(true)
+    setError(null)
+    const dir = effectiveProjectDir as string
+    void readAssemblyActionBridge()
+      .assemblySummary(dir)
+      .then((report: AssemblySummaryReport) => {
+        setSummarizing(false)
+        toast(
+          'ok',
+          `Assembly: ${report.activeComponentCount} active / ${report.componentCount} components, ${report.totalBomQuantity} BOM qty`,
+        )
+      })
+      .catch((e: unknown) => {
+        setSummarizing(false)
+        setError(`Summary failed: ${e instanceof Error ? e.message : String(e)}`)
+      })
+  }, [summarizing, hasProjectDir, effectiveProjectDir, toast])
+
   // ── Empty-state branch ────────────────────────────────────────────────────
   if (parts.length === 0) {
     return (
@@ -872,6 +1138,62 @@ export function AssemblyView({
             data-testid="design-assembly-solver-badge"
           >
             {convergenceReport.status.replace(/_/g, ' ')}
+          </span>
+        )}
+        {/* SAVED-assembly IPC actions: mesh-accurate interference, BOM
+            export, motion study, and a read-only summary. All but Motion
+            study read <projectDir>/assembly.json, so they disable (with a
+            hint) until a project is open. */}
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-testid="design-assembly-check-interference"
+          onClick={handleCheckInterference}
+          disabled={checkingInterference || !hasProjectDir}
+          aria-disabled={checkingInterference || !hasProjectDir}
+          title={hasProjectDir ? 'Mesh-accurate interference check on the saved assembly' : 'Open a project to check interference'}
+        >
+          {checkingInterference ? 'Checking…' : 'Check Interference'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-testid="design-assembly-export-bom"
+          onClick={handleExportBom}
+          disabled={exportingBom || !hasProjectDir}
+          aria-disabled={exportingBom || !hasProjectDir}
+          title={hasProjectDir ? 'Export the assembly bill of materials to output/bom.csv' : 'Open a project to export the BOM'}
+        >
+          {exportingBom ? 'Exporting…' : 'Export BOM'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-testid="design-assembly-motion-study"
+          onClick={handleMotionStudy}
+          disabled={parts.length === 0 || motionStudying}
+          aria-disabled={parts.length === 0 || motionStudying}
+          title="Step jointed components across their limit range (motion study)"
+        >
+          {motionStudying ? 'Stepping…' : 'Motion Study'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-testid="design-assembly-summary-action"
+          onClick={handleSummary}
+          disabled={summarizing || !hasProjectDir}
+          aria-disabled={summarizing || !hasProjectDir}
+          title={hasProjectDir ? 'Show a roll-up summary of the saved assembly' : 'Open a project to summarize the assembly'}
+        >
+          {summarizing ? 'Summarizing…' : 'Summary'}
+        </button>
+        {motionSampleCount !== null && (
+          <span
+            className="design-assembly__motion-badge"
+            data-testid="design-assembly-motion-badge"
+          >
+            {`Motion study: ${motionSampleCount} pose${motionSampleCount === 1 ? '' : 's'}`}
           </span>
         )}
       </div>
@@ -1097,6 +1419,14 @@ export function AssemblyView({
                   )
                 })}
               </ul>
+            )}
+            {ipcInterference !== null && (
+              <div
+                className="design-assembly__interference-ipc"
+                data-testid="design-assembly-interference-ipc"
+              >
+                {formatInterferenceResultSummary(ipcInterference)}
+              </div>
             )}
           </div>
 

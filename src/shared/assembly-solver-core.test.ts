@@ -129,6 +129,93 @@ describe('solveMateConstraints — (2) over-constrained', () => {
     expect(report.conflictingConstraintIds).toContain('m_alpha')
     expect(report.conflictingConstraintIds).toContain('m_beta')
   })
+
+  it('the conflicting block only lists constraints still violated (non-zero residual) at the solved pose', () => {
+    // The least-squares pose leaves BOTH coincident mates unsatisfied (their A targets are 5mm
+    // apart), so each residual stays above the conflict floor and both ids are reported. The
+    // reported set is exactly the still-violated set — not a blanket "all mates".
+    const { report } = solveMateConstraints(components, mates)
+    const violated = new Set(report.conflictingConstraintIds ?? [])
+    expect(violated.size).toBe(2)
+    // Every reported id maps to a per-constraint residual that is genuinely non-trivial.
+    for (const r of report.perConstraintResiduals) {
+      if (violated.has(r.constraintId)) expect(r.residual).toBeGreaterThan(1e-4)
+    }
+  })
+})
+
+describe('solveMateConstraints — (2b) over-DETERMINED but CONSISTENT (redundant, not conflicting)', () => {
+  // E > F by count, but the surplus equations are redundant (mutually satisfiable), so a
+  // least-squares solve drives the residual to ~0. This must classify as `converged`, NOT
+  // `over_constrained` — the count alone never proves a conflict. (Prompt: report
+  // over-constrained only when E>F WITH non-zero conflicting residuals.)
+  it('two IDENTICAL coincident mates (E=6 > F=3) converge instead of flagging a conflict', () => {
+    const components = [
+      comp({ id: 'a', grounded: true, transform: { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 } }),
+      comp({ id: 'b', grounded: false, transform: { x: 10, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    // Both mates pin B.origin to the SAME world point [5,0,0]: 6 equations, but only 3 are
+    // independent → redundant-consistent.
+    const mate = (id: string): AssemblyMateConstraint => ({
+      id,
+      kind: 'coincident',
+      part1Id: 'a',
+      feature1: { x: 5, y: 0, z: 0 },
+      part2Id: 'b',
+      feature2: { x: 0, y: 0, z: 0 }
+    })
+    const { transforms, report } = solveMateConstraints(components, [mate('dup1'), mate('dup2')])
+    expect(report.status).toBe('converged')
+    expect(report.converged).toBe(true)
+    expect(report.finalResidual).toBeLessThan(1e-5)
+    // No conflict surfaced when the system is actually satisfiable.
+    expect(report.conflictingConstraintIds).toBeUndefined()
+    // And B still lands on the analytic pose.
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(5, 4)
+    expect(b.y).toBeCloseTo(0, 4)
+    expect(b.z).toBeCloseTo(0, 4)
+  })
+
+  it('a coincident (3 eq) + a redundant flush along Z (1 eq), E=4 > F=3, still converges', () => {
+    // Coincident already pins all three of B's translational DOF to [5,0,0]; the extra flush
+    // along Z is automatically satisfied at that pose → redundant, not conflicting.
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 9, y: -2, z: 4, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'co', kind: 'coincident', part1Id: 'a', feature1: { x: 5, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } },
+      { id: 'fz', kind: 'flush', part1Id: 'a', feature1: { x: 0, y: 0, z: 0, axis: 'z' }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0, axis: 'z' } }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('converged')
+    expect(report.finalResidual).toBeLessThan(1e-5)
+    expect(report.conflictingConstraintIds).toBeUndefined()
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(5, 4)
+    expect(b.y).toBeCloseTo(0, 4)
+    expect(b.z).toBeCloseTo(0, 4)
+  })
+
+  it('an over-determined CONFLICTING set with the same E>F count is still flagged (no false negative)', () => {
+    // Sanity counter-case: same E=4 > F=3 shape, but the flush demands a DIFFERENT Z than the
+    // coincident → irreducible conflict survives the least-squares solve.
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 1, y: 1, z: 1, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      // coincident pins B.origin to [0,0,0]...
+      { id: 'co', kind: 'coincident', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } },
+      // ...but this distance demands B.origin sit 5mm from A.origin → cannot hold both.
+      { id: 'di', kind: 'distance', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 }, value: 5 }
+    ]
+    const { report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('over_constrained')
+    expect(report.converged).toBe(false)
+    expect(report.conflictingConstraintIds?.length ?? 0).toBeGreaterThan(0)
+  })
 })
 
 describe('solveMateConstraints — (3) under-constrained', () => {

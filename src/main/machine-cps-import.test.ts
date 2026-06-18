@@ -166,3 +166,52 @@ describe('machineProfileWithSummaryFromCps', () => {
     expect(detected.name).toBe(false)
   })
 })
+
+describe('machineProfileWithSummaryFromCps — 5-axis fallback warning', () => {
+  // A 5-axis CPS: bOutput is the strong 5-axis signal detectAxisCount keys on.
+  const fiveAxisFanuc = [
+    '// Fanuc 5-axis post',
+    'var aOutput = createVariable({}, abcFormat);',
+    'var bOutput = createVariable({}, abcFormat);',
+    'function onOpen() {}'
+  ].join('\n')
+
+  it('attaches a fiveAxisFallback warning for a 5-axis dialect', () => {
+    const summary = machineProfileWithSummaryFromCps('fanuc_5x.cps', fiveAxisFanuc)
+    expect(summary.profile.axisCount).toBe(5)
+    expect(summary.warnings).toBeDefined()
+    expect(summary.warnings).toHaveLength(1)
+    const w = summary.warnings![0]
+    expect(w.code).toBe('fiveAxisFallback')
+    expect(w.from).toBe('5axis')
+    // `to` reflects the actual reduced-axis post the import fell back to.
+    expect(w.to).toBe(summary.profile.postTemplate)
+    expect(w.message).toContain('5-axis')
+    expect(w.message).toContain('will not be in the output')
+  })
+
+  it('warns for a 5-axis Siemens CPS as well (controller-agnostic)', () => {
+    const siemens5x = [
+      '// Sinumerik 5-axis post',
+      'var bOutput = createVariable({}, abcFormat);',
+      'function onOpen() {}'
+    ].join('\n')
+    const summary = machineProfileWithSummaryFromCps('siemens_5x.cps', siemens5x)
+    expect(summary.profile.axisCount).toBe(5)
+    expect(summary.warnings?.[0]?.code).toBe('fiveAxisFallback')
+  })
+
+  it('does NOT attach a warning for a 3-axis dialect', () => {
+    const threeAxis = '// Fanuc 3-axis post\nfunction onOpen() {}'
+    const summary = machineProfileWithSummaryFromCps('fanuc_3x.cps', threeAxis)
+    expect(summary.profile.axisCount).toBeUndefined()
+    expect(summary.warnings).toBeUndefined()
+  })
+
+  it('does NOT attach a warning for a 4-axis dialect', () => {
+    const fourAxis = '// Fanuc 4-axis post\nvar aOutput = createVariable({}, xyzFormat);\nfunction onOpen() {}'
+    const summary = machineProfileWithSummaryFromCps('fanuc_4x.cps', fourAxis)
+    expect(summary.profile.axisCount).toBe(4)
+    expect(summary.warnings).toBeUndefined()
+  })
+})

@@ -83,6 +83,7 @@ import {
 import type {
   DrawingDimension,
   GdtFeatureControlFrame,
+  SurfaceFinishSymbol,
 } from '../../shared/drawing-annotation-schema'
 import {
   FeatureTree,
@@ -836,6 +837,17 @@ export function DesignWorkspace({
    */
   const [drawingGdtFrames, setDrawingGdtFrames] = useState<readonly GdtFeatureControlFrame[]>([])
 
+  /**
+   * Persisted, associative surface-texture symbols for the active part's sheet
+   * (`sheet.annotations.surfaceFinishes`). Threaded into the DrawingView in
+   * controlled mode so a placed symbol records its snapped feature's `refId` and
+   * re-resolves against fresh geometry on every re-projection. Held here (not
+   * inside DrawingView) so it survives view-tab switches and is the value a
+   * future project-save writes into `drawing.json`. Documentation overlays only
+   * — never read by CAM/G-code (Safety Rule 1). Mirrors {@link drawingGdtFrames}.
+   */
+  const [drawingSurfaceFinishes, setDrawingSurfaceFinishes] = useState<readonly SurfaceFinishSymbol[]>([])
+
   // ── Drawings persistence seam ──────────────────────────────────────────────
   //
   // CONTROLLED mode: the host (DesignWorkspaceHost → DesignSessionContext) supplies
@@ -852,6 +864,9 @@ export function DesignWorkspace({
   const effectiveDrawingGdtFrames = effectiveDrawing
     ? effectiveDrawing.featureControlFrames
     : drawingGdtFrames
+  const effectiveDrawingSurfaceFinishes = effectiveDrawing
+    ? effectiveDrawing.surfaceFinishes
+    : drawingSurfaceFinishes
   const effectiveDrawingTitleBlock: DrawingTitleBlock | undefined = effectiveDrawing
     ? effectiveDrawing.titleBlock
     : undefined
@@ -874,6 +889,17 @@ export function DesignWorkspace({
         onDrawing?.({ ...base, featureControlFrames: next })
       } else {
         setDrawingGdtFrames(next)
+      }
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingSurfaceFinishes = useCallback(
+    (next: readonly SurfaceFinishSymbol[]): void => {
+      if (drawingControlled) {
+        const base = drawing ?? emptyDrawingViewState()
+        onDrawing?.({ ...base, surfaceFinishes: next })
+      } else {
+        setDrawingSurfaceFinishes(next)
       }
     },
     [drawingControlled, drawing, onDrawing],
@@ -1684,6 +1710,8 @@ export function DesignWorkspace({
             onPersistDimensions={handlePersistDrawingDimensions}
             persistedGdtFrames={effectiveDrawingGdtFrames}
             onPersistGdt={handlePersistDrawingGdt}
+            persistedSurfaceFinishes={effectiveDrawingSurfaceFinishes}
+            onPersistSurfaceFinishes={handlePersistDrawingSurfaceFinishes}
             initialTitleBlock={effectiveDrawingTitleBlock}
             onPersistTitleBlock={
               drawingControlled ? handlePersistDrawingTitleBlock : undefined

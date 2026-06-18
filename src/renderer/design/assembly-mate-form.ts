@@ -36,6 +36,18 @@ import type {
   CadAssemblyMateKind,
 } from '../../shared/sidecar-protocol'
 
+/**
+ * The mate kinds the **authoring form** can produce — a strict superset of the
+ * sidecar wire's {@link CadAssemblyMateKind}. The wire kind is intentionally only
+ * `point | axis | plane | distance` (the sidecar `cad.add_assembly_mate` cannot
+ * process a rotational mate — see its honesty note). The form additionally
+ * authors the **persist-only rotational** kinds `angle` / `tangent`, which never
+ * touch the sidecar: they fold straight into a Model-C constraint the foundation
+ * solver drives by rotating a revolute hinge (Cycle 272). Keeping a distinct
+ * form-level kind means the wire contract stays honest while the form offers more.
+ */
+export type MateFormKind = CadAssemblyMateKind | 'angle' | 'tangent'
+
 // ── Form draft (what the panel's controlled inputs hold) ─────────────────────
 
 /**
@@ -55,7 +67,7 @@ import type {
  * switch.
  */
 export type MateFormDraft = {
-  readonly kind: CadAssemblyMateKind
+  readonly kind: MateFormKind
   /** Part 1 child id (AssemblyPart.name at the IPC boundary; see panel). */
   readonly part1Id: string
   /** Part 2 child id (must differ from part1Id). */
@@ -80,54 +92,113 @@ export type MateFormDraft = {
    * ignored by every other kind.
    */
   readonly value: string
+  /**
+   * angle / tangent: the **cardinal** local axis of each part's directional
+   * feature, picked directly (x / y / z) rather than typed as a free 3-vector.
+   * The foundation solver's angle/tangent residual compares cardinal feature
+   * axes, so the authoring form offers a simple axis picker per part. Ignored by
+   * every non-rotational kind.
+   */
+  readonly axis1Cardinal: MateCardinalAxis
+  readonly axis2Cardinal: MateCardinalAxis
+  /**
+   * angle: the target angle (DEGREES) between the two cardinal axes, kept as a
+   * **raw string** (like {@link value}) so an in-progress edit does not crash the
+   * controlled input. Kept SEPARATE from the distance-mm `value` so the two
+   * parametric targets never alias. Parsed + validated (finite) by
+   * {@link buildAddMateRequest} only for the `angle` kind; ignored otherwise
+   * (`tangent` has no angle target).
+   */
+  readonly angleDeg: string
 }
+
+/** A cardinal local-axis label the angle/tangent axis picker offers. */
+export type MateCardinalAxis = 'x' | 'y' | 'z'
+
+/** The three cardinal axes, in picker order — the SSOT for the angle/tangent axis selects. */
+export const MATE_CARDINAL_AXES: readonly MateCardinalAxis[] = ['x', 'y', 'z']
 
 /**
  * The mate kinds the authoring form **offers** — the single source of truth the
  * panel's kind picker should map over (rather than hard-coding a list). Every
- * entry here is genuinely actionable: `point` / `axis` / `plane` solve live via
- * the sidecar; `distance` folds to a Model-C constraint the TypeScript solver
- * positions. See {@link CadAssemblyMateKind} for why `angle` / `tangent` are
- * **not** here (the foundation solver has no rotational free variables, so it
- * cannot position them — offering them would be dishonest).
+ * entry here is genuinely actionable:
+ *   - `point` / `axis` / `plane` solve live via the sidecar;
+ *   - `distance` folds to a Model-C constraint the TypeScript solver positions;
+ *   - `angle` / `tangent` fold to a Model-C rotational constraint the solver
+ *     drives by rotating a revolute hinge (Cycle 272). The PANEL gates these two
+ *     on a non-grounded, revolute-jointed driven part (the only case the solver
+ *     converges — see {@link rotationalMatesSupportedFor}); the kind itself is
+ *     offered, but its option/inputs are disabled when the gate fails.
  */
-export const OFFERED_MATE_KINDS: readonly CadAssemblyMateKind[] = [
+export const OFFERED_MATE_KINDS: readonly MateFormKind[] = [
   'point',
   'axis',
   'plane',
   'distance',
+  'angle',
+  'tangent',
 ]
 
 /**
- * Mate kinds intentionally **deferred** from the authoring form, each with the
- * honest reason. Exported so a UI (or a test) can surface "coming soon" copy
- * without re-deriving the rationale. These are *not* offered — see
- * {@link OFFERED_MATE_KINDS}.
+ * Mate kinds intentionally **deferred** from the authoring form. Now EMPTY: the
+ * foundation solver gained the revolute rotational DOF (Cycle 272), and the
+ * authoring form offers + gates `angle` / `tangent` (see {@link OFFERED_MATE_KINDS}
+ * + {@link rotationalMatesSupportedFor}), so no kind is withheld. Kept exported
+ * (as a typed empty array) so existing consumers/tests referencing the honesty
+ * surface still compile — the surface now honestly reports "nothing deferred".
  */
 export const DEFERRED_MATE_KINDS: ReadonlyArray<{
   readonly kind: 'angle' | 'tangent'
   readonly reason: string
-}> = [
-  {
-    kind: 'angle',
-    reason:
-      'The solver now rotates a revolute-jointed part about its hinge axis to satisfy an angle target (assembly-solver-core, Cycle 272). What is still deferred is the authoring form — it does not yet offer angle/tangent or gate them on a revolute joint; coming with the revolute-gated picker + angle inputs.',
-  },
-  {
-    kind: 'tangent',
-    reason:
-      'Tangency is a rotational/contact condition; it now solves on a revolute hinge in the solver, but is still deferred from the authoring form until the revolute-gated picker + tangent inputs land.',
-  },
-]
+}> = []
+
+/**
+ * The rotational mate kinds (`angle` / `tangent`) the panel gates on a revolute
+ * driven part. Exported as the SSOT so the panel + its tests agree on exactly
+ * which kinds require the gate.
+ */
+export const ROTATIONAL_MATE_KINDS: readonly MateFormKind[] = ['angle', 'tangent']
+
+/** Is `kind` a rotational mate (`angle` / `tangent`) that requires the revolute gate? */
+export function isRotationalMateKind(kind: MateFormKind): boolean {
+  return kind === 'angle' || kind === 'tangent'
+}
+
+/**
+ * The minimal shape the rotational-mate gate inspects on the **driven** part
+ * (Part 2 of the mate). Mirrors the fields `AssemblyPart` now carries (`joint` /
+ * `grounded`) and the fields the solver consumes to wire a rotational DOF.
+ */
+export type RotationalGatePart = {
+  /** The part's joint kind (undefined ⇒ free-floating, no rotational DOF). */
+  readonly joint?: string
+  /** Whether the part is grounded (a grounded part is fixed — no DOF). */
+  readonly grounded?: boolean
+}
+
+/**
+ * Can the foundation solver position a rotational (`angle` / `tangent`) mate on
+ * this driven part? `true` ONLY for a **non-grounded, revolute-jointed** part —
+ * the single rotational DOF the solver wires (about the hinge's
+ * `revolutePreviewAxis`). Every other case (no joint, grounded, slider, etc.)
+ * stalls at `max_iterations` with no rotational handle to move, so the panel must
+ * NOT offer a rotational mate there. Honest gate: refuse the combination the
+ * solver can't converge rather than persist a mate that never solves.
+ */
+export function rotationalMatesSupportedFor(part: RotationalGatePart | undefined): boolean {
+  if (part == null) return false
+  if (part.grounded === true) return false
+  return part.joint === 'revolute'
+}
 
 /**
  * Is this mate kind solved **live** by the Python sidecar (`add_assembly_mate`)?
  * `true` for point/axis/plane (the wire union carries them); `false` for
- * `distance` (persist-only — the renderer skips the sidecar and folds it straight
- * into a Model-C constraint). Lets the panel branch its submit path without
- * re-encoding the rule.
+ * `distance` / `angle` / `tangent` (persist-only — the renderer skips the sidecar
+ * and folds them straight into a Model-C constraint the TS solver positions).
+ * Lets the panel branch its submit path without re-encoding the rule.
  */
-export function mateKindUsesSidecar(kind: CadAssemblyMateKind): boolean {
+export function mateKindUsesSidecar(kind: MateFormKind): boolean {
   return kind === 'point' || kind === 'axis' || kind === 'plane'
 }
 
@@ -157,6 +228,12 @@ export function makeMateFormDraft(part1Id: string, part2Id: string): MateFormDra
     normal2: ['0', '0', '1'],
     // distance target (mm) — defaults to 0 (a coincident-equivalent separation).
     value: '0',
+    // angle / tangent cardinal feature axes — default each part to its local +X
+    // (a concrete, valid pick so the picker never starts on an empty axis).
+    axis1Cardinal: 'x',
+    axis2Cardinal: 'x',
+    // angle target (degrees) — defaults to 90° (the canonical right-angle hinge).
+    angleDeg: '90',
   }
 }
 
@@ -178,33 +255,62 @@ export type MateFormField =
   | 'normal1'
   | 'normal2'
   | 'value'
+  | 'axis1Cardinal'
+  | 'axis2Cardinal'
+  | 'angleDeg'
 
 /**
- * A validated **persist-only** mate (the `distance` kind). Carries the two
- * feature points (each part's local frame) + the numeric target so the renderer
- * can adapt it onto `assembly-mate-persist`'s `SolvedMateDraftInput` and fold it
- * into a Model-C `distance` constraint — WITHOUT a sidecar round-trip (the
- * Python `add_assembly_mate` does not accept distance). Mirrors the fields the
- * persist layer reads for a distance fold.
+ * A validated **persist-only** mate — a kind the renderer folds straight into a
+ * Model-C constraint via `assembly-mate-persist` WITHOUT a sidecar round-trip
+ * (the Python `add_assembly_mate` wire union carries only point/axis/plane).
+ * Discriminated by `kind`:
+ *
+ *   - `distance` — two feature points (each part's local frame) + a numeric mm
+ *                  target → a Model-C `distance` constraint.
+ *   - `angle`    — two cardinal feature axes + a degrees target → a Model-C
+ *                  `angle` constraint (the solver rotates a revolute hinge).
+ *   - `tangent`  — two cardinal feature axes (no target) → a Model-C `tangent`
+ *                  constraint (perpendicular contact on a revolute hinge).
+ *
+ * The renderer adapts these onto `SolvedMateDraftInput` (`point1/point2/value`
+ * for distance; `axis1Cardinal/axis2Cardinal/angleDeg` for angle/tangent).
  */
-export type PersistOnlyMate = {
-  readonly kind: 'distance'
-  readonly part1Id: string
-  readonly part2Id: string
-  readonly point1: readonly [number, number, number]
-  readonly point2: readonly [number, number, number]
-  /** Target separation (mm), finite and non-negative. */
-  readonly value: number
-}
+export type PersistOnlyMate =
+  | {
+      readonly kind: 'distance'
+      readonly part1Id: string
+      readonly part2Id: string
+      readonly point1: readonly [number, number, number]
+      readonly point2: readonly [number, number, number]
+      /** Target separation (mm), finite and non-negative. */
+      readonly value: number
+    }
+  | {
+      readonly kind: 'angle'
+      readonly part1Id: string
+      readonly part2Id: string
+      readonly axis1Cardinal: MateCardinalAxis
+      readonly axis2Cardinal: MateCardinalAxis
+      /** Target angle (degrees), finite. */
+      readonly angleDeg: number
+    }
+  | {
+      readonly kind: 'tangent'
+      readonly part1Id: string
+      readonly part2Id: string
+      readonly axis1Cardinal: MateCardinalAxis
+      readonly axis2Cardinal: MateCardinalAxis
+    }
 
 /**
  * Discriminated result of {@link buildAddMateRequest}.
  *
  *   - `{ ok: true, request }`      — a live mate (point/axis/plane): send
  *                                     `request` to `cad.addAssemblyMate`.
- *   - `{ ok: true, persistOnly }`  — a `distance` mate: do NOT call the sidecar;
- *                                     fold `persistOnly` straight into a Model-C
- *                                     constraint via `assembly-mate-persist`.
+ *   - `{ ok: true, persistOnly }`  — a `distance` / `angle` / `tangent` mate: do
+ *                                     NOT call the sidecar; fold `persistOnly`
+ *                                     straight into a Model-C constraint via
+ *                                     `assembly-mate-persist`.
  *   - `{ ok: false, field, message }` — a precise inline validation error.
  *
  * Both success shapes carry `ok: true`; the renderer discriminates on the
@@ -250,15 +356,21 @@ function parseFiniteNumber(cell: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** A literal cardinal axis label (`'x' | 'y' | 'z'`)? Guards the angle/tangent axis picks. */
+function isCardinalAxis(v: MateCardinalAxis | undefined): v is MateCardinalAxis {
+  return v === 'x' || v === 'y' || v === 'z'
+}
+
 /**
  * Validate + normalise a {@link MateFormDraft} (plus the assembly handle).
  *
  *   - **Live kinds** (`point` / `axis` / `plane`) → `{ ok: true, request }`: the
  *     `{ handle, mate }` envelope `cad.add_assembly_mate` accepts.
- *   - **`distance`** → `{ ok: true, persistOnly }`: a validated
- *     {@link PersistOnlyMate} the renderer folds straight into a Model-C
- *     constraint (NO sidecar — the Python verb does not accept distance). The
- *     `handle` is NOT required for this kind (persistence needs no live B-rep).
+ *   - **Persist-only kinds** (`distance` / `angle` / `tangent`) →
+ *     `{ ok: true, persistOnly }`: a validated {@link PersistOnlyMate} the
+ *     renderer folds straight into a Model-C constraint (NO sidecar — the Python
+ *     verb does not accept them). The `handle` is NOT required for these kinds
+ *     (persistence needs no live B-rep).
  *
  * Validation order (fail fast, precise field pointer):
  *   1. for **live kinds only**, `handle` non-empty (the assembly must exist).
@@ -269,6 +381,8 @@ function parseFiniteNumber(cell: string): number | null {
  *      reject it up front with a clearer message).
  *   5. for `distance`, the target `value` parses to a **finite, non-negative**
  *      number (a separation cannot be negative).
+ *   6. for `angle` / `tangent`, both cardinal axis picks are valid (x/y/z); for
+ *      `angle` the `angleDeg` target parses to a **finite** number (degrees).
  *
  * On a live-kind success the returned `request.mate` is a real
  * {@link CadAssemblyMate} (discriminated by `kind`) ready to `JSON.stringify`
@@ -326,6 +440,54 @@ export function buildAddMateRequest(
         point1,
         point2,
         value: target,
+      },
+    }
+  }
+
+  if (draft.kind === 'angle') {
+    const axis1Cardinal = draft.axis1Cardinal
+    if (!isCardinalAxis(axis1Cardinal)) {
+      return { ok: false, field: 'axis1Cardinal', message: 'Pick the axis on Part 1 (x, y, or z).' }
+    }
+    const axis2Cardinal = draft.axis2Cardinal
+    if (!isCardinalAxis(axis2Cardinal)) {
+      return { ok: false, field: 'axis2Cardinal', message: 'Pick the axis on Part 2 (x, y, or z).' }
+    }
+    const angleDeg = parseFiniteNumber(draft.angleDeg)
+    if (angleDeg == null) {
+      return { ok: false, field: 'angleDeg', message: 'Angle needs a finite number (degrees).' }
+    }
+    return {
+      ok: true,
+      persistOnly: {
+        kind: 'angle',
+        part1Id: draft.part1Id,
+        part2Id: draft.part2Id,
+        axis1Cardinal,
+        axis2Cardinal,
+        angleDeg,
+      },
+    }
+  }
+
+  if (draft.kind === 'tangent') {
+    const axis1Cardinal = draft.axis1Cardinal
+    if (!isCardinalAxis(axis1Cardinal)) {
+      return { ok: false, field: 'axis1Cardinal', message: 'Pick the axis on Part 1 (x, y, or z).' }
+    }
+    const axis2Cardinal = draft.axis2Cardinal
+    if (!isCardinalAxis(axis2Cardinal)) {
+      return { ok: false, field: 'axis2Cardinal', message: 'Pick the axis on Part 2 (x, y, or z).' }
+    }
+    // Tangent (perpendicular contact) carries NO numeric target.
+    return {
+      ok: true,
+      persistOnly: {
+        kind: 'tangent',
+        part1Id: draft.part1Id,
+        part2Id: draft.part2Id,
+        axis1Cardinal,
+        axis2Cardinal,
       },
     }
   }

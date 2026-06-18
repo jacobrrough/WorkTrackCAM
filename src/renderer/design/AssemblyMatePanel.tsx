@@ -39,23 +39,27 @@
  *      click handler, so `renderToStaticMarkup` never calls IPC.
  */
 
-import { useCallback, useMemo, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { fab } from '../src/shop-types'
 import type { AssemblyPart } from './AssemblyView'
-import type { CadAssemblyMateKind } from '../../shared/sidecar-protocol'
 import {
   buildAddMateRequest,
+  isRotationalMateKind,
   makeMateFormDraft,
   mateKindUsesSidecar,
   mateOutcomeToBadge,
   narrowAddMateResponse,
-  DEFERRED_MATE_KINDS,
+  rotationalMatesSupportedFor,
   IDLE_MATE_BADGE,
+  MATE_CARDINAL_AXES,
   OFFERED_MATE_KINDS,
+  ROTATIONAL_MATE_KINDS,
   SOLVING_MATE_BADGE,
   type MateBadgeView,
+  type MateCardinalAxis,
   type MateFormDraft,
   type MateFormField,
+  type MateFormKind,
   type VectorDraft,
 } from './assembly-mate-form'
 
@@ -104,24 +108,31 @@ export interface AssemblyMatePanelProps {
 }
 
 /** Labels for the kind picker — matches the AssemblyView modal capitalization. */
-const KIND_LABELS: Record<CadAssemblyMateKind, string> = {
+const KIND_LABELS: Record<MateFormKind, string> = {
   point: 'Point',
   axis: 'Axis',
   plane: 'Plane',
   distance: 'Distance',
+  angle: 'Angle',
+  tangent: 'Tangent',
 }
+
+/** Per-cell axis labels for the cardinal axis pickers. */
+const AXIS_LABELS: Record<MateCardinalAxis, string> = { x: 'X', y: 'Y', z: 'Z' }
 
 /**
  * Kind options the picker offers — the SINGLE SOURCE OF TRUTH is the engine's
  * `OFFERED_MATE_KINDS` (`assembly-mate-form.ts`), NOT a list re-typed here. Every
  * entry is genuinely actionable: point/axis/plane solve live via the sidecar;
- * `distance` folds straight into a Model-C constraint the TS solver positions.
- * `angle` / `tangent` are deliberately absent (see {@link DEFERRED_MATE_KINDS}) —
- * the foundation solver has no rotational DOF, so offering them would be
- * dishonest. Deriving from the shared constant means the picker can never drift
- * from what the solver actually supports.
+ * `distance` folds straight into a Model-C constraint the TS solver positions;
+ * `angle` / `tangent` fold into a Model-C rotational constraint the solver drives
+ * by rotating a revolute hinge (Cycle 272). The two rotational kinds are GATED at
+ * render — their `<option>` is disabled (and their inputs are withheld) unless the
+ * selected driven part (Part 2) is a non-grounded **revolute** hinge, the only
+ * case the solver converges (`rotationalMatesSupportedFor`). Deriving from the
+ * shared constant means the picker can never drift from the solver's vocabulary.
  */
-const KINDS: readonly CadAssemblyMateKind[] = OFFERED_MATE_KINDS
+const KINDS: readonly MateFormKind[] = OFFERED_MATE_KINDS
 
 /** Per-cell axis labels for the vector inputs. */
 const CELL_LABELS: readonly ['X', 'Y', 'Z'] = ['X', 'Y', 'Z']
@@ -159,14 +170,52 @@ export function AssemblyMatePanel({
     return out
   }, [parts])
 
+  const partById = useMemo<Record<string, AssemblyPart>>(() => {
+    const out: Record<string, AssemblyPart> = {}
+    for (const p of parts) out[p.id] = p
+    return out
+  }, [parts])
+
+  // ── Rotational-mate gate ────────────────────────────────────────────────────
+  // `angle` / `tangent` converge ONLY when the DRIVEN part (Part 2 of the mate)
+  // is a non-grounded revolute hinge — the one rotational DOF the foundation
+  // solver wires. Offer those kinds only then; otherwise disable their options +
+  // withhold their inputs so the operator can't author a mate the solver can't
+  // satisfy. (Part 2 is the driven side: Part 1 is the reference, mirroring the
+  // `assembly-solver-revolute` fixtures where the grounded base is part1.)
+  const drivenPart: AssemblyPart | undefined = partById[draft.part2Id]
+  const rotationalSupported = rotationalMatesSupportedFor(drivenPart)
+
+  // Snap an unsupported rotational draft back to a positional kind: if Part 2 is
+  // switched to a non-revolute part while an angle/tangent kind is active, the
+  // form must not keep showing rotational inputs for a part the solver can't move.
+  useEffect(() => {
+    if (isRotationalMateKind(draft.kind) && !rotationalSupported) {
+      setDraft((d) => ({ ...d, kind: 'point' }))
+      setFieldError(null)
+    }
+  }, [draft.kind, rotationalSupported])
+
   // ── Controlled-input setters (pure draft updates) ──────────────────────────
-  const setKind = useCallback((kind: CadAssemblyMateKind): void => {
+  const setKind = useCallback((kind: MateFormKind): void => {
     setDraft((d) => ({ ...d, kind }))
     setFieldError(null)
   }, [])
 
   const setPart = useCallback((side: 1 | 2, id: string): void => {
     setDraft((d) => (side === 1 ? { ...d, part1Id: id } : { ...d, part2Id: id }))
+    setFieldError(null)
+  }, [])
+
+  // Cardinal-axis picker setter (angle / tangent feature axes per part).
+  const setCardinalAxis = useCallback((side: 1 | 2, axis: MateCardinalAxis): void => {
+    setDraft((d) => (side === 1 ? { ...d, axis1Cardinal: axis } : { ...d, axis2Cardinal: axis }))
+    setFieldError(null)
+  }, [])
+
+  // Angle-target scalar setter (raw string; the builder parses it).
+  const setAngleDeg = useCallback((value: string): void => {
+    setDraft((d) => ({ ...d, angleDeg: value }))
     setFieldError(null)
   }, [])
 
@@ -216,22 +265,30 @@ export function AssemblyMatePanel({
     }
     setFieldError(null)
 
-    // ── PERSIST-ONLY path (distance) ─────────────────────────────────────────
-    // No sidecar: the durable Model-C `distance` constraint is folded by the
-    // host (`onMateAdded` → `runPersistMate` → `persistMate`), and the TS
-    // `solveMateConstraints` drives the part's translation to the target on the
-    // next Solve in AssemblyView. We hand the SolvedMate straight back and paint
-    // a "solved" badge — honest: the mate is recorded + solver-backed, the
-    // separation is realised when the assembly solve runs.
+    // ── PERSIST-ONLY path (distance / angle / tangent) ───────────────────────
+    // No sidecar: the durable Model-C constraint is folded by the host
+    // (`onMateAdded` → `runPersistMate` → `persistMate`), and the TS
+    // `solveMateConstraints` drives the part (translation for distance; a revolute
+    // hinge rotation for angle/tangent) to the target on the next Solve in
+    // AssemblyView. We hand the SolvedMate straight back and paint a "solved"
+    // badge — honest: the mate is recorded + solver-backed, the pose is realised
+    // when the assembly solve runs.
     if (built.persistOnly !== undefined) {
+      const po = built.persistOnly
       const id = `mate-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`
       onMateAdded?.({ id, draft })
-      setBadge({
-        label: `Mate added: ${KIND_LABELS[draft.kind]} ${built.persistOnly.value} mm`,
-        status: 'solved',
-        detail: 'Saved as a distance constraint — runs in the assembly solve.',
-      })
-      toast('ok', `Mate added: ${KIND_LABELS[draft.kind]} (${built.persistOnly.value} mm)`)
+      const summary =
+        po.kind === 'distance'
+          ? `${KIND_LABELS.distance} ${po.value} mm`
+          : po.kind === 'angle'
+            ? `${KIND_LABELS.angle} ${po.angleDeg}°`
+            : KIND_LABELS.tangent
+      const detail =
+        po.kind === 'distance'
+          ? 'Saved as a distance constraint — runs in the assembly solve.'
+          : 'Saved as a rotational constraint — the revolute hinge rotates to satisfy it in the assembly solve.'
+      setBadge({ label: `Mate added: ${summary}`, status: 'solved', detail })
+      toast('ok', `Mate added: ${summary}`)
       return
     }
 
@@ -321,13 +378,20 @@ export function AssemblyMatePanel({
               className="assembly-mate-panel__select"
               data-testid="assembly-mate-kind"
               value={draft.kind}
-              onChange={(e) => setKind(e.target.value as CadAssemblyMateKind)}
+              onChange={(e) => setKind(e.target.value as MateFormKind)}
             >
-              {KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {KIND_LABELS[k]}
-                </option>
-              ))}
+              {KINDS.map((k) => {
+                // Gate the rotational kinds: their option is present (the picker
+                // is SSOT-complete) but DISABLED unless the driven part is a
+                // non-grounded revolute hinge — the only case the solver converges.
+                const gatedOff = isRotationalMateKind(k) && !rotationalSupported
+                return (
+                  <option key={k} value={k} disabled={gatedOff}>
+                    {KIND_LABELS[k]}
+                    {gatedOff ? ' (needs a revolute part)' : ''}
+                  </option>
+                )
+              })}
             </select>
           </div>
 
@@ -461,6 +525,42 @@ export function AssemblyMatePanel({
               </div>
             </>
           )}
+          {/* angle / tangent: a cardinal axis picker per part (no free vectors —
+              the solver compares cardinal feature axes), plus the degrees target
+              for angle. Only reachable when the rotational gate passed (an
+              unsupported kind is snapped back to point by the gate effect). */}
+          {(draft.kind === 'angle' || draft.kind === 'tangent') && (
+            <>
+              <AxisPickerField
+                side={1}
+                label={`Axis 1 — ${partNameById[draft.part1Id] ?? draft.part1Id}`}
+                value={draft.axis1Cardinal}
+                onPick={setCardinalAxis}
+              />
+              <AxisPickerField
+                side={2}
+                label={`Axis 2 — ${partNameById[draft.part2Id] ?? draft.part2Id} (revolute hinge)`}
+                value={draft.axis2Cardinal}
+                onPick={setCardinalAxis}
+              />
+              {draft.kind === 'angle' && (
+                <div className="assembly-mate-panel__field assembly-mate-panel__field--scalar">
+                  <label className="assembly-mate-panel__label" htmlFor="assembly-mate-angle">
+                    Target angle (degrees)
+                  </label>
+                  <input
+                    id="assembly-mate-angle"
+                    className="assembly-mate-panel__input"
+                    data-testid="assembly-mate-angle"
+                    type="number"
+                    inputMode="decimal"
+                    value={draft.angleDeg}
+                    onChange={(e) => setAngleDeg(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
+          )}
 
           {fieldError !== null && (
             <div
@@ -495,17 +595,22 @@ export function AssemblyMatePanel({
           </div>
 
           {/*
-            HONESTY: the foundation solver exposes only translational DOF, so the
-            rotational kinds (angle / tangent) cannot be positioned yet — they are
-            withheld from the picker (OFFERED_MATE_KINDS) and documented here as
-            deferred rather than offered as no-ops. Surfaced from the shared
-            DEFERRED_MATE_KINDS so the reason can't drift from the engine's truth.
+            HONESTY: the rotational kinds (angle / tangent) are now offered + fold
+            to a Model-C constraint the solver drives by rotating a revolute hinge
+            (Cycle 272). They converge ONLY when the driven part (Part 2) is a
+            non-grounded revolute hinge, so the picker GATES them on exactly that.
+            This note states the gate condition + its current status so the surface
+            stays honest — never offers a combination the solver can't satisfy.
           */}
           <p
-            className="assembly-mate-panel__deferred"
-            data-testid="assembly-mate-deferred"
+            className="assembly-mate-panel__gate-note"
+            data-testid="assembly-mate-rotational-gate"
           >
-            {`Coming soon: ${DEFERRED_MATE_KINDS.map((d) => d.kind).join(', ')} (need rotational DOF).`}
+            {rotationalSupported
+              ? `${ROTATIONAL_MATE_KINDS.join(' / ')} mates available: ${
+                  partNameById[draft.part2Id] ?? draft.part2Id
+                } is a revolute hinge.`
+              : `${ROTATIONAL_MATE_KINDS.join(' / ')} mates need the driven part (Part 2) to be a non-grounded revolute joint.`}
           </p>
         </div>
       )}
@@ -547,6 +652,47 @@ function VectorField({
           </label>
         ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * One labelled cardinal-axis picker (X / Y / Z radio-style select) for an
+ * angle / tangent feature. The rotational solver compares cardinal feature axes,
+ * so the operator picks one of the three local axes per part rather than typing a
+ * free direction. `side` keys the stable testid (`assembly-mate-axis{1,2}-cardinal`)
+ * + routes the pick to the matching draft field.
+ */
+function AxisPickerField({
+  side,
+  label,
+  value,
+  onPick,
+}: {
+  readonly side: 1 | 2
+  readonly label: string
+  readonly value: MateCardinalAxis
+  readonly onPick: (side: 1 | 2, axis: MateCardinalAxis) => void
+}): JSX.Element {
+  const id = `assembly-mate-axis${side}-cardinal`
+  return (
+    <div className="assembly-mate-panel__field assembly-mate-panel__field--axis-pick">
+      <label className="assembly-mate-panel__label" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        id={id}
+        className="assembly-mate-panel__select"
+        data-testid={id}
+        value={value}
+        onChange={(e) => onPick(side, e.target.value as MateCardinalAxis)}
+      >
+        {MATE_CARDINAL_AXES.map((ax) => (
+          <option key={ax} value={ax}>
+            {AXIS_LABELS[ax]}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }

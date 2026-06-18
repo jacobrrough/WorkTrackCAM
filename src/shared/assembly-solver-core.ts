@@ -18,7 +18,12 @@ import type { AssemblyTransform6 } from './assembly-viewport-math'
  *
  * Over/under-constrained detection uses the documented **constraint-count vs free-DOF** heuristic
  * (full Jacobian-rank is a later enhancement): `E` = total scalar residual equations, `F` = total
- * free DOF. `E > F` → over-constrained; `E < F` → under-constrained; `E == F` → run the loop.
+ * free DOF. `E < F` → under-constrained. `E == F` → run the loop. `E > F` is over-DETERMINED but
+ * not necessarily conflicting — a redundant-but-consistent set (e.g. two identical coincident
+ * mates) is satisfiable — so we run a least-squares solve and classify on the FINAL residual:
+ * residual converges → `converged` (redundant); residual stays above
+ * `CONFLICTING_RESIDUAL_FLOOR` → `over_constrained`, reporting the still-violated ids as the
+ * conflicting block. (With no movable free vars the over-determined report is immediate.)
  *
  * Strictly deterministic: components sorted by id, constraints sorted by id, fixed variable order,
  * and NO `Math.random` / `Date.now` / `crypto`.
@@ -353,6 +358,124 @@ function buildReport(
 }
 
 /**
+ * Run the gradient-descent + backtracking convergence loop **in place** on `transforms`
+ * (mirrors solver2d). Shared by the balanced `E === F` path and the over-determined
+ * `E > F` least-squares path so both reduce energy with identical, deterministic mechanics.
+ *
+ * Returns the iteration count and a terminal status of `converged` / `max_iterations_reached`
+ * / `diverged`. The caller is responsible for the over/under-constrained *classification*
+ * (this helper only drives energy down and reports raw convergence).
+ */
+function runMateConvergenceLoop(
+  activeMates: AssemblyMateConstraint[],
+  transforms: Map<string, AssemblyTransform6>,
+  freeVars: FreeVar[],
+  cfg: SolverConfig,
+  energyTol: number
+): { iterations: number; status: SolverConvergenceStatus } {
+  // Anti-singularity seed: a cos-based angle/tangent residual has a ZERO gradient
+  // when the two axes start exactly aligned or perpendicular (sin = 0 at the
+  // extremum), which would stall a rotational handle at its start pose. If we are
+  // not already converged, nudge each rotational handle a deterministic 2° to
+  // break the symmetry so gradient descent has a slope to follow. Harmless when
+  // already near the target (the loop corrects it); skipped once energy < tol, and
+  // never touches translational handles.
+  if (totalEnergy(activeMates, transforms) >= energyTol) {
+    const seedRad = 2 * DEG2RAD
+    for (const fv of freeVars) {
+      if (fv.axis === 'rx' || fv.axis === 'ry' || fv.axis === 'rz') {
+        writeVar(transforms, fv, readVar(transforms, fv) + seedRad)
+      }
+    }
+  }
+
+  let lr = 0.4
+  let iterations = 0
+  let status: SolverConvergenceStatus = 'max_iterations_reached'
+
+  for (let it = 0; it < cfg.maxIterations; it++) {
+    iterations = it + 1
+    const e0 = totalEnergy(activeMates, transforms)
+    if (e0 < energyTol) {
+      status = 'converged'
+      break
+    }
+    if (freeVars.length === 0) {
+      // No movable handles (e.g. all DOF are joint scalars not yet wired): can't
+      // reduce energy in the foundation — report honestly rather than spin.
+      status = e0 < energyTol ? 'converged' : 'max_iterations_reached'
+      break
+    }
+
+    // Jacobi sweep: snapshot, compute all gradients at the snapshot, then apply together.
+    const snapshot = new Map<string, AssemblyTransform6>()
+    for (const [id, t] of transforms) snapshot.set(id, { ...t })
+
+    const gradients: number[] = []
+    for (const fv of freeVars) {
+      // Restore from snapshot before each partial so multi-var mates stay consistent.
+      for (const [id, t] of snapshot) transforms.set(id, { ...t })
+      const v0 = readVar(transforms, fv)
+      writeVar(transforms, fv, v0 + cfg.eps)
+      const ePlus = totalEnergy(activeMates, transforms)
+      writeVar(transforms, fv, v0 - cfg.eps)
+      const eMinus = totalEnergy(activeMates, transforms)
+      writeVar(transforms, fv, v0)
+      gradients.push((ePlus - eMinus) / (2 * cfg.eps))
+    }
+
+    // Restore snapshot, then take the step.
+    for (const [id, t] of snapshot) transforms.set(id, { ...t })
+    for (let i = 0; i < freeVars.length; i++) {
+      const fv = freeVars[i]!
+      const v0 = readVar(transforms, fv)
+      writeVar(transforms, fv, v0 - lr * gradients[i]!)
+    }
+
+    const e1 = totalEnergy(activeMates, transforms)
+    if (!Number.isFinite(e1)) {
+      // Numerical blow-up: restore and report diverged.
+      for (const [id, t] of snapshot) transforms.set(id, { ...t })
+      status = 'diverged'
+      break
+    }
+    if (e1 > e0 * 1.0 + 1e-18) {
+      // No improvement: restore and shrink the step (backtracking line search).
+      for (const [id, t] of snapshot) transforms.set(id, { ...t })
+      lr *= 0.5
+      if (lr < 1e-12) {
+        status = totalEnergy(activeMates, transforms) < energyTol ? 'converged' : 'max_iterations_reached'
+        break
+      }
+    }
+  }
+
+  // Final convergence check (covers the case where the last accepted step crossed the threshold).
+  if (status === 'max_iterations_reached' && totalEnergy(activeMates, transforms) < energyTol) {
+    status = 'converged'
+  }
+  return { iterations, status }
+}
+
+/**
+ * Constraints whose residual magnitude stays above this floor after a least-squares
+ * solve of an over-determined system (`E > F`) are reported as the **conflicting**
+ * block. The floor is generous relative to the convergence tolerance so a merely
+ * redundant-but-consistent system (which the loop drives to ~0) is NOT flagged.
+ */
+const CONFLICTING_RESIDUAL_FLOOR = 1e-4
+
+/** Ids of constraints still carrying a residual above {@link CONFLICTING_RESIDUAL_FLOOR}. */
+function conflictingMateIds(
+  activeMates: AssemblyMateConstraint[],
+  transforms: Map<string, AssemblyTransform6>
+): string[] {
+  return activeMates
+    .filter((m) => mateResidualMagnitude(m, transforms) > CONFLICTING_RESIDUAL_FLOOR)
+    .map((m) => m.id)
+}
+
+/**
  * Solve a set of mate constraints to convergence.
  *
  * @param components assembly components (any order; sorted by id internally)
@@ -426,12 +549,39 @@ export function solveMateConstraints(
     }
   }
 
-  // Count heuristic for over / under classification (full Jacobian rank is a later enhancement).
+  // Over-determined by count (E > F). The count alone does NOT prove conflict: a
+  // redundant-but-consistent set (e.g. two identical coincident mates) is satisfiable.
+  // So run a least-squares solve of the free vars and classify on the FINAL residual —
+  //   • residual converges  → the extra equations were redundant, report `converged`;
+  //   • residual stays high → genuinely `over_constrained`, and the conflicting block is
+  //     the constraints still carrying a residual above CONFLICTING_RESIDUAL_FLOOR.
+  // With NO free vars to move (every DOF grounded/unwired), nothing can satisfy the surplus
+  // equations unless we already start satisfied — keep the honest immediate report.
   if (equationCount > freeDof) {
+    if (freeVars.length === 0) {
+      const startResidual = Math.sqrt(totalEnergy(activeMates, transforms))
+      if (startResidual < cfg.residualTol) {
+        return { transforms, report: buildReport(activeMates, transforms, 0, 'converged') }
+      }
+      return {
+        transforms,
+        report: buildReport(activeMates, transforms, 0, 'over_constrained', {
+          conflictingConstraintIds: conflictingMateIds(activeMates, transforms)
+        })
+      }
+    }
+    const loop = runMateConvergenceLoop(activeMates, transforms, freeVars, cfg, energyTol)
+    if (loop.status === 'converged') {
+      // The surplus equations were consistent (redundant) — the system solved.
+      return { transforms, report: buildReport(activeMates, transforms, loop.iterations, 'converged') }
+    }
+    // Could not satisfy all equations: report the irreducible conflict honestly.
+    const conflicting = conflictingMateIds(activeMates, transforms)
     return {
       transforms,
-      report: buildReport(activeMates, transforms, 0, 'over_constrained', {
-        conflictingConstraintIds: activeMates.map((m) => m.id)
+      report: buildReport(activeMates, transforms, loop.iterations, 'over_constrained', {
+        // Fall back to all ids if the floor filtered everything (defensive: never empty).
+        conflictingConstraintIds: conflicting.length > 0 ? conflicting : activeMates.map((m) => m.id)
       })
     }
   }
@@ -444,88 +594,7 @@ export function solveMateConstraints(
     }
   }
 
-  // Anti-singularity seed: a cos-based angle/tangent residual has a ZERO gradient
-  // when the two axes start exactly aligned or perpendicular (sin = 0 at the
-  // extremum), which would stall a rotational handle at its start pose. If we are
-  // not already converged, nudge each rotational handle a deterministic 2° to
-  // break the symmetry so gradient descent has a slope to follow. Harmless when
-  // already near the target (the loop corrects it); skipped once energy < tol, and
-  // never touches translational handles.
-  if (totalEnergy(activeMates, transforms) >= energyTol) {
-    const seedRad = 2 * DEG2RAD
-    for (const fv of freeVars) {
-      if (fv.axis === 'rx' || fv.axis === 'ry' || fv.axis === 'rz') {
-        writeVar(transforms, fv, readVar(transforms, fv) + seedRad)
-      }
-    }
-  }
-
   // E === F: run the convergence loop (gradient descent with backtracking, mirroring solver2d).
-  let lr = 0.4
-  let iterations = 0
-  let status: SolverConvergenceStatus = 'max_iterations_reached'
-
-  for (let it = 0; it < cfg.maxIterations; it++) {
-    iterations = it + 1
-    const e0 = totalEnergy(activeMates, transforms)
-    if (e0 < energyTol) {
-      status = 'converged'
-      break
-    }
-    if (freeVars.length === 0) {
-      // No movable handles but E === F (e.g. all DOF are joint scalars not yet wired): can't
-      // reduce energy in the foundation — report honestly rather than spin.
-      status = e0 < energyTol ? 'converged' : 'max_iterations_reached'
-      break
-    }
-
-    // Jacobi sweep: snapshot, compute all gradients at the snapshot, then apply together.
-    const snapshot = new Map<string, AssemblyTransform6>()
-    for (const [id, t] of transforms) snapshot.set(id, { ...t })
-
-    const gradients: number[] = []
-    for (const fv of freeVars) {
-      // Restore from snapshot before each partial so multi-var mates stay consistent.
-      for (const [id, t] of snapshot) transforms.set(id, { ...t })
-      const v0 = readVar(transforms, fv)
-      writeVar(transforms, fv, v0 + cfg.eps)
-      const ePlus = totalEnergy(activeMates, transforms)
-      writeVar(transforms, fv, v0 - cfg.eps)
-      const eMinus = totalEnergy(activeMates, transforms)
-      writeVar(transforms, fv, v0)
-      gradients.push((ePlus - eMinus) / (2 * cfg.eps))
-    }
-
-    // Restore snapshot, then take the step.
-    for (const [id, t] of snapshot) transforms.set(id, { ...t })
-    for (let i = 0; i < freeVars.length; i++) {
-      const fv = freeVars[i]!
-      const v0 = readVar(transforms, fv)
-      writeVar(transforms, fv, v0 - lr * gradients[i]!)
-    }
-
-    const e1 = totalEnergy(activeMates, transforms)
-    if (!Number.isFinite(e1)) {
-      // Numerical blow-up: restore and report diverged.
-      for (const [id, t] of snapshot) transforms.set(id, { ...t })
-      status = 'diverged'
-      break
-    }
-    if (e1 > e0 * 1.0 + 1e-18) {
-      // No improvement: restore and shrink the step (backtracking line search).
-      for (const [id, t] of snapshot) transforms.set(id, { ...t })
-      lr *= 0.5
-      if (lr < 1e-12) {
-        status = totalEnergy(activeMates, transforms) < energyTol ? 'converged' : 'max_iterations_reached'
-        break
-      }
-    }
-  }
-
-  // Final convergence check (covers the case where the last accepted step crossed the threshold).
-  if (status === 'max_iterations_reached' && totalEnergy(activeMates, transforms) < energyTol) {
-    status = 'converged'
-  }
-
+  const { iterations, status } = runMateConvergenceLoop(activeMates, transforms, freeVars, cfg, energyTol)
   return { transforms, report: buildReport(activeMates, transforms, iterations, status) }
 }

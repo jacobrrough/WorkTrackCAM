@@ -51,7 +51,8 @@ import {
   type DrawingDimension,
   type DrawingNote,
   type DrawingRevision,
-  type GdtFeatureControlFrame
+  type GdtFeatureControlFrame,
+  type SurfaceFinishSymbol
 } from './drawing-annotation-schema'
 import { resolveActiveSheetId } from './drawing-sheet-ops'
 
@@ -88,6 +89,7 @@ export const PRIMARY_DRAWING_SHEET_NAME = 'Drawing'
 export type DrawingViewState = {
   readonly dimensions: readonly DrawingDimension[]
   readonly featureControlFrames: readonly GdtFeatureControlFrame[]
+  readonly surfaceFinishes: readonly SurfaceFinishSymbol[]
   readonly titleBlock: DrawingTitleBlock
   readonly notes: readonly DrawingNote[]
   readonly revisions: readonly DrawingRevision[]
@@ -99,6 +101,7 @@ export function emptyDrawingViewState(): DrawingViewState {
   return {
     dimensions: [],
     featureControlFrames: [],
+    surfaceFinishes: [],
     titleBlock: emptyDrawingTitleBlock(),
     notes: [],
     revisions: [],
@@ -147,6 +150,7 @@ export function foldDrawingState(
   const annotations = {
     dimensions: [...state.dimensions],
     featureControlFrames: [...state.featureControlFrames],
+    surfaceFinishes: [...state.surfaceFinishes],
     notes: [...state.notes],
     revisions: [...state.revisions],
     bom: [...state.bom]
@@ -222,6 +226,7 @@ function sheetToViewState(sheet: DrawingSheet | undefined): DrawingViewState {
   return {
     dimensions: annotations.dimensions,
     featureControlFrames: annotations.featureControlFrames,
+    surfaceFinishes: annotations.surfaceFinishes,
     titleBlock,
     notes: annotations.notes,
     revisions: annotations.revisions,

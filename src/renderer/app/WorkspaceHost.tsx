@@ -20,6 +20,7 @@ import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { WorkshopHost } from './WorkshopHost'
 import { UtilitiesHost } from './UtilitiesHost'
 import { ManufactureHost } from './ManufactureHost'
+import { WorkspaceErrorBoundary } from '../src/WorkspaceErrorBoundary'
 import type { WorkspaceId } from './useWorkspaceRouter'
 
 /**
@@ -67,12 +68,54 @@ function routeToViewMode(active: WorkspaceId): DesignViewMode {
   }
 }
 
+/**
+ * Human-readable label for the active workspace, shown by the
+ * {@link WorkspaceErrorBoundary} fallback ("The <label> workspace
+ * encountered an unexpected error."). Total over every {@link WorkspaceId} so
+ * a new route cannot silently fall through to a generic string.
+ */
+function workspaceLabel(active: WorkspaceId): string {
+  switch (active) {
+    case 'design':
+      return 'Design'
+    case 'assemble':
+      return 'Assemble'
+    case 'drawings':
+      return 'Drawings'
+    case 'manufacture':
+      return 'Manufacture'
+    case 'workshop':
+      return 'Workshop'
+    case 'utilities':
+      return 'Utilities'
+    default:
+      return 'Workspace'
+  }
+}
+
 export function WorkspaceHost({
   active,
-  onNavigate
+  onNavigate,
+  seedDesignScript = null,
+  onSeedDesignConsumed
 }: {
   active: WorkspaceId
   onNavigate: (w: WorkspaceId) => void
+  /**
+   * Onboarding "Start a parametric design" seed — the machine-specific bundled
+   * CAD sample text the {@link FirstRunOnboarding} picker already read. When
+   * non-null AND the CAD session is still inert (CAD-first boot: no project open,
+   * the editor still on the generic {@link STARTER_SCRIPT}), the seed effect
+   * injects THIS script into the Design editor (via `designScript` + a remount
+   * token) so the operator lands on their chosen machine's sample. Optional —
+   * omitted by callers that don't onboard; `null` is the no-seed default.
+   */
+  seedDesignScript?: string | null
+  /**
+   * Fired once the seed has been injected so the parent can clear it (so a later
+   * manual edit is never re-clobbered by a stale seed). Optional.
+   */
+  onSeedDesignConsumed?: () => void
 }): ReactElement {
   const { pushToast } = useToast()
   // Project binding for the CAD session. Mirrors `ManufactureHost`'s own
@@ -101,6 +144,31 @@ export function WorkspaceHost({
   const [assemblyParts, setAssemblyParts] = useState<readonly AssemblyPart[]>([])
   const [assemblyMates, setAssemblyMates] = useState<readonly AssemblyMateConstraint[]>([])
   const [hydrateToken, setHydrateToken] = useState(0)
+
+  // Onboarding design-seed. The "Start a parametric design" card hands the
+  // machine-specific bundled CAD sample down via `seedDesignScript`; inject it
+  // into the Design editor so the operator opens on THEIR machine's starter
+  // rather than the generic STARTER_SCRIPT. Gated to the CAD-first boot case:
+  //   - a script is actually queued (`seedDesignScript` non-null), AND
+  //   - no project is open (`projectDir == null` — the session is inert; with a
+  //     project the on-disk sketch is the source of truth and must NOT be
+  //     overwritten by a starter), AND
+  //   - the editor is still on the untouched default (`designScript ===
+  //     STARTER_SCRIPT`) so a manual edit made before the seed lands is never
+  //     clobbered.
+  // On a match we set `designScript` and bump `hydrateToken` (the DesignWorkspaceHost
+  // `key` includes it, and DesignWorkspace seeds its editor from `initialScript`
+  // mount-only — so a remount is what actually loads the new script), then ack via
+  // `onSeedDesignConsumed` so the parent clears the one-shot seed. SAFETY: sets a
+  // CAD script string only; emits no G-code.
+  useEffect(() => {
+    if (seedDesignScript == null) return
+    if (projectDir !== null) return
+    if (designScript !== STARTER_SCRIPT) return
+    setDesignScript(seedDesignScript)
+    setHydrateToken((t) => t + 1)
+    onSeedDesignConsumed?.()
+  }, [seedDesignScript, projectDir, designScript, onSeedDesignConsumed])
 
   // CAD foundation (#9) — hydrate the on-disk assembly when the assemble route
   // is active. Guarded so it fires only on the assemble route + a (projectDir)
@@ -218,7 +286,15 @@ export function WorkspaceHost({
     [projectDir, pushToast]
   )
 
-  switch (active) {
+  // Render the active route's workspace. Wrapped below in a
+  // WorkspaceErrorBoundary so an uncaught render/lifecycle error in ONE
+  // workspace shows a recoverable in-pane fallback (Try again / Reload app)
+  // instead of white-screening the whole shell. The boundary is keyed on the
+  // active route so switching workspaces resets a tripped boundary — a crash on
+  // Manufacture must not leave the fallback showing once the operator navigates
+  // to Design.
+  const renderActiveWorkspace = (): ReactElement => {
+    switch (active) {
     case 'design':
     case 'assemble':
     case 'drawings':
@@ -255,5 +331,12 @@ export function WorkspaceHost({
           <EmptyState title="Workspace" />
         </div>
       )
+    }
   }
+
+  return (
+    <WorkspaceErrorBoundary key={active} label={workspaceLabel(active)}>
+      {renderActiveWorkspace()}
+    </WorkspaceErrorBoundary>
+  )
 }

@@ -18,14 +18,17 @@ import { describe, expect, it } from 'vitest'
 import {
   buildAddMateRequest,
   bboxExtentSummary,
+  isRotationalMateKind,
   makeMateFormDraft,
   mateOutcomeToBadge,
   mateKindUsesSidecar,
   narrowAddMateResponse,
+  rotationalMatesSupportedFor,
   DEFERRED_MATE_KINDS,
   EMPTY_VECTOR,
   IDLE_MATE_BADGE,
   OFFERED_MATE_KINDS,
+  ROTATIONAL_MATE_KINDS,
   SOLVING_MATE_BADGE,
   type MateFormDraft,
 } from './assembly-mate-form'
@@ -278,8 +281,8 @@ describe('buildAddMateRequest — distance mate (persist-only)', () => {
   it('does NOT require an assembly handle (distance folds without a live B-rep)', () => {
     const r = buildAddMateRequest('', base)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.persistOnly?.value).toBe(12.5)
+    if (!r.ok || r.persistOnly?.kind !== 'distance') return
+    expect(r.persistOnly.value).toBe(12.5)
   })
 
   it('still requires two distinct parts', () => {
@@ -314,8 +317,8 @@ describe('buildAddMateRequest — distance mate (persist-only)', () => {
   it('accepts a zero distance value', () => {
     const r = buildAddMateRequest(HANDLE, { ...base, value: '0' })
     expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.persistOnly?.value).toBe(0)
+    if (!r.ok || r.persistOnly?.kind !== 'distance') return
+    expect(r.persistOnly.value).toBe(0)
   })
 
   it('rejects a malformed point even when value is fine', () => {
@@ -326,29 +329,160 @@ describe('buildAddMateRequest — distance mate (persist-only)', () => {
   })
 })
 
+// ── (A4) angle / tangent mates (persist-only rotational) ─────────────────────
+
+describe('buildAddMateRequest — angle mate (persist-only rotational)', () => {
+  const base: MateFormDraft = {
+    ...makeMateFormDraft('p1', 'p2'),
+    kind: 'angle',
+    axis1Cardinal: 'x',
+    axis2Cardinal: 'x',
+    angleDeg: '90',
+  }
+
+  it('returns a persistOnly angle result with the cardinal axes + degrees', () => {
+    const r = buildAddMateRequest(HANDLE, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.request).toBeUndefined()
+    expect(r.persistOnly).toEqual({
+      kind: 'angle',
+      part1Id: 'p1',
+      part2Id: 'p2',
+      axis1Cardinal: 'x',
+      axis2Cardinal: 'x',
+      angleDeg: 90,
+    })
+  })
+
+  it('does NOT require an assembly handle (angle folds without a live B-rep)', () => {
+    const r = buildAddMateRequest('', base)
+    expect(r.ok).toBe(true)
+    if (!r.ok || r.persistOnly?.kind !== 'angle') return
+    expect(r.persistOnly.angleDeg).toBe(90)
+  })
+
+  it('accepts a non-90 angle (e.g. 45°) and negative angles', () => {
+    const r45 = buildAddMateRequest(HANDLE, { ...base, angleDeg: '45' })
+    expect(r45.ok).toBe(true)
+    if (!r45.ok || r45.persistOnly?.kind !== 'angle') return
+    expect(r45.persistOnly.angleDeg).toBe(45)
+
+    const rNeg = buildAddMateRequest(HANDLE, { ...base, angleDeg: '-30' })
+    expect(rNeg.ok).toBe(true)
+    if (!rNeg.ok || rNeg.persistOnly?.kind !== 'angle') return
+    expect(rNeg.persistOnly.angleDeg).toBe(-30)
+  })
+
+  it('rejects a non-numeric / empty angle with an angleDeg field pointer', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, angleDeg: 'abc' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('angleDeg')
+
+    const empty = buildAddMateRequest(HANDLE, { ...base, angleDeg: '' })
+    expect(empty.ok).toBe(false)
+    if (empty.ok) return
+    expect(empty.field).toBe('angleDeg')
+  })
+
+  it('still requires two distinct parts', () => {
+    const r = buildAddMateRequest(HANDLE, { ...base, part2Id: 'p1' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.field).toBe('part2Id')
+  })
+})
+
+describe('buildAddMateRequest — tangent mate (persist-only rotational, no value)', () => {
+  const base: MateFormDraft = {
+    ...makeMateFormDraft('p1', 'p2'),
+    kind: 'tangent',
+    axis1Cardinal: 'y',
+    axis2Cardinal: 'z',
+  }
+
+  it('returns a persistOnly tangent result with the cardinal axes and NO angle target', () => {
+    const r = buildAddMateRequest(HANDLE, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.request).toBeUndefined()
+    expect(r.persistOnly).toEqual({
+      kind: 'tangent',
+      part1Id: 'p1',
+      part2Id: 'p2',
+      axis1Cardinal: 'y',
+      axis2Cardinal: 'z',
+    })
+    // No `value` / `angleDeg` on a tangent persistOnly.
+    expect(r.persistOnly).not.toHaveProperty('angleDeg')
+    expect(r.persistOnly).not.toHaveProperty('value')
+  })
+
+  it('does NOT require an assembly handle or an angle value', () => {
+    const r = buildAddMateRequest('', { ...base, angleDeg: '' })
+    expect(r.ok).toBe(true)
+    if (!r.ok || r.persistOnly?.kind !== 'tangent') return
+    expect(r.persistOnly.axis1Cardinal).toBe('y')
+  })
+})
+
 describe('offered vs deferred mate kinds (honesty surface)', () => {
-  it('offers exactly the solver-backed kinds (point/axis/plane/distance)', () => {
-    expect([...OFFERED_MATE_KINDS]).toEqual(['point', 'axis', 'plane', 'distance'])
+  // HONESTY PIN (updated Cycle 276): angle + tangent are NO LONGER deferred. The
+  // foundation solver gained the revolute rotational DOF (Cycle 272) and the
+  // authoring form now offers + gates them, so all six solver-backed kinds are
+  // offered and the deferred surface is empty. These pins now lock the NEW truth.
+  it('offers all six solver-backed kinds, including the now-authorable angle/tangent', () => {
+    expect([...OFFERED_MATE_KINDS]).toEqual([
+      'point',
+      'axis',
+      'plane',
+      'distance',
+      'angle',
+      'tangent',
+    ])
   })
 
-  it('defers angle + tangent with a documented reason (no rotational DOF yet)', () => {
-    const kinds = DEFERRED_MATE_KINDS.map((d) => d.kind)
-    expect(kinds).toEqual(['angle', 'tangent'])
-    for (const d of DEFERRED_MATE_KINDS) {
-      expect(d.reason.length).toBeGreaterThan(0)
-      expect(d.reason).toMatch(/rotational|rotate/i)
-    }
+  it('defers NOTHING — angle/tangent are now authorable (DEFERRED_MATE_KINDS is empty)', () => {
+    expect(DEFERRED_MATE_KINDS).toEqual([])
   })
 
-  it('mateKindUsesSidecar is true for live kinds, false for distance', () => {
+  it('exposes the rotational gate SSOT (angle/tangent require a revolute driven part)', () => {
+    expect([...ROTATIONAL_MATE_KINDS]).toEqual(['angle', 'tangent'])
+    expect(isRotationalMateKind('angle')).toBe(true)
+    expect(isRotationalMateKind('tangent')).toBe(true)
+    expect(isRotationalMateKind('point')).toBe(false)
+    expect(isRotationalMateKind('distance')).toBe(false)
+  })
+
+  it('gates rotational mates on a non-grounded revolute DRIVEN part', () => {
+    // Converges only for a non-grounded revolute hinge (the one rotational DOF
+    // the solver wires) — every other case is withheld so the form never offers
+    // a mate the solver cannot satisfy.
+    expect(rotationalMatesSupportedFor({ joint: 'revolute', grounded: false })).toBe(true)
+    expect(rotationalMatesSupportedFor({ joint: 'revolute' })).toBe(true) // grounded defaults false
+    expect(rotationalMatesSupportedFor({ joint: 'revolute', grounded: true })).toBe(false)
+    expect(rotationalMatesSupportedFor({ joint: 'slider', grounded: false })).toBe(false)
+    expect(rotationalMatesSupportedFor({ grounded: false })).toBe(false) // no joint → free body
+    expect(rotationalMatesSupportedFor(undefined)).toBe(false)
+  })
+
+  it('mateKindUsesSidecar is true for live kinds, false for the persist-only kinds', () => {
     expect(mateKindUsesSidecar('point')).toBe(true)
     expect(mateKindUsesSidecar('axis')).toBe(true)
     expect(mateKindUsesSidecar('plane')).toBe(true)
     expect(mateKindUsesSidecar('distance')).toBe(false)
+    // angle / tangent fold to a Model-C constraint, never touch the sidecar.
+    expect(mateKindUsesSidecar('angle')).toBe(false)
+    expect(mateKindUsesSidecar('tangent')).toBe(false)
   })
 
-  it('makeMateFormDraft seeds a numeric-string distance value', () => {
-    expect(makeMateFormDraft('p1', 'p2').value).toBe('0')
+  it('makeMateFormDraft seeds a numeric-string distance value + the rotational defaults', () => {
+    const d = makeMateFormDraft('p1', 'p2')
+    expect(d.value).toBe('0')
+    expect(d.axis1Cardinal).toBe('x')
+    expect(d.axis2Cardinal).toBe('x')
+    expect(d.angleDeg).toBe('90')
   })
 })
 

@@ -60,6 +60,16 @@ import type { AssemblyMateConstraint } from './assembly-mate-schema'
  *   - `partPath`    — optional explicit project-relative part path. When absent
  *                     {@link persistParts} synthesizes a stable placeholder from
  *                     the id (the schema requires a non-empty `partPath`).
+ *   - `joint`       — optional persisted joint kind for this instance (mirrors
+ *                     `AssemblyComponent.joint`). Carried through the round-trip
+ *                     so a disk-loaded assembly keeps the angle/tangent rotational-
+ *                     mate gate (`joint === 'revolute' && !grounded`) WITHOUT the
+ *                     operator re-setting the joint in-session. Optional + additive:
+ *                     a legacy view / saved row with no joint is "free-floating".
+ *   - `grounded`    — optional persisted grounded flag (mirrors
+ *                     `AssemblyComponent.grounded`). Threaded for the same gate (a
+ *                     grounded part has no free DOF). Optional + additive; the
+ *                     schema defaults it to `false` so existing assemblies still load.
  */
 export type AssemblyPartView = {
   readonly id: string
@@ -70,6 +80,8 @@ export type AssemblyPartView = {
     readonly rotation?: readonly [number, number, number]
   }
   readonly partPath?: string
+  readonly joint?: AssemblyComponent['joint']
+  readonly grounded?: boolean
 }
 
 /** Hydrate output: the renderer-shaped parts + mate constraints from a loaded file. */
@@ -179,11 +191,17 @@ export function persistParts(
 
     if (prior) {
       // Update in place: refresh the renderer-owned fields, preserve the rest.
+      // `joint` / `grounded` are now part of the renderer's view, so a view that
+      // CARRIES them refreshes the prior value; a view that OMITS them (legacy
+      // caller / a row that never modelled a joint) leaves the prior intact — so
+      // a re-persist after an edit is still non-destructive to fields set elsewhere.
       return {
         ...prior,
         name: part.name,
         partPath,
         transform,
+        ...(part.joint !== undefined ? { joint: part.joint } : {}),
+        ...(part.grounded !== undefined ? { grounded: part.grounded } : {}),
         ...(part.geometry != null
           ? { geometrySource: part.geometry }
           : prior.geometrySource != null
@@ -201,6 +219,12 @@ export function persistParts(
       transform
     }
     if (part.geometry != null) raw.geometrySource = part.geometry
+    // Carry the renderer's joint / grounded onto the fresh row so the rotational-
+    // mate gate survives the first persist. Omitted fields let the schema default
+    // (`grounded → false`, `joint → undefined`), so a row that never modelled a
+    // joint round-trips exactly as before.
+    if (part.joint !== undefined) raw.joint = part.joint
+    if (part.grounded !== undefined) raw.grounded = part.grounded
     return assemblyComponentSchemaParse(raw)
   })
 
@@ -254,6 +278,8 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
       geometry?: AssemblyGeometrySource
       transform?: NonNullable<AssemblyPartView['transform']>
       partPath?: string
+      joint?: AssemblyComponent['joint']
+      grounded?: boolean
     } = {
       id: c.id,
       name: c.name,
@@ -261,6 +287,13 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
       transform: trsToViewTransform(c.transform)
     }
     if (c.geometrySource != null) view.geometry = c.geometrySource
+    // Carry the gating fields back so a disk-loaded assembly keeps the rotational-
+    // mate gate (`joint === 'revolute' && !grounded`). Only emit the NON-default
+    // values: an absent `joint` stays absent, and `grounded` is emitted only when
+    // `true` (the schema default is `false`, and the gate treats absent === false),
+    // so a legacy row with neither field hydrates to the exact same shape as before.
+    if (c.joint !== undefined) view.joint = c.joint
+    if (c.grounded === true) view.grounded = true
     return view
   })
 

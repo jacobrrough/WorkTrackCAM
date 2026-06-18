@@ -221,6 +221,21 @@ Until that verb ships, `machine:estop` for the Carvera returns a structured `no_
 
 ## Deferred items (do NOT block real-world testing)
 
+> **2026-06-17 (Cycle 276 — deferred-items cleanup sweep):** A 6-wave agent sweep closed most of the
+> below + several wiring gaps. Now CLOSED/LANDED: WorkspaceErrorBoundary wired into the shell; My Shop
+> quick-select mounted (CLAUDE.md hard req); stranded assembly IPC (interference / BOM export / motion
+> study) wired into AssemblyView; 10 orphaned legacy-shell files deleted; Carvera 4-axis Y=0/X-offset
+> guards confirmed + raw-JSON-pinned (item 2); CPS 5-axis→3-axis fallback warning toast (the optional
+> follow-up); new-shell first-launch onboarding rebuilt; Feeds & Speeds "Apply to op"; Laguna 6-zone
+> vacuum UI; surface-finish drawing symbols; MyShop CSS; the **Manufacture panelTab full retirement**
+> (re-homed into the workflow-stage model — the "see the same thing twice" issue) + the real R3F
+> Simulate playback/heatmap wiring (item 4 follow-up); assembly angle/tangent mate authoring
+> (full-stack) + solver residual/over-constrained diagnostics + interference narrow-phase seam.
+> `npm test` 17,257 → 17,504, typecheck clean, gcode-safety SAFE. Still genuinely open: OpenCAMLib
+> enablement (manual venv install), free-body SE(3) assembly rotation, interference narrow-phase
+> consumption (awaits per-part dims), Carvera software e-stop (upstream `carvera-cli`), esbuild
+> dev-server advisory (dev-only). The real first cut on hardware remains the operator-only gate.
+
 Eight items remain as design-effort cycles. They are all defense-in-depth, not blocking:
 
 ### 1. Vitest 3.x → 4.x upgrade (rank 4, CVSS 9.8)

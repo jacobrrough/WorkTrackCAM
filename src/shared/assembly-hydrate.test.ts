@@ -294,6 +294,54 @@ describe('hydrateAssembly — round-trip', () => {
     const hydrated = hydrateAssembly(saveLoadRoundTrip(withParts))
     expect(hydrated.parts[0]!.id).toBe('weird id-123')
   })
+
+  it('carries joint + grounded through persist → save→load → hydrate (rotational-mate gate)', () => {
+    // A revolute, non-grounded hinge is the EXACT case the angle/tangent mate gate
+    // depends on. Before this fix the view shape dropped joint/grounded, so a
+    // disk-loaded assembly lost the gating until the operator re-set the joint.
+    const parts: readonly AssemblyPartView[] = [
+      { id: 'base', name: 'Base', geometry: { handle: 'h-base' }, grounded: true },
+      { id: 'hinge', name: 'Hinge', geometry: { handle: 'h-hinge' }, joint: 'revolute' }
+    ]
+    const withParts = persistParts(emptyAsm(), parts)
+    // Written onto the components…
+    expect(withParts.components.find((c) => c.id === 'base')!.grounded).toBe(true)
+    expect(withParts.components.find((c) => c.id === 'hinge')!.joint).toBe('revolute')
+
+    const hydrated = hydrateAssembly(saveLoadRoundTrip(withParts))
+    const base = hydrated.parts.find((p) => p.id === 'base')!
+    const hinge = hydrated.parts.find((p) => p.id === 'hinge')!
+    // …and survive the full round-trip back into the renderer view shape.
+    expect(base.grounded).toBe(true)
+    expect(hinge.joint).toBe('revolute')
+    // The hinge is the gate-eligible part: revolute AND not grounded.
+    expect(hinge.joint === 'revolute' && hinge.grounded !== true).toBe(true)
+  })
+
+  it('omits joint/grounded for a free-floating row (no default === false key churn)', () => {
+    // A plain part (no joint, not grounded) must hydrate to the SAME shape as
+    // before — the gating fields are emitted only when meaningful (joint present,
+    // grounded === true), so legacy rows keep their exact view shape.
+    const withParts = persistParts(emptyAsm(), [{ id: 'p', name: 'P', geometry: { handle: 'h' } }])
+    const view = hydrateAssembly(saveLoadRoundTrip(withParts)).parts[0]!
+    expect(view).not.toHaveProperty('joint')
+    expect(view).not.toHaveProperty('grounded')
+  })
+
+  it('a view carrying joint refreshes a prior persisted joint in place', () => {
+    // The in-place update path must honor a CHANGED joint from the renderer view
+    // (the operator switched a part from rigid → revolute in-session and re-saved).
+    const seeded = parseAssemblyFile({
+      version: 2,
+      name: 'Seed',
+      components: [
+        { id: 'p', name: 'P', partPath: 'design/p.json', transform: {}, joint: 'rigid', geometrySource: { handle: 'h' } }
+      ]
+    })
+    const out = persistParts(seeded, [{ id: 'p', name: 'P', joint: 'revolute', grounded: false }])
+    expect(out.components[0]!.joint).toBe('revolute')
+    expect(out.components[0]!.grounded).toBe(false)
+  })
 })
 
 describe('hydrateAssembly — legacy + tolerance', () => {
