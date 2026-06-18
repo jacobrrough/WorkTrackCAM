@@ -866,3 +866,219 @@ body > .tb-tooltip::after {
   box-shadow: var(--elevation-2);
   pointer-events: none;
 }
+
+/* ============================================================
+   "My Shop" quick-select panel  (MyShopPanel.tsx -> MyShopDrawer)
+   ------------------------------------------------------------
+   Three target-machine "bays" (K2 Plus / Laguna Swift / Carvera),
+   one card each, plus their real-world presets. Rendered inside the
+   right-side `.drawer`. Each `.my-shop-card` carries `data-environment`
+   (vcarve_pro / creality_print / makera_cam), so the per-environment
+   `[data-environment]` overrides in themes.css re-point `--accent` for
+   that card's subtree -- glyph, Active pill, current-border, preset
+   hover and the install CTA all tint to the machine's own env accent
+   automatically (no per-env rules needed here). The panel header /
+   footer sit outside any card and follow the shell's active env accent.
+   ============================================================ */
+.my-shop-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-8);
+}
+.my-shop-panel__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.my-shop-panel__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  color: var(--txt0);
+}
+.my-shop-panel__sub {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  line-height: var(--leading-normal);
+}
+.my-shop-panel__grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+.my-shop-panel__footer {
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+.my-shop-panel__preset-count {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--txt2);
+  letter-spacing: 0.02em;
+}
+
+/* -- Machine card -- */
+.my-shop-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+/* Active session machine -- accent border (env-tinted via data-environment). */
+.my-shop-card--current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/* Not-yet-installed bay -- recessed + dashed so all three bays stay visible
+   ("what's still to set up") while the install CTA below stays vivid. */
+.my-shop-card--uninstalled {
+  background: var(--bg1);
+  border-style: dashed;
+}
+.my-shop-card--uninstalled .my-shop-card__glyph {
+  opacity: var(--disabled-opacity);
+}
+.my-shop-card--uninstalled .my-shop-card__name,
+.my-shop-card--uninstalled .my-shop-card__specs {
+  color: var(--txt2);
+}
+
+.my-shop-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.my-shop-card__glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--accent-12);
+  color: var(--accent);
+  font-size: var(--text-xl);
+  line-height: 1;
+}
+.my-shop-card__titleblock {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.my-shop-card__name {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.my-shop-card__env {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--txt2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.my-shop-card__badge {
+  flex: none;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.my-shop-card__specs {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--txt1);
+}
+
+/* -- Preset list -- */
+.my-shop-card__presets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.my-shop-card__preset {
+  margin: 0;
+}
+.my-shop-card__preset-btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--sp-4) var(--sp-5);
+  text-align: left;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.my-shop-card__preset-btn:hover {
+  background: var(--bg3);
+  border-color: var(--accent);
+}
+.my-shop-card__preset-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.my-shop-card__preset-btn:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+.my-shop-card__preset-btn:disabled:hover {
+  background: var(--bg1);
+  border-color: var(--border);
+}
+.my-shop-card__preset-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--txt0);
+}
+.my-shop-card__preset-desc {
+  font-size: var(--text-xs);
+  color: var(--txt2);
+  line-height: var(--leading-normal);
+}
+
+/* -- Install CTA (uninstalled bay) -- */
+.my-shop-card__install-btn {
+  width: 100%;
+  padding: var(--sp-4);
+  background: var(--accent-dim);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.my-shop-card__install-btn:hover {
+  background: var(--accent-12);
+  border-style: solid;
+}
+.my-shop-card__install-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
