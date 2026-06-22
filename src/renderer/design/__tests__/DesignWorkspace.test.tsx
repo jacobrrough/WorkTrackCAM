@@ -307,6 +307,34 @@ describe('DesignWorkspace — Send-to-CAM button render contract', () => {
     expect(html).toContain('design-workspace__tree-col')
   })
 
+  it('renders collapse toggles on both cockpit side panels (collapsible sections)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        onSendToCam: vi.fn()
+      })
+    )
+    // Both side panels expose a collapse toggle so the operator can reclaim
+    // viewport width; the default (expanded) render still shows the panel labels.
+    expect(html).toContain('data-testid="dc-browser-collapse"')
+    expect(html).toContain('data-testid="dc-props-collapse"')
+    expect(html).toContain('Feature Tree')
+    expect(html).toContain('Properties')
+  })
+
+  it('renders the optional CadQuery code button plus its show/hide preference (default shown)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        onSendToCam: vi.fn()
+      })
+    )
+    // Default preference = shown, so the code </> toggle renders...
+    expect(html).toContain('data-testid="design-cockpit-code-toggle"')
+    // ...and the Properties panel exposes the preference that makes it optional.
+    expect(html).toContain('data-testid="design-workspace-show-code-pref"')
+  })
+
   it('renders the empty-state branch when no script and no tessellation', () => {
     const html = renderToStaticMarkup(
       createElement(DesignWorkspace, { initialScript: '' })

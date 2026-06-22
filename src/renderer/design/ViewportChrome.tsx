@@ -43,6 +43,11 @@ export interface ViewportChromeProps {
   readonly codeOpen: boolean
   /** Toggles the CadQuery code drawer open/closed. */
   readonly onToggleCode: () => void
+  /**
+   * When false, the CadQuery code `</>` toggle is hidden entirely (the no-code cockpit default the
+   * operator can opt into). Defaults true so existing mounts/pins are byte-identical.
+   */
+  readonly showCodeToggle?: boolean
 }
 
 /** Ordered stage-tab definitions (mockup `.stage-tabs`). */
@@ -62,11 +67,13 @@ export function ViewportChrome({
   onStageChange,
   codeOpen,
   onToggleCode,
+  showCodeToggle = true,
 }: ViewportChromeProps): JSX.Element {
   return (
     <>
-      {/* ── Viewport toolbar (mockup .vp-toolbar) — Code drawer toggle only.
+      {/* ── Viewport toolbar (mockup .vp-toolbar) — optional Code drawer toggle.
           Orbit / Pan / Zoom / Section / Measure moved into Viewport3D's HUD. */}
+      {showCodeToggle && (
       <div
         className="dc-vp-toolbar"
         role="toolbar"
@@ -96,6 +103,7 @@ export function ViewportChrome({
           <span className="dc-iconbtn-label">Code</span>
         </button>
       </div>
+      )}
 
       {/* ── Stage tabs (mockup .stage-tabs) ─────────────────────────── */}
       <div

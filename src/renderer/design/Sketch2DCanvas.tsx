@@ -262,6 +262,21 @@ function getCanvasCursor(
   return undefined
 }
 
+/**
+ * Resolve the target sketch-plane point for a heads-up numeric entry: use a typed X / Y when it
+ * parses to a finite number, else fall back to the live (snap-resolved) cursor coordinate. Pure +
+ * exported so the HUD's "type to constrain the next point" behaviour is unit-testable in node-env.
+ */
+export function resolveHudTargetPoint(
+  xIn: string,
+  yIn: string,
+  live: readonly [number, number]
+): [number, number] {
+  const px = Number.parseFloat(xIn)
+  const py = Number.parseFloat(yIn)
+  return [Number.isFinite(px) ? px : live[0], Number.isFinite(py) ? py : live[1]]
+}
+
 export function Sketch2DCanvas({
   width,
   height,
@@ -597,6 +612,20 @@ export function Sketch2DCanvas({
   const [nodeGhost, setNodeGhost] = useState<{ nodeId: string; point: [number, number] } | null>(
     null
   )
+  /**
+   * Always-on heads-up read-out: the snap-resolved sketch-plane point under the
+   * cursor (mm). Drives the `.sketch-cursor-hud` overlay so the operator can SEE
+   * where a point will land + the live length/angle of the segment being drawn,
+   * regardless of which tool has its own numeric popover. Render-only; null when
+   * the pointer is off the canvas.
+   */
+  const [hudCursor, setHudCursor] = useState<[number, number] | null>(null)
+  // Heads-up numeric ENTRY (polyline): editable X/Y strings mirror the live cursor until focused,
+  // then the operator types exact coordinates and Enter places the next vertex there. `hudFocused`
+  // latches editing so a live mouse move doesn't clobber what's being typed (mirrors lineDimFocused).
+  const [hudXIn, setHudXIn] = useState('')
+  const [hudYIn, setHudYIn] = useState('')
+  const hudFocused = useRef(false)
   /** Armed (clicked) node -- Delete removes it; Esc or a second click disarms. */
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
 
@@ -775,6 +804,14 @@ export function Sketch2DCanvas({
     setLineDeltaX(String(Math.round(dx * 1000) / 1000))
     setLineDeltaY(String(Math.round(dy * 1000) / 1000))
   }, [lineStart, lineHover])
+
+  // Mirror the live cursor into the HUD numeric fields while they aren't being edited.
+  useEffect(() => {
+    if (hudFocused.current) return
+    if (!hudCursor) return
+    setHudXIn(String(Math.round(hudCursor[0] * 1000) / 1000))
+    setHudYIn(String(Math.round(hudCursor[1] * 1000) / 1000))
+  }, [hudCursor])
 
   useEffect(() => {
     if (drag?.kind !== 'rect') {
@@ -1635,6 +1672,8 @@ export function Sketch2DCanvas({
     // Wave 3n — thread the SAME snap-resolved value the placement logic uses
     // up to the shell StatusBar (pass-through only; nothing recomputed).
     onCursorWorld?.(p)
+    // Same resolved point feeds the always-on cursor read-out HUD.
+    setHudCursor(p)
 
     // Sketch S2 -- live node-handle drag: ghost the dragged node + the
     // reshaped outline at the resolved point (osnap into OTHER geometry,
@@ -2009,6 +2048,8 @@ export function Sketch2DCanvas({
           panRef.current = null
           // Wave 3n — the source goes inactive; blank the StatusBar read-out.
           onCursorWorld?.(null)
+          // ...and blank the always-on cursor HUD.
+          setHudCursor(null)
           // Sketch S1 — cancel any in-flight select drag (no move emitted).
           selectDragRef.current = null
           setSelectGhostOffset(null)
@@ -2033,6 +2074,113 @@ export function Sketch2DCanvas({
           setEntityHoverId(null)
         }}
       />
+      {hudCursor &&
+        (() => {
+          const anchor =
+            lineStart ?? (polyDraft.length > 0 ? polyDraft[polyDraft.length - 1]! : null)
+          const fmt = (n: number): string => {
+            const r = Math.round(n * 1000) / 1000
+            return Object.is(r, -0) ? '0' : String(r)
+          }
+          let lenAng: { len: number; ang: number } | null = null
+          if (anchor) {
+            const dx = hudCursor[0] - anchor[0]
+            const dy = hudCursor[1] - anchor[1]
+            lenAng = { len: Math.hypot(dx, dy), ang: (Math.atan2(dy, dx) * 180) / Math.PI }
+          }
+          // The polyline tool has no per-tool numeric popover, so its X/Y become editable here:
+          // type exact coordinates and Enter places the next vertex (resolveHudTargetPoint falls
+          // back to the live cursor for a blank field). Other tools keep a read-only read-out
+          // (line/rect/circle already own their own ΔX-ΔY / W×H / radius popovers).
+          const editable = activeTool === 'polyline'
+          const commitEntry = (): void => {
+            if (!hudCursor) return
+            const target = resolveHudTargetPoint(hudXIn, hudYIn, hudCursor)
+            setPolyDraft((d) => [...d, target])
+            onSketchHint?.('Vertex placed from typed coordinates.')
+          }
+          return (
+            <div className="sketch-cursor-hud" data-testid="sketch-cursor-hud">
+              {editable ? (
+                <>
+                  <label className="sketch-cursor-hud__pair">
+                    <b>X</b>
+                    <input
+                      className="sketch-cursor-hud__input"
+                      data-testid="sketch-cursor-hud-x"
+                      inputMode="decimal"
+                      aria-label="Next vertex X (mm)"
+                      value={hudXIn}
+                      onFocus={() => {
+                        hudFocused.current = true
+                      }}
+                      onBlur={() => {
+                        hudFocused.current = false
+                      }}
+                      onChange={(e) => setHudXIn(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitEntry()
+                        } else if (e.key === 'Escape') {
+                          e.currentTarget.blur()
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="sketch-cursor-hud__pair">
+                    <b>Y</b>
+                    <input
+                      className="sketch-cursor-hud__input"
+                      data-testid="sketch-cursor-hud-y"
+                      inputMode="decimal"
+                      aria-label="Next vertex Y (mm)"
+                      value={hudYIn}
+                      onFocus={() => {
+                        hudFocused.current = true
+                      }}
+                      onBlur={() => {
+                        hudFocused.current = false
+                      }}
+                      onChange={(e) => setHudYIn(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitEntry()
+                        } else if (e.key === 'Escape') {
+                          e.currentTarget.blur()
+                        }
+                      }}
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <span className="sketch-cursor-hud__pair">
+                    <b>X</b>
+                    {fmt(hudCursor[0])}
+                  </span>
+                  <span className="sketch-cursor-hud__pair">
+                    <b>Y</b>
+                    {fmt(hudCursor[1])}
+                  </span>
+                </>
+              )}
+              {lenAng && (
+                <>
+                  <span className="sketch-cursor-hud__pair">
+                    <b>L</b>
+                    {fmt(lenAng.len)}
+                  </span>
+                  <span className="sketch-cursor-hud__pair">
+                    <b>∠</b>
+                    {`${fmt(lenAng.ang)}°`}
+                  </span>
+                </>
+              )}
+            </div>
+          )
+        })()}
       <button
         type="button"
         className={

@@ -67,7 +67,12 @@ import type { DesignFileV2 } from '../../shared/design-schema'
 import { buildViewportGeometry } from './viewport3d-geometry'
 import { buildPickIndex } from '../../shared/kernel-pick-file'
 import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
-import { AssemblyView, type AssemblyPart } from './AssemblyView'
+import {
+  AssemblyView,
+  applySolvedTransforms,
+  type AssemblyPart,
+  type SolvedComponentTransform
+} from './AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import {
@@ -1063,6 +1068,32 @@ export function DesignWorkspace({
   // state with no sidecar side-effects.
   const [codeOpen, setCodeOpen] = useState(false)
   const [designStage, setDesignStage] = useState<'model' | 'sketch' | 'inspect'>('model')
+  // Collapsible cockpit side panels — collapsing a panel narrows its grid column
+  // (driven inline on `.dc-cockpit` below) so the viewport reclaims the width.
+  // Sticky across remounts via localStorage (best-effort; no-ops under SSR/tests).
+  const [browserCollapsed, setBrowserCollapsed] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.browserCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [propsCollapsed, setPropsCollapsed] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.propsCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
+  // The CadQuery code `</>` toggle is optional (the no-code cockpit can hide it). Persisted; default
+  // shown so existing behaviour/pins hold (missing pref → shown).
+  const [showCodeToggle, setShowCodeToggle] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.showCodeToggle') !== '0'
+    } catch {
+      return true
+    }
+  })
   /**
    * FG-5b — which per-feature property dialog is open in the Properties pane,
    * or `null` for the picker (no dialog active). Local UI state; selecting a
@@ -1183,6 +1214,20 @@ export function DesignWorkspace({
    * splash preview, the render-pin tests). Guarded by a ref so a re-created
    * callback identity never re-fires the persist on an unchanged parts list.
    */
+  /**
+   * Apply the mate solver's solved poses (forwarded from {@link AssemblyView} after a successful
+   * `assembly:solve`) back onto the live part rows so the assembly re-renders at the solved
+   * placements — the apply-back that closes the "solver runs but parts never move" gap. The
+   * `onAssemblyPartsChange` effect below then persists the new poses. `applySolvedTransforms`
+   * returns the SAME list reference when nothing changed, so a no-transform solve is a no-op.
+   */
+  const handleSolvedTransforms = useCallback(
+    (solved: ReadonlyArray<SolvedComponentTransform>): void => {
+      setAssemblyParts((prev) => applySolvedTransforms(prev, solved))
+    },
+    []
+  )
+
   const onAssemblyPartsChangeRef = useRef(onAssemblyPartsChange)
   onAssemblyPartsChangeRef.current = onAssemblyPartsChange
   const assemblyPartsDidMount = useRef(false)
@@ -1641,6 +1686,7 @@ export function DesignWorkspace({
             onAddPart={handleAddPartToAssembly}
             onRemovePart={handleRemoveAssemblyPart}
             onAssemblyHandle={setAssemblyHandle}
+            onSolvedTransforms={handleSolvedTransforms}
             onToast={onToast}
           />
           {/*
@@ -1726,10 +1772,41 @@ export function DesignWorkspace({
       className="design-workspace design-workspace--cockpit"
       data-testid="design-workspace"
     >
-      <div className="dc-cockpit">
+      <div
+        className="dc-cockpit"
+        style={{
+          gridTemplateColumns: `${browserCollapsed ? '34px' : '280px'} 1fr ${propsCollapsed ? '34px' : '300px'}`
+        }}
+      >
         {/* LEFT — Feature-tree browser */}
-        <aside className="dc-browser" aria-label="Feature tree">
-          <div className="dc-panel-head">Feature Tree</div>
+        <aside
+          className={browserCollapsed ? 'dc-browser dc-browser--collapsed' : 'dc-browser'}
+          aria-label="Feature tree"
+        >
+          <div className="dc-panel-head">
+            {!browserCollapsed && <span className="dc-panel-head__label">Feature Tree</span>}
+            <button
+              type="button"
+              className="dc-collapse-btn"
+              data-testid="dc-browser-collapse"
+              aria-expanded={!browserCollapsed}
+              aria-label={browserCollapsed ? 'Expand Feature Tree panel' : 'Collapse Feature Tree panel'}
+              title={browserCollapsed ? 'Expand Feature Tree' : 'Collapse Feature Tree'}
+              onClick={() =>
+                setBrowserCollapsed((v) => {
+                  const next = !v
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.browserCollapsed', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                  return next
+                })
+              }
+            >
+              {browserCollapsed ? '›' : '‹'}
+            </button>
+          </div>
           <div className="dc-browser-body">
             {parseError !== null ? (
               <div
@@ -1766,6 +1843,7 @@ export function DesignWorkspace({
             onStageChange={handleStageChange}
             codeOpen={codeOpen}
             onToggleCode={() => setCodeOpen((open) => !open)}
+            showCodeToggle={showCodeToggle}
           />
           {/*
             FG-2 — the real Three.js viewport. `Viewport3D` brings its own
@@ -2095,11 +2173,59 @@ export function DesignWorkspace({
 
         {/* RIGHT — Properties panel (params + Save / Send-to-CAM) */}
         <aside
-          className="design-workspace__tree-col dc-props"
+          className={
+            propsCollapsed
+              ? 'design-workspace__tree-col dc-props dc-props--collapsed'
+              : 'design-workspace__tree-col dc-props'
+          }
           aria-label="Properties"
         >
-          <div className="dc-panel-head">Properties</div>
+          <div className="dc-panel-head">
+            {!propsCollapsed && <span className="dc-panel-head__label">Properties</span>}
+            <button
+              type="button"
+              className="dc-collapse-btn"
+              data-testid="dc-props-collapse"
+              aria-expanded={!propsCollapsed}
+              aria-label={propsCollapsed ? 'Expand Properties panel' : 'Collapse Properties panel'}
+              title={propsCollapsed ? 'Expand Properties' : 'Collapse Properties'}
+              onClick={() =>
+                setPropsCollapsed((v) => {
+                  const next = !v
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.propsCollapsed', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                  return next
+                })
+              }
+            >
+              {propsCollapsed ? '‹' : '›'}
+            </button>
+          </div>
           <div className="dc-props-body">
+            <label
+              className="dc-prop-card"
+              data-testid="design-workspace-show-code-pref"
+              style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={showCodeToggle}
+                onChange={(e) => {
+                  const next = e.target.checked
+                  setShowCodeToggle(next)
+                  if (!next) setCodeOpen(false)
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.showCodeToggle', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                }}
+              />
+              Show CadQuery code button
+            </label>
             <div className="dc-prop-card design-workspace__feature-section">
               <h3 className="dc-prop-card-title design-workspace__feature-title">
                 Parameters

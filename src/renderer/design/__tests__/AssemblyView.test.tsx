@@ -31,6 +31,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AssemblyView,
+  applySolvedTransforms,
   formatTransformSummary,
   type AssemblyMate,
   type AssemblyPart,
@@ -629,6 +630,57 @@ describe('AssemblyView — durable mate constraints (reload surface feed)', () =
     // silently break "mates position parts" — pin it.
     const src = readFileSync(join(__dirname, '..', 'AssemblyView.tsx'), 'utf-8')
     expect(src).toContain('partPath: partPathForRow(part)')
+  })
+})
+
+// ── (G) Solver apply-back: solved poses are forwarded + mapped onto part rows ──
+//
+// GAP fix: the `assembly:solve` IPC returns the solved per-component poses, but the
+// renderer previously read ONLY the convergence report and dropped `res.transforms`,
+// so parts never moved after a solve. `applySolvedTransforms` is the pure apply-back
+// (node-env unit-testable, mirroring the form-logic split); a source pin guards the
+// `handleSolve` forwarding wiring (the click handler never fires under SSR).
+
+describe('applySolvedTransforms — maps solved poses back onto part rows', () => {
+  const parts: readonly AssemblyPart[] = [
+    {
+      id: 'a',
+      name: 'A',
+      handle: 'script:a',
+      transform: { position: [1, 2, 3], rotation: [0, 0, 0] },
+      transformSummary: '@(1, 2, 3)',
+    },
+    { id: 'b', name: 'B', handle: 'script:b' },
+  ]
+
+  it('updates a matched row transform + recomputes its summary; leaves unmatched rows by reference', () => {
+    const next = applySolvedTransforms(parts, [
+      { id: 'a', transform: { x: 5, y: 0, z: 0, rxDeg: 0, ryDeg: 90, rzDeg: 0 } },
+    ])
+    const a = next.find((p) => p.id === 'a')!
+    expect(a.transform?.position).toEqual([5, 0, 0])
+    expect(a.transform?.rotation).toEqual([0, 90, 0])
+    // Summary recomputed from the SOLVED position, not the stale '@(1, 2, 3)'.
+    expect(a.transformSummary).toBe('@(5, 0, 0)')
+    // The unmatched row is returned untouched (same reference — no spurious churn).
+    expect(next.find((p) => p.id === 'b')).toBe(parts[1])
+  })
+
+  it('returns the input list unchanged (same reference) when there are no solved poses', () => {
+    expect(applySolvedTransforms(parts, [])).toBe(parts)
+  })
+
+  it('collapses the summary to "identity" when a part solves back to the origin', () => {
+    const next = applySolvedTransforms(parts, [
+      { id: 'a', transform: { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 } },
+    ])
+    expect(next.find((p) => p.id === 'a')!.transformSummary).toBe('identity')
+  })
+
+  it('source pin: handleSolve forwards res.transforms to onSolvedTransforms (the discard-gap fix)', () => {
+    // The Solve click handler never fires under renderToStaticMarkup, so pin the wiring at source.
+    const src = readFileSync(join(__dirname, '..', 'AssemblyView.tsx'), 'utf-8')
+    expect(src).toContain('onSolvedTransforms?.(res.transforms)')
   })
 })
 

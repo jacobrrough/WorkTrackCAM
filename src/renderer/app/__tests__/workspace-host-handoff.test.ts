@@ -461,6 +461,153 @@ describe('WorkspaceHost serializes mate persistence (source pin)', () => {
   })
 })
 
+// ── (7) GAP 2 — a freshly-added mate refreshes the in-memory set (no route hop) ─
+//
+// BUG: adding a mate persisted it to assembly.json but did NOT update the
+// in-memory `assemblyMates` fed to the solver, so a "Solve" right after adding a
+// mate solved the OLD constraint set; the new mate only took effect after leaving
+// and returning to the `assemble` route (which re-ran the hydrate effect).
+//
+// FIX (Option A): after a SUCCESSFUL `runPersistMate`, `handleMateAdded` re-runs
+// `runHydrateAssembly` (re-reads assembly.json through the proven hydrate path),
+// then `setAssemblyMates(...)` + bumps `hydrateToken` so DesignWorkspaceHost
+// remounts with the fresh `initialAssemblyMates` seed → DesignWorkspace state →
+// AssemblyView's `mateConstraints` (the `assembly:solve` input). The re-read runs
+// inside the SAME matePersistChainRef link, i.e. strictly AFTER the save commits,
+// so it never reads a stale base and never clobbers a concurrent save.
+//
+// These tests reproduce the host's persist→re-hydrate sequence over a single
+// in-memory async store (load + save both yield a tick, as a real IPC would), so
+// they prove the NEW mate reaches the refreshed mate set the host would push into
+// `setAssemblyMates` — WITHOUT any route change.
+
+describe('GAP 2 — handleMateAdded refreshes the in-memory mate set in-session', () => {
+  /** A two-component assembly store; load + save both yield to the microtask queue. */
+  function asyncAssemblyStore() {
+    let onDisk = twoPartAssembly()
+    return {
+      get onDisk() {
+        return onDisk
+      },
+      loadAssembly: async (): Promise<AssemblyFile> => {
+        await Promise.resolve()
+        return onDisk
+      },
+      saveAssembly: async (_dir: string, json: string): Promise<void> => {
+        await Promise.resolve()
+        onDisk = assemblyFileSchema.parse(JSON.parse(json))
+      }
+    }
+  }
+
+  /**
+   * Faithful re-creation of `WorkspaceHost.handleMateAdded`'s chained body: persist
+   * the mate, then on success re-hydrate and capture what the host would push into
+   * `setAssemblyMates` / `setHydrateToken`. Returns the captured in-memory state so
+   * a test can assert the new mate is visible to the solver WITHOUT a route hop.
+   */
+  async function addMateLikeHost(
+    store: ReturnType<typeof asyncAssemblyStore>,
+    mate: SolvedMate,
+    projectDir: string | null
+  ): Promise<{
+    persistOk: boolean
+    inMemoryMateIds: readonly string[]
+    hydrateTokenBumps: number
+  }> {
+    let inMemoryMateIds: readonly string[] = []
+    let hydrateTokenBumps = 0
+    const outcome = await runPersistMate({
+      mate,
+      projectDir,
+      loadAssembly: store.loadAssembly,
+      saveAssembly: store.saveAssembly
+    })
+    if (!outcome.ok) {
+      return { persistOk: false, inMemoryMateIds, hydrateTokenBumps }
+    }
+    const refreshed = await runHydrateAssembly({ projectDir, loadAssembly: store.loadAssembly })
+    if (refreshed.ok) {
+      // setAssemblyMates(refreshed.hydrated.mateConstraints) + setHydrateToken(t => t + 1)
+      inMemoryMateIds = refreshed.hydrated.mateConstraints.map((m) => m.id)
+      hydrateTokenBumps += 1
+    }
+    return { persistOk: true, inMemoryMateIds, hydrateTokenBumps }
+  }
+
+  it('a freshly-added mate appears in the re-hydrated in-memory mate set + bumps the token', async () => {
+    const store = asyncAssemblyStore()
+    expect(store.onDisk.mateConstraints).toHaveLength(0)
+
+    const res = await addMateLikeHost(store, solvedPointMate(), 'C:/proj')
+
+    expect(res.persistOk).toBe(true)
+    // The NEW mate is now in the in-memory set the host pushes into setAssemblyMates
+    // (→ AssemblyView mateConstraints → assembly:solve) — no route change needed.
+    expect(res.inMemoryMateIds).toEqual(['mate-point-1'])
+    // The remount-driving token bumped so initialAssemblyMates re-reads the seed.
+    expect(res.hydrateTokenBumps).toBe(1)
+  })
+
+  it('two mates added back-to-back both reach the in-memory set (serialized, no lost update)', async () => {
+    const store = asyncAssemblyStore()
+    const mateA: SolvedMate = { id: 'mate-A', draft: { ...solvedPointMate().draft, point1: ['1', '0', '0'] } }
+    const mateB: SolvedMate = { id: 'mate-B', draft: { ...solvedPointMate().draft, point1: ['2', '0', '0'] } }
+
+    await addMateLikeHost(store, mateA, 'C:/proj')
+    const res = await addMateLikeHost(store, mateB, 'C:/proj')
+
+    // After the second add, the in-memory set the host pushes carries BOTH mates.
+    expect([...res.inMemoryMateIds].sort()).toEqual(['mate-A', 'mate-B'])
+    expect(store.onDisk.mateConstraints.map((m) => m.id).sort()).toEqual(['mate-A', 'mate-B'])
+  })
+
+  it('a FAILED persist (no project) does not refresh or bump the token', async () => {
+    const store = asyncAssemblyStore()
+    const res = await addMateLikeHost(store, solvedPointMate(), null)
+    // runPersistMate returned ok:false (warn) — the host returns early, so the
+    // in-memory set is untouched and no remount is forced.
+    expect(res.persistOk).toBe(false)
+    expect(res.inMemoryMateIds).toEqual([])
+    expect(res.hydrateTokenBumps).toBe(0)
+  })
+})
+
+// ── (8) GAP 2 — source pin: handleMateAdded re-hydrates after a successful persist
+//
+// Beyond the behavioral seam above, pin the WIRING in WorkspaceHost so a future
+// refactor cannot drop the in-session refresh (which would silently regress GAP 2
+// back to "Solve uses the old mate set until you leave and re-enter the route").
+
+describe('WorkspaceHost.handleMateAdded refreshes mates in-session (source pin)', () => {
+  const HOST_SRC = readFileSync(join(__dirname, '..', 'WorkspaceHost.tsx'), 'utf-8')
+
+  /** The chained body of handleMateAdded (persist → toast → in-session refresh). */
+  function handleMateAddedBody(): string {
+    const start = HOST_SRC.indexOf('const handleMateAdded = useCallback(')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = HOST_SRC.indexOf('const handleAssemblyPartsChange = useCallback(', start)
+    expect(end).toBeGreaterThan(start)
+    return HOST_SRC.slice(start, end)
+  }
+
+  it('re-runs runHydrateAssembly inside handleMateAdded (not only the hydrate effect)', () => {
+    const body = handleMateAddedBody()
+    expect(body).toContain('await runPersistMate(')
+    expect(body).toContain('await runHydrateAssembly(')
+  })
+
+  it('pushes the refreshed mates into state and bumps hydrateToken (forces the remount)', () => {
+    const body = handleMateAddedBody()
+    expect(body).toContain('setAssemblyMates(')
+    expect(body).toContain('setHydrateToken((t) => t + 1)')
+    // The refresh is GATED on a successful persist (so a warn/error never forces a
+    // pointless remount, and a null projectDir — which makes runPersistMate fail —
+    // never reaches runHydrateAssembly).
+    expect(body).toContain('if (!outcome.ok) return')
+  })
+})
+
 // ── (5) runHydrateAssembly — load → hydrate (the #9 reload surface seam) ───────
 
 describe('runHydrateAssembly — load → hydrate', () => {

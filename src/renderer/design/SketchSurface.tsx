@@ -355,6 +355,15 @@ export function SketchSurface({
   // variant + Fusion): the operator picks/moves/deletes by default and arms a
   // draw tool explicitly (palette click or ribbon command).
   const [activeTool, setActiveTool] = useState<SketchTool>('select')
+  // The internal tool palette duplicates the top CREATE/MODIFY ribbon (which also arms tools via
+  // `armedSketchTool`), so let the operator collapse it to a thin rail to cut the overlap. Sticky.
+  const [paletteCollapsed, setPaletteCollapsed] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.sketch.toolsCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
   const [snapEnabled, setSnapEnabled] = useState(true)
   // Wave 3n — blank the StatusBar coordinate read-out when this surface
   // unmounts (Sketch->Model stage switch / sketch exit): the canvas can only
@@ -793,12 +802,42 @@ export function SketchSurface({
     >
       {/* ── Tool palette (internal — drives the canvas activeTool) ───────── */}
       <div
-        className="sketch-surface__palette"
+        className={
+          paletteCollapsed
+            ? 'sketch-surface__palette sketch-surface__palette--collapsed'
+            : 'sketch-surface__palette'
+        }
         role="toolbar"
         aria-label="Sketch tools"
         data-testid="sketch-surface-palette"
       >
-        {TOOL_GROUPS.map((group) => (
+        <button
+          type="button"
+          className="sketch-surface__palette-collapse"
+          data-testid="sketch-surface-palette-collapse"
+          aria-expanded={!paletteCollapsed}
+          aria-label={paletteCollapsed ? 'Show sketch tools panel' : 'Hide sketch tools panel'}
+          title={
+            paletteCollapsed
+              ? 'Show sketch tools'
+              : 'Hide sketch tools (duplicates the ribbon — use the ribbon instead)'
+          }
+          onClick={() =>
+            setPaletteCollapsed((v) => {
+              const next = !v
+              try {
+                globalThis.localStorage?.setItem('wt.sketch.toolsCollapsed', next ? '1' : '0')
+              } catch {
+                /* best-effort */
+              }
+              return next
+            })
+          }
+        >
+          {paletteCollapsed ? '☰' : '‹'}
+        </button>
+        {!paletteCollapsed &&
+          TOOL_GROUPS.map((group) => (
           <div key={group} className="sketch-surface__palette-group">
             <div className="sketch-surface__palette-heading">{group}</div>
             {SKETCH_SURFACE_TOOLS.filter((t) => t.group === group).map((t) => {
