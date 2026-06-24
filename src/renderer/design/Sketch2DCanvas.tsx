@@ -31,6 +31,7 @@ import {
   nearestPolylineSegment,
   nodeHandlePickToleranceMm
 } from './sketch2d-node-edit'
+import { inferDrawConstraints, type InferredConstraintKind } from './sketch-inference'
 import {
   collectOsnapCandidates,
   collectOsnapCandidatesDetailed,
@@ -620,6 +621,9 @@ export function Sketch2DCanvas({
    * the pointer is off the canvas.
    */
   const [hudCursor, setHudCursor] = useState<[number, number] | null>(null)
+  // The live inference relation under the cursor (horizontal/vertical/parallel/perpendicular/
+  // coincident), or null when free — drives the inference glyph in the read-out.
+  const [inferenceKind, setInferenceKind] = useState<InferredConstraintKind | null>(null)
   // Heads-up numeric ENTRY (polyline): editable X/Y strings mirror the live cursor until focused,
   // then the operator types exact coordinates and Enter places the next vertex there. `hudFocused`
   // latches editing so a live mouse move doesn't clobber what's being typed (mirrors lineDimFocused).
@@ -1239,6 +1243,36 @@ export function Sketch2DCanvas({
     setScale((s) => Math.min(40, Math.max(0.1, s * factor)))
   }
 
+  // Live horizontal/vertical inference while a line/polyline segment is in flight: lock the resolved
+  // cursor to the axis (within sketch-inference's cone) UNLESS an object snap already grabbed
+  // geometry. Phase A of the sketch rebuild — the Fusion "it snaps straight as you draw" feel.
+  function inferDrawPoint(
+    point: [number, number],
+    objectSnapped: boolean
+  ): { point: [number, number]; kind: InferredConstraintKind | null } {
+    const anchor: [number, number] | null =
+      activeTool === 'line'
+        ? lineStart
+        : activeTool === 'polyline' && polyDraft.length > 0
+          ? polyDraft[polyDraft.length - 1]!
+          : null
+    if (anchor === null || objectSnapped) return { point, kind: null }
+    // The previous polyline segment's direction lets the NEXT segment lock parallel/perpendicular
+    // to it (Fusion-style), on top of horizontal/vertical.
+    const refs: number[] = []
+    if (activeTool === 'polyline' && polyDraft.length >= 2) {
+      const prev = polyDraft[polyDraft.length - 2]!
+      refs.push(Math.atan2(anchor[1] - prev[1], anchor[0] - prev[0]))
+    }
+    // The polyline's own earlier vertices are snap targets too (osnap only covers committed
+    // geometry), so the cursor can lock coincident onto the start vertex to close the loop. The
+    // point radius is a screen-px tolerance converted to world mm so it stays steady as you zoom.
+    const snapPts = activeTool === 'polyline' ? polyDraft.slice(0, -1) : []
+    const coincidentToleranceMm = 4 / Math.max(scale, 0.05)
+    const result = inferDrawConstraints(anchor, point, snapPts, { coincidentToleranceMm }, refs)
+    return { point: result.point, kind: result.hints[0] ?? null }
+  }
+
   function onMouseDown(ev: React.MouseEvent) {
     const c = ref.current
     if (!c) return
@@ -1273,8 +1307,10 @@ export function Sketch2DCanvas({
     const dpr = Math.max(1, window.devicePixelRatio || 1)
     const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
     // Sketch S2 -- the ONE pointer->world resolution: object snaps win within
-    // tolerance, else the grid lattice exactly as before.
-    const w: [number, number] = resolvePointerPlacement(raw).point
+    // tolerance, else the grid lattice exactly as before. Phase A: H/V inference
+    // then locks the COMMITTED point to the axis (deferring to any object snap).
+    const placement = resolvePointerPlacement(raw)
+    const w: [number, number] = inferDrawPoint(placement.point, placement.snapped != null).point
 
     if (constraintPickActive && (onConstraintPointPick || onConstraintSegmentPick)) {
       const action = handleConstraintPickClick(design, raw[0], raw[1], scale, 'vertex_segment', probeConstraintPick, !!onConstraintPointPick, !!onConstraintSegmentPick)
@@ -1668,7 +1704,11 @@ export function Sketch2DCanvas({
     const raw = screenToWorld(lx, ly, c.width, c.height, scale * dpr, ox, oy)
     // Sketch S2 -- same ONE resolution as onMouseDown placements.
     const res = resolvePointerPlacement(raw)
-    const p: [number, number] = res.point
+    // Phase A: lock the preview point to horizontal/vertical while drawing (deferring to osnap), so
+    // the rubber-band, HUD and committed vertex all agree on the inferred point.
+    const inferred = inferDrawPoint(res.point, res.snapped != null)
+    const p: [number, number] = inferred.point
+    setInferenceKind(inferred.kind)
     // Wave 3n — thread the SAME snap-resolved value the placement logic uses
     // up to the shell StatusBar (pass-through only; nothing recomputed).
     onCursorWorld?.(p)
@@ -2050,6 +2090,7 @@ export function Sketch2DCanvas({
           onCursorWorld?.(null)
           // ...and blank the always-on cursor HUD.
           setHudCursor(null)
+          setInferenceKind(null)
           // Sketch S1 — cancel any in-flight select drag (no move emitted).
           selectDragRef.current = null
           setSelectGhostOffset(null)
@@ -2101,6 +2142,20 @@ export function Sketch2DCanvas({
           }
           return (
             <div className="sketch-cursor-hud" data-testid="sketch-cursor-hud">
+              {inferenceKind && (
+                <span className="sketch-cursor-hud__hint" data-testid="sketch-cursor-hud-hint">
+                  {inferenceKind === 'horizontal'
+                    ? '—'
+                    : inferenceKind === 'vertical'
+                      ? '|'
+                      : inferenceKind === 'parallel'
+                        ? '∥'
+                        : inferenceKind === 'perpendicular'
+                          ? '⊥'
+                          : '○'}{' '}
+                  {inferenceKind}
+                </span>
+              )}
               {editable ? (
                 <>
                   <label className="sketch-cursor-hud__pair">

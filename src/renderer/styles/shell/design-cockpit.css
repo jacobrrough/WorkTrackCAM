@@ -1043,6 +1043,14 @@
   display: inline-flex;
   align-items: center;
 }
+.sketch-cursor-hud__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+  text-transform: capitalize;
+}
 .sketch-cursor-hud__pair b {
   color: var(--txt2, var(--accent));
   font-weight: var(--weight-semibold);
