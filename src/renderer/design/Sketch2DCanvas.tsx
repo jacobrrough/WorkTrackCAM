@@ -278,6 +278,29 @@ export function resolveHudTargetPoint(
   return [Number.isFinite(px) ? px : live[0], Number.isFinite(py) ? py : live[1]]
 }
 
+/**
+ * Resolve the next sketch point from a heads-up POLAR entry: anchor + (len ∠ angDeg). A blank /
+ * non-numeric Length OR Angle falls back to the live segment's value, so typing only Length keeps
+ * the live angle (and vice-versa) — the Fusion "type one dimension, leave the rest live" feel. Pure
+ * + exported so the HUD's type-to-constrain behaviour is unit-testable in node-env.
+ */
+export function resolvePolarEntryPoint(
+  lenIn: string,
+  angDegIn: string,
+  anchor: readonly [number, number],
+  live: readonly [number, number]
+): [number, number] {
+  const liveDx = live[0] - anchor[0]
+  const liveDy = live[1] - anchor[1]
+  const lenParsed = Number.parseFloat(lenIn)
+  const len = Number.isFinite(lenParsed) ? lenParsed : Math.hypot(liveDx, liveDy)
+  const angParsed = Number.parseFloat(angDegIn)
+  const angRad = Number.isFinite(angParsed)
+    ? (angParsed * Math.PI) / 180
+    : Math.atan2(liveDy, liveDx)
+  return [anchor[0] + len * Math.cos(angRad), anchor[1] + len * Math.sin(angRad)]
+}
+
 export function Sketch2DCanvas({
   width,
   height,
@@ -629,6 +652,13 @@ export function Sketch2DCanvas({
   // latches editing so a live mouse move doesn't clobber what's being typed (mirrors lineDimFocused).
   const [hudXIn, setHudXIn] = useState('')
   const [hudYIn, setHudYIn] = useState('')
+  // Polar twins of the X/Y entry: Length / Angle of the segment in flight. Tab (on the canvas) focuses
+  // Length FIRST; focusing either freezes BOTH (the sync effect bails on `hudFocused`) so the typed
+  // dimension holds while the other stays at its live value — the Fusion "type the dimension" entry.
+  const [hudLenIn, setHudLenIn] = useState('')
+  const [hudAngIn, setHudAngIn] = useState('')
+  const hudLenRef = useRef<HTMLInputElement | null>(null)
+  const hudAngRef = useRef<HTMLInputElement | null>(null)
   const hudFocused = useRef(false)
   /** Armed (clicked) node -- Delete removes it; Esc or a second click disarms. */
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
@@ -816,6 +846,22 @@ export function Sketch2DCanvas({
     setHudXIn(String(Math.round(hudCursor[0] * 1000) / 1000))
     setHudYIn(String(Math.round(hudCursor[1] * 1000) / 1000))
   }, [hudCursor])
+
+  // Mirror the live segment's length / angle into the polar HUD fields while neither is being edited.
+  // The SAME `hudFocused` latch freezes both the moment the operator Tabs into either field.
+  useEffect(() => {
+    if (hudFocused.current) return
+    const anchor = lineStart ?? (polyDraft.length > 0 ? polyDraft[polyDraft.length - 1]! : null)
+    if (!hudCursor || !anchor) {
+      setHudLenIn('')
+      setHudAngIn('')
+      return
+    }
+    const dx = hudCursor[0] - anchor[0]
+    const dy = hudCursor[1] - anchor[1]
+    setHudLenIn(String(Math.round(Math.hypot(dx, dy) * 1000) / 1000))
+    setHudAngIn(String(Math.round(((Math.atan2(dy, dx) * 180) / Math.PI) * 1000) / 1000))
+  }, [hudCursor, lineStart, polyDraft])
 
   useEffect(() => {
     if (drag?.kind !== 'rect') {
@@ -2054,6 +2100,19 @@ export function Sketch2DCanvas({
     setSlotOverallWidthHover(null)
   }
 
+  /**
+   * Draw-mode canvas keydown: Fusion "Tab to type the dimension". While a polyline segment is
+   * rubber-banding (an anchor exists), Tab moves focus into the heads-up Length field FIRST (Angle is
+   * one Tab further); focusing it freezes both fields. Shift+Tab is left to the browser (reverse tab).
+   */
+  function onDrawKeyDown(e: React.KeyboardEvent<HTMLCanvasElement>): void {
+    if (e.key !== 'Tab' || e.shiftKey) return
+    if (activeTool !== 'polyline' || !hudCursor || polyDraft.length === 0) return
+    e.preventDefault()
+    hudLenRef.current?.focus()
+    hudLenRef.current?.select()
+  }
+
   return (
     <div className="sketch-wrap" ref={sketchWrapRef}>
       <canvas
@@ -2062,8 +2121,16 @@ export function Sketch2DCanvas({
         height={height}
         className="sketch-canvas"
         data-marquee={marqueeRect ? marqueeRect.mode : undefined}
-        tabIndex={activeTool === 'select' && onEntityPick ? 0 : undefined}
-        onKeyDown={activeTool === 'select' && onEntityPick ? onSelectKeyDown : undefined}
+        tabIndex={
+          (activeTool === 'select' && onEntityPick) || activeTool === 'polyline' ? 0 : undefined
+        }
+        onKeyDown={
+          activeTool === 'select' && onEntityPick
+            ? onSelectKeyDown
+            : activeTool === 'polyline'
+              ? onDrawKeyDown
+              : undefined
+        }
         style={{
           cursor: getCanvasCursor(
             activeTool,
@@ -2139,6 +2206,15 @@ export function Sketch2DCanvas({
             const target = resolveHudTargetPoint(hudXIn, hudYIn, hudCursor)
             setPolyDraft((d) => [...d, target])
             onSketchHint?.('Vertex placed from typed coordinates.')
+          }
+          const commitPolarEntry = (): void => {
+            if (!hudCursor || !anchor) return
+            const target = resolvePolarEntryPoint(hudLenIn, hudAngIn, anchor, hudCursor)
+            setPolyDraft((d) => [...d, target])
+            onSketchHint?.('Vertex placed from typed length / angle.')
+            // Unfreeze + hand focus back to the canvas so the next Tab re-arms the entry.
+            hudFocused.current = false
+            ref.current?.focus()
           }
           return (
             <div className="sketch-cursor-hud" data-testid="sketch-cursor-hud">
@@ -2221,18 +2297,74 @@ export function Sketch2DCanvas({
                   </span>
                 </>
               )}
-              {lenAng && (
-                <>
-                  <span className="sketch-cursor-hud__pair">
-                    <b>L</b>
-                    {fmt(lenAng.len)}
-                  </span>
-                  <span className="sketch-cursor-hud__pair">
-                    <b>∠</b>
-                    {`${fmt(lenAng.ang)}°`}
-                  </span>
-                </>
-              )}
+              {lenAng &&
+                (editable ? (
+                  <>
+                    <label className="sketch-cursor-hud__pair">
+                      <b>L</b>
+                      <input
+                        ref={hudLenRef}
+                        className="sketch-cursor-hud__input"
+                        data-testid="sketch-cursor-hud-len"
+                        inputMode="decimal"
+                        aria-label="Segment length (mm)"
+                        value={hudLenIn}
+                        onFocus={() => {
+                          hudFocused.current = true
+                        }}
+                        onBlur={() => {
+                          hudFocused.current = false
+                        }}
+                        onChange={(e) => setHudLenIn(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitPolarEntry()
+                          } else if (e.key === 'Escape') {
+                            e.currentTarget.blur()
+                          }
+                        }}
+                      />
+                    </label>
+                    <label className="sketch-cursor-hud__pair">
+                      <b>∠</b>
+                      <input
+                        ref={hudAngRef}
+                        className="sketch-cursor-hud__input"
+                        data-testid="sketch-cursor-hud-ang"
+                        inputMode="decimal"
+                        aria-label="Segment angle (degrees)"
+                        value={hudAngIn}
+                        onFocus={() => {
+                          hudFocused.current = true
+                        }}
+                        onBlur={() => {
+                          hudFocused.current = false
+                        }}
+                        onChange={(e) => setHudAngIn(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitPolarEntry()
+                          } else if (e.key === 'Escape') {
+                            e.currentTarget.blur()
+                          }
+                        }}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <span className="sketch-cursor-hud__pair">
+                      <b>L</b>
+                      {fmt(lenAng.len)}
+                    </span>
+                    <span className="sketch-cursor-hud__pair">
+                      <b>∠</b>
+                      {`${fmt(lenAng.ang)}°`}
+                    </span>
+                  </>
+                ))}
             </div>
           )
         })()}
