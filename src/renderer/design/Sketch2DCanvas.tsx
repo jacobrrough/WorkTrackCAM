@@ -32,6 +32,7 @@ import {
   nodeHandlePickToleranceMm
 } from './sketch2d-node-edit'
 import { inferDrawConstraints, type InferredConstraintKind } from './sketch-inference'
+import { inferredAxisConstraints } from './sketch-auto-constraints'
 import {
   collectOsnapCandidates,
   collectOsnapCandidatesDetailed,
@@ -1193,6 +1194,15 @@ export function Sketch2DCanvas({
       const idA = crypto.randomUUID()
       const idB = crypto.randomUUID()
       const eid = crypto.randomUUID()
+      // Auto-constraint on draw: persist horizontal / vertical if the segment was snapped on-axis.
+      const autoCons = inferredAxisConstraints(
+        [
+          { id: idA, pt: a },
+          { id: idB, pt: b }
+        ],
+        false,
+        new Set(design.constraints.map((c) => c.id))
+      )
       onDesignChange({
         ...design,
         points: {
@@ -1200,7 +1210,8 @@ export function Sketch2DCanvas({
           [idA]: { x: a[0], y: a[1] },
           [idB]: { x: b[0], y: b[1] }
         },
-        entities: [...design.entities, { id: eid, kind: 'polyline', pointIds: [idA, idB], closed: false }]
+        entities: [...design.entities, { id: eid, kind: 'polyline', pointIds: [idA, idB], closed: false }],
+        constraints: [...design.constraints, ...autoCons]
       })
     },
     [design, onDesignChange]
@@ -2007,10 +2018,18 @@ export function Sketch2DCanvas({
       nextPoints[ids[i]!] = { x: pt[0], y: pt[1] }
     })
     const id = crypto.randomUUID()
+    // Auto-constraint on draw: each side that was snapped on-axis becomes a persisted horizontal /
+    // vertical constraint (closed loop, so the final side wraps back to the first vertex).
+    const autoCons = inferredAxisConstraints(
+      polyDraft.map((pt, i) => ({ id: ids[i]!, pt })),
+      true,
+      new Set(design.constraints.map((c) => c.id))
+    )
     onDesignChange({
       ...design,
       points: nextPoints,
-      entities: [...design.entities, { id, kind: 'polyline', pointIds: ids, closed: true }]
+      entities: [...design.entities, { id, kind: 'polyline', pointIds: ids, closed: true }],
+      constraints: [...design.constraints, ...autoCons]
     })
     setPolyDraft([])
   }
