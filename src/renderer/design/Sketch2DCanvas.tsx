@@ -660,6 +660,15 @@ export function Sketch2DCanvas({
   const hudLenRef = useRef<HTMLInputElement | null>(null)
   const hudAngRef = useRef<HTMLInputElement | null>(null)
   const hudFocused = useRef(false)
+  // Cursor position in canvas-local CSS px + per-edge flip flags — floats the read-out at the cursor
+  // (offset so it never sits under the crosshair). Frozen while a field is focused so the operator can
+  // reach the inputs without the HUD running away. null = pointer off-canvas → CSS corner fallback.
+  const [hudScreen, setHudScreen] = useState<{
+    x: number
+    y: number
+    flipX: boolean
+    flipY: boolean
+  } | null>(null)
   /** Armed (clicked) node -- Delete removes it; Esc or a second click disarms. */
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
 
@@ -1760,6 +1769,14 @@ export function Sketch2DCanvas({
     onCursorWorld?.(p)
     // Same resolved point feeds the always-on cursor read-out HUD.
     setHudCursor(p)
+    // Float the HUD at the cursor (CSS px in the canvas box). Frozen while a field is focused so the
+    // inputs stay reachable; the flip flags keep it on-canvas near the right / bottom edges.
+    if (!hudFocused.current) {
+      const hr = c.getBoundingClientRect()
+      const hx = ev.clientX - hr.left
+      const hy = ev.clientY - hr.top
+      setHudScreen({ x: hx, y: hy, flipX: hx > hr.width * 0.62, flipY: hy > hr.height * 0.72 })
+    }
 
     // Sketch S2 -- live node-handle drag: ghost the dragged node + the
     // reshaped outline at the resolved point (osnap into OTHER geometry,
@@ -2155,9 +2172,13 @@ export function Sketch2DCanvas({
           panRef.current = null
           // Wave 3n — the source goes inactive; blank the StatusBar read-out.
           onCursorWorld?.(null)
-          // ...and blank the always-on cursor HUD.
-          setHudCursor(null)
-          setInferenceKind(null)
+          // ...and blank the always-on cursor HUD — UNLESS a field is being edited (moving the cursor
+          // onto a HUD input leaves the canvas; tearing the read-out down would drop the edit).
+          if (!hudFocused.current) {
+            setHudCursor(null)
+            setInferenceKind(null)
+            setHudScreen(null)
+          }
           // Sketch S1 — cancel any in-flight select drag (no move emitted).
           selectDragRef.current = null
           setSelectGhostOffset(null)
@@ -2217,7 +2238,23 @@ export function Sketch2DCanvas({
             ref.current?.focus()
           }
           return (
-            <div className="sketch-cursor-hud" data-testid="sketch-cursor-hud">
+            <div
+              className="sketch-cursor-hud"
+              data-testid="sketch-cursor-hud"
+              style={
+                hudScreen
+                  ? {
+                      left: hudScreen.x,
+                      top: hudScreen.y,
+                      right: 'auto',
+                      bottom: 'auto',
+                      transform: `translate(${
+                        hudScreen.flipX ? 'calc(-100% - 14px)' : '14px'
+                      }, ${hudScreen.flipY ? 'calc(-100% - 14px)' : '14px'})`
+                    }
+                  : undefined
+              }
+            >
               {inferenceKind && (
                 <span className="sketch-cursor-hud__hint" data-testid="sketch-cursor-hud-hint">
                   {inferenceKind === 'horizontal'
