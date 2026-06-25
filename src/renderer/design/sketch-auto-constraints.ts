@@ -65,3 +65,39 @@ export function inferredAxisConstraints(
   }
   return out
 }
+
+/**
+ * Coincident constraints for the new vertices that landed EXACTLY on an existing sketch point. An
+ * osnap endpoint snap writes the existing point's exact coordinate into the new vertex, so the match
+ * is an exact `===` compare (no tolerance) — only a vertex the operator actually snapped onto another
+ * point gets constrained; one that merely passed nearby stays free. Each match becomes a `coincident`
+ * so the two points move together on a later edit instead of sharing a coordinate by accident.
+ *
+ * `existing` MUST exclude the new vertices — pass the design's points as they were BEFORE this commit.
+ * The first existing point at the coordinate wins (stacked duplicates are degenerate). Pure.
+ */
+export function inferredCoincidentConstraints(
+  vertices: ReadonlyArray<AutoConstraintVertex>,
+  existing: ReadonlyArray<AutoConstraintVertex>,
+  takenConstraintIds: ReadonlySet<string>
+): SketchConstraint[] {
+  if (vertices.length === 0 || existing.length === 0) return []
+
+  const taken = new Set(takenConstraintIds)
+  const nextId = (): string => {
+    let n = 1
+    while (taken.has(`con_${n}`)) n += 1
+    const id = `con_${n}`
+    taken.add(id)
+    return id
+  }
+
+  const out: SketchConstraint[] = []
+  for (const v of vertices) {
+    const hit = existing.find((e) => e.pt[0] === v.pt[0] && e.pt[1] === v.pt[1])
+    if (hit) {
+      out.push({ id: nextId(), type: 'coincident', a: { pointId: v.id }, b: { pointId: hit.id } })
+    }
+  }
+  return out
+}

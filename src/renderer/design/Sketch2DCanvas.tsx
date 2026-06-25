@@ -32,7 +32,7 @@ import {
   nodeHandlePickToleranceMm
 } from './sketch2d-node-edit'
 import { inferDrawConstraints, type InferredConstraintKind } from './sketch-inference'
-import { inferredAxisConstraints } from './sketch-auto-constraints'
+import { inferredAxisConstraints, inferredCoincidentConstraints } from './sketch-auto-constraints'
 import {
   collectOsnapCandidates,
   collectOsnapCandidatesDetailed,
@@ -1194,15 +1194,21 @@ export function Sketch2DCanvas({
       const idA = crypto.randomUUID()
       const idB = crypto.randomUUID()
       const eid = crypto.randomUUID()
-      // Auto-constraint on draw: persist horizontal / vertical if the segment was snapped on-axis.
-      const autoCons = inferredAxisConstraints(
-        [
-          { id: idA, pt: a },
-          { id: idB, pt: b }
-        ],
-        false,
-        new Set(design.constraints.map((c) => c.id))
+      // Auto-constraint on draw: persist horizontal / vertical for an on-axis segment, plus a
+      // coincident for either endpoint that snapped onto an existing point.
+      const acTaken = new Set(design.constraints.map((c) => c.id))
+      const acVerts = [
+        { id: idA, pt: a },
+        { id: idB, pt: b }
+      ]
+      const axisCons = inferredAxisConstraints(acVerts, false, acTaken)
+      axisCons.forEach((c) => acTaken.add(c.id))
+      const coincCons = inferredCoincidentConstraints(
+        acVerts,
+        Object.entries(design.points).map(([id, p]) => ({ id, pt: [p.x, p.y] as [number, number] })),
+        acTaken
       )
+      const autoCons = [...axisCons, ...coincCons]
       onDesignChange({
         ...design,
         points: {
@@ -2018,13 +2024,19 @@ export function Sketch2DCanvas({
       nextPoints[ids[i]!] = { x: pt[0], y: pt[1] }
     })
     const id = crypto.randomUUID()
-    // Auto-constraint on draw: each side that was snapped on-axis becomes a persisted horizontal /
-    // vertical constraint (closed loop, so the final side wraps back to the first vertex).
-    const autoCons = inferredAxisConstraints(
-      polyDraft.map((pt, i) => ({ id: ids[i]!, pt })),
-      true,
-      new Set(design.constraints.map((c) => c.id))
+    // Auto-constraint on draw: each on-axis side becomes a horizontal / vertical constraint (closed
+    // loop wraps the last side back to the first vertex), plus a coincident for any vertex snapped
+    // onto an existing point.
+    const acTaken = new Set(design.constraints.map((c) => c.id))
+    const acVerts = polyDraft.map((pt, i) => ({ id: ids[i]!, pt }))
+    const axisCons = inferredAxisConstraints(acVerts, true, acTaken)
+    axisCons.forEach((c) => acTaken.add(c.id))
+    const coincCons = inferredCoincidentConstraints(
+      acVerts,
+      Object.entries(design.points).map(([id, p]) => ({ id, pt: [p.x, p.y] as [number, number] })),
+      acTaken
     )
+    const autoCons = [...axisCons, ...coincCons]
     onDesignChange({
       ...design,
       points: nextPoints,
