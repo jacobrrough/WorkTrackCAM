@@ -285,46 +285,6 @@
   border-color: var(--accent-hi);
 }
 
-/* Stage tabs (mockup .stage-tabs): centered pill, top-middle. */
-.dc-stage-tabs {
-  position: absolute;
-  top: var(--sp-6);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
-  display: flex;
-  gap: var(--sp-1);
-  padding: var(--sp-1);
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--elevation-1);
-}
-.dc-stage-tab {
-  border: none;
-  background: transparent;
-  color: var(--txt2);
-  font: var(--weight-semibold) var(--text-sm) / 1 var(--font);
-  padding: var(--sp-3) var(--sp-8);
-  border-radius: 20px;
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-.dc-stage-tab:hover {
-  color: var(--txt1);
-}
-.dc-stage-tab:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-.dc-stage-tab--on {
-  background: var(--accent);
-  color: #fff;
-}
-.dc-stage-tab--on:hover {
-  color: #fff;
-}
-
 /* Viewcube (mockup .viewcube): top-right. */
 .dc-viewcube {
   position: absolute;
@@ -1143,20 +1103,25 @@
   gap: var(--sp-5);
 }
 
-/* Feature picker (the 6-way arm row inside the Properties "Features" card). */
+/* Per-feature property dialog card (opened from the Design ribbon's Solid / Construct
+   commands; the in-panel 6-way picker was retired as a redundant launcher). */
 .design-workspace__feature-dialogs {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
 }
-.fd-picker {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--sp-2);
+/* Dialog header: title + the ✕ that dismisses the dialog (the picker used to be the
+   only way to close it). */
+.design-workspace__feature-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
 }
-.fd-picker__btn {
-  width: 100%;
-  justify-content: center;
+.design-workspace__feature-dialog-close {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  line-height: 1;
 }
 
 /* Each dialog is a prop-card; its body is a vertical field stack. */

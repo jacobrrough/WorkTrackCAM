@@ -1062,12 +1062,9 @@ export function DesignWorkspace({
   // the operator double-clicks.
   const [sending, setSending] = useState(false)
   // ── UI-3 cockpit chrome state ─────────────────────────────────────────────
-  // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the
-  // Part view reads as a no-code cockpit); designStage tracks the Model /
-  // Sketch / Inspect stage-tabs in the viewport chrome. Both are local UI
-  // state with no sidecar side-effects.
+  // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the Part
+  // view reads as a no-code cockpit). Local UI state with no sidecar side-effects.
   const [codeOpen, setCodeOpen] = useState(false)
-  const [designStage, setDesignStage] = useState<'model' | 'sketch' | 'inspect'>('model')
   // Collapsible cockpit side panels — collapsing a panel narrows its grid column
   // (driven inline on `.dc-cockpit` below) so the viewport reclaims the width.
   // Sticky across remounts via localStorage (best-effort; no-ops under SSR/tests).
@@ -1310,18 +1307,10 @@ export function DesignWorkspace({
   // ── FG-3 — sketch mode (drives the center-pane swap + contextual ribbon) ────
   /**
    * Effective sketch mode for the Part view. Mirrors the host-supplied
-   * `sketchActive` prop, but is ALSO surfaced via the `designStage` tab so the
-   * cockpit's Model/Sketch/Inspect strip agrees with the mounted surface. Only
-   * the Part view honors it (Assembly/Drawing own their own bodies).
+   * `sketchActive` prop. Only the Part view honors it (Assembly/Drawing own
+   * their own bodies).
    */
   const sketchMode = sketchActive === true
-
-  // Keep the cockpit stage strip in lockstep with sketch mode: entering sketch
-  // selects the Sketch stage, leaving it falls back to Model. This is a
-  // presentational sync (the body branches on `sketchMode`, not `designStage`).
-  useEffect(() => {
-    setDesignStage(sketchMode ? 'sketch' : 'model')
-  }, [sketchMode])
 
   // ── FG-5 — open a feature dialog requested by the ribbon's Solid commands ───
   // `requestedFeatureDialog` is a one-shot from the host; when it lands, open
@@ -1373,23 +1362,6 @@ export function DesignWorkspace({
       sketchMode
     })
   }, [onCommandSurface, selection, sketchMode])
-
-  /**
-   * FG-3 — cockpit stage-tab handler. Picking "Sketch" enters sketch mode
-   * (mounting the sketcher); picking "Model"/"Inspect" leaves it. The host
-   * owns the actual sketch-mode cell (so the ribbon's `armSketchMode` and this
-   * stage tab stay in sync); we just relay the intent + optimistically set the
-   * local stage so the strip highlights immediately. When the host wired
-   * neither enter/exit callback the tabs stay presentational (pre-FG-3).
-   */
-  const handleStageChange = useCallback(
-    (next: 'model' | 'sketch' | 'inspect'): void => {
-      setDesignStage(next)
-      if (next === 'sketch') onSketchEnter?.()
-      else onSketchExit?.()
-    },
-    [onSketchEnter, onSketchExit],
-  )
 
   /**
    * Derive a user-facing label for the selection chip. Pulls from the
@@ -1839,8 +1811,6 @@ export function DesignWorkspace({
           data-testid="design-workspace-viewport"
         >
           <ViewportChrome
-            stage={designStage}
-            onStageChange={handleStageChange}
             codeOpen={codeOpen}
             onToggleCode={() => setCodeOpen((open) => !open)}
             showCodeToggle={showCodeToggle}
@@ -2254,71 +2224,41 @@ export function DesignWorkspace({
             </div>
 
             {/*
-              FG-5b — per-feature property dialogs. Only rendered when the host
-              threads `onAppendKernelOp` (a live session); the splash preview and
-              the prop-less render-pin tests never see it, so every existing
-              Properties-pane pin holds. A 6-way picker arms one dialog; the
-              dialog applies through the existing kernel-op append
-              (fillet/chamfer/shell/hole) or script-param rebuild
-              (extrude/revolve) paths.
+              FG-5b — per-feature property dialog. Opened from the Design ribbon's
+              Solid / Construct commands (`openFeatureDialog` → `requestedFeatureDialog`
+              → `activeFeatureDialog`); the in-panel 6-way picker was retired as a
+              redundant launcher. Only rendered when the host threads `onAppendKernelOp`
+              (a live session) AND a dialog is actually open, so the splash preview +
+              the prop-less render pins still never see it. The header ✕ closes the
+              dialog (the picker used to be the only dismissal). Applies through the
+              existing kernel-op append (fillet/chamfer/shell/hole) or script-param
+              rebuild (extrude/revolve) paths.
             */}
-            {onAppendKernelOp && (
+            {onAppendKernelOp && featureDialogSpec !== null && (
               <div
                 className="dc-prop-card design-workspace__feature-dialogs"
                 data-testid="design-workspace-feature-dialogs"
               >
-                <h3 className="dc-prop-card-title">Features</h3>
-                <div
-                  className="fd-picker"
-                  role="group"
-                  aria-label="Add a feature"
-                  data-testid="design-workspace-feature-picker"
-                >
-                  {(
-                    [
-                      ['extrude', 'Extrude'],
-                      ['revolve', 'Revolve'],
-                      ['fillet', 'Fillet'],
-                      ['chamfer', 'Chamfer'],
-                      ['shell', 'Shell'],
-                      ['hole', 'Hole'],
-                      ['datum_plane', 'Plane'],
-                      ['datum_axis', 'Axis'],
-                      ['datum_point', 'Point'],
-                    ] as ReadonlyArray<readonly [FeatureDialogKind, string]>
-                  ).map(([kind, label]) => {
-                    const active = effectiveFeatureDialog === kind
-                    return (
-                      <button
-                        key={kind}
-                        type="button"
-                        className={
-                          active
-                            ? 'btn btn-primary btn-sm fd-picker__btn fd-picker__btn--active'
-                            : 'btn btn-ghost btn-sm fd-picker__btn'
-                        }
-                        data-testid={`design-workspace-feature-pick-${kind}`}
-                        data-active={active ? 'true' : 'false'}
-                        aria-pressed={active}
-                        onClick={() =>
-                          setActiveFeatureDialog((cur) => (cur === kind ? null : kind))
-                        }
-                      >
-                        {label}
-                      </button>
-                    )
-                  })}
+                <div className="design-workspace__feature-dialog-head">
+                  <h3 className="dc-prop-card-title">Feature</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm design-workspace__feature-dialog-close"
+                    data-testid="design-workspace-feature-dialog-close"
+                    aria-label="Close feature dialog"
+                    onClick={() => setActiveFeatureDialog(null)}
+                  >
+                    ✕
+                  </button>
                 </div>
-                {featureDialogSpec !== null && (
-                  <FeatureDialogHost
-                    spec={featureDialogSpec}
-                    selectionInfo={featureDialogSelectionInfo}
-                    onAppendKernelOp={handleFeatureKernelOp}
-                    onScriptParams={handleParamsChange}
-                    busy={busy}
-                    disabled={kernelOpsDisabled}
-                  />
-                )}
+                <FeatureDialogHost
+                  spec={featureDialogSpec}
+                  selectionInfo={featureDialogSelectionInfo}
+                  onAppendKernelOp={handleFeatureKernelOp}
+                  onScriptParams={handleParamsChange}
+                  busy={busy}
+                  disabled={kernelOpsDisabled}
+                />
               </div>
             )}
 

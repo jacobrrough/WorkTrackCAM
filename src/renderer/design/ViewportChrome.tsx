@@ -11,15 +11,16 @@
  * remove the duplication the Wave-0 audit flagged (two viewcubes, two
  * triads, two orbit/pan/zoom sets).
  *
- * What remains are the two pieces the live viewport does NOT provide, which
- * are genuinely wired:
+ * What remains is the one piece the live viewport does NOT provide, which is
+ * genuinely wired:
  *
  *   1. The `Code </>` toggle button — calls `onToggleCode` and paints a
  *      pressed state (`aria-pressed`) when the CadQuery code drawer is open.
- *   2. The Model / Sketch / Inspect stage-tabs — bound to `stage` /
- *      `onStageChange` so the cockpit can swap stage context. (The stages
- *      are presentational selection state for now; the Part-view body does
- *      not yet branch on them — that wiring is a later foundation gap.)
+ *
+ * The Model / Sketch / Inspect stage-tabs were RETIRED as redundant chrome:
+ * sketch entry/exit is driven by the Design ribbon (`armSketchMode`), the
+ * viewport face-pick (`onSketchPlanePicked` → `onSketchEnter`), and the
+ * in-sketch exit button — the tabs were a presentational duplicate.
  *
  * The selection chip is intentionally NOT rendered here — DesignWorkspace
  * owns the `design-workspace__selection-chip` element (pinned by
@@ -31,14 +32,7 @@
 
 import type { JSX } from 'react'
 
-/** The three cockpit stage contexts mirrored from the mockup stage-tabs. */
-export type DesignStage = 'model' | 'sketch' | 'inspect'
-
 export interface ViewportChromeProps {
-  /** Currently-active stage tab. */
-  readonly stage: DesignStage
-  /** Fires when the operator picks a different stage tab. */
-  readonly onStageChange: (stage: DesignStage) => void
   /** True while the CadQuery code drawer is open (drives the pressed state). */
   readonly codeOpen: boolean
   /** Toggles the CadQuery code drawer open/closed. */
@@ -50,21 +44,12 @@ export interface ViewportChromeProps {
   readonly showCodeToggle?: boolean
 }
 
-/** Ordered stage-tab definitions (mockup `.stage-tabs`). */
-const STAGES: ReadonlyArray<{ id: DesignStage; label: string }> = [
-  { id: 'model', label: 'Model' },
-  { id: 'sketch', label: 'Sketch' },
-  { id: 'inspect', label: 'Inspect' },
-]
-
 /**
- * Slim chrome overlay for the live viewport: the Code drawer toggle (in a
- * minimal floating pill) plus the Model / Sketch / Inspect stage-tabs. The
- * navigation/viewcube/triad chrome now lives inside {@link Viewport3D}.
+ * Slim chrome overlay for the live viewport: just the optional Code drawer toggle (in a minimal
+ * floating pill). The navigation/viewcube/triad chrome lives inside {@link Viewport3D}, and the
+ * Model / Sketch / Inspect stage-tabs were retired (sketch entry/exit is ribbon- + face-pick-driven).
  */
 export function ViewportChrome({
-  stage,
-  onStageChange,
   codeOpen,
   onToggleCode,
   showCodeToggle = true,
@@ -104,31 +89,6 @@ export function ViewportChrome({
         </button>
       </div>
       )}
-
-      {/* ── Stage tabs (mockup .stage-tabs) ─────────────────────────── */}
-      <div
-        className="dc-stage-tabs"
-        role="tablist"
-        aria-label="Design stage"
-        data-testid="design-cockpit-stage-tabs"
-      >
-        {STAGES.map((s) => {
-          const isActive = stage === s.id
-          return (
-            <button
-              key={s.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              data-testid={`design-cockpit-stage-${s.id}`}
-              className={isActive ? 'dc-stage-tab dc-stage-tab--on' : 'dc-stage-tab'}
-              onClick={() => onStageChange(s.id)}
-            >
-              {s.label}
-            </button>
-          )
-        })}
-      </div>
     </>
   )
 }

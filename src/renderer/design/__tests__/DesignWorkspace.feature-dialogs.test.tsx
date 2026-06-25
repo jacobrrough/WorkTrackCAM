@@ -1,19 +1,16 @@
 /**
- * FG-5b · DesignWorkspace integration pin — the feature-dialog section is
- * REACHABLE in the Properties pane (not built-but-orphaned, the exact failure
- * the FG-5 audit warns about), and is gated by the additive contract:
+ * FG-5b · DesignWorkspace integration pin — the per-feature property dialog is REACHABLE in
+ * the Properties pane, gated by the additive contract. The in-panel 6-way picker was RETIRED
+ * as a redundant launcher: feature dialogs now open from the Design ribbon's Solid / Construct
+ * commands (`requestedFeatureDialog`), and the dialog's header ✕ dismisses it (the picker used
+ * to be the only way to close it).
  *
- *   - WITHOUT `onAppendKernelOp` (the splash preview / legacy render-pins):
- *     the feature-dialog section does NOT render, so every pre-existing
- *     Properties-pane pin (parameters, Save, Send-to-CAM) is untouched.
- *   - WITH `onAppendKernelOp` (a live session via DesignWorkspaceHost):
- *     the 6-way feature picker renders, and selecting one mounts that dialog.
+ *   - WITHOUT `onAppendKernelOp` (the splash preview / legacy render-pins): nothing renders.
+ *   - WITH `onAppendKernelOp` but NO open dialog: nothing renders (no empty "Features" card).
+ *   - WITH `onAppendKernelOp` AND a requested dialog: the dialog card renders, incl. its ✕.
  *
- * `renderToStaticMarkup` is one-shot SSR (no click events), so we drive the
- * "which dialog is open" state through the picker's default-closed render and
- * assert the picker buttons exist + are typed. The picker → dialog open path is
- * covered structurally (the picker arms `activeFeatureDialog`, whose render is
- * pinned by the FeatureDialogHost tests).
+ * `renderToStaticMarkup` is one-shot SSR (effects don't run), so the open state is driven
+ * through `effectiveFeatureDialog`'s `requestedFeatureDialog` SSR fallback.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -29,42 +26,40 @@ describe('DesignWorkspace — feature-dialog section gating', () => {
       createElement(DesignWorkspace, { initialScript: STARTER_SCRIPT })
     )
     expect(html).not.toContain('data-testid="design-workspace-feature-dialogs"')
-    expect(html).not.toContain('data-testid="design-workspace-feature-picker"')
   })
 
-  it('renders the 6-way feature picker when onAppendKernelOp is supplied', () => {
+  it('the retired in-panel picker is GONE (features open from the ribbon now)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, { initialScript: STARTER_SCRIPT, onAppendKernelOp: noop })
+    )
+    expect(html).not.toContain('data-testid="design-workspace-feature-picker"')
+    for (const kind of ['extrude', 'revolve', 'fillet', 'chamfer', 'shell', 'hole']) {
+      expect(html).not.toContain(`data-testid="design-workspace-feature-pick-${kind}"`)
+    }
+  })
+
+  it('renders no feature-dialog card until a dialog is requested (no empty card)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, { initialScript: STARTER_SCRIPT, onAppendKernelOp: noop })
+    )
+    expect(html).not.toContain('data-testid="design-workspace-feature-dialogs"')
+  })
+
+  it('renders the dialog card + its close ✕ when a feature dialog is requested', () => {
     const html = renderToStaticMarkup(
       createElement(DesignWorkspace, {
         initialScript: STARTER_SCRIPT,
-        onAppendKernelOp: noop
+        onAppendKernelOp: noop,
+        requestedFeatureDialog: 'extrude'
       })
     )
     expect(html).toContain('data-testid="design-workspace-feature-dialogs"')
-    expect(html).toContain('data-testid="design-workspace-feature-picker"')
-    for (const kind of ['extrude', 'revolve', 'fillet', 'chamfer', 'shell', 'hole']) {
-      expect(html).toContain(`data-testid="design-workspace-feature-pick-${kind}"`)
-    }
-  })
-
-  it('every feature-picker button is type="button"', () => {
-    const html = renderToStaticMarkup(
-      createElement(DesignWorkspace, {
-        initialScript: STARTER_SCRIPT,
-        onAppendKernelOp: noop
-      })
+    expect(html).toMatch(
+      /<button type="button"[^>]*data-testid="design-workspace-feature-dialog-close"/
     )
-    // Slice to the picker region and assert each button tag is typed.
-    const start = html.indexOf('data-testid="design-workspace-feature-picker"')
-    expect(start).toBeGreaterThan(-1)
-    const region = html.slice(start, start + 2000)
-    const buttons = region.match(/<button[^>]*>/g) ?? []
-    expect(buttons.length).toBeGreaterThanOrEqual(6)
-    for (const tag of buttons) {
-      expect(tag).toContain('type="button"')
-    }
   })
 
-  it('keeps the existing parameters + Save + Send-to-CAM pins intact alongside it', () => {
+  it('keeps the existing parameters + Save + Send-to-CAM pins intact', () => {
     const html = renderToStaticMarkup(
       createElement(DesignWorkspace, {
         initialScript: STARTER_SCRIPT,
@@ -73,21 +68,14 @@ describe('DesignWorkspace — feature-dialog section gating', () => {
         onSendToCam: noop
       })
     )
-    // Pre-existing Properties-pane affordances still present.
     expect(html).toContain('data-testid="design-workspace-save"')
     expect(html).toContain('data-testid="design-workspace-send-to-cam"')
-    // And the new section co-exists.
-    expect(html).toContain('data-testid="design-workspace-feature-dialogs"')
   })
 
-  it('no dialog is open by default (picker armed, no active dialog mounted)', () => {
+  it('no dialog host is mounted by default (nothing armed)', () => {
     const html = renderToStaticMarkup(
-      createElement(DesignWorkspace, {
-        initialScript: STARTER_SCRIPT,
-        onAppendKernelOp: noop
-      })
+      createElement(DesignWorkspace, { initialScript: STARTER_SCRIPT, onAppendKernelOp: noop })
     )
-    // The host wrapper only renders once a feature is armed.
     expect(html).not.toContain('data-testid="fd-host"')
   })
 })
