@@ -1,0 +1,46 @@
+# Fusion-Parity Roadmap
+
+Grounded scorecard from a 5-area code survey (2026-06-25). Percentages are **code-capability**;
+user-**reachable** parity is materially lower because of orphaned (built-but-unwired) surfaces.
+
+## Scorecard
+
+| Workspace | Code parity | Note |
+|---|---:|---|
+| Manufacture (CAM) | ~65–70% | Strongest; near-full parity for the 3 shop machines. Gaps deliberate (no 5-axis/turning). |
+| Drawings | ~60–70% | Ortho/iso/section/detail views, 7 dim types, 14 GD&T chars, title block, multi-sheet, BOM. No HLR, notes, DXF. |
+| Solid modeling | ~45–55% | 30+ real kernel ops; ~15 have **no dialog**. No surface/direct-edit, no feature re-edit. |
+| Sketch | ~45–50% | Inference + auto-constraints + 15 constraint types + solver. No construction geo, project, face-sketch. |
+| Assemble | ~25–30% | Real 6-DOF mate solver, thin UI. No motion, bbox-only interference, one mate panel unreachable. |
+
+**Overall:** ~50% (code) / ~40% (reachable) within the app's intended scope (design → drawing → CAM
+for the 3 machines); ~25–30% against *all* of Fusion (which includes Render/Sim/Generative/Surface —
+deliberately out of scope).
+
+## The dominant theme
+
+**The engine is consistently more capable than the UI exposes.** The expensive part (kernel, solvers,
+posts) exists and works; much of the road to parity is *surfacing* capability, not creating it.
+
+## Prioritized backlog (parity-per-effort)
+
+### Tier 1 — Wire orphaned engine work to the UI (cheap, high reachable-parity gain)
+- **Solid feature dialogs** for the ~15 dialog-less kernel ops: loft (`loft_guide_rails`), sweep
+  (`sweep_profile_path_true`), pipe (`pipe_path`), coil (`coil_cut`), thread (`thread_wizard`),
+  pattern-along-path (`pattern_path`), sheet-metal (`sheet_tab_union`/`sheet_fold`/`sheet_flat_pattern`),
+  boolean combine, transform/move-copy. Pattern: schema → dialog component → DesignWorkspace wiring → test.
+- **Sketch tools**: wire the existing `sketch-boolean-offset.ts` (offset) and `sketch-array.ts` (pattern)
+  modules into the tool palette.
+- **Assembly**: thread the V1.5 mate panel through DesignWorkspace (currently test-only, not passed).
+
+### Tier 2 — Parametric depth
+- **Feature re-edit** — timeline is append-only via dialogs (delete+re-add to change a fillet). Editable
+  features is the core parametric-CAD expectation.
+- **Face-sketching** — schema accepts face planes; kernel still assumes XY. Unlocks the Sketch→Solid loop.
+
+### Tier 3 — Documentation / output
+- Drawings: hidden-line removal (Tier B / OCC HLR), free-text notes, real DXF export (currently a stub).
+
+## Verification gap (cross-cutting — see self-optimization plan)
+No DOM/interaction test env and no app-driving harness, so "wired" ≠ "works." Closing this is the
+precondition for trusting any Tier-1/2 work. Sidecar venv ready at `C:\Users\jrrou\wtcam-sidecar-venv`.
