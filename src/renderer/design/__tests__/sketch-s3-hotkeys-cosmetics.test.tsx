@@ -160,7 +160,7 @@ describe('S2 cosmetic (a) -- mid-drag readout resolves over the SAME excluded se
 
   it('the Wave 3n general emit stays intact for the non-drag paths (pins still hold)', () => {
     expect(LIVE).toMatch(
-      /const p: \[number, number\] = res\.point[\s\S]{0,250}?onCursorWorld\?\.\(p\)/
+      /const p: \[number, number\] = inferred\.point[\s\S]{0,250}?onCursorWorld\?\.\(p\)/
     )
   })
 

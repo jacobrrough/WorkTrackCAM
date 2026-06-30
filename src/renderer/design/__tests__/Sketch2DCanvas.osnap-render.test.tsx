@@ -94,9 +94,10 @@ const DRAW = readFileSync(resolve(__dirname, '../sketch2d-draw.ts'), 'utf-8')
 
 describe('Sketch2DCanvas osnap -- source pins (pointer halves SSR cannot move)', () => {
   it('the ONE pointer-resolution path: both mousedown and mousemove run resolvePointerPlacement', () => {
-    expect(SRC).toContain('const w: [number, number] = resolvePointerPlacement(raw).point')
+    expect(SRC).toContain('const placement = resolvePointerPlacement(raw)')
+    expect(SRC).toContain('inferDrawPoint(placement.point, placement.snapped != null).point')
     expect(SRC).toContain('const res = resolvePointerPlacement(raw)')
-    expect(SRC).toContain('const p: [number, number] = res.point')
+    expect(SRC).toContain('const p: [number, number] = inferred.point')
     // The bare lattice call is GONE from the pointer path (typed-dimension
     // fields still snap their numeric input to the grid -- that is not the
     // pointer path).
@@ -146,7 +147,7 @@ describe('Sketch2DCanvas osnap -- source pins (pointer halves SSR cannot move)',
 
   it('onCursorWorld keeps emitting the FINAL resolved point (Wave 3n threading intact)', () => {
     expect(SRC).toMatch(
-      /const p: \[number, number\] = res\.point[\s\S]{0,250}?onCursorWorld\?\.\(p\)/
+      /const p: \[number, number\] = inferred\.point[\s\S]{0,250}?onCursorWorld\?\.\(p\)/
     )
   })
 

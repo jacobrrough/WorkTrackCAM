@@ -258,6 +258,26 @@ export function WorkspaceHost({
             saveAssembly: (dir, json) => fab().assemblySave(dir, json)
           })
           pushToast(outcome.toast.kind, outcome.toast.message)
+          // GAP 2 (in-session stale mates) — after a SUCCESSFUL persist, refresh
+          // the in-memory mate set so a "Solve" right after adding a mate sees the
+          // NEW constraint in the SAME session (no route round-trip). We re-read
+          // `assembly.json` through the proven hydrate path and bump hydrateToken,
+          // which remounts DesignWorkspaceHost with the fresh `initialAssemblyMates`
+          // seed (a mount-only prop) → DesignWorkspace state → AssemblyView's
+          // `mateConstraints` (the `assembly:solve` input). This re-read runs INSIDE
+          // the same matePersistChainRef link, i.e. strictly AFTER this persist's
+          // save committed, so it can never read a stale base or clobber a
+          // concurrent save (the chain serializes both). A null `projectDir` cannot
+          // reach here: runPersistMate returns `ok:false` (warn) without writing.
+          if (!outcome.ok) return
+          const refreshed = await runHydrateAssembly({
+            projectDir,
+            loadAssembly: (dir) => fab().assemblyLoad(dir)
+          })
+          if (!refreshed.ok) return
+          setAssemblyParts(refreshed.hydrated.parts)
+          setAssemblyMates(refreshed.hydrated.mateConstraints)
+          setHydrateToken((t) => t + 1)
         })
     },
     [projectDir, pushToast]

@@ -536,8 +536,10 @@ describe('S2 e2e — ONE pointer pipeline (no duplicate snap logic in the live c
   })
 
   it('every gesture path resolves through the shared engine (placement, S1 drag, node drag, insert)', () => {
-    // Drawing-tool placement (mousedown) + crosshair/hover (mousemove):
-    expect(live).toContain('const w: [number, number] = resolvePointerPlacement(raw).point')
+    // Drawing-tool placement (mousedown) + crosshair/hover (mousemove): resolvePointerPlacement is
+    // still the ONE snap resolver; inferDrawPoint layers constraint inference on top of its result.
+    expect(live).toContain('const placement = resolvePointerPlacement(raw)')
+    expect(live).toContain('inferDrawPoint(placement.point, placement.snapped != null).point')
     expect(live).toContain('const res = resolvePointerPlacement(raw)')
     // S1 entity drag-move: ghost AND release run the same selection-excluded call:
     expect(live.match(/resolveSelectDragDelta\(sd, raw\)/g) ?? []).toHaveLength(2)

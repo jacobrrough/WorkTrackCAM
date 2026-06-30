@@ -117,6 +117,47 @@
   flex: none;
 }
 
+/* Collapse toggle in a panel head + the collapsed thin-rail state. Collapsing a
+   side panel narrows its cockpit column (driven inline from React state) so the
+   viewport reclaims the freed width — the "grid feels cramped" fix. */
+.dc-collapse-btn {
+  appearance: none;
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--txt1);
+  font-size: var(--text-md, 14px);
+  line-height: 1;
+  cursor: pointer;
+}
+.dc-collapse-btn:hover {
+  background: var(--bg2, var(--bg3));
+  border-color: var(--border);
+  color: var(--txt0);
+}
+.dc-browser--collapsed .dc-panel-head,
+.dc-props--collapsed .dc-panel-head {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.dc-browser--collapsed .dc-collapse-btn,
+.dc-props--collapsed .dc-collapse-btn {
+  margin-left: 0;
+}
+.dc-browser--collapsed .dc-browser-body,
+.dc-props--collapsed .dc-props-body {
+  display: none;
+}
+
 /* Browser body: the FeatureTree's own ops list scrolls inside. */
 .dc-browser-body {
   flex: 1 1 auto;
@@ -242,46 +283,6 @@
   background: var(--accent-hi);
   color: #fff;
   border-color: var(--accent-hi);
-}
-
-/* Stage tabs (mockup .stage-tabs): centered pill, top-middle. */
-.dc-stage-tabs {
-  position: absolute;
-  top: var(--sp-6);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
-  display: flex;
-  gap: var(--sp-1);
-  padding: var(--sp-1);
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--elevation-1);
-}
-.dc-stage-tab {
-  border: none;
-  background: transparent;
-  color: var(--txt2);
-  font: var(--weight-semibold) var(--text-sm) / 1 var(--font);
-  padding: var(--sp-3) var(--sp-8);
-  border-radius: 20px;
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-.dc-stage-tab:hover {
-  color: var(--txt1);
-}
-.dc-stage-tab:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-.dc-stage-tab--on {
-  background: var(--accent);
-  color: #fff;
-}
-.dc-stage-tab--on:hover {
-  color: #fff;
 }
 
 /* Viewcube (mockup .viewcube): top-right. */
@@ -480,6 +481,43 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* Collapsed tool palette: a thin rail with just the show/hide toggle. The ribbon's CREATE/MODIFY
+   commands already arm every tool, so collapsing trims the duplicated tool list and gives the
+   canvas the width back. The parent grid narrows its first column when the palette is collapsed. */
+.sketch-surface:has(.sketch-surface__palette--collapsed) {
+  grid-template-columns: 32px 1fr;
+}
+.sketch-surface__palette--collapsed {
+  padding: var(--sp-2);
+  overflow: hidden;
+}
+.sketch-surface__palette-collapse {
+  appearance: none;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--txt1);
+  font-size: var(--text-md, 14px);
+  line-height: 1;
+  cursor: pointer;
+}
+.sketch-surface__palette-collapse:hover {
+  background: var(--bg3);
+  border-color: var(--border);
+  color: var(--txt0);
+}
+.sketch-surface__palette--collapsed .sketch-surface__palette-collapse {
+  align-self: center;
+}
+
 .sketch-surface__palette-group {
   display: flex;
   flex-direction: column;
@@ -938,6 +976,64 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
+/* Always-on cursor heads-up read-out: live sketch-plane X/Y, plus length/angle
+   from the active draw anchor (line start or last polyline vertex). Read-only
+   v1 — gives the operator the position + distance feedback that per-tool numeric
+   popovers only covered for some tools. Docked bottom-RIGHT (the toolbar owns
+   bottom-left), so the two never collide. */
+.sketch-cursor-hud {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: 4;
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--elevation-1, var(--elevation-2));
+  color: var(--txt0);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.sketch-cursor-hud__pair {
+  display: inline-flex;
+  align-items: center;
+}
+.sketch-cursor-hud__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+  text-transform: capitalize;
+}
+.sketch-cursor-hud__pair b {
+  color: var(--txt2, var(--accent));
+  font-weight: var(--weight-semibold);
+  margin-right: 4px;
+}
+/* Editable entry (polyline tool): the container is pointer-events:none so it never
+   eats canvas drags, so the inputs must re-enable pointer events themselves. */
+.sketch-cursor-hud__input {
+  pointer-events: auto;
+  width: 56px;
+  background: var(--bg0, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--txt0);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 4px;
+}
+.sketch-cursor-hud__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .sketch-surface__canvas-host .sketch-toolbar {
   position: absolute;
   left: var(--sp-4);
@@ -1007,20 +1103,25 @@
   gap: var(--sp-5);
 }
 
-/* Feature picker (the 6-way arm row inside the Properties "Features" card). */
+/* Per-feature property dialog card (opened from the Design ribbon's Solid / Construct
+   commands; the in-panel 6-way picker was retired as a redundant launcher). */
 .design-workspace__feature-dialogs {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
 }
-.fd-picker {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--sp-2);
+/* Dialog header: title + the ✕ that dismisses the dialog (the picker used to be the
+   only way to close it). */
+.design-workspace__feature-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
 }
-.fd-picker__btn {
-  width: 100%;
-  justify-content: center;
+.design-workspace__feature-dialog-close {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  line-height: 1;
 }
 
 /* Each dialog is a prop-card; its body is a vertical field stack. */

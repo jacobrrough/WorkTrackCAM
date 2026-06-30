@@ -151,6 +151,23 @@ export type AssemblyPart = {
 }
 
 /**
+ * One solved per-component pose returned by the `assembly:solve` IPC (mirrors the main-process
+ * payload shape). Threaded back up via {@link AssemblyViewProps.onSolvedTransforms} so a solved
+ * assembly actually MOVES — the IPC returns these poses but the renderer previously dropped them.
+ */
+export type SolvedComponentTransform = {
+  readonly id: string
+  readonly transform: {
+    readonly x: number
+    readonly y: number
+    readonly z: number
+    readonly rxDeg: number
+    readonly ryDeg: number
+    readonly rzDeg: number
+  }
+}
+
+/**
  * Public props.
  *
  * `parts` is the source-of-truth assembly list; the parent (typically
@@ -266,6 +283,14 @@ export interface AssemblyViewProps {
    */
   readonly mateConstraints?: readonly AssemblyMateConstraint[]
   /**
+   * Fired after a successful solve with the solver's per-component solved poses (the
+   * `assembly:solve` IPC `transforms`). The host maps these back onto its part rows by id so the
+   * assembly re-renders at the solved placements — closing the gap where the solved poses were
+   * computed and discarded. Optional + additive: when omitted, a solve only updates the convergence
+   * badge exactly as before (every existing Phase-3 render pin holds).
+   */
+  readonly onSolvedTransforms?: (transforms: ReadonlyArray<SolvedComponentTransform>) => void
+  /**
    * Open project directory. The SAVED-assembly IPC actions (Check
    * Interference / Export BOM / Summary) read `<projectDir>/assembly.json` in
    * the main process, so they need the dir. Optional + additive: when omitted
@@ -330,6 +355,32 @@ export function formatTransformSummary(part: AssemblyPart): string {
     return `@(${pos[0]}, ${pos[1]}, ${pos[2]})`
   }
   return 'identity'
+}
+
+/**
+ * Apply the solver's per-component solved poses back onto the assembly part rows, matched by id.
+ * Pure: returns a NEW list where each matched row's `transform` (position + rotation) and
+ * `transformSummary` are recomputed from the solved pose; unmatched rows are returned by reference
+ * (and the input list is returned unchanged when there are no solved poses) so the host avoids a
+ * spurious state write. This is the renderer apply-back the `assembly:solve` round-trip needs:
+ * the IPC returns these poses, but without this the parts never move after a solve.
+ */
+export function applySolvedTransforms(
+  parts: readonly AssemblyPart[],
+  solved: ReadonlyArray<SolvedComponentTransform>
+): readonly AssemblyPart[] {
+  if (solved.length === 0) return parts
+  const byId = new Map(solved.map((s) => [s.id, s.transform]))
+  return parts.map((part) => {
+    const t = byId.get(part.id)
+    if (!t) return part
+    const base: AssemblyPart = {
+      ...part,
+      transform: { position: [t.x, t.y, t.z], rotation: [t.rxDeg, t.ryDeg, t.rzDeg] },
+      transformSummary: undefined
+    }
+    return { ...base, transformSummary: formatTransformSummary(base) }
+  })
 }
 
 /**
@@ -550,6 +601,7 @@ export function AssemblyView({
   initialMateModalOpen = false,
   initialConvergenceReport = null,
   mateConstraints = [],
+  onSolvedTransforms,
   projectDir,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
@@ -825,6 +877,7 @@ export function AssemblyView({
         ok: boolean
         convergenceReport?: ConvergenceReport
         diagnostics?: { convergenceReport?: ConvergenceReport }
+        transforms?: ReadonlyArray<SolvedComponentTransform>
       }>
     }
     const bridge = assemblyBridgeAny.assemblySolve
@@ -864,12 +917,15 @@ export function AssemblyView({
       if (!res.ok) return
       const report = res.convergenceReport ?? res.diagnostics?.convergenceReport ?? null
       setConvergenceReport(report)
+      // Close the discard gap: thread the solver's solved poses back to the host so the parts
+      // actually move (the IPC returns these; they were previously dropped on the floor).
+      if (res.transforms && res.transforms.length > 0) onSolvedTransforms?.(res.transforms)
     }).catch((e: unknown) => {
       setSolving(false)
       const message = e instanceof Error ? e.message : String(e)
       setError(`Solve threw: ${message}`)
     })
-  }, [parts, solving, mateConstraints])
+  }, [parts, solving, mateConstraints, onSolvedTransforms])
 
   // ── SAVED-assembly IPC actions (interference / BOM / summary) ───────────────
   // These read `<projectDir>/assembly.json` in the main process, so they need

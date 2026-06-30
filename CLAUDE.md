@@ -117,11 +117,21 @@ Every cycle MUST update `.claude/improvement-log.md` with: cycle number, date, f
 
 ## Development Commands
 ```bash
-npm test              # Run all tests (Vitest)
+npm test              # Run all node-env tests (Vitest) — the 17K-file source-pin + pure-logic suite
+npm run test:dom      # Interactive renderer tests (happy-dom + Testing Library) — REAL click/type/Tab
 npm run typecheck     # TypeScript strict validation
 npm run dev           # Start dev server (electron-vite)
 npm run build         # Full production build
 ```
+
+**Two test suites, disjoint by design:**
+- **Node-env** (`npm test`, `vitest.config.ts`): the big suite — `*.test.{ts,tsx}`, no DOM, renderer
+  components verified via `renderToStaticMarkup` + source pins. Stays node-env + fast (single worker).
+- **DOM** (`npm run test:dom`, `vitest.dom.config.ts`): `*.dom.spec.tsx` ONLY (the `*.test.*` glob never
+  catches them). happy-dom + `@testing-library/react`; for behaviour the node suite can't reach — does
+  the dialog open, does typing update state, does Tab focus the right field. Template:
+  `feature-dialogs/__tests__/ExtrudeDialog.dom.spec.tsx`. Use the **`wire-feature-dialog`** skill +
+  this suite when surfacing the dialog-less kernel ops in `docs/PARITY-ROADMAP.md` (the parity backlog).
 
 ## Architecture Quick Reference
 - `src/main/` — Electron main process, IPC handlers, file I/O

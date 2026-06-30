@@ -67,7 +67,12 @@ import type { DesignFileV2 } from '../../shared/design-schema'
 import { buildViewportGeometry } from './viewport3d-geometry'
 import { buildPickIndex } from '../../shared/kernel-pick-file'
 import { worldYRangeFromExtrudeMeshGeometry } from './viewport3d-bounds'
-import { AssemblyView, type AssemblyPart } from './AssemblyView'
+import {
+  AssemblyView,
+  applySolvedTransforms,
+  type AssemblyPart,
+  type SolvedComponentTransform
+} from './AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { AssemblyMatePanel, type SolvedMate } from './AssemblyMatePanel'
 import {
@@ -96,6 +101,7 @@ import {
   type FeatureDialogKind,
   type FeatureDialogSpec
 } from './feature-dialogs'
+import { profileOptions, pathOptions } from './feature-dialogs/profile-path-options'
 import { fab } from '../src/shop-types'
 import type {
   CadExecuteScriptMesh,
@@ -1083,12 +1089,35 @@ export function DesignWorkspace({
   // the operator double-clicks.
   const [sending, setSending] = useState(false)
   // ── UI-3 cockpit chrome state ─────────────────────────────────────────────
-  // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the
-  // Part view reads as a no-code cockpit); designStage tracks the Model /
-  // Sketch / Inspect stage-tabs in the viewport chrome. Both are local UI
-  // state with no sidecar side-effects.
+  // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the Part
+  // view reads as a no-code cockpit). Local UI state with no sidecar side-effects.
   const [codeOpen, setCodeOpen] = useState(false)
-  const [designStage, setDesignStage] = useState<'model' | 'sketch' | 'inspect'>('model')
+  // Collapsible cockpit side panels — collapsing a panel narrows its grid column
+  // (driven inline on `.dc-cockpit` below) so the viewport reclaims the width.
+  // Sticky across remounts via localStorage (best-effort; no-ops under SSR/tests).
+  const [browserCollapsed, setBrowserCollapsed] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.browserCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [propsCollapsed, setPropsCollapsed] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.propsCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
+  // The CadQuery code `</>` toggle is optional (the no-code cockpit can hide it). Persisted; default
+  // shown so existing behaviour/pins hold (missing pref → shown).
+  const [showCodeToggle, setShowCodeToggle] = useState<boolean>(() => {
+    try {
+      return globalThis.localStorage?.getItem('wt.design.showCodeToggle') !== '0'
+    } catch {
+      return true
+    }
+  })
   /**
    * FG-5b — which per-feature property dialog is open in the Properties pane,
    * or `null` for the picker (no dialog active). Local UI state; selecting a
@@ -1209,6 +1238,20 @@ export function DesignWorkspace({
    * splash preview, the render-pin tests). Guarded by a ref so a re-created
    * callback identity never re-fires the persist on an unchanged parts list.
    */
+  /**
+   * Apply the mate solver's solved poses (forwarded from {@link AssemblyView} after a successful
+   * `assembly:solve`) back onto the live part rows so the assembly re-renders at the solved
+   * placements — the apply-back that closes the "solver runs but parts never move" gap. The
+   * `onAssemblyPartsChange` effect below then persists the new poses. `applySolvedTransforms`
+   * returns the SAME list reference when nothing changed, so a no-transform solve is a no-op.
+   */
+  const handleSolvedTransforms = useCallback(
+    (solved: ReadonlyArray<SolvedComponentTransform>): void => {
+      setAssemblyParts((prev) => applySolvedTransforms(prev, solved))
+    },
+    []
+  )
+
   const onAssemblyPartsChangeRef = useRef(onAssemblyPartsChange)
   onAssemblyPartsChangeRef.current = onAssemblyPartsChange
   const assemblyPartsDidMount = useRef(false)
@@ -1291,18 +1334,10 @@ export function DesignWorkspace({
   // ── FG-3 — sketch mode (drives the center-pane swap + contextual ribbon) ────
   /**
    * Effective sketch mode for the Part view. Mirrors the host-supplied
-   * `sketchActive` prop, but is ALSO surfaced via the `designStage` tab so the
-   * cockpit's Model/Sketch/Inspect strip agrees with the mounted surface. Only
-   * the Part view honors it (Assembly/Drawing own their own bodies).
+   * `sketchActive` prop. Only the Part view honors it (Assembly/Drawing own
+   * their own bodies).
    */
   const sketchMode = sketchActive === true
-
-  // Keep the cockpit stage strip in lockstep with sketch mode: entering sketch
-  // selects the Sketch stage, leaving it falls back to Model. This is a
-  // presentational sync (the body branches on `sketchMode`, not `designStage`).
-  useEffect(() => {
-    setDesignStage(sketchMode ? 'sketch' : 'model')
-  }, [sketchMode])
 
   // ── FG-5 — open a feature dialog requested by the ribbon's Solid commands ───
   // `requestedFeatureDialog` is a one-shot from the host; when it lands, open
@@ -1354,23 +1389,6 @@ export function DesignWorkspace({
       sketchMode
     })
   }, [onCommandSurface, selection, sketchMode])
-
-  /**
-   * FG-3 — cockpit stage-tab handler. Picking "Sketch" enters sketch mode
-   * (mounting the sketcher); picking "Model"/"Inspect" leaves it. The host
-   * owns the actual sketch-mode cell (so the ribbon's `armSketchMode` and this
-   * stage tab stay in sync); we just relay the intent + optimistically set the
-   * local stage so the strip highlights immediately. When the host wired
-   * neither enter/exit callback the tabs stay presentational (pre-FG-3).
-   */
-  const handleStageChange = useCallback(
-    (next: 'model' | 'sketch' | 'inspect'): void => {
-      setDesignStage(next)
-      if (next === 'sketch') onSketchEnter?.()
-      else onSketchExit?.()
-    },
-    [onSketchEnter, onSketchExit],
-  )
 
   /**
    * Derive a user-facing label for the selection chip. Pulls from the
@@ -1540,6 +1558,10 @@ export function DesignWorkspace({
    * (fillet/chamfer/shell/hole) open on conservative defaults the operator then
    * tunes. `null` when no dialog is active.
    */
+  // Sketch-derived picker options for the selection-heavy feature dialogs (Press/Pull, Sweep, …).
+  const sketchProfiles = useMemo(() => profileOptions(sketchDesign), [sketchDesign])
+  const sketchPaths = useMemo(() => pathOptions(sketchDesign), [sketchDesign])
+
   const featureDialogSpec: FeatureDialogSpec | null = useMemo(() => {
     if (effectiveFeatureDialog === null) return null
     const numericParam = (name: string): number | undefined => {
@@ -1574,6 +1596,122 @@ export function DesignWorkspace({
         return { kind: 'datum_axis', params: { axis: 'Z', originXMm: 0, originYMm: 0, originZMm: 0 } }
       case 'datum_point':
         return { kind: 'datum_point', params: { xMm: 0, yMm: 0, zMm: 0 } }
+      case 'transform_translate':
+        return { kind: 'transform_translate', params: { dxMm: 0, dyMm: 0, dzMm: 0, mode: 'move' } }
+      case 'mirror_union_plane':
+        return {
+          kind: 'mirror_union_plane',
+          params: { plane: 'YZ', originXMm: 0, originYMm: 0, originZMm: 0 },
+        }
+      case 'split_keep_halfspace':
+        return { kind: 'split_keep_halfspace', params: { axis: 'Z', offsetMm: 0, keep: 'positive' } }
+      case 'pattern_rectangular':
+        return {
+          kind: 'pattern_rectangular',
+          params: { countX: 2, countY: 1, spacingXMm: 20, spacingYMm: 20 },
+        }
+      case 'pattern_circular':
+        return {
+          kind: 'pattern_circular',
+          params: { count: 4, centerXMm: 0, centerYMm: 0, startAngleDeg: 0, totalAngleDeg: 360 },
+        }
+      case 'pattern_linear_3d':
+        return { kind: 'pattern_linear_3d', params: { count: 3, dxMm: 10, dyMm: 0, dzMm: 0 } }
+      case 'boolean_union_box':
+        return {
+          kind: 'boolean_union_box',
+          params: { xMinMm: 0, xMaxMm: 10, yMinMm: 0, yMaxMm: 10, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'boolean_subtract_box':
+        return {
+          kind: 'boolean_subtract_box',
+          params: { xMinMm: 0, xMaxMm: 10, yMinMm: 0, yMaxMm: 10, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'boolean_intersect_box':
+        return {
+          kind: 'boolean_intersect_box',
+          params: { xMinMm: -10, xMaxMm: 10, yMinMm: -10, yMaxMm: 10, zMinMm: 0, zMaxMm: 20 },
+        }
+      case 'boolean_subtract_cylinder':
+        return {
+          kind: 'boolean_subtract_cylinder',
+          params: { centerXMm: 0, centerYMm: 0, radiusMm: 5, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'thread_wizard':
+        return {
+          kind: 'thread_wizard',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            majorRadiusMm: 8,
+            pitchMm: 1.25,
+            lengthMm: 20,
+            depthMm: 0.8,
+            zStartMm: 0,
+            hand: 'right',
+            mode: 'modeled',
+            standard: 'ISO',
+            designation: 'M',
+            class: '6g',
+            starts: 1,
+          },
+        }
+      case 'thicken_offset':
+        return { kind: 'thicken_offset', params: { distanceMm: 2, side: 'outward' } }
+      case 'coil_cut':
+        return {
+          kind: 'coil_cut',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            majorRadiusMm: 10,
+            pitchMm: 2,
+            turns: 5,
+            depthMm: 1,
+            zStartMm: 0,
+          },
+        }
+      case 'plastic_rule_fillet':
+        return { kind: 'plastic_rule_fillet', params: { radiusMm: 2 } }
+      case 'plastic_boss':
+        return {
+          kind: 'plastic_boss',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            zBaseMm: 0,
+            outerRadiusMm: 5,
+            heightMm: 8,
+            draftDeg: 1,
+          },
+        }
+      case 'plastic_lip_groove':
+        return {
+          kind: 'plastic_lip_groove',
+          params: { mode: 'lip', xMinMm: 0, xMaxMm: 50, yMinMm: 0, yMaxMm: 30, zBaseMm: 10, depthMm: 2 },
+        }
+      case 'press_pull_profile':
+        return { kind: 'press_pull_profile', params: { profileIndex: 0, deltaMm: 5, zStartMm: 0 } }
+      case 'boolean_combine_profile':
+        return {
+          kind: 'boolean_combine_profile',
+          params: { mode: 'union', extrudeDepthMm: 5, zStartMm: 0 },
+        }
+      case 'pipe_path':
+        return {
+          kind: 'pipe_path',
+          params: { outerRadiusMm: 5, zStartMm: 0, orientationMode: 'frenet' },
+        }
+      case 'pattern_path':
+        return {
+          kind: 'pattern_path',
+          params: { count: 4, closedPath: false, alignToPathTangent: false },
+        }
+      case 'sweep_profile_path_true':
+        return {
+          kind: 'sweep_profile_path_true',
+          params: { zStartMm: 0, orientationMode: 'frenet' },
+        }
       default: {
         const _never: never = effectiveFeatureDialog
         void _never
@@ -1667,6 +1805,7 @@ export function DesignWorkspace({
             onAddPart={handleAddPartToAssembly}
             onRemovePart={handleRemoveAssemblyPart}
             onAssemblyHandle={setAssemblyHandle}
+            onSolvedTransforms={handleSolvedTransforms}
             onToast={onToast}
           />
           {/*
@@ -1754,10 +1893,41 @@ export function DesignWorkspace({
       className="design-workspace design-workspace--cockpit"
       data-testid="design-workspace"
     >
-      <div className="dc-cockpit">
+      <div
+        className="dc-cockpit"
+        style={{
+          gridTemplateColumns: `${browserCollapsed ? '34px' : '280px'} 1fr ${propsCollapsed ? '34px' : '300px'}`
+        }}
+      >
         {/* LEFT — Feature-tree browser */}
-        <aside className="dc-browser" aria-label="Feature tree">
-          <div className="dc-panel-head">Feature Tree</div>
+        <aside
+          className={browserCollapsed ? 'dc-browser dc-browser--collapsed' : 'dc-browser'}
+          aria-label="Feature tree"
+        >
+          <div className="dc-panel-head">
+            {!browserCollapsed && <span className="dc-panel-head__label">Feature Tree</span>}
+            <button
+              type="button"
+              className="dc-collapse-btn"
+              data-testid="dc-browser-collapse"
+              aria-expanded={!browserCollapsed}
+              aria-label={browserCollapsed ? 'Expand Feature Tree panel' : 'Collapse Feature Tree panel'}
+              title={browserCollapsed ? 'Expand Feature Tree' : 'Collapse Feature Tree'}
+              onClick={() =>
+                setBrowserCollapsed((v) => {
+                  const next = !v
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.browserCollapsed', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                  return next
+                })
+              }
+            >
+              {browserCollapsed ? '›' : '‹'}
+            </button>
+          </div>
           <div className="dc-browser-body">
             {parseError !== null ? (
               <div
@@ -1790,10 +1960,9 @@ export function DesignWorkspace({
           data-testid="design-workspace-viewport"
         >
           <ViewportChrome
-            stage={designStage}
-            onStageChange={handleStageChange}
             codeOpen={codeOpen}
             onToggleCode={() => setCodeOpen((open) => !open)}
+            showCodeToggle={showCodeToggle}
           />
           {/*
             FG-2 — the real Three.js viewport. `Viewport3D` brings its own
@@ -2123,11 +2292,59 @@ export function DesignWorkspace({
 
         {/* RIGHT — Properties panel (params + Save / Send-to-CAM) */}
         <aside
-          className="design-workspace__tree-col dc-props"
+          className={
+            propsCollapsed
+              ? 'design-workspace__tree-col dc-props dc-props--collapsed'
+              : 'design-workspace__tree-col dc-props'
+          }
           aria-label="Properties"
         >
-          <div className="dc-panel-head">Properties</div>
+          <div className="dc-panel-head">
+            {!propsCollapsed && <span className="dc-panel-head__label">Properties</span>}
+            <button
+              type="button"
+              className="dc-collapse-btn"
+              data-testid="dc-props-collapse"
+              aria-expanded={!propsCollapsed}
+              aria-label={propsCollapsed ? 'Expand Properties panel' : 'Collapse Properties panel'}
+              title={propsCollapsed ? 'Expand Properties' : 'Collapse Properties'}
+              onClick={() =>
+                setPropsCollapsed((v) => {
+                  const next = !v
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.propsCollapsed', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                  return next
+                })
+              }
+            >
+              {propsCollapsed ? '‹' : '›'}
+            </button>
+          </div>
           <div className="dc-props-body">
+            <label
+              className="dc-prop-card"
+              data-testid="design-workspace-show-code-pref"
+              style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={showCodeToggle}
+                onChange={(e) => {
+                  const next = e.target.checked
+                  setShowCodeToggle(next)
+                  if (!next) setCodeOpen(false)
+                  try {
+                    globalThis.localStorage?.setItem('wt.design.showCodeToggle', next ? '1' : '0')
+                  } catch {
+                    /* best-effort */
+                  }
+                }}
+              />
+              Show CadQuery code button
+            </label>
             <div className="dc-prop-card design-workspace__feature-section">
               <h3 className="dc-prop-card-title design-workspace__feature-title">
                 Parameters
@@ -2156,71 +2373,43 @@ export function DesignWorkspace({
             </div>
 
             {/*
-              FG-5b — per-feature property dialogs. Only rendered when the host
-              threads `onAppendKernelOp` (a live session); the splash preview and
-              the prop-less render-pin tests never see it, so every existing
-              Properties-pane pin holds. A 6-way picker arms one dialog; the
-              dialog applies through the existing kernel-op append
-              (fillet/chamfer/shell/hole) or script-param rebuild
-              (extrude/revolve) paths.
+              FG-5b — per-feature property dialog. Opened from the Design ribbon's
+              Solid / Construct commands (`openFeatureDialog` → `requestedFeatureDialog`
+              → `activeFeatureDialog`); the in-panel 6-way picker was retired as a
+              redundant launcher. Only rendered when the host threads `onAppendKernelOp`
+              (a live session) AND a dialog is actually open, so the splash preview +
+              the prop-less render pins still never see it. The header ✕ closes the
+              dialog (the picker used to be the only dismissal). Applies through the
+              existing kernel-op append (fillet/chamfer/shell/hole) or script-param
+              rebuild (extrude/revolve) paths.
             */}
-            {onAppendKernelOp && (
+            {onAppendKernelOp && featureDialogSpec !== null && (
               <div
                 className="dc-prop-card design-workspace__feature-dialogs"
                 data-testid="design-workspace-feature-dialogs"
               >
-                <h3 className="dc-prop-card-title">Features</h3>
-                <div
-                  className="fd-picker"
-                  role="group"
-                  aria-label="Add a feature"
-                  data-testid="design-workspace-feature-picker"
-                >
-                  {(
-                    [
-                      ['extrude', 'Extrude'],
-                      ['revolve', 'Revolve'],
-                      ['fillet', 'Fillet'],
-                      ['chamfer', 'Chamfer'],
-                      ['shell', 'Shell'],
-                      ['hole', 'Hole'],
-                      ['datum_plane', 'Plane'],
-                      ['datum_axis', 'Axis'],
-                      ['datum_point', 'Point'],
-                    ] as ReadonlyArray<readonly [FeatureDialogKind, string]>
-                  ).map(([kind, label]) => {
-                    const active = effectiveFeatureDialog === kind
-                    return (
-                      <button
-                        key={kind}
-                        type="button"
-                        className={
-                          active
-                            ? 'btn btn-primary btn-sm fd-picker__btn fd-picker__btn--active'
-                            : 'btn btn-ghost btn-sm fd-picker__btn'
-                        }
-                        data-testid={`design-workspace-feature-pick-${kind}`}
-                        data-active={active ? 'true' : 'false'}
-                        aria-pressed={active}
-                        onClick={() =>
-                          setActiveFeatureDialog((cur) => (cur === kind ? null : kind))
-                        }
-                      >
-                        {label}
-                      </button>
-                    )
-                  })}
+                <div className="design-workspace__feature-dialog-head">
+                  <h3 className="dc-prop-card-title">Feature</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm design-workspace__feature-dialog-close"
+                    data-testid="design-workspace-feature-dialog-close"
+                    aria-label="Close feature dialog"
+                    onClick={() => setActiveFeatureDialog(null)}
+                  >
+                    ✕
+                  </button>
                 </div>
-                {featureDialogSpec !== null && (
-                  <FeatureDialogHost
-                    spec={featureDialogSpec}
-                    selectionInfo={featureDialogSelectionInfo}
-                    onAppendKernelOp={handleFeatureKernelOp}
-                    onScriptParams={handleParamsChange}
-                    busy={busy}
-                    disabled={kernelOpsDisabled}
-                  />
-                )}
+                <FeatureDialogHost
+                  spec={featureDialogSpec}
+                  selectionInfo={featureDialogSelectionInfo}
+                  onAppendKernelOp={handleFeatureKernelOp}
+                  onScriptParams={handleParamsChange}
+                  busy={busy}
+                  disabled={kernelOpsDisabled}
+                  sketchProfiles={sketchProfiles}
+                  sketchPaths={sketchPaths}
+                />
               </div>
             )}
 

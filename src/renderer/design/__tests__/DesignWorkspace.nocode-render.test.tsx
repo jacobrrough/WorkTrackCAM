@@ -145,18 +145,18 @@ describe('DesignWorkspace — no-code build→render', () => {
     expect(html).not.toContain('data-testid="design-workspace-sketch-plane-prompt"')
   })
 
-  it('renders the Construct datum picker buttons when a session sink is threaded', () => {
+  it('opens a Construct datum dialog from a ribbon request (in-panel picker retired)', () => {
     const html = renderToStaticMarkup(
       createElement(DesignWorkspace, {
-        initialScript: '# session with datum picker',
+        initialScript: '# session with datum dialog',
         kernelViewportGeometry: makeBoxGeometry(),
-        onAppendKernelOp: () => undefined
+        onAppendKernelOp: () => undefined,
+        requestedFeatureDialog: 'datum_plane'
       })
     )
-    // The Plane / Axis / Point datum picker buttons join the 6 solid features.
-    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_plane"')
-    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_axis"')
-    expect(html).toContain('data-testid="design-workspace-feature-pick-datum_point"')
+    // The retired in-panel picker buttons are gone; datum features now open from the ribbon.
+    expect(html).not.toContain('data-testid="design-workspace-feature-pick-datum_plane"')
+    expect(html).toContain('data-testid="design-workspace-feature-dialogs"')
   })
 
   // task_f76b39b3 — picking gates on CAPABILITY, not source: a pick-tagged

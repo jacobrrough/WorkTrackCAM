@@ -126,8 +126,10 @@ describe('Sketch2DCanvas select tool -- source pins (pointer halves SSR cannot c
   })
 
   it('select keys bind to the CANVAS element (focus-scoped) -- never a window capture', () => {
-    expect(SRC).toContain(
-      "onKeyDown={activeTool === 'select' && onEntityPick ? onSelectKeyDown : undefined}"
+    // The canvas onKeyDown still routes the select tool to onSelectKeyDown. A polyline branch was
+    // added (Tab-to-type), but select keys stay focus-scoped on the element — never a window capture.
+    expect(SRC).toMatch(
+      /onKeyDown=\{\s*activeTool === 'select' && onEntityPick\s*\?\s*onSelectKeyDown/
     )
     expect(SRC).not.toMatch(/window\.addEventListener\([^)]*onSelectKeyDown/)
   })

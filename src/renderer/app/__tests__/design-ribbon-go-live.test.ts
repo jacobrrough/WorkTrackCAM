@@ -128,10 +128,12 @@ describe('Design ribbon go-live — action dispatch through the registry', () =>
     const { actions, state } = makeHostActions()
     registerDesignCommands(actions, reg)
 
-    // so_sweep has a kernel but no per-feature dialog in feature-dialogs/.
-    reg.run('so_sweep', ctx({ workspace: 'design' }))
+    // so_loft is a BASE-SOLID mode (set at base build from the sketch profiles), not a post-op
+    // kernel dialog, so the ribbon honestly reports it has no per-feature dialog rather than faking
+    // one. (so_sweep now HAS a dialog — see the selection-heavy profile/path wave.)
+    reg.run('so_loft', ctx({ workspace: 'design' }))
     expect(state.openedDialog).toBeNull()
-    expect(state.toasts).toContain('no-dialog:so_sweep')
+    expect(state.toasts).toContain('no-dialog:so_loft')
   })
 
   it('an Inspect command routes to runInspect', () => {

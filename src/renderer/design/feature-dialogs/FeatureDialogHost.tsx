@@ -32,6 +32,28 @@ import { HoleDialog, type HoleDialogParams } from './HoleDialog'
 import { DatumPlaneDialog, type DatumPlaneDialogParams } from './DatumPlaneDialog'
 import { DatumAxisDialog, type DatumAxisDialogParams } from './DatumAxisDialog'
 import { DatumPointDialog, type DatumPointDialogParams } from './DatumPointDialog'
+import { MoveCopyDialog, type MoveCopyDialogParams } from './MoveCopyDialog'
+import { MirrorDialog, type MirrorDialogParams } from './MirrorDialog'
+import { SplitBodyDialog, type SplitBodyDialogParams } from './SplitBodyDialog'
+import { RectangularPatternDialog, type RectangularPatternDialogParams } from './RectangularPatternDialog'
+import { CircularPatternDialog, type CircularPatternDialogParams } from './CircularPatternDialog'
+import { LinearPatternDialog, type LinearPatternDialogParams } from './LinearPatternDialog'
+import { AddBoxDialog, type AddBoxDialogParams } from './AddBoxDialog'
+import { CutBoxDialog, type CutBoxDialogParams } from './CutBoxDialog'
+import { IntersectBoxDialog, type IntersectBoxDialogParams } from './IntersectBoxDialog'
+import { CutCylinderDialog, type CutCylinderDialogParams } from './CutCylinderDialog'
+import { ThreadDialog, type ThreadDialogParams } from './ThreadDialog'
+import { ThickenDialog, type ThickenDialogParams } from './ThickenDialog'
+import { CoilDialog, type CoilDialogParams } from './CoilDialog'
+import { PlasticRuleFilletDialog, type PlasticRuleFilletDialogParams } from './PlasticRuleFilletDialog'
+import { PlasticBossDialog, type PlasticBossDialogParams } from './PlasticBossDialog'
+import { PlasticLipGrooveDialog, type PlasticLipGrooveDialogParams } from './PlasticLipGrooveDialog'
+import { PressPullProfileDialog, type PressPullProfileDialogParams } from './PressPullProfileDialog'
+import { CombineProfileDialog, type CombineProfileDialogParams } from './CombineProfileDialog'
+import { PipeDialog, type PipeDialogParams } from './PipeDialog'
+import { PatternPathDialog, type PatternPathDialogParams } from './PatternPathDialog'
+import { SweepDialog, type SweepDialogParams } from './SweepDialog'
+import type { PathOption, ProfileOption } from './profile-path-options'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
 import {
@@ -55,6 +77,27 @@ export type FeatureDialogSpec =
   | { readonly kind: 'datum_plane'; readonly params: DatumPlaneDialogParams }
   | { readonly kind: 'datum_axis'; readonly params: DatumAxisDialogParams }
   | { readonly kind: 'datum_point'; readonly params: DatumPointDialogParams }
+  | { readonly kind: 'transform_translate'; readonly params: MoveCopyDialogParams }
+  | { readonly kind: 'mirror_union_plane'; readonly params: MirrorDialogParams }
+  | { readonly kind: 'split_keep_halfspace'; readonly params: SplitBodyDialogParams }
+  | { readonly kind: 'pattern_rectangular'; readonly params: RectangularPatternDialogParams }
+  | { readonly kind: 'pattern_circular'; readonly params: CircularPatternDialogParams }
+  | { readonly kind: 'pattern_linear_3d'; readonly params: LinearPatternDialogParams }
+  | { readonly kind: 'boolean_union_box'; readonly params: AddBoxDialogParams }
+  | { readonly kind: 'boolean_subtract_box'; readonly params: CutBoxDialogParams }
+  | { readonly kind: 'boolean_intersect_box'; readonly params: IntersectBoxDialogParams }
+  | { readonly kind: 'boolean_subtract_cylinder'; readonly params: CutCylinderDialogParams }
+  | { readonly kind: 'thread_wizard'; readonly params: ThreadDialogParams }
+  | { readonly kind: 'thicken_offset'; readonly params: ThickenDialogParams }
+  | { readonly kind: 'coil_cut'; readonly params: CoilDialogParams }
+  | { readonly kind: 'plastic_rule_fillet'; readonly params: PlasticRuleFilletDialogParams }
+  | { readonly kind: 'plastic_boss'; readonly params: PlasticBossDialogParams }
+  | { readonly kind: 'plastic_lip_groove'; readonly params: PlasticLipGrooveDialogParams }
+  | { readonly kind: 'press_pull_profile'; readonly params: PressPullProfileDialogParams }
+  | { readonly kind: 'boolean_combine_profile'; readonly params: CombineProfileDialogParams }
+  | { readonly kind: 'pipe_path'; readonly params: PipeDialogParams }
+  | { readonly kind: 'pattern_path'; readonly params: PatternPathDialogParams }
+  | { readonly kind: 'sweep_profile_path_true'; readonly params: SweepDialogParams }
 
 export interface FeatureDialogHostProps {
   /** Which dialog to render + its seed params. */
@@ -69,6 +112,10 @@ export interface FeatureDialogHostProps {
   readonly busy?: boolean
   /** No-project / no-model flag forwarded to the dialog. */
   readonly disabled?: boolean
+  /** Closed-profile options from the live sketch — fed to profile-picking dialogs (Press/Pull, …). */
+  readonly sketchProfiles?: readonly ProfileOption[]
+  /** Open-polyline path options from the live sketch — fed to path-picking dialogs (Pipe, Sweep, …). */
+  readonly sketchPaths?: readonly PathOption[]
 }
 
 /** Map the dialog kind to its catalog/testid handle (used by the wrapper). */
@@ -80,7 +127,9 @@ export function FeatureDialogHost({
   onAppendKernelOp,
   onScriptParams,
   busy,
-  disabled
+  disabled,
+  sketchProfiles = [],
+  sketchPaths = []
 }: FeatureDialogHostProps): JSX.Element {
   // Fan a dialog's single emit out to the matching existing sink.
   const handleApply = (change: FeatureDialogChange): void => {
@@ -103,7 +152,7 @@ export function FeatureDialogHost({
 
   return (
     <div className="fd-host" data-testid={FEATURE_DIALOG_HOST_TESTID} data-fd-kind={spec.kind}>
-      {renderDialog(spec, common)}
+      {renderDialog(spec, common, { profiles: sketchProfiles, paths: sketchPaths })}
     </div>
   )
 }
@@ -120,6 +169,10 @@ function renderDialog(
     readonly onApply: (change: FeatureDialogChange) => void
     readonly busy?: boolean
     readonly disabled?: boolean
+  },
+  pickers: {
+    readonly profiles: readonly ProfileOption[]
+    readonly paths: readonly PathOption[]
   }
 ): JSX.Element {
   switch (spec.kind) {
@@ -141,6 +194,50 @@ function renderDialog(
       return <DatumAxisDialog params={spec.params} {...common} />
     case 'datum_point':
       return <DatumPointDialog params={spec.params} {...common} />
+    case 'transform_translate':
+      return <MoveCopyDialog params={spec.params} {...common} />
+    case 'mirror_union_plane':
+      return <MirrorDialog params={spec.params} {...common} />
+    case 'split_keep_halfspace':
+      return <SplitBodyDialog params={spec.params} {...common} />
+    case 'pattern_rectangular':
+      return <RectangularPatternDialog params={spec.params} {...common} />
+    case 'pattern_circular':
+      return <CircularPatternDialog params={spec.params} {...common} />
+    case 'pattern_linear_3d':
+      return <LinearPatternDialog params={spec.params} {...common} />
+    case 'boolean_union_box':
+      return <AddBoxDialog params={spec.params} {...common} />
+    case 'boolean_subtract_box':
+      return <CutBoxDialog params={spec.params} {...common} />
+    case 'boolean_intersect_box':
+      return <IntersectBoxDialog params={spec.params} {...common} />
+    case 'boolean_subtract_cylinder':
+      return <CutCylinderDialog params={spec.params} {...common} />
+    case 'thread_wizard':
+      return <ThreadDialog params={spec.params} {...common} />
+    case 'thicken_offset':
+      return <ThickenDialog params={spec.params} {...common} />
+    case 'coil_cut':
+      return <CoilDialog params={spec.params} {...common} />
+    case 'plastic_rule_fillet':
+      return <PlasticRuleFilletDialog params={spec.params} {...common} />
+    case 'plastic_boss':
+      return <PlasticBossDialog params={spec.params} {...common} />
+    case 'plastic_lip_groove':
+      return <PlasticLipGrooveDialog params={spec.params} {...common} />
+    case 'press_pull_profile':
+      return <PressPullProfileDialog params={spec.params} profiles={pickers.profiles} {...common} />
+    case 'boolean_combine_profile':
+      return <CombineProfileDialog params={spec.params} profiles={pickers.profiles} {...common} />
+    case 'pipe_path':
+      return <PipeDialog params={spec.params} paths={pickers.paths} {...common} />
+    case 'pattern_path':
+      return <PatternPathDialog params={spec.params} paths={pickers.paths} {...common} />
+    case 'sweep_profile_path_true':
+      return (
+        <SweepDialog params={spec.params} profiles={pickers.profiles} paths={pickers.paths} {...common} />
+      )
     default: {
       const _never: never = spec
       void _never

@@ -395,6 +395,26 @@ export function emptyDesign(): DesignFileV2 {
   }
 }
 
+/**
+ * Set a picked model face as the design's active sketch plane (`kind: 'face'`), so the renderer
+ * preview (`sketchPreviewPlacementMatrix`) AND the kernel build (`_apply_placement` in build_part.py)
+ * place the sketch ON that face instead of the default XY datum — the link that closes the
+ * sketch-on-face loop. Pure; does not mutate `design`.
+ */
+export function withSketchFacePlane(
+  design: DesignFileV2,
+  pick: {
+    readonly origin: [number, number, number]
+    readonly normal: [number, number, number]
+    readonly xAxis: [number, number, number]
+  }
+): DesignFileV2 {
+  return {
+    ...design,
+    sketchPlane: { kind: 'face', origin: pick.origin, normal: pick.normal, xAxis: pick.xAxis }
+  }
+}
+
 /** Normalize any loaded design to v2 for the app. */
 export function normalizeDesign(raw: unknown): DesignFileV2 {
   const parsed = designFileSchema.parse(raw)
