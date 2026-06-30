@@ -62,3 +62,55 @@ describe('Machine-profile spindle-RPM range pin (raw JSON)', () => {
     expect(profile.maxSpindleRpm).toBeUndefined()
   })
 })
+
+/**
+ * Carvera 4-axis rotary-safety field pin (raw JSON).
+ *
+ * Background: the Makera Carvera 4th-Axis HD setup centers the workpiece on
+ * the Y=0 plane via the harmonic-drive headstock. Any non-zero Y drives the
+ * cutter off-axis -- under-cut on the high side, chuck-jaw collision on the
+ * low side. The defense-in-depth stack (Cycle "rank 13") pushes that invariant
+ * into the SCHEMA via two fields the 4-axis validator consumes:
+ *   - yAxisMustBeZero: true       -> src/main/cam-axis4/validation.ts rejects
+ *                                    any toolpath segment with non-zero Y
+ *                                    BEFORE G-code is generated.
+ *   - rotaryHeadstockXOffsetMm: 5 -> operator-measured X offset from spindle
+ *                                    X=0 to the chuck face; required by the
+ *                                    4-axis validator so a hand-edited / CPS-
+ *                                    imported profile cannot emit G-code
+ *                                    against an unknown chuck position.
+ *
+ * Like the spindle-RPM pin above, this guards the *raw JSON* (fs.readFile +
+ * JSON.parse) rather than the Zod-validated profile, so a regression that
+ * drops `yAxisMustBeZero` from the bundled profile is caught even if someone
+ * also relaxes the schema (where both fields are .optional() for backward
+ * compat). Schema-to-validator wire coverage lives in
+ * post-process-carvera-4axis-contract.test.ts; this file is intentionally
+ * schema-independent.
+ *
+ * Three-machine impact: DIRECT (Makera Carvera 4th Axis). Bad Y motion on the
+ * rotary crashes the tool into the chuck -- Safety Rule 1 ("G-code is sacred")
+ * applies to the machine profile that gates the validator.
+ */
+describe('Makera Carvera 4-axis rotary-safety field pin (raw JSON)', () => {
+  it('pins yAxisMustBeZero=true (rotary centering -- validator rejects non-zero Y)', async () => {
+    const profile = await readProfileJson('makera-carvera-4axis.json')
+    expect(profile.yAxisMustBeZero).toBe(true)
+  })
+
+  it('pins rotaryHeadstockXOffsetMm=5 (operator-measured chuck-face offset default)', async () => {
+    const profile = await readProfileJson('makera-carvera-4axis.json')
+    expect(profile.rotaryHeadstockXOffsetMm).toBe(5)
+  })
+
+  it('pins axisCount=4 (the rotary-safety fields are only meaningful on a 4-axis profile)', async () => {
+    const profile = await readProfileJson('makera-carvera-4axis.json')
+    expect(profile.axisCount).toBe(4)
+  })
+
+  it('3-axis Carvera does NOT carry the rotary-safety fields (no rotary fixture)', async () => {
+    const profile = await readProfileJson('makera-carvera-3axis.json')
+    expect(profile.yAxisMustBeZero).toBeUndefined()
+    expect(profile.rotaryHeadstockXOffsetMm).toBeUndefined()
+  })
+})

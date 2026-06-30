@@ -35,6 +35,7 @@
 import type { AssemblyFile } from '../../shared/assembly-schema'
 import {
   persistMate,
+  type SolvedCardinalAxis,
   type SolvedMateDraftInput,
   type SolvedMateInput,
   type SolvedMateKind,
@@ -42,7 +43,7 @@ import {
 } from '../../shared/assembly-mate-persist'
 import { persistParts } from '../../shared/assembly-hydrate'
 import type { SolvedMate } from '../design/AssemblyMatePanel'
-import type { MateFormDraft, VectorDraft } from '../design/assembly-mate-form'
+import type { MateCardinalAxis, MateFormDraft, VectorDraft } from '../design/assembly-mate-form'
 import {
   hydrateAssembly,
   partToView,
@@ -166,11 +167,28 @@ function parseDraftVector(v: VectorDraft | undefined): SolvedVec3 | null {
 }
 
 /**
+ * Narrow a draft's cardinal-axis cell (the form's axis picker holds a
+ * {@link MateCardinalAxis}) onto the shared {@link SolvedCardinalAxis}, or `null`
+ * if it is not one of `'x' | 'y' | 'z'`. Defensive: an angle/tangent SolvedMate's
+ * axis always parses (the picker offers only the three), but re-checking keeps a
+ * malformed draft from folding to a degenerate (axis-less) rotational constraint.
+ */
+function parseDraftCardinalAxis(v: MateCardinalAxis | undefined): SolvedCardinalAxis | null {
+  return v === 'x' || v === 'y' || v === 'z' ? v : null
+}
+
+/**
  * Adapt a renderer {@link SolvedMate} (whose `draft` is a {@link MateFormDraft}
  * with STRING vector cells) onto the shared {@link SolvedMateInput} (NUMBER
- * 3-vectors) that {@link persistMate} consumes. Only the vectors the mate's
- * `kind` needs are parsed; an unparseable required cell yields `null` so the
- * caller rejects the persist rather than writing a degenerate constraint.
+ * 3-vectors) that {@link persistMate} consumes. Only the fields the mate's `kind`
+ * needs are parsed; an unparseable required cell yields `null` so the caller
+ * rejects the persist rather than writing a degenerate constraint.
+ *
+ * Every kind has an EXPLICIT branch — point / axis / distance / **angle** /
+ * **tangent** — and the remaining `plane` is the final fall-through. The angle /
+ * tangent branches read the cardinal axis picks (+ degrees for angle); they are
+ * handled before the fall-through so a rotational mate is never silently folded
+ * as a `plane` flush constraint.
  *
  * Pure: no React, no IPC. The kind enum is shared 1:1 between the form
  * (`CadAssemblyMateKind`) and the fold (`SolvedMateKind`).
@@ -205,6 +223,28 @@ export function solvedMateToInput(mate: SolvedMate): SolvedMateInput | null {
     const value = Number(draft.value)
     if (!Number.isFinite(value) || value < 0) return null
     const adapted: SolvedMateDraftInput = { ...base, point1, point2, value }
+    return { id: mate.id, draft: adapted }
+  }
+  if (kind === 'angle') {
+    // Persist-only ROTATIONAL mate: two cardinal feature axes + a degrees target.
+    // Explicit branch so an angle SolvedMate is NOT silently mis-folded as a plane
+    // flush constraint (the historic fall-through bug). The cardinal axes come
+    // straight off the form's axis picker; angleDeg is the right-angle target.
+    const axis1Cardinal = parseDraftCardinalAxis(draft.axis1Cardinal)
+    const axis2Cardinal = parseDraftCardinalAxis(draft.axis2Cardinal)
+    if (!axis1Cardinal || !axis2Cardinal) return null
+    const angleDeg = Number(draft.angleDeg)
+    if (!Number.isFinite(angleDeg)) return null
+    const adapted: SolvedMateDraftInput = { ...base, axis1Cardinal, axis2Cardinal, angleDeg }
+    return { id: mate.id, draft: adapted }
+  }
+  if (kind === 'tangent') {
+    // Persist-only ROTATIONAL mate: two cardinal feature axes, NO target
+    // (perpendicular contact). Explicit branch (no plane fall-through).
+    const axis1Cardinal = parseDraftCardinalAxis(draft.axis1Cardinal)
+    const axis2Cardinal = parseDraftCardinalAxis(draft.axis2Cardinal)
+    if (!axis1Cardinal || !axis2Cardinal) return null
+    const adapted: SolvedMateDraftInput = { ...base, axis1Cardinal, axis2Cardinal }
     return { id: mate.id, draft: adapted }
   }
   // plane

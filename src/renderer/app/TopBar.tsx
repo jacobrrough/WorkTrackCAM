@@ -19,7 +19,8 @@ export function TopBar({
   projectName,
   onOpenCommand,
   onOpenSettings,
-  onOpenHelp
+  onOpenHelp,
+  onOpenMyShop
 }: {
   machine: MachineProfile | null
   /**
@@ -31,6 +32,13 @@ export function TopBar({
   onOpenCommand: () => void
   onOpenSettings: () => void
   onOpenHelp: () => void
+  /**
+   * Opens the "My Shop" quick-select drawer (CLAUDE.md UI Requirement — a
+   * one-click surface showing ONLY Jacob's three machines + their real-world
+   * presets). Wired in {@link AppShell}; the trigger sits beside the machine
+   * read-out so switching shop bays is one click from anywhere.
+   */
+  onOpenMyShop: () => void
 }): ReactElement {
   const { pushToast } = useToast()
 
@@ -99,6 +107,24 @@ export function TopBar({
       <EnvSwitcher />
 
       <div className="wt-topbar__spacer" />
+
+      <button
+        type="button"
+        className="wt-myshop-btn"
+        onClick={onOpenMyShop}
+        title="My Shop — pick a machine + a real-world preset"
+        aria-label="Open My Shop"
+      >
+        <svg className="wt-myshop-btn__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M4 9 5 4h14l1 5M4 9h16M4 9v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9M9 19v-5h6v5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+        </svg>
+        My Shop
+      </button>
 
       <div className="wt-machine" title={machine ? `${machine.name}` : 'No machine selected'}>
         <span className={`wt-dot ${machine ? 'wt-dot--ok' : 'wt-dot--idle'}`} />

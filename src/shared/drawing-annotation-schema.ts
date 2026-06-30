@@ -256,6 +256,90 @@ export const gdtFeatureControlFrameSchema = z.object({
 export type GdtFeatureControlFrame = z.infer<typeof gdtFeatureControlFrameSchema>
 
 // ---------------------------------------------------------------------------
+// Surface-finish symbol (ISO 1302 / ASME Y14.36 surface texture)
+// ---------------------------------------------------------------------------
+
+/**
+ * Material-removal disposition of a surface-texture symbol (ISO 1302 / ASME
+ * Y14.36). Determines the BASIC glyph variant the renderer draws:
+ *
+ *  * `any`        — the bare check-mark (√): surface may be produced by ANY
+ *    process; no statement about material removal.
+ *  * `required`   — the check-mark with a horizontal bar across the top of the
+ *    long leg: material removal (machining) IS required.
+ *  * `prohibited` — the check-mark with a small circle in the vee: material
+ *    removal is PROHIBITED (surface left as-cast / as-forged).
+ *
+ * Stored as a stable string id; the renderer maps each to its drafting glyph.
+ */
+export const surfaceFinishMaterialSchema = z.enum(['any', 'required', 'prohibited'])
+
+export type SurfaceFinishMaterial = z.infer<typeof surfaceFinishMaterialSchema>
+
+/**
+ * Lay direction symbol (the texture's dominant pattern relative to the surface),
+ * placed to the right of the long leg of the symbol (ISO 1302 §"lay"). Optional;
+ * `undefined` means no lay is specified. The renderer maps each id to its glyph
+ * character:
+ *
+ *  * `parallel` (`=`)        — lay parallel to the plane of projection.
+ *  * `perpendicular` (`⊥`)   — lay perpendicular to the plane of projection.
+ *  * `crossed` (`X`)         — lay angular in both directions (crossed).
+ *  * `multidirectional` (`M`)— lay multidirectional.
+ *  * `circular` (`C`)        — approximately circular relative to the centre.
+ *  * `radial` (`R`)          — approximately radial relative to the centre.
+ *  * `particulate` (`P`)     — particulate, non-directional / protuberant.
+ */
+export const surfaceFinishLaySchema = z.enum([
+  'parallel',
+  'perpendicular',
+  'crossed',
+  'multidirectional',
+  'circular',
+  'radial',
+  'particulate'
+])
+
+export type SurfaceFinishLay = z.infer<typeof surfaceFinishLaySchema>
+
+/**
+ * A single surface-finish (surface-texture) symbol, anchored to a model feature
+ * so it stays attached on rebuild — the exact persistence + associativity
+ * pattern as {@link gdtFeatureControlFrameSchema}.
+ *
+ *  * `material` — the basic glyph variant (any / required / prohibited).
+ *  * `ra`       — primary roughness value (Ra) in micrometres (µm). Optional:
+ *    a bare symbol with no Ra is valid (states only the removal disposition).
+ *    Finite + non-negative when present.
+ *  * `machiningAllowanceMm` — optional machining-allowance value (mm) drawn to
+ *    the left of the long leg (ISO 1302). Finite + non-negative when present.
+ *  * `lay`      — optional lay-direction symbol drawn to the right of the leg.
+ *  * `anchor`   — the feature this symbol is attached to (associative).
+ *  * `placement`— where the symbol sits in sheet space.
+ *
+ * Additive + frozen: a v1 symbol carries Ra + a removal flag (+ optional
+ * allowance / lay). Like GD&T datums, NO free-text reaches markup here — every
+ * field is a number or a closed enum, so there is no Safety-Rule-4 escaping
+ * surface on this annotation.
+ */
+export const surfaceFinishSymbolSchema = z.object({
+  id: z.string(),
+  material: surfaceFinishMaterialSchema,
+  /** Primary roughness value Ra in micrometres (µm). */
+  ra: z.number().finite().nonnegative().optional(),
+  /** Machining-allowance value in mm (drawn to the left of the long leg). */
+  machiningAllowanceMm: z.number().finite().nonnegative().optional(),
+  /** Lay-direction symbol drawn to the right of the long leg. */
+  lay: surfaceFinishLaySchema.optional(),
+  /** Feature this symbol is attached to (associative). */
+  anchor: drawingDimensionAnchorSchema,
+  /** Where the symbol sits in sheet space. */
+  placement: drawingPoint2DSchema
+})
+
+export type SurfaceFinishSymbol = z.infer<typeof surfaceFinishSymbolSchema>
+
+// ---------------------------------------------------------------------------
 // Notes
 // ---------------------------------------------------------------------------
 
@@ -324,10 +408,17 @@ export type DrawingBomRow = z.infer<typeof drawingBomRowSchema>
  *
  * `bom` is included alongside the four task-named arrays so a sheet can carry a
  * parts list; it defaults to empty and is harmless when unused.
+ *
+ * `surfaceFinishes` is the ISO 1302 / ASME Y14.36 surface-texture symbol layer,
+ * added alongside `featureControlFrames` with the same `.default([])` so an
+ * existing `drawing.json` (saved before surface-finish symbols existed) parses
+ * unchanged and gains an empty surface-finish array in memory (Safety Rule 2 —
+ * additive, no version bump, no migration).
  */
 export const drawingSheetAnnotationsSchema = z.object({
   dimensions: z.array(drawingDimensionSchema).default([]),
   featureControlFrames: z.array(gdtFeatureControlFrameSchema).default([]),
+  surfaceFinishes: z.array(surfaceFinishSymbolSchema).default([]),
   notes: z.array(drawingNoteSchema).default([]),
   revisions: z.array(drawingRevisionSchema).default([]),
   bom: z.array(drawingBomRowSchema).default([])

@@ -37,10 +37,21 @@ import type {
 } from './assembly-mate-schema'
 
 /** A solved Model-B mate kind (mirrors `CadAssemblyMateKind`). */
-export type SolvedMateKind = 'point' | 'axis' | 'plane' | 'distance'
+export type SolvedMateKind = 'point' | 'axis' | 'plane' | 'distance' | 'angle' | 'tangent'
 
 /** A local-frame 3-vector `[x, y, z]` (finite numbers). */
 export type SolvedVec3 = readonly [number, number, number]
+
+/**
+ * A **cardinal** local-frame axis label (`'x' | 'y' | 'z'`) — the directional
+ * feature the persisted Model-C `angle` / `tangent` mate stores. Distinct from
+ * the free 3-vectors the `axis` / `plane` kinds carry: a rotational mate's
+ * authoring form picks one of the three local axes directly (the foundation
+ * solver compares `worldFeatureAxis` dot products on the *current* pose, so a
+ * cardinal label is all it consumes — see `assembly-solver-core.ts` `angle` /
+ * `tangent` residuals).
+ */
+export type SolvedCardinalAxis = 'x' | 'y' | 'z'
 
 /**
  * The structural input the fold needs from a solved mate. Mirrors the renderer's
@@ -56,6 +67,12 @@ export type SolvedVec3 = readonly [number, number, number]
  *   - `distance`: `point1` + `point2` + `value` (feature points held at `value`
  *                 mm apart → a Model-C `distance` constraint the TS solver drives
  *                 to the target). `value` is required for this kind.
+ *   - `angle`:    `axis1Cardinal` + `axis2Cardinal` + `angleDeg` (two local
+ *                 cardinal axes held at a target angle in degrees → a Model-C
+ *                 `angle` constraint the TS solver drives by rotating a revolute
+ *                 hinge). `angleDeg` is required for this kind.
+ *   - `tangent`:  `axis1Cardinal` + `axis2Cardinal` (two local cardinal axes held
+ *                 perpendicular → a Model-C `tangent` constraint). NO angle value.
  */
 export type SolvedMateDraftInput = {
   readonly kind: SolvedMateKind
@@ -69,6 +86,21 @@ export type SolvedMateDraftInput = {
   readonly normal2?: SolvedVec3
   /** distance: target separation (mm). Finite, non-negative. Ignored by other kinds. */
   readonly value?: number
+  /**
+   * angle / tangent: the **cardinal** local axis (`'x' | 'y' | 'z'`) of each
+   * part's directional feature. Distinct from the free 3-vectors `axis1` / `axis2`
+   * carry — a rotational mate persists a cardinal label, not a snapped direction.
+   * Required for `angle` / `tangent`; ignored by other kinds.
+   */
+  readonly axis1Cardinal?: SolvedCardinalAxis
+  readonly axis2Cardinal?: SolvedCardinalAxis
+  /**
+   * angle: the target angle (DEGREES) between the two cardinal axes — kept
+   * **separate** from the distance-mm `value` so the two parametric targets never
+   * alias. Required for `angle`; ignored by `tangent` (perpendicular contact has
+   * no free target) and every non-rotational kind.
+   */
+  readonly angleDeg?: number
 }
 
 /** A solved mate plus its caller-owned stable id (the renderer's `SolvedMate`). */
@@ -93,12 +125,17 @@ export type BuildMateConstraintResult =
  *                               apart; the TS `solveMateConstraints` drives the
  *                               part's translation to the target separation).
  *
- * All four are solver-backed kinds, so a persisted mate round-trips straight into
- * `solveMateConstraints` with no extra mapping. (`angle` / `tangent` are NOT
- * mapped here: the foundation solver exposes only translational DOF and so cannot
- * position a rotational mate — see `CadAssemblyMateKind` in `sidecar-protocol.ts`
- * for the full honesty note. They become foldable once the solver gains
- * rotational free variables.)
+ *   - `angle`    → `angle`      (two feature axes held at a target angle in
+ *                               degrees; the TS solver rotates a revolute hinge
+ *                               about its axis to satisfy it — Cycle 272).
+ *   - `tangent`  → `tangent`    (two feature axes held perpendicular; same
+ *                               revolute-hinge rotational solve, no angle target).
+ *
+ * All six are solver-backed kinds, so a persisted mate round-trips straight into
+ * `solveMateConstraints` with no extra mapping. (`angle` / `tangent` converge only
+ * when the driven part is a **non-grounded, revolute-jointed** component — the one
+ * rotational DOF the foundation solver wires; the authoring form gates the offer
+ * on exactly that, so a non-convergent combination is never persisted.)
  */
 export function solvedKindToMateKind(kind: SolvedMateKind): AssemblyMateKind {
   switch (kind) {
@@ -110,6 +147,10 @@ export function solvedKindToMateKind(kind: SolvedMateKind): AssemblyMateKind {
       return 'flush'
     case 'distance':
       return 'distance'
+    case 'angle':
+      return 'angle'
+    case 'tangent':
+      return 'tangent'
     default: {
       // Exhaustiveness guard: a new SolvedMateKind must extend the map above.
       const never: never = kind
@@ -132,6 +173,11 @@ function isVec3(v: SolvedVec3 | undefined): v is SolvedVec3 {
 /** Local point feature from a 3-vector (drops `-0` to `0` for canonical JSON). */
 function pointFeature(v: SolvedVec3): AssemblyMateFeature {
   return { x: v[0] === 0 ? 0 : v[0], y: v[1] === 0 ? 0 : v[1], z: v[2] === 0 ? 0 : v[2] }
+}
+
+/** A literal cardinal axis label (`'x' | 'y' | 'z'`)? Used by the angle/tangent fold. */
+function isCardinalAxis(v: SolvedCardinalAxis | undefined): v is SolvedCardinalAxis {
+  return v === 'x' || v === 'y' || v === 'z'
 }
 
 /**
@@ -209,6 +255,51 @@ export function buildMateConstraintFromSolved(
         feature2: pointFeature(draft.point2),
         // Drop -0 to 0 for canonical JSON, matching pointFeature's convention.
         value: value === 0 ? 0 : value
+      }
+    }
+  }
+
+  if (draft.kind === 'angle') {
+    const a1 = draft.axis1Cardinal
+    const a2 = draft.axis2Cardinal
+    if (!isCardinalAxis(a1)) return { ok: false, reason: 'Axis 1 must be a cardinal axis (x, y, or z).' }
+    if (!isCardinalAxis(a2)) return { ok: false, reason: 'Axis 2 must be a cardinal axis (x, y, or z).' }
+    const deg = draft.angleDeg
+    if (typeof deg !== 'number' || !Number.isFinite(deg)) {
+      return { ok: false, reason: 'Angle value must be a finite number (degrees).' }
+    }
+    return {
+      ok: true,
+      constraint: {
+        id: id.trim(),
+        kind,
+        part1Id,
+        // Directional-only feature: a cardinal axis, no point. The foundation
+        // solver's angle residual reads only `feature.axis`.
+        feature1: { axis: a1 },
+        part2Id,
+        feature2: { axis: a2 },
+        // Drop -0 to 0 for canonical JSON, matching pointFeature's convention.
+        value: deg === 0 ? 0 : deg
+      }
+    }
+  }
+
+  if (draft.kind === 'tangent') {
+    const a1 = draft.axis1Cardinal
+    const a2 = draft.axis2Cardinal
+    if (!isCardinalAxis(a1)) return { ok: false, reason: 'Axis 1 must be a cardinal axis (x, y, or z).' }
+    if (!isCardinalAxis(a2)) return { ok: false, reason: 'Axis 2 must be a cardinal axis (x, y, or z).' }
+    // Tangent (perpendicular contact) has NO numeric target — omit `value`.
+    return {
+      ok: true,
+      constraint: {
+        id: id.trim(),
+        kind,
+        part1Id,
+        feature1: { axis: a1 },
+        part2Id,
+        feature2: { axis: a2 }
       }
     }
   }

@@ -8,8 +8,14 @@ import {
   drawingSheetAnnotationsSchema,
   emptyDrawingSheetAnnotations,
   gdtFeatureControlFrameSchema,
+  surfaceFinishLaySchema,
+  surfaceFinishMaterialSchema,
+  surfaceFinishSymbolSchema,
   type DrawingDimension,
-  type DrawingSheetAnnotations
+  type DrawingSheetAnnotations,
+  type SurfaceFinishLay,
+  type SurfaceFinishMaterial,
+  type SurfaceFinishSymbol
 } from '../drawing-annotation-schema'
 import { drawingFileSchema, parseDrawingFile } from '../drawing-sheet-schema'
 
@@ -261,6 +267,7 @@ describe('drawingSheetAnnotationsSchema', () => {
     expect(empty).toEqual({
       dimensions: [],
       featureControlFrames: [],
+      surfaceFinishes: [],
       notes: [],
       revisions: [],
       bom: []
@@ -292,6 +299,17 @@ describe('drawingSheetAnnotationsSchema', () => {
           datums: ['A'],
           anchor: anchor('hole-1', 5, 5),
           placement: { x: 5, y: 20 }
+        }
+      ],
+      surfaceFinishes: [
+        {
+          id: 's1',
+          material: 'required',
+          ra: 1.6,
+          machiningAllowanceMm: 0.5,
+          lay: 'perpendicular',
+          anchor: anchor('face-1', 8, 0),
+          placement: { x: 8, y: 0 }
         }
       ],
       notes: [{ id: 'n1', text: 'NOTE', placement: { x: 0, y: 0 } }],
@@ -382,5 +400,114 @@ describe('drawing-sheet-schema back-compat with additive annotations', () => {
     if (dim.kind === 'diameter') {
       expect(dim.center.refId).toBe('c0')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Surface-finish symbol (ISO 1302 / ASME Y14.36) — the new annotation layer.
+// Mirrors the GD&T frame coverage above (shape + round-trip + associativity +
+// enum validation + additive back-compat).
+// ---------------------------------------------------------------------------
+
+describe('surfaceFinishSymbolSchema', () => {
+  const FULL: SurfaceFinishSymbol = {
+    id: 's1',
+    material: 'required',
+    ra: 1.6,
+    machiningAllowanceMm: 0.5,
+    lay: 'perpendicular',
+    anchor: anchor('edge-3', 40, 18),
+    placement: { x: 40, y: 18 }
+  }
+
+  it('round-trips a fully-populated symbol (anchor refId intact)', () => {
+    expect(surfaceFinishSymbolSchema.parse(FULL)).toEqual(FULL)
+    expect(surfaceFinishSymbolSchema.parse(FULL).anchor.refId).toBe('edge-3')
+  })
+
+  it('accepts a bare minimal symbol (material + anchor + placement only)', () => {
+    const bare: SurfaceFinishSymbol = {
+      id: 's2',
+      material: 'any',
+      anchor: anchor('', 5, 6),
+      placement: { x: 5, y: 6 }
+    }
+    const parsed = surfaceFinishSymbolSchema.parse(bare)
+    expect(parsed.ra).toBeUndefined()
+    expect(parsed.machiningAllowanceMm).toBeUndefined()
+    expect(parsed.lay).toBeUndefined()
+  })
+
+  it('every material id parses', () => {
+    const materials: SurfaceFinishMaterial[] = ['any', 'required', 'prohibited']
+    for (const m of materials) expect(() => surfaceFinishMaterialSchema.parse(m)).not.toThrow()
+  })
+
+  it('every lay id parses', () => {
+    const lays: SurfaceFinishLay[] = [
+      'parallel',
+      'perpendicular',
+      'crossed',
+      'multidirectional',
+      'circular',
+      'radial',
+      'particulate'
+    ]
+    for (const l of lays) expect(() => surfaceFinishLaySchema.parse(l)).not.toThrow()
+  })
+
+  it('rejects an unknown material and a negative / non-finite Ra', () => {
+    expect(() => surfaceFinishMaterialSchema.parse('sandblasted')).toThrow()
+    expect(() =>
+      surfaceFinishSymbolSchema.parse({ ...FULL, ra: -1 })
+    ).toThrow()
+    expect(() =>
+      surfaceFinishSymbolSchema.parse({ ...FULL, ra: Number.POSITIVE_INFINITY })
+    ).toThrow()
+  })
+})
+
+describe('drawingSheetAnnotationsSchema — surfaceFinishes additive back-compat', () => {
+  it('a legacy annotations payload with NO surfaceFinishes defaults to []', () => {
+    const legacy = drawingSheetAnnotationsSchema.parse({
+      dimensions: [],
+      featureControlFrames: [],
+      notes: [],
+      revisions: [],
+      bom: []
+    })
+    expect(legacy.surfaceFinishes).toEqual([])
+  })
+
+  it('emptyDrawingSheetAnnotations() includes an empty surfaceFinishes array', () => {
+    expect(emptyDrawingSheetAnnotations().surfaceFinishes).toEqual([])
+  })
+
+  it('round-trips a sheet that carries a surface-finish symbol through parseDrawingFile', () => {
+    const file = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: 'b',
+          name: 'Detail',
+          annotations: {
+            surfaceFinishes: [
+              {
+                id: 's1',
+                material: 'prohibited',
+                ra: 3.2,
+                anchor: anchor('face-9', 2, 2),
+                placement: { x: 2, y: 2 }
+              }
+            ]
+          }
+        }
+      ]
+    })
+    const ann = file.sheets[0]!.annotations!
+    expect(ann.surfaceFinishes).toHaveLength(1)
+    expect(ann.surfaceFinishes[0]!.material).toBe('prohibited')
+    // refId survived the round-trip — the symbol is associative.
+    expect(ann.surfaceFinishes[0]!.anchor.refId).toBe('face-9')
   })
 })

@@ -108,11 +108,20 @@ export function partToView(part: AssemblyPart): AssemblyPartView {
     geometry?: { handle: string }
     transform?: NonNullable<AssemblyPartView['transform']>
     partPath?: string
+    joint?: AssemblyPart['joint']
+    grounded?: boolean
   } = {
     id: part.id,
     name: part.name
   }
   if (ref) view.geometry = { handle: ref }
+  // Carry the durable gating fields onto the view so a persist writes them to the
+  // component (the rotational-mate gate `joint === 'revolute' && !grounded` then
+  // survives a reload without the operator re-setting the joint). Only forward the
+  // values the row actually carries — an omitted field stays omitted so the shared
+  // persistParts preserves any prior persisted value / schema default.
+  if (part.joint !== undefined) view.joint = part.joint
+  if (part.grounded !== undefined) view.grounded = part.grounded
   if (part.transform) {
     view.transform = {
       position: part.transform.position
@@ -167,12 +176,21 @@ export function viewToPart(view: AssemblyPartView): AssemblyPart {
     geometrySource?: string
     transform?: AssemblyPart['transform']
     transformSummary?: string
+    joint?: AssemblyPart['joint']
+    grounded?: boolean
   } = {
     id: view.id,
     name: view.name,
     handle: ''
   }
   if (geometrySource) part.geometrySource = geometrySource
+  // Restore the gating fields onto the row so the AssemblyMatePanel's angle/tangent
+  // gate (`joint === 'revolute' && !grounded`) is correct immediately after a
+  // reload. Only set what the view carries (the shared hydrate emits `joint` only
+  // when present and `grounded` only when `true`), so a free-floating row stays
+  // free-floating without spurious keys.
+  if (view.joint !== undefined) part.joint = view.joint
+  if (view.grounded !== undefined) part.grounded = view.grounded
   if (view.transform) {
     part.transform = {
       position: view.transform.position,

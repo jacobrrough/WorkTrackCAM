@@ -55,12 +55,13 @@
 // with toolhead Z, and Klipper's print-end macro emits Z lifts via custom
 // macros that vary by printer).  See resources/posts/fdm_passthrough.hbs.
 //
-// Hook point: renderPost() in src/main/post-process.ts already runs three
-// validators (validateDialectCompliance, validateGcodeHeaderInvariants,
-// validateGcodeEndProgramInvariants) and pushes their issues into
-// `warnings[]`. The intent is to hook this validator in beside them in a
-// follow-up cycle, using the same "[CODE] <message> (line N)" wire format
-// so downstream renderers parse all four validator sources the same way.
+// Wire point (live): renderPost() in src/main/post-process.ts (lines 1266–1275)
+// calls this validator alongside validateDialectCompliance,
+// validateGcodeHeaderInvariants, and validateGcodeEndProgramInvariants,
+// pushing all issues into `warnings[]` using the same
+// "[CODE] <message> (line N)" wire format so downstream renderers parse
+// all four validator sources uniformly. This is already wired — no
+// follow-up cycle required.
 //
 // Pure function -- no I/O, no state, no throws on any input. Parses G-code
 // the same way the sibling validators do (strip `;` and `(...)` comments,

@@ -15,6 +15,7 @@ import type { ToolLibraryFile } from '../../shared/tool-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import type { MaterialAuditResult } from '../../shared/material-audit'
 import type { FdmLayerBreakdownResult } from '../../shared/fdm-gcode-layer-breakdown'
+import type { AssemblyInterferenceReport, AssemblySummaryReport } from '../../shared/assembly-schema'
 import type { EnvironmentId } from './environments/registry'
 import type {
   CadCreateAssemblyPayload,
@@ -523,6 +524,47 @@ export declare const window: Window & {
       diagnostics: unknown
       convergenceReport?: unknown
     }>
+    /**
+     * Assembly interference detection over the SAVED `<projectDir>/assembly.json`.
+     * Resolves each component's binary STL and runs the broad-phase AABB +
+     * narrow-phase triangle-SAT mesh check (falling back to a placement heuristic
+     * when no usable mesh is present), returning the conflicting pairs +
+     * diagnostics. Delegates to `assembly:interferenceCheck`. Read-only analysis —
+     * never emits G-code.
+     */
+    assemblyInterferenceCheck: (projectDir: string) => Promise<AssemblyInterferenceReport>
+    /**
+     * Like `assemblyInterferenceCheck` but solves the SUPPLIED in-memory assembly
+     * first and checks interference at the SOLVED placements (so a motion-study
+     * pose can be clash-checked without saving). Delegates to
+     * `assembly:interferenceCheckSimulated`.
+     */
+    assemblyInterferenceCheckSimulated: (
+      projectDir: string,
+      assemblyInput: unknown
+    ) => Promise<AssemblyInterferenceReport>
+    /**
+     * Export the SAVED assembly's BOM to `<projectDir>/output/bom.csv` (flat).
+     * Returns the absolute output path. Delegates to `assembly:exportBom`.
+     */
+    assemblyExportBom: (projectDir: string) => Promise<string>
+    /**
+     * Export the SAVED assembly's BOM as an indented hierarchical text tree to
+     * `<projectDir>/output/bom-hierarchical.txt`. Returns the absolute output
+     * path. Delegates to `assembly:exportBomHierarchical`.
+     */
+    assemblyExportBomHierarchical: (projectDir: string) => Promise<string>
+    /**
+     * Export the SAVED assembly's BOM as a structured JSON hierarchy to
+     * `<projectDir>/output/bom-hierarchy.json`. Returns the absolute output path.
+     * Delegates to `assembly:exportBomHierarchyJson`.
+     */
+    assemblyExportBomHierarchyJson: (projectDir: string) => Promise<string>
+    /**
+     * Roll-up summary of the SAVED assembly (counts, joint tallies, BOM totals,
+     * diagnostics) WITHOUT writing a file. Delegates to `assembly:summary`.
+     */
+    assemblySummary: (projectDir: string) => Promise<AssemblySummaryReport>
     /**
      * Workflow F: machine:estop — AppHeader STOP button safety dispatch.
      * Renderer calls `window.fab.machine.estop({ machineId })`; the main

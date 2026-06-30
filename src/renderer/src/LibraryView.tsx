@@ -10,6 +10,38 @@ import { friendlyError } from '../../shared/file-parse-errors'
 import { ContextMenu } from './ContextMenu'
 import type { ContextMenuEntry } from './ContextMenu'
 import type { AuditSeverity, MaterialAuditFinding } from '../../shared/material-audit'
+import type { CpsImportSummary } from '../../main/machine-cps-import'
+
+// ── CPS import toast builder ─────────────────────────────────────────────────
+/** A toast the CPS import flow wants to raise: kind + message. */
+export interface CpsImportToast { kind: Toast['kind']; msg: string }
+
+/**
+ * Pure helper: turn a CPS import result into the toast(s) the UI should raise.
+ *
+ * Always emits the "Imported ..." summary toast. When the import carries a
+ * 5-axis fallback warning (the source CPS described a 5-axis machine but no
+ * 5-axis post template exists), it ALSO emits a `warn` toast so the operator
+ * knows their 5-axis features were dropped. Kept pure (no `fab`, no React) so
+ * it can be unit-tested directly.
+ */
+export function buildCpsImportToasts(summary: CpsImportSummary): CpsImportToast[] {
+  const d = summary.detected
+  const toasts: CpsImportToast[] = [{
+    kind: 'ok',
+    msg: `Imported "${summary.profile.name}" · ${[
+      d.name ? '✓ name' : '~ name',
+      d.workArea ? '✓ area' : '~ area',
+      d.maxFeed ? '✓ feed' : '~ feed'
+    ].join(' · ')}`
+  }]
+  for (const w of summary.warnings ?? []) {
+    if (w.code === 'fiveAxisFallback') {
+      toasts.push({ kind: 'warn', msg: w.message })
+    }
+  }
+  return toasts
+}
 
 // ── Machine editor ─────────────────────────────────────────────────────────────
 function MachineEditor({ machine, onChange, onSave, onCancel }: {
@@ -211,8 +243,10 @@ export function LibraryView({ onToast, onMachinesChanged }: LibraryViewProps): R
     try {
       const r = await fab().machinesPickAndImportCps()
       if (!r) return
-      const d = r.detected
-      onToast('ok', `Imported "${r.profile.name}" \u00B7 ${[d.name?'\u2713 name':'~ name',d.workArea?'\u2713 area':'~ area',d.maxFeed?'\u2713 feed':'~ feed'].join(' \u00B7 ')}`)
+      // buildCpsImportToasts emits the "Imported ..." summary plus, when the
+      // CPS described a 5-axis machine that fell back to a reduced-axis post,
+      // a `warn` toast telling the operator their 5-axis features were dropped.
+      for (const t of buildCpsImportToasts(r)) onToast(t.kind, t.msg)
       await refreshMachines()
     } catch (e) { onToast('err', friendlyError(e, 'Machine import failed')) }
   }

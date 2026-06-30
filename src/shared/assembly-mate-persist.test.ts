@@ -82,6 +82,11 @@ describe('solvedKindToMateKind', () => {
     expect(solvedKindToMateKind('plane')).toBe('flush')
     expect(solvedKindToMateKind('distance')).toBe('distance')
   })
+
+  it('maps the rotational kinds 1:1 — angle→angle, tangent→tangent', () => {
+    expect(solvedKindToMateKind('angle')).toBe('angle')
+    expect(solvedKindToMateKind('tangent')).toBe('tangent')
+  })
 })
 
 describe('buildMateConstraintFromSolved — point mate', () => {
@@ -267,6 +272,139 @@ describe('buildMateConstraintFromSolved — distance mate', () => {
   })
 })
 
+// ── (A1c) angle / tangent mate fold + round-trip ─────────────────────────────
+
+describe('buildMateConstraintFromSolved — angle mate', () => {
+  const ANGLE_MATE: SolvedMateInput = {
+    id: 'mate-angle-1',
+    draft: {
+      kind: 'angle',
+      part1Id: 'base',
+      part2Id: 'arm',
+      axis1Cardinal: 'x',
+      axis2Cardinal: 'x',
+      angleDeg: 90
+    }
+  }
+
+  it('folds an angle mate into an angle constraint carrying cardinal axes + degrees', () => {
+    const r = buildMateConstraintFromSolved(ANGLE_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.constraint).toEqual({
+      id: 'mate-angle-1',
+      kind: 'angle',
+      part1Id: 'base',
+      feature1: { axis: 'x' },
+      part2Id: 'arm',
+      feature2: { axis: 'x' },
+      value: 90
+    })
+    // Directional-only: the feature carries NO point (the solver reads only axis).
+    expect(r.constraint.feature1).not.toHaveProperty('x')
+  })
+
+  it('an angle mate persists with its degrees value and survives the disk round-trip', () => {
+    const r = persistMate(twoPartAssembly(), ANGLE_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints).toHaveLength(1)
+    expect(reloaded.mateConstraints[0]).toMatchObject({
+      id: 'mate-angle-1',
+      kind: 'angle',
+      feature1: { axis: 'x' },
+      feature2: { axis: 'x' },
+      value: 90
+    })
+  })
+
+  it('rejects a missing / non-finite angle value', () => {
+    const noVal = buildMateConstraintFromSolved({
+      id: 'a-noval',
+      draft: { kind: 'angle', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x', axis2Cardinal: 'x' }
+    })
+    expect(noVal.ok).toBe(false)
+    if (noVal.ok) return
+    expect(noVal.reason).toMatch(/finite number/i)
+  })
+
+  it('rejects a missing cardinal axis', () => {
+    const r = buildMateConstraintFromSolved({
+      id: 'a-noaxis',
+      draft: { kind: 'angle', part1Id: 'base', part2Id: 'arm', axis2Cardinal: 'x', angleDeg: 45 }
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/cardinal axis/i)
+  })
+
+  it('canonicalizes a -0 angle value to 0', () => {
+    const r = buildMateConstraintFromSolved({
+      id: 'a-negzero',
+      draft: { kind: 'angle', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x', axis2Cardinal: 'x', angleDeg: -0 }
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(Object.is(r.constraint.value, -0)).toBe(false)
+    expect(r.constraint.value).toBe(0)
+  })
+})
+
+describe('buildMateConstraintFromSolved — tangent mate', () => {
+  const TANGENT_MATE: SolvedMateInput = {
+    id: 'mate-tangent-1',
+    draft: {
+      kind: 'tangent',
+      part1Id: 'base',
+      part2Id: 'arm',
+      axis1Cardinal: 'y',
+      axis2Cardinal: 'z'
+    }
+  }
+
+  it('folds a tangent mate into a tangent constraint carrying cardinal axes and NO value', () => {
+    const r = buildMateConstraintFromSolved(TANGENT_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.constraint).toEqual({
+      id: 'mate-tangent-1',
+      kind: 'tangent',
+      part1Id: 'base',
+      feature1: { axis: 'y' },
+      part2Id: 'arm',
+      feature2: { axis: 'z' }
+    })
+    // Perpendicular contact has no numeric target.
+    expect(r.constraint.value).toBeUndefined()
+  })
+
+  it('a tangent mate persists (no value) and survives the disk round-trip', () => {
+    const r = persistMate(twoPartAssembly(), TANGENT_MATE)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints).toHaveLength(1)
+    expect(reloaded.mateConstraints[0]).toMatchObject({
+      id: 'mate-tangent-1',
+      kind: 'tangent',
+      feature1: { axis: 'y' },
+      feature2: { axis: 'z' }
+    })
+    expect(reloaded.mateConstraints[0]!.value).toBeUndefined()
+  })
+
+  it('rejects a missing cardinal axis', () => {
+    const r = buildMateConstraintFromSolved({
+      id: 't-noaxis',
+      draft: { kind: 'tangent', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x' }
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/cardinal axis/i)
+  })
+})
+
 // ── (A2) reloaded constraints are solver-consumable (end-to-end GOAL) ────────
 
 describe('reloaded mate is solver-consumable', () => {
@@ -345,6 +483,79 @@ describe('reloaded mate is solver-consumable', () => {
     expect(arm.x).toBeCloseTo(0, 3)
     expect(arm.y).toBeCloseTo(0, 3)
     expect(Math.abs(arm.z)).toBeCloseTo(8, 3)
+  })
+
+  it('a persisted+reloaded ANGLE mate drives a revolute hinge to its target (the GOAL)', () => {
+    // base grounded (Part 1, reference); arm is a non-grounded REVOLUTE hinge about
+    // its +Z axis (Part 2, driven) — exactly the case the foundation solver wires
+    // (E === F === 1). A 90° angle mate between the two parts' +X axes must rotate
+    // the arm about Z until its +X is perpendicular to base's +X (|cos rz| ≈ 0).
+    const asm = parseAssemblyFile({
+      version: 2,
+      name: 'Angle hinge assy',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 }, grounded: true },
+        {
+          id: 'arm',
+          name: 'Arm',
+          partPath: 'q',
+          transform: { x: 0, y: 0, z: 0 },
+          joint: 'revolute',
+          revolutePreviewAxis: 'z'
+        }
+      ]
+    })
+    const r = persistMate(asm, {
+      id: 'm-angle',
+      draft: { kind: 'angle', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x', axis2Cardinal: 'x', angleDeg: 90 }
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints[0]).toMatchObject({ kind: 'angle', value: 90 })
+    const solve = solveMateConstraints(reloaded.components, reloaded.mateConstraints)
+    expect(solve.report.status).toBe('converged')
+    const arm = solve.transforms.get('arm')!
+    // The revolute Euler angle moved to make the axes perpendicular; |cos rz| ≈ 0.
+    expect(Math.abs(Math.cos((arm.rzDeg * Math.PI) / 180))).toBeLessThan(1e-3)
+    // Only the hinge rotation moved — translation untouched.
+    expect(arm.x).toBe(0)
+    expect(arm.y).toBe(0)
+    expect(arm.z).toBe(0)
+  })
+
+  it('a persisted+reloaded TANGENT mate drives a revolute hinge perpendicular (the GOAL)', () => {
+    // Same revolute-hinge setup; a tangent mate holds the two +X axes perpendicular
+    // (no angle target). After the solve |cos rz| ≈ 0.
+    const asm = parseAssemblyFile({
+      version: 2,
+      name: 'Tangent hinge assy',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 }, grounded: true },
+        {
+          id: 'arm',
+          name: 'Arm',
+          partPath: 'q',
+          transform: { x: 0, y: 0, z: 0 },
+          joint: 'revolute',
+          revolutePreviewAxis: 'z'
+        }
+      ]
+    })
+    const r = persistMate(asm, {
+      id: 'm-tangent',
+      draft: { kind: 'tangent', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x', axis2Cardinal: 'x' }
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints[0]).toMatchObject({ kind: 'tangent' })
+    expect(reloaded.mateConstraints[0]!.value).toBeUndefined()
+    const solve = solveMateConstraints(reloaded.components, reloaded.mateConstraints)
+    expect(solve.report.status).toBe('converged')
+    const arm = solve.transforms.get('arm')!
+    expect(Math.abs(Math.cos((arm.rzDeg * Math.PI) / 180))).toBeLessThan(1e-3)
   })
 })
 

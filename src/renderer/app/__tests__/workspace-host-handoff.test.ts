@@ -59,7 +59,10 @@ function solvedPointMate(): SolvedMate {
     axis2: ['0', '0', '1'],
     normal1: ['0', '0', '1'],
     normal2: ['0', '0', '1'],
-    value: '0'
+    value: '0',
+    axis1Cardinal: 'x',
+    axis2Cardinal: 'x',
+    angleDeg: '90'
   }
   return { id: 'mate-point-1', draft }
 }
@@ -216,6 +219,50 @@ describe('solvedMateToInput — string draft → number input', () => {
     }
     expect(solvedMateToInput(mate)).toBeNull()
   })
+
+  it('maps an ANGLE mate to a cardinal-axis + degrees input (NOT the plane fall-through)', () => {
+    const mate: SolvedMate = {
+      id: 'mate-angle-1',
+      draft: { ...solvedPointMate().draft, kind: 'angle', axis1Cardinal: 'x', axis2Cardinal: 'x', angleDeg: '90' }
+    }
+    const input = solvedMateToInput(mate)
+    expect(input).not.toBeNull()
+    expect(input?.draft).toEqual({
+      kind: 'angle',
+      part1Id: 'base',
+      part2Id: 'arm',
+      axis1Cardinal: 'x',
+      axis2Cardinal: 'x',
+      angleDeg: 90
+    })
+    // Crucially NOT folded as a plane (no point/normal vectors leaked through).
+    expect(input?.draft).not.toHaveProperty('normal1')
+  })
+
+  it('maps a TANGENT mate to cardinal axes with NO angle value (NOT the plane fall-through)', () => {
+    const mate: SolvedMate = {
+      id: 'mate-tangent-1',
+      draft: { ...solvedPointMate().draft, kind: 'tangent', axis1Cardinal: 'y', axis2Cardinal: 'z' }
+    }
+    const input = solvedMateToInput(mate)
+    expect(input?.draft).toEqual({
+      kind: 'tangent',
+      part1Id: 'base',
+      part2Id: 'arm',
+      axis1Cardinal: 'y',
+      axis2Cardinal: 'z'
+    })
+    expect(input?.draft).not.toHaveProperty('angleDeg')
+    expect(input?.draft).not.toHaveProperty('normal1')
+  })
+
+  it('returns null for an angle mate with a non-numeric degrees cell', () => {
+    const mate: SolvedMate = {
+      id: 'm',
+      draft: { ...solvedPointMate().draft, kind: 'angle', angleDeg: 'abc' }
+    }
+    expect(solvedMateToInput(mate)).toBeNull()
+  })
 })
 
 // ── (2) mate persistence: full seam ──────────────────────────────────────────
@@ -252,6 +299,66 @@ describe('runPersistMate — load → fold → save', () => {
       feature1: { x: 10, y: 0, z: 0 },
       feature2: { x: 0, y: 5, z: -3 }
     })
+  })
+
+  it('persists an ANGLE mate through the full load → fold → save seam (round-trip shape)', async () => {
+    // Revolute-hinge assembly so a reload+solve would converge; here we pin that
+    // the host writes the correct persisted angle shape (the solver round-trip is
+    // pinned exhaustively in assembly-mate-persist.test.ts).
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'Hinge assy',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 }, grounded: true },
+        { id: 'arm', name: 'Arm', partPath: 'q', transform: { x: 0, y: 0, z: 0 }, joint: 'revolute', revolutePreviewAxis: 'z' }
+      ]
+    })
+    const loadAssembly = vi.fn(async () => loaded)
+    const saveAssembly = vi.fn(async (_dir: string, _json: string) => {})
+    const angleMate: SolvedMate = {
+      id: 'mate-angle-1',
+      draft: { ...solvedPointMate().draft, kind: 'angle', axis1Cardinal: 'x', axis2Cardinal: 'x', angleDeg: '90' }
+    }
+
+    const outcome = await runPersistMate({ mate: angleMate, projectDir: 'C:/proj', loadAssembly, saveAssembly })
+    expect(outcome.ok).toBe(true)
+    expect(saveAssembly).toHaveBeenCalledTimes(1)
+    const [, jsonArg] = saveAssembly.mock.calls[0]!
+    const reparsed = assemblyFileSchema.parse(JSON.parse(jsonArg as string))
+    expect(reparsed.mateConstraints[0]).toMatchObject({
+      id: 'mate-angle-1',
+      kind: 'angle',
+      part1Id: 'base',
+      part2Id: 'arm',
+      feature1: { axis: 'x' },
+      feature2: { axis: 'x' },
+      value: 90
+    })
+  })
+
+  it('persists a TANGENT mate (no value) through the full seam', async () => {
+    const loaded = twoPartAssembly()
+    const saveAssembly = vi.fn(async (_dir: string, _json: string) => {})
+    const tangentMate: SolvedMate = {
+      id: 'mate-tangent-1',
+      draft: { ...solvedPointMate().draft, kind: 'tangent', axis1Cardinal: 'y', axis2Cardinal: 'z' }
+    }
+    const outcome = await runPersistMate({
+      mate: tangentMate,
+      projectDir: 'C:/proj',
+      loadAssembly: async () => loaded,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    const [, jsonArg] = saveAssembly.mock.calls[0]!
+    const reparsed = assemblyFileSchema.parse(JSON.parse(jsonArg as string))
+    expect(reparsed.mateConstraints[0]).toMatchObject({
+      id: 'mate-tangent-1',
+      kind: 'tangent',
+      feature1: { axis: 'y' },
+      feature2: { axis: 'z' }
+    })
+    expect(reparsed.mateConstraints[0]!.value).toBeUndefined()
   })
 
   it('with no open project: warns and never loads or saves', async () => {

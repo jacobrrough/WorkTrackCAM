@@ -1,4 +1,6 @@
-import type { Workspace } from './WorkspaceBar'
+/** Primary workspace IDs — the top-level tabs in the new shell. */
+export type Workspace = 'design' | 'assemble' | 'manufacture' | 'utilities'
+
 import type {
   CommandParityStatus,
   CommandRibbonGroup,

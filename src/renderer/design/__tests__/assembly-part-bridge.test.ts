@@ -188,6 +188,38 @@ describe('assembly-part-bridge — viewToPart', () => {
     expect(back.name).toBe('Plate')
     expect(back.transform?.position).toEqual([1, 2, 3])
   })
+
+  it('row → component → hydrate → row preserves joint + grounded (rotational-mate gate)', () => {
+    // The angle/tangent mate gate reads `joint === 'revolute' && !grounded` off the
+    // row. Threading joint/grounded through the bridge keeps that gate correct
+    // immediately after a reload (no operator re-set needed).
+    const hinge = part({ id: 'hinge', name: 'Hinge', handle: 'script:h', joint: 'revolute' })
+    const base = part({ id: 'base', name: 'Base', handle: 'script:b', grounded: true })
+    const file = parseAssemblyFile({
+      version: 2,
+      name: 'RT-joint',
+      components: partsToComponents([hinge, base]),
+      mateConstraints: []
+    })
+    const rows = hydrateAssembly(file).parts
+    const hingeBack = rows.find((p) => p.id === 'hinge')!
+    const baseBack = rows.find((p) => p.id === 'base')!
+    expect(hingeBack.joint).toBe('revolute')
+    expect(hingeBack.grounded).not.toBe(true)
+    expect(baseBack.grounded).toBe(true)
+    // The hinge is gate-eligible; the grounded base is not.
+    expect(hingeBack.joint === 'revolute' && hingeBack.grounded !== true).toBe(true)
+    expect(baseBack.joint === 'revolute' && baseBack.grounded !== true).toBe(false)
+  })
+
+  it('partToView carries joint/grounded; a free-floating row stays clean', () => {
+    expect(partToView(part({ joint: 'revolute' })).joint).toBe('revolute')
+    expect(partToView(part({ grounded: true })).grounded).toBe(true)
+    // A plain row forwards neither (so persistParts preserves prior/default).
+    const plain = partToView(part({ joint: undefined, grounded: undefined }))
+    expect(plain).not.toHaveProperty('joint')
+    expect(plain).not.toHaveProperty('grounded')
+  })
 })
 
 // ── (G) partHasLiveGeometry — honesty guard ──────────────────────────────────

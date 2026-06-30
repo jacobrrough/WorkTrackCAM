@@ -3814,3 +3814,57 @@
 .util-fs-row dt { color: var(--text-muted, #888); }
 .util-fs-row dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
 .util-fs-notes { margin: var(--sp-2, 8px) 0 0; padding-left: var(--sp-3, 12px); display: flex; flex-direction: column; gap: 2px; }
+
+/* Feeds & Speeds "Apply to op" action (Wave C) — writes the machine-clamped
+   spindle RPM + cutting feed onto the selected operation. */
+.util-fs-apply {
+  margin-top: var(--sp-2, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1, 4px);
+}
+.util-fs-apply-btn { align-self: flex-start; }
+.util-fs-apply-hint { margin: 0; }
+
+/* Laguna 6-zone vacuum ALLOCATOR ([ID-0020], Wave C) — sheet picker + 2x3 zone
+   coverage map + assign action. Companions the manual toggle picker above. */
+.util-laguna-alloc-controls { gap: var(--sp-3, 12px); flex-wrap: wrap; }
+.util-laguna-alloc-controls .util-panel-control { flex: 1 1 10rem; }
+.util-laguna-zone-grid {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  margin: var(--sp-2, 8px) 0;
+}
+.util-laguna-zone-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2, 8px);
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: var(--radius, 6px);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  color: var(--txt2, #888);
+  text-align: center;
+}
+.util-laguna-zone-cell--engaged {
+  border-color: var(--ok, #22c55e);
+  background: var(--ok-dim, rgba(34, 197, 94, 0.15));
+  color: var(--txt0, #e5e5e5);
+}
+.util-laguna-zone-cell-num { font-weight: 600; }
+.util-laguna-zone-cell-id {
+  font-family: var(--mono);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--txt2, #888);
+}
+.util-laguna-zone-cell-cov {
+  font-size: var(--text-xs, 0.75rem);
+  font-variant-numeric: tabular-nums;
+}
+.util-laguna-alloc-actions {
+  align-items: center;
+  gap: var(--sp-3, 12px);
+  flex-wrap: wrap;
+  margin-top: var(--sp-2, 8px);
+}
+.util-laguna-alloc-hint { margin: 0; }

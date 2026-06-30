@@ -293,8 +293,35 @@ export function machineProfileFromCpsContent(fileBasename: string, cpsText: stri
 }
 
 /**
+ * A non-fatal warning attached to a CPS import result so the UI can surface
+ * a notice without the import failing. Discriminated on `code` so callers can
+ * branch on the specific situation.
+ *
+ * `fiveAxisFallback` — the CPS file describes a 5-axis machine, but no 5-axis
+ * post template exists (the speculative `cnc_5axis_*.hbs` posts were removed in
+ * the June 2026 My-Shop-Only cleanup — none of the three target shops own a
+ * 5-axis machine). The import still succeeds with a reduced-axis post, but the
+ * 5-axis (and any 4th-axis tilt/rotary) moves will NOT be in the output.
+ */
+export interface CpsFiveAxisFallbackWarning {
+  code: 'fiveAxisFallback'
+  /** Always '5axis' — the axis class detected in the source CPS. */
+  from: '5axis'
+  /** The post template the import actually fell back to. */
+  to: string
+  /** Operator-facing one-line message. */
+  message: string
+}
+
+export type CpsImportWarning = CpsFiveAxisFallbackWarning
+
+/**
  * Summarise what was extracted from a CPS file so the UI can show the user
  * what fields were detected vs defaulted.
+ *
+ * `warnings` is optional and only present when the import had to make a
+ * silent compromise (e.g. a 5-axis dialect routed to a reduced-axis post).
+ * Keeping it optional preserves backward compatibility with existing callers.
  */
 export interface CpsImportSummary {
   profile: MachineProfile
@@ -306,6 +333,7 @@ export interface CpsImportSummary {
     axisCount: boolean
     spindleMax?: number
   }
+  warnings?: CpsImportWarning[]
 }
 
 export function machineProfileWithSummaryFromCps(
@@ -323,6 +351,25 @@ export function machineProfileWithSummaryFromCps(
 
   const profile = machineProfileFromCpsContent(fileBasename, cpsText)
 
+  // 5-axis CPS files have no dedicated post template (the speculative
+  // cnc_5axis_*.hbs posts were removed). detectAxisCount caps the dialect at
+  // the 4-axis family or the 3-axis generic post, so the 5th axis (and any
+  // rotary/tilt moves) are silently dropped. Surface a non-fatal warning so
+  // the import still succeeds but the operator is told. We key off the raw
+  // detected axis count (5), not the dialect, because every 5-axis path lands
+  // on a reduced-axis post regardless of controller family.
+  const warnings: CpsImportWarning[] = []
+  if (axisCount >= 5) {
+    warnings.push({
+      code: 'fiveAxisFallback',
+      from: '5axis',
+      to: profile.postTemplate,
+      message:
+        '5-axis dialect detected → 3-axis generic fallback; ' +
+        '5-axis features will not be in the output.'
+    })
+  }
+
   return {
     profile,
     detected: {
@@ -332,6 +379,7 @@ export function machineProfileWithSummaryFromCps(
       dialect: dialectDetected,
       axisCount: axisCount > 3,
       spindleMax: spindleRpm.max
-    }
+    },
+    ...(warnings.length > 0 ? { warnings } : {})
   }
 }

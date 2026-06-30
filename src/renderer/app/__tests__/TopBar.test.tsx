@@ -21,11 +21,15 @@
  * `useMachineSession` / `useProjectSession` hooks resolve; their async loads are
  * effects that static render does not run, keeping the assertion deterministic.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TopBar } from '../TopBar'
 import { AppProviders } from '../../contexts/AppProviders'
+
+const TOPBAR_SRC = readFileSync(join(__dirname, '..', 'TopBar.tsx'), 'utf-8')
 
 function render(projectName: string): string {
   return renderToStaticMarkup(
@@ -37,7 +41,8 @@ function render(projectName: string): string {
         projectName,
         onOpenCommand: () => {},
         onOpenSettings: () => {},
-        onOpenHelp: () => {}
+        onOpenHelp: () => {},
+        onOpenMyShop: () => {}
       })
     )
   )
@@ -65,5 +70,30 @@ describe('TopBar (FG-7 honest title chrome)', () => {
     const html = render('Untitled project')
     // No bare <button> (defaults to submit inside a form — the ID-0152 footgun).
     expect(html).not.toMatch(/<button(?![^>]*type=)/)
+  })
+})
+
+describe('TopBar — My Shop quick-select trigger', () => {
+  it('renders a labeled My Shop button (the CLAUDE.md one-click quick-select)', () => {
+    const html = render('Untitled project')
+    expect(html).toContain('My Shop')
+    expect(html).toContain('class="wt-myshop-btn"')
+    // Accessible name + explicit button type.
+    expect(html).toContain('aria-label="Open My Shop"')
+    expect(html).toMatch(/class="wt-myshop-btn"[^>]*type="button"|type="button"[^>]*class="wt-myshop-btn"/)
+  })
+
+  it('sits beside the machine read-out so switching bays is one click', () => {
+    const html = render('Untitled project')
+    // The trigger and the machine status both render in the topbar.
+    expect(html).toContain('wt-myshop-btn')
+    expect(html).toContain('wt-machine')
+  })
+
+  it('wires the trigger onClick to the onOpenMyShop prop', () => {
+    // Source-pin: node-env cannot dispatch a real click on static markup, so we
+    // assert the handler is the passed prop (not a no-op / wrong callback).
+    expect(TOPBAR_SRC).toContain('onClick={onOpenMyShop}')
+    expect(TOPBAR_SRC).toContain('onOpenMyShop: () => void')
   })
 })

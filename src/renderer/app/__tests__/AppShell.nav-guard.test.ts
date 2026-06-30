@@ -55,8 +55,12 @@ describe('AppShell — navigation-guard seam wiring', () => {
     expect(SRC).toContain('<CommandContextProvider workspace={activeWorkspace} onNavigate={guardedNavigate}>')
     // 3. WorkspaceNav onSelect
     expect(SRC).toContain('<WorkspaceNav active={activeWorkspace} onSelect={guardedNavigate} />')
-    // 4. WorkspaceHost onNavigate
-    expect(SRC).toContain('<WorkspaceHost active={activeWorkspace} onNavigate={guardedNavigate} />')
+    // 4. WorkspaceHost onNavigate (the element now spans multiple lines to also
+    // thread the onboarding design seed, so assert the nav-discipline facts
+    // layout-robustly rather than pinning a single-line JSX form).
+    expect(SRC).toContain('<WorkspaceHost')
+    expect(SRC).toContain('active={activeWorkspace}')
+    expect(SRC).toContain('onNavigate={guardedNavigate}')
   })
 
   it('does NOT hand the raw setActiveWorkspace to any nav sink anymore', () => {

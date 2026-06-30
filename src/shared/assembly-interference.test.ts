@@ -18,7 +18,8 @@ import {
   worldAabbOf,
   worldAabbsOverlap,
   type InterferencePart,
-  type LocalAabb
+  type LocalAabb,
+  type NarrowPhaseDelegate
 } from './assembly-interference'
 
 /** A unit cube [0,1]^3 centered shifted by id default — caller sets transform. */
@@ -180,5 +181,104 @@ describe('detectInterferences — exclusions + determinism', () => {
   it('an empty / single-part assembly has no clashes', () => {
     expect(detectInterferences([]).clashingPairs).toEqual([])
     expect(detectInterferences([part('solo')]).clashingPairs).toEqual([])
+  })
+})
+
+describe('detectInterferences — narrow-phase delegation (broad/narrow split)', () => {
+  // Two overlapping unit cubes at the origin region — guaranteed broad-phase overlap.
+  const overlapping: InterferencePart[] = [
+    part('a', { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 }),
+    part('b', { x: 0.5, y: 0.5, z: 0.5, rxDeg: 0, ryDeg: 0, rzDeg: 0 })
+  ]
+
+  it('reports fidelity "bbox" and no narrow-phase fields when NO delegate is supplied', () => {
+    const r = detectInterferences(overlapping)
+    expect(r.fidelity).toBe('bbox')
+    expect(r.clashingPairs).toEqual([{ aId: 'a', bId: 'b' }])
+    expect(r.indeterminatePairs).toBeUndefined()
+    expect(r.narrowPhaseClearedPairs).toBeUndefined()
+  })
+
+  it('an empty options object behaves exactly like the no-delegate path', () => {
+    const r = detectInterferences(overlapping, {})
+    expect(r.fidelity).toBe('bbox')
+    expect(r.clashingPairs).toEqual([{ aId: 'a', bId: 'b' }])
+  })
+
+  it('a delegate that CLEARS a pair drops the bbox false positive and switches fidelity', () => {
+    // The narrow phase decides the solids do NOT actually intersect → drop the pair.
+    const r = detectInterferences(overlapping, { narrowPhase: () => false })
+    expect(r.fidelity).toBe('bbox+narrow')
+    expect(r.clashingPairs).toEqual([])
+    expect(r.narrowPhaseClearedPairs).toEqual([{ aId: 'a', bId: 'b' }])
+    expect(r.indeterminatePairs).toBeUndefined()
+  })
+
+  it('a delegate that CONFIRMS keeps the pair at bbox+narrow fidelity with no cleared list', () => {
+    const r = detectInterferences(overlapping, { narrowPhase: () => true })
+    expect(r.fidelity).toBe('bbox+narrow')
+    expect(r.clashingPairs).toEqual([{ aId: 'a', bId: 'b' }])
+    expect(r.narrowPhaseClearedPairs).toBeUndefined()
+    expect(r.indeterminatePairs).toBeUndefined()
+  })
+
+  it('an INDETERMINATE verdict keeps the pair (conservative) and flags it', () => {
+    const r = detectInterferences(overlapping, { narrowPhase: () => 'indeterminate' })
+    expect(r.fidelity).toBe('bbox+narrow')
+    expect(r.clashingPairs).toEqual([{ aId: 'a', bId: 'b' }])
+    expect(r.indeterminatePairs).toEqual([{ aId: 'a', bId: 'b' }])
+    expect(r.narrowPhaseClearedPairs).toBeUndefined()
+  })
+
+  it('the delegate is ONLY called for broad-phase overlaps (never for disjoint pairs)', () => {
+    // a∩b overlap; c is far away (disjoint from both) → delegate must see only (a,b).
+    const parts: InterferencePart[] = [
+      part('a', { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 }),
+      part('b', { x: 0.5, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 }),
+      part('c', { x: 100, y: 100, z: 100, rxDeg: 0, ryDeg: 0, rzDeg: 0 })
+    ]
+    const seen: Array<[string, string]> = []
+    const delegate: NarrowPhaseDelegate = (aId, bId) => {
+      seen.push([aId, bId])
+      return true
+    }
+    detectInterferences(parts, { narrowPhase: delegate })
+    expect(seen).toEqual([['a', 'b']])
+  })
+
+  it('invokes the delegate in canonical (aId<bId) order regardless of input order', () => {
+    const overlap = (id: string): InterferencePart =>
+      part(id, { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 }, { min: [0, 0, 0], max: [5, 5, 5] })
+    const seen: Array<[string, string]> = []
+    const delegate: NarrowPhaseDelegate = (aId, bId) => {
+      seen.push([aId, bId])
+      return true
+    }
+    detectInterferences([overlap('z'), overlap('a'), overlap('m')], { narrowPhase: delegate })
+    expect(seen).toEqual([
+      ['a', 'm'],
+      ['a', 'z'],
+      ['m', 'z']
+    ])
+  })
+
+  it('mixes confirmed / cleared / indeterminate across several pairs deterministically', () => {
+    const overlap = (id: string): InterferencePart =>
+      part(id, { x: 0, y: 0, z: 0, rxDeg: 0, ryDeg: 0, rzDeg: 0 }, { min: [0, 0, 0], max: [5, 5, 5] })
+    // Pairs among a,b,c (all mutually overlapping): (a,b),(a,c),(b,c).
+    const delegate: NarrowPhaseDelegate = (aId, bId) => {
+      if (aId === 'a' && bId === 'b') return true // confirmed
+      if (aId === 'a' && bId === 'c') return false // cleared
+      return 'indeterminate' // (b,c)
+    }
+    const r = detectInterferences([overlap('a'), overlap('b'), overlap('c')], { narrowPhase: delegate })
+    expect(r.fidelity).toBe('bbox+narrow')
+    // confirmed + indeterminate are kept; cleared is dropped.
+    expect(r.clashingPairs).toEqual([
+      { aId: 'a', bId: 'b' },
+      { aId: 'b', bId: 'c' }
+    ])
+    expect(r.indeterminatePairs).toEqual([{ aId: 'b', bId: 'c' }])
+    expect(r.narrowPhaseClearedPairs).toEqual([{ aId: 'a', bId: 'c' }])
   })
 })
