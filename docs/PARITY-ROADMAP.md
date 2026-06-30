@@ -30,10 +30,13 @@ posts) exists and works; much of the road to parity is *surfacing* capability, n
   Boss, Lip/Groove. Each: params dialog + pure `build<Op>()` + DOM interaction test + op-builder
   schema test; reachable from the data-driven Design ribbon. Built by the `tier1-feature-dialogs`
   fan-out wave, independently verified (typecheck, test:dom 66, npm test 17415).
-- ⏳ **Selection-heavy solid dialogs** — loft (`loft_guide_rails`), sweep (`sweep_profile_path_true`),
-  pipe (`pipe_path`), pattern-along-path (`pattern_path`), boolean combine (`boolean_combine_profile`),
-  press/pull (`press_pull_profile`). These need a profile/path PICKER (interactive geometry selection),
-  not just params — a real UI capability, the next sub-tier. Do NOT fake them into params dialogs.
+- ✅ **DONE (selection-heavy solid dialogs)** — press/pull, combine, pipe, pattern-along-path, sweep,
+  on a reusable **profile/path picker** (`ProfileSelectField` / `PathSelectField` fed from the sketch
+  via `profileOptions` / `pathOptions`): a labelled-dropdown upgrade over the blind numeric index.
+  Each reachable from the ribbon; DOM + op tests per dialog. NOTE: `loft` is NOT a post-op dialog —
+  it's a base-solid build mode (`loft_guide_rails` is a marker), set from the sketch profiles at base
+  build, so it stays out of the feature-dialog set. A true viewport click-to-pick (highlighted profile
+  selection) is the polish layer on top of the dropdowns (armSketchPlane pattern).
 - ⏳ **Sketch tools**: wire the existing `sketch-boolean-offset.ts` (offset) and `sketch-array.ts`
   (pattern) modules into the tool palette.
 - ⏳ **Assembly**: thread the V1.5 mate panel through DesignWorkspace (currently test-only, not passed).
