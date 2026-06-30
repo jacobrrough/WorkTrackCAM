@@ -55,7 +55,11 @@ interaction problem; the labeled dropdowns are the functional Tier-1 answer.
 ### Tier 2 — Parametric depth
 - **Feature re-edit** — timeline is append-only via dialogs (delete+re-add to change a fillet). Editable
   features is the core parametric-CAD expectation.
-- **Face-sketching** — schema accepts face planes; kernel still assumes XY. Unlocks the Sketch→Solid loop.
+- ✅ **DONE (face-sketching)** — pick a model face → sketch on it → the solid builds on that face. The
+  whole stack was already built + pinned (face-pick, `sketchPreviewPlacementMatrix`, kernel
+  `_apply_placement`); the loop only broke because `DesignWorkspaceHost.onSketchPlanePicked` never
+  persisted the picked plane. One-line fix (`withSketchFacePlane` + the host callback), pinned by
+  `sketch-face-plane.test.ts`. Open follow-up: a "new sketch" inherits the last plane (no re-prompt).
 
 ### Tier 3 — Documentation / output
 - Drawings: hidden-line removal (Tier B / OCC HLR), free-text notes, real DXF export (currently a stub).
