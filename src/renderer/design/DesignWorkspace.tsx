@@ -1565,6 +1565,100 @@ export function DesignWorkspace({
         return { kind: 'datum_axis', params: { axis: 'Z', originXMm: 0, originYMm: 0, originZMm: 0 } }
       case 'datum_point':
         return { kind: 'datum_point', params: { xMm: 0, yMm: 0, zMm: 0 } }
+      case 'transform_translate':
+        return { kind: 'transform_translate', params: { dxMm: 0, dyMm: 0, dzMm: 0, mode: 'move' } }
+      case 'mirror_union_plane':
+        return {
+          kind: 'mirror_union_plane',
+          params: { plane: 'YZ', originXMm: 0, originYMm: 0, originZMm: 0 },
+        }
+      case 'split_keep_halfspace':
+        return { kind: 'split_keep_halfspace', params: { axis: 'Z', offsetMm: 0, keep: 'positive' } }
+      case 'pattern_rectangular':
+        return {
+          kind: 'pattern_rectangular',
+          params: { countX: 2, countY: 1, spacingXMm: 20, spacingYMm: 20 },
+        }
+      case 'pattern_circular':
+        return {
+          kind: 'pattern_circular',
+          params: { count: 4, centerXMm: 0, centerYMm: 0, startAngleDeg: 0, totalAngleDeg: 360 },
+        }
+      case 'pattern_linear_3d':
+        return { kind: 'pattern_linear_3d', params: { count: 3, dxMm: 10, dyMm: 0, dzMm: 0 } }
+      case 'boolean_union_box':
+        return {
+          kind: 'boolean_union_box',
+          params: { xMinMm: 0, xMaxMm: 10, yMinMm: 0, yMaxMm: 10, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'boolean_subtract_box':
+        return {
+          kind: 'boolean_subtract_box',
+          params: { xMinMm: 0, xMaxMm: 10, yMinMm: 0, yMaxMm: 10, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'boolean_intersect_box':
+        return {
+          kind: 'boolean_intersect_box',
+          params: { xMinMm: -10, xMaxMm: 10, yMinMm: -10, yMaxMm: 10, zMinMm: 0, zMaxMm: 20 },
+        }
+      case 'boolean_subtract_cylinder':
+        return {
+          kind: 'boolean_subtract_cylinder',
+          params: { centerXMm: 0, centerYMm: 0, radiusMm: 5, zMinMm: 0, zMaxMm: 10 },
+        }
+      case 'thread_wizard':
+        return {
+          kind: 'thread_wizard',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            majorRadiusMm: 8,
+            pitchMm: 1.25,
+            lengthMm: 20,
+            depthMm: 0.8,
+            zStartMm: 0,
+            hand: 'right',
+            mode: 'modeled',
+            standard: 'ISO',
+            designation: 'M',
+            class: '6g',
+            starts: 1,
+          },
+        }
+      case 'thicken_offset':
+        return { kind: 'thicken_offset', params: { distanceMm: 2, side: 'outward' } }
+      case 'coil_cut':
+        return {
+          kind: 'coil_cut',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            majorRadiusMm: 10,
+            pitchMm: 2,
+            turns: 5,
+            depthMm: 1,
+            zStartMm: 0,
+          },
+        }
+      case 'plastic_rule_fillet':
+        return { kind: 'plastic_rule_fillet', params: { radiusMm: 2 } }
+      case 'plastic_boss':
+        return {
+          kind: 'plastic_boss',
+          params: {
+            centerXMm: 0,
+            centerYMm: 0,
+            zBaseMm: 0,
+            outerRadiusMm: 5,
+            heightMm: 8,
+            draftDeg: 1,
+          },
+        }
+      case 'plastic_lip_groove':
+        return {
+          kind: 'plastic_lip_groove',
+          params: { mode: 'lip', xMinMm: 0, xMaxMm: 50, yMinMm: 0, yMaxMm: 30, zBaseMm: 10, depthMm: 2 },
+        }
       default: {
         const _never: never = effectiveFeatureDialog
         void _never

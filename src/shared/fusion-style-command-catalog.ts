@@ -497,6 +497,15 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'CREATE',
     'Kernel `thicken_offset` true offset request (outward/inward/both) with topology-safe failure reporting'
   ),
+  c(
+    'so_add_box',
+    'Add box (boolean)',
+    'solid_create',
+    'design',
+    'implemented',
+    'CREATE',
+    'Kernel `boolean_union_box`: unions an axis-aligned box (six signed min/max mm bounds) into the current solid'
+  ),
 
   // —— Solid MODIFY ——
   c(
@@ -580,6 +589,33 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'MODIFY',
     'Kernel `press_pull_profile` signed delta on profileIndex (+ union, - cut); face-pick/direct-manipulate UX still planned'
   ),
+  c(
+    'so_cut_box',
+    'Cut box (boolean)',
+    'solid_modify',
+    'design',
+    'implemented',
+    'MODIFY',
+    'Kernel `boolean_subtract_box`: subtracts an axis-aligned box (six signed min/max mm bounds) from the current solid'
+  ),
+  c(
+    'so_intersect_box',
+    'Intersect box (boolean)',
+    'solid_modify',
+    'design',
+    'implemented',
+    'MODIFY',
+    'Kernel `boolean_intersect_box`: clips the current solid to an axis-aligned box (six signed min/max mm bounds)'
+  ),
+  c(
+    'so_cut_cylinder',
+    'Cut cylinder (boolean)',
+    'solid_modify',
+    'design',
+    'implemented',
+    'MODIFY',
+    'Kernel `boolean_subtract_cylinder`: bores a +Z cylinder (center X/Y, radius, z-span) out of the current solid'
+  ),
 
   // —— Solid PATTERN ——
   c(
@@ -619,6 +655,15 @@ export const FUSION_STYLE_COMMAND_CATALOG: FusionStyleCommand[] = [
     'Kernel `mirror_union_plane` (YZ/XZ/XY + origin) — Design ribbon + mirror ∪'
   ),
   c('so_mirror_sketch_plane', 'Mirror (sketch plane)', 'solid_pattern', 'design', 'partial', 'PATTERN', 'Mirror across Y axis in sketch'),
+  c(
+    'so_pattern_linear',
+    'Linear pattern (3D)',
+    'solid_pattern',
+    'design',
+    'implemented',
+    'PATTERN',
+    'Kernel `pattern_linear_3d`: count + signed ΔX/ΔY/ΔZ step (at least one non-zero) — 3D linear array of the current solid'
+  ),
 
   // —— Construct (datums / reference geometry) ——
   c(

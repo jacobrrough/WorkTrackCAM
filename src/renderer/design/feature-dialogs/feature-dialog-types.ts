@@ -72,6 +72,26 @@ export type FeatureDialogKind =
   | 'datum_plane'
   | 'datum_axis'
   | 'datum_point'
+  // ── Wave-wired kernelOp dialogs (Move/Copy, Mirror, Split, patterns,
+  //    box/cylinder booleans, Thread, Thicken, Coil, plastic features). Each is a
+  //    member of `kernelPostSolidOpSchema` driven purely by params — see the
+  //    matching `*Dialog.tsx` op-builders.
+  | 'transform_translate'
+  | 'mirror_union_plane'
+  | 'split_keep_halfspace'
+  | 'pattern_rectangular'
+  | 'pattern_circular'
+  | 'pattern_linear_3d'
+  | 'boolean_union_box'
+  | 'boolean_subtract_box'
+  | 'boolean_intersect_box'
+  | 'boolean_subtract_cylinder'
+  | 'thread_wizard'
+  | 'thicken_offset'
+  | 'coil_cut'
+  | 'plastic_rule_fillet'
+  | 'plastic_boss'
+  | 'plastic_lip_groove'
 
 /** The catalog command id each dialog corresponds to (single source of truth). */
 export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, string>> = {
@@ -83,7 +103,28 @@ export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, strin
   hole: 'so_hole',
   datum_plane: 'co_offset_plane',
   datum_axis: 'co_datum_axis',
-  datum_point: 'co_datum_point'
+  datum_point: 'co_datum_point',
+  // Catalog ids that already exist in fusion-style-command-catalog.ts (so the
+  // Solid/Construct ribbon buttons + palette rows were already rendered; this
+  // wiring is what makes the button OPEN the dialog instead of toasting).
+  transform_translate: 'so_move_copy',
+  mirror_union_plane: 'so_mirror_body',
+  split_keep_halfspace: 'so_split',
+  pattern_rectangular: 'so_pattern_rect',
+  pattern_circular: 'so_pattern_circ',
+  thread_wizard: 'so_thread',
+  thicken_offset: 'so_thicken',
+  coil_cut: 'so_coil',
+  plastic_rule_fillet: 'pl_rule_fillet',
+  plastic_boss: 'pl_boss',
+  plastic_lip_groove: 'pl_lip_groove',
+  // New catalog rows added for ops that had a kernel + dialog but no catalog
+  // entry yet (so a ribbon button now exists for them).
+  pattern_linear_3d: 'so_pattern_linear',
+  boolean_union_box: 'so_add_box',
+  boolean_subtract_box: 'so_cut_box',
+  boolean_intersect_box: 'so_intersect_box',
+  boolean_subtract_cylinder: 'so_cut_cylinder'
 }
 
 /**
