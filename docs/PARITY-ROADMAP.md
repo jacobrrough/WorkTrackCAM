@@ -25,13 +25,18 @@ posts) exists and works; much of the road to parity is *surfacing* capability, n
 ## Prioritized backlog (parity-per-effort)
 
 ### Tier 1 — Wire orphaned engine work to the UI (cheap, high reachable-parity gain)
-- **Solid feature dialogs** for the ~15 dialog-less kernel ops: loft (`loft_guide_rails`), sweep
-  (`sweep_profile_path_true`), pipe (`pipe_path`), coil (`coil_cut`), thread (`thread_wizard`),
-  pattern-along-path (`pattern_path`), sheet-metal (`sheet_tab_union`/`sheet_fold`/`sheet_flat_pattern`),
-  boolean combine, transform/move-copy. Pattern: schema → dialog component → DesignWorkspace wiring → test.
-- **Sketch tools**: wire the existing `sketch-boolean-offset.ts` (offset) and `sketch-array.ts` (pattern)
-  modules into the tool palette.
-- **Assembly**: thread the V1.5 mate panel through DesignWorkspace (currently test-only, not passed).
+- ✅ **DONE (16 params-only solid feature dialogs)** — Move/Copy, Mirror, Split Body, Rectangular/
+  Circular/Linear Pattern, Add/Cut/Intersect Box, Cut Cylinder, Thread, Thicken, Coil, Rule Fillet,
+  Boss, Lip/Groove. Each: params dialog + pure `build<Op>()` + DOM interaction test + op-builder
+  schema test; reachable from the data-driven Design ribbon. Built by the `tier1-feature-dialogs`
+  fan-out wave, independently verified (typecheck, test:dom 66, npm test 17415).
+- ⏳ **Selection-heavy solid dialogs** — loft (`loft_guide_rails`), sweep (`sweep_profile_path_true`),
+  pipe (`pipe_path`), pattern-along-path (`pattern_path`), boolean combine (`boolean_combine_profile`),
+  press/pull (`press_pull_profile`). These need a profile/path PICKER (interactive geometry selection),
+  not just params — a real UI capability, the next sub-tier. Do NOT fake them into params dialogs.
+- ⏳ **Sketch tools**: wire the existing `sketch-boolean-offset.ts` (offset) and `sketch-array.ts`
+  (pattern) modules into the tool palette.
+- ⏳ **Assembly**: thread the V1.5 mate panel through DesignWorkspace (currently test-only, not passed).
 
 ### Tier 2 — Parametric depth
 - **Feature re-edit** — timeline is append-only via dialogs (delete+re-add to change a fillet). Editable
