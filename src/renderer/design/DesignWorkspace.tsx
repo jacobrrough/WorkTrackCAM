@@ -100,6 +100,7 @@ import {
   type FeatureDialogKind,
   type FeatureDialogSpec
 } from './feature-dialogs'
+import { profileOptions, pathOptions } from './feature-dialogs/profile-path-options'
 import { fab } from '../src/shop-types'
 import type {
   CadExecuteScriptMesh,
@@ -1531,6 +1532,10 @@ export function DesignWorkspace({
    * (fillet/chamfer/shell/hole) open on conservative defaults the operator then
    * tunes. `null` when no dialog is active.
    */
+  // Sketch-derived picker options for the selection-heavy feature dialogs (Press/Pull, Sweep, …).
+  const sketchProfiles = useMemo(() => profileOptions(sketchDesign), [sketchDesign])
+  const sketchPaths = useMemo(() => pathOptions(sketchDesign), [sketchDesign])
+
   const featureDialogSpec: FeatureDialogSpec | null = useMemo(() => {
     if (effectiveFeatureDialog === null) return null
     const numericParam = (name: string): number | undefined => {
@@ -1659,6 +1664,8 @@ export function DesignWorkspace({
           kind: 'plastic_lip_groove',
           params: { mode: 'lip', xMinMm: 0, xMaxMm: 50, yMinMm: 0, yMaxMm: 30, zBaseMm: 10, depthMm: 2 },
         }
+      case 'press_pull_profile':
+        return { kind: 'press_pull_profile', params: { profileIndex: 0, deltaMm: 5, zStartMm: 0 } }
       default: {
         const _never: never = effectiveFeatureDialog
         void _never
@@ -2352,6 +2359,8 @@ export function DesignWorkspace({
                   onScriptParams={handleParamsChange}
                   busy={busy}
                   disabled={kernelOpsDisabled}
+                  sketchProfiles={sketchProfiles}
+                  sketchPaths={sketchPaths}
                 />
               </div>
             )}

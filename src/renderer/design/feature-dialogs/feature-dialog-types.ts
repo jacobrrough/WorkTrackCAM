@@ -92,6 +92,9 @@ export type FeatureDialogKind =
   | 'plastic_rule_fillet'
   | 'plastic_boss'
   | 'plastic_lip_groove'
+  // ── Selection-heavy profile/path dialogs: a profile by index and/or a path as a
+  //    point list, picked from sketch-derived dropdowns (ProfilePathFields).
+  | 'press_pull_profile'
 
 /** The catalog command id each dialog corresponds to (single source of truth). */
 export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, string>> = {
@@ -124,7 +127,9 @@ export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, strin
   boolean_union_box: 'so_add_box',
   boolean_subtract_box: 'so_cut_box',
   boolean_intersect_box: 'so_intersect_box',
-  boolean_subtract_cylinder: 'so_cut_cylinder'
+  boolean_subtract_cylinder: 'so_cut_cylinder',
+  // Selection-heavy profile/path dialogs (catalog row `so_press_pull` already exists).
+  press_pull_profile: 'so_press_pull'
 }
 
 /**

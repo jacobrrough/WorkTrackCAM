@@ -48,6 +48,8 @@ import { CoilDialog, type CoilDialogParams } from './CoilDialog'
 import { PlasticRuleFilletDialog, type PlasticRuleFilletDialogParams } from './PlasticRuleFilletDialog'
 import { PlasticBossDialog, type PlasticBossDialogParams } from './PlasticBossDialog'
 import { PlasticLipGrooveDialog, type PlasticLipGrooveDialogParams } from './PlasticLipGrooveDialog'
+import { PressPullProfileDialog, type PressPullProfileDialogParams } from './PressPullProfileDialog'
+import type { PathOption, ProfileOption } from './profile-path-options'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
 import {
@@ -87,6 +89,7 @@ export type FeatureDialogSpec =
   | { readonly kind: 'plastic_rule_fillet'; readonly params: PlasticRuleFilletDialogParams }
   | { readonly kind: 'plastic_boss'; readonly params: PlasticBossDialogParams }
   | { readonly kind: 'plastic_lip_groove'; readonly params: PlasticLipGrooveDialogParams }
+  | { readonly kind: 'press_pull_profile'; readonly params: PressPullProfileDialogParams }
 
 export interface FeatureDialogHostProps {
   /** Which dialog to render + its seed params. */
@@ -101,6 +104,10 @@ export interface FeatureDialogHostProps {
   readonly busy?: boolean
   /** No-project / no-model flag forwarded to the dialog. */
   readonly disabled?: boolean
+  /** Closed-profile options from the live sketch — fed to profile-picking dialogs (Press/Pull, …). */
+  readonly sketchProfiles?: readonly ProfileOption[]
+  /** Open-polyline path options from the live sketch — fed to path-picking dialogs (Pipe, Sweep, …). */
+  readonly sketchPaths?: readonly PathOption[]
 }
 
 /** Map the dialog kind to its catalog/testid handle (used by the wrapper). */
@@ -112,7 +119,9 @@ export function FeatureDialogHost({
   onAppendKernelOp,
   onScriptParams,
   busy,
-  disabled
+  disabled,
+  sketchProfiles = [],
+  sketchPaths = []
 }: FeatureDialogHostProps): JSX.Element {
   // Fan a dialog's single emit out to the matching existing sink.
   const handleApply = (change: FeatureDialogChange): void => {
@@ -135,7 +144,7 @@ export function FeatureDialogHost({
 
   return (
     <div className="fd-host" data-testid={FEATURE_DIALOG_HOST_TESTID} data-fd-kind={spec.kind}>
-      {renderDialog(spec, common)}
+      {renderDialog(spec, common, { profiles: sketchProfiles, paths: sketchPaths })}
     </div>
   )
 }
@@ -152,6 +161,10 @@ function renderDialog(
     readonly onApply: (change: FeatureDialogChange) => void
     readonly busy?: boolean
     readonly disabled?: boolean
+  },
+  pickers: {
+    readonly profiles: readonly ProfileOption[]
+    readonly paths: readonly PathOption[]
   }
 ): JSX.Element {
   switch (spec.kind) {
@@ -205,6 +218,8 @@ function renderDialog(
       return <PlasticBossDialog params={spec.params} {...common} />
     case 'plastic_lip_groove':
       return <PlasticLipGrooveDialog params={spec.params} {...common} />
+    case 'press_pull_profile':
+      return <PressPullProfileDialog params={spec.params} profiles={pickers.profiles} {...common} />
     default: {
       const _never: never = spec
       void _never
