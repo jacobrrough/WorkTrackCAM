@@ -17,7 +17,7 @@ import {
 import type { SelectionSurface } from '../design/selection-state'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
-import type { DesignFileV2 } from '../../shared/design-schema'
+import { withSketchFacePlane, type DesignFileV2 } from '../../shared/design-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import { deriveDrawingBom } from '../../shared/drawing-bom'
 import type { DrawingSheetTab } from '../design/DrawingView'
@@ -441,9 +441,14 @@ export function DesignWorkspaceHost({
       // Construct sketch-on-face — arm face-pick; on a pick enter sketch mode +
       // disarm so the next plain click goes back to normal selection.
       sketchPlanePickArmed={sketchPlanePickArmed}
-      onSketchPlanePicked={() => {
+      onSketchPlanePicked={(plane) => {
         setSketchActive(true)
         setSketchPlanePickArmed(false)
+        // Persist the picked face as the sketch plane so the preview + kernel build place the sketch
+        // ON the face, not the default XY. This was the one missing link — everything downstream
+        // already consumes design.sketchPlane (sketchPreviewPlacementMatrix + build_part.py
+        // _apply_placement, pinned to mirror each other).
+        if (session.design) session.onDesignChange(withSketchFacePlane(session.design, plane))
       }}
       onCommandSurface={handleCommandSurface}
       // Wave 3n — live cursor / last-pick coordinates for the shell StatusBar.
