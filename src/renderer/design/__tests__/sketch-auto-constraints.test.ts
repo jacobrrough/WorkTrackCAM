@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import {
   inferredAxisConstraints,
   inferredCoincidentConstraints,
+  inferredPerpendicularCandidates,
   type AutoConstraintVertex
 } from '../sketch-auto-constraints'
 
@@ -118,22 +119,53 @@ describe('inferredCoincidentConstraints — auto-coincident on snap', () => {
   })
 })
 
+describe('inferredPerpendicularCandidates — slanted right-angle corners', () => {
+  it('flags every right-angle corner of a closed slanted rectangle', () => {
+    const rect = [v('v0', 0, 0), v('v1', 4, 3), v('v2', 1, 7), v('v3', -3, 4)]
+    const out = inferredPerpendicularCandidates(rect, true, new Set())
+    expect(out).toHaveLength(4)
+    expect(out.every((c) => c.type === 'perpendicular')).toBe(true)
+  })
+
+  it('skips corners whose sides are axis-aligned (H/V already pins them)', () => {
+    const rect = [v('a', 0, 0), v('b', 10, 0), v('c', 10, 6), v('d', 0, 6)]
+    expect(inferredPerpendicularCandidates(rect, true, new Set())).toEqual([])
+  })
+
+  it('leaves a non-right-angle corner free', () => {
+    const open = [v('a', 0, 0), v('b', 5, 1), v('c', 8, 6)] // ~43° turn, well outside the 2° cone
+    expect(inferredPerpendicularCandidates(open, false, new Set())).toEqual([])
+  })
+
+  it('only flags interior corners of an open chain', () => {
+    const open = [v('a', 0, 0), v('b', 4, 3), v('c', 1, 7)] // one interior corner at b, perpendicular
+    const out = inferredPerpendicularCandidates(open, false, new Set())
+    expect(out).toHaveLength(1)
+    expect(out[0]!.type).toBe('perpendicular')
+  })
+
+  it('returns nothing for fewer than 3 vertices', () => {
+    expect(inferredPerpendicularCandidates([v('a', 0, 0), v('b', 4, 3)], false, new Set())).toEqual([])
+  })
+})
+
 // Node-env can't click the canvas, so the LAST inch (both commit sites actually persist the inferred
 // constraints) is pinned textually — the same convention as sketch-cursor-world-threading-pin.test.ts.
 const CANVAS = readFileSync(resolve(__dirname, '../Sketch2DCanvas.tsx'), 'utf-8')
 
 describe('auto-constraint wiring — both polyline commit sites persist the inferred constraints', () => {
-  it('imports the pure cores', () => {
-    expect(CANVAS).toContain(
-      "import { inferredAxisConstraints, inferredCoincidentConstraints } from './sketch-auto-constraints'"
-    )
+  it('imports the pure cores + the rank gate', () => {
+    expect(CANVAS).toContain('inferredPerpendicularCandidates')
+    expect(CANVAS).toContain("import { keepRankIndependent } from './sketch-overconstraint'")
   })
 
-  it('the open-segment AND closed-loop commits both append axis + coincident constraints', () => {
-    // Two call sites (commitOpenPolylineSegment + closePolyline), each running both pure cores and
-    // spreading the result into the committed design's constraints array.
+  it('both commits append axis + coincident; the closed loop also rank-gates perpendicular corners', () => {
+    // Two call sites (commitOpenPolylineSegment + closePolyline) run the axis + coincident cores;
+    // perpendicular candidates + the rank gate run ONLY in closePolyline (the multi-segment commit).
     expect(CANVAS.match(/inferredAxisConstraints\(/g) ?? []).toHaveLength(2)
     expect(CANVAS.match(/inferredCoincidentConstraints\(/g) ?? []).toHaveLength(2)
+    expect(CANVAS.match(/inferredPerpendicularCandidates\(/g) ?? []).toHaveLength(1)
+    expect(CANVAS.match(/keepRankIndependent\(/g) ?? []).toHaveLength(1)
     expect(
       CANVAS.match(/constraints: \[\.\.\.design\.constraints, \.\.\.autoCons\]/g) ?? []
     ).toHaveLength(2)

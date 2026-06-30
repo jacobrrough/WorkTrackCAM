@@ -32,7 +32,12 @@ import {
   nodeHandlePickToleranceMm
 } from './sketch2d-node-edit'
 import { inferDrawConstraints, type InferredConstraintKind } from './sketch-inference'
-import { inferredAxisConstraints, inferredCoincidentConstraints } from './sketch-auto-constraints'
+import {
+  inferredAxisConstraints,
+  inferredCoincidentConstraints,
+  inferredPerpendicularCandidates
+} from './sketch-auto-constraints'
+import { keepRankIndependent } from './sketch-overconstraint'
 import {
   collectOsnapCandidates,
   collectOsnapCandidatesDetailed,
@@ -2026,7 +2031,7 @@ export function Sketch2DCanvas({
     const id = crypto.randomUUID()
     // Auto-constraint on draw: each on-axis side becomes a horizontal / vertical constraint (closed
     // loop wraps the last side back to the first vertex), plus a coincident for any vertex snapped
-    // onto an existing point.
+    // onto an existing point, plus perpendicular for slanted right-angle corners.
     const acTaken = new Set(design.constraints.map((c) => c.id))
     const acVerts = polyDraft.map((pt, i) => ({ id: ids[i]!, pt }))
     const axisCons = inferredAxisConstraints(acVerts, true, acTaken)
@@ -2036,7 +2041,17 @@ export function Sketch2DCanvas({
       Object.entries(design.points).map(([id, p]) => ({ id, pt: [p.x, p.y] as [number, number] })),
       acTaken
     )
-    const autoCons = [...axisCons, ...coincCons]
+    coincCons.forEach((c) => acTaken.add(c.id))
+    // Perpendicular corners are CANDIDATES: the rank gate drops any a closed shape already implies
+    // (a slanted quad keeps 3 of 4 right-angles), so the loop is never over-constrained.
+    const base = [...axisCons, ...coincCons]
+    const perpCandidates = inferredPerpendicularCandidates(acVerts, true, acTaken)
+    const allPoints: Record<string, { x: number; y: number }> = { ...design.points }
+    acVerts.forEach((v) => {
+      allPoints[v.id] = { x: v.pt[0], y: v.pt[1] }
+    })
+    const keptPerps = keepRankIndependent(base, perpCandidates, allPoints, ids)
+    const autoCons = [...base, ...keptPerps]
     onDesignChange({
       ...design,
       points: nextPoints,

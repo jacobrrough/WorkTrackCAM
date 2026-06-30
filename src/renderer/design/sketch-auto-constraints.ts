@@ -101,3 +101,64 @@ export function inferredCoincidentConstraints(
   }
   return out
 }
+
+const PERP_TOL_DEG = 2
+const PERP_TOL_SIN = Math.sin((PERP_TOL_DEG * Math.PI) / 180)
+
+/**
+ * Perpendicular CANDIDATES for the corners of a drawn chain — each consecutive segment pair whose
+ * included angle is within {@link PERP_TOL_DEG}° of 90°. These are CANDIDATES, not final constraints:
+ * a closed shape's corners are not all independent (a slanted quad's 4th right-angle is implied), so
+ * the caller MUST pass the result through the rank gate (`keepRankIndependent`) before persisting.
+ *
+ * Sides that are themselves axis-aligned are skipped — a horizontal/vertical pair's right angle is
+ * already pinned by the H/V auto-constraints, so a perpendicular there would only be redundant.
+ * `closed` adds the wrap-around corners (last↔first); an open chain only constrains interior corners.
+ */
+export function inferredPerpendicularCandidates(
+  vertices: ReadonlyArray<AutoConstraintVertex>,
+  closed: boolean,
+  takenConstraintIds: ReadonlySet<string>
+): SketchConstraint[] {
+  const n = vertices.length
+  if (n < 3) return []
+
+  const taken = new Set(takenConstraintIds)
+  const nextId = (): string => {
+    let k = 1
+    while (taken.has(`con_${k}`)) k += 1
+    const id = `con_${k}`
+    taken.add(id)
+    return id
+  }
+
+  const out: SketchConstraint[] = []
+  const start = closed ? 0 : 1
+  const end = closed ? n : n - 1
+  for (let i = start; i < end; i++) {
+    const prev = vertices[(i - 1 + n) % n]!
+    const cur = vertices[i]!
+    const next = vertices[(i + 1) % n]!
+    const d1x = cur.pt[0] - prev.pt[0]
+    const d1y = cur.pt[1] - prev.pt[1]
+    const d2x = next.pt[0] - cur.pt[0]
+    const d2y = next.pt[1] - cur.pt[1]
+    const l1 = Math.hypot(d1x, d1y)
+    const l2 = Math.hypot(d2x, d2y)
+    if (l1 === 0 || l2 === 0) continue
+    // H/V already pins a right angle when either side is on-axis — skip to avoid a redundant perp.
+    if (d1x === 0 || d1y === 0 || d2x === 0 || d2y === 0) continue
+    const cosAbs = Math.abs(d1x * d2x + d1y * d2y) / (l1 * l2)
+    if (cosAbs < PERP_TOL_SIN) {
+      out.push({
+        id: nextId(),
+        type: 'perpendicular',
+        a1: { pointId: prev.id },
+        b1: { pointId: cur.id },
+        a2: { pointId: cur.id },
+        b2: { pointId: next.id }
+      })
+    }
+  }
+  return out
+}
