@@ -37,9 +37,20 @@ posts) exists and works; much of the road to parity is *surfacing* capability, n
   it's a base-solid build mode (`loft_guide_rails` is a marker), set from the sketch profiles at base
   build, so it stays out of the feature-dialog set. A true viewport click-to-pick (highlighted profile
   selection) is the polish layer on top of the dropdowns (armSketchPlane pattern).
-- ⏳ **Sketch tools**: wire the existing `sketch-boolean-offset.ts` (offset) and `sketch-array.ts`
-  (pattern) modules into the tool palette.
-- ⏳ **Assembly**: thread the V1.5 mate panel through DesignWorkspace (currently test-only, not passed).
+- ✅ **DONE (sketch offset + array) — was already wired.** The `SketchSurface` palette has the
+  Offset / Boolean / Array buttons → `OffsetSketchDialog` / `ArraySketchDialog` → the pure modules
+  (`offsetSketchEntities` / `rectangularArray` / `circularArray`) → `applyDesignEdit`. Now also
+  DOM-interaction-tested (`SketchEditDialogs.dom.spec.tsx`); the roadmap entry was stale.
+- ✅ **DONE (assembly mates) — already reachable.** The live mate surface is `AssemblyMatePanel`
+  (3-vector point/axis/plane/distance mates), mounted on the assemble route, wired to `onMateAdded` →
+  `runPersistMate` (assembly.json) and fed to the solver via `mateConstraints`. The V1.5 FACE-ID panel
+  in `AssemblyView` is DEAD BY DESIGN (incompatible shape — its own comment says don't wire it), so the
+  roadmap's "thread the V1.5 panel" was misguided. Open follow-up (not Tier-1): confirm a freshly
+  persisted mate reaches the in-memory solver state without a reload.
+
+**Tier-1 is CLEARED.** The remaining nicety is viewport **click-to-pick** for profile/path selection —
+but the profiles live in the 2D SKETCH, not the 3D feature-editing view, so it's a Tier-2-sized
+interaction problem; the labeled dropdowns are the functional Tier-1 answer.
 
 ### Tier 2 — Parametric depth
 - **Feature re-edit** — timeline is append-only via dialogs (delete+re-add to change a fillet). Editable
