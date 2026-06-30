@@ -49,6 +49,10 @@ import { PlasticRuleFilletDialog, type PlasticRuleFilletDialogParams } from './P
 import { PlasticBossDialog, type PlasticBossDialogParams } from './PlasticBossDialog'
 import { PlasticLipGrooveDialog, type PlasticLipGrooveDialogParams } from './PlasticLipGrooveDialog'
 import { PressPullProfileDialog, type PressPullProfileDialogParams } from './PressPullProfileDialog'
+import { CombineProfileDialog, type CombineProfileDialogParams } from './CombineProfileDialog'
+import { PipeDialog, type PipeDialogParams } from './PipeDialog'
+import { PatternPathDialog, type PatternPathDialogParams } from './PatternPathDialog'
+import { SweepDialog, type SweepDialogParams } from './SweepDialog'
 import type { PathOption, ProfileOption } from './profile-path-options'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 import type { CadScriptParamValue } from '../../../shared/sidecar-protocol'
@@ -90,6 +94,10 @@ export type FeatureDialogSpec =
   | { readonly kind: 'plastic_boss'; readonly params: PlasticBossDialogParams }
   | { readonly kind: 'plastic_lip_groove'; readonly params: PlasticLipGrooveDialogParams }
   | { readonly kind: 'press_pull_profile'; readonly params: PressPullProfileDialogParams }
+  | { readonly kind: 'boolean_combine_profile'; readonly params: CombineProfileDialogParams }
+  | { readonly kind: 'pipe_path'; readonly params: PipeDialogParams }
+  | { readonly kind: 'pattern_path'; readonly params: PatternPathDialogParams }
+  | { readonly kind: 'sweep_profile_path_true'; readonly params: SweepDialogParams }
 
 export interface FeatureDialogHostProps {
   /** Which dialog to render + its seed params. */
@@ -220,6 +228,16 @@ function renderDialog(
       return <PlasticLipGrooveDialog params={spec.params} {...common} />
     case 'press_pull_profile':
       return <PressPullProfileDialog params={spec.params} profiles={pickers.profiles} {...common} />
+    case 'boolean_combine_profile':
+      return <CombineProfileDialog params={spec.params} profiles={pickers.profiles} {...common} />
+    case 'pipe_path':
+      return <PipeDialog params={spec.params} paths={pickers.paths} {...common} />
+    case 'pattern_path':
+      return <PatternPathDialog params={spec.params} paths={pickers.paths} {...common} />
+    case 'sweep_profile_path_true':
+      return (
+        <SweepDialog params={spec.params} profiles={pickers.profiles} paths={pickers.paths} {...common} />
+      )
     default: {
       const _never: never = spec
       void _never

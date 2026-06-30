@@ -1666,6 +1666,26 @@ export function DesignWorkspace({
         }
       case 'press_pull_profile':
         return { kind: 'press_pull_profile', params: { profileIndex: 0, deltaMm: 5, zStartMm: 0 } }
+      case 'boolean_combine_profile':
+        return {
+          kind: 'boolean_combine_profile',
+          params: { mode: 'union', extrudeDepthMm: 5, zStartMm: 0 },
+        }
+      case 'pipe_path':
+        return {
+          kind: 'pipe_path',
+          params: { outerRadiusMm: 5, zStartMm: 0, orientationMode: 'frenet' },
+        }
+      case 'pattern_path':
+        return {
+          kind: 'pattern_path',
+          params: { count: 4, closedPath: false, alignToPathTangent: false },
+        }
+      case 'sweep_profile_path_true':
+        return {
+          kind: 'sweep_profile_path_true',
+          params: { zStartMm: 0, orientationMode: 'frenet' },
+        }
       default: {
         const _never: never = effectiveFeatureDialog
         void _never

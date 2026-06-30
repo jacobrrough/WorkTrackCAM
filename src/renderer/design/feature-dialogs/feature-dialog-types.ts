@@ -95,6 +95,10 @@ export type FeatureDialogKind =
   // ── Selection-heavy profile/path dialogs: a profile by index and/or a path as a
   //    point list, picked from sketch-derived dropdowns (ProfilePathFields).
   | 'press_pull_profile'
+  | 'boolean_combine_profile'
+  | 'pipe_path'
+  | 'pattern_path'
+  | 'sweep_profile_path_true'
 
 /** The catalog command id each dialog corresponds to (single source of truth). */
 export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, string>> = {
@@ -128,8 +132,12 @@ export const FEATURE_DIALOG_COMMAND_ID: Readonly<Record<FeatureDialogKind, strin
   boolean_subtract_box: 'so_cut_box',
   boolean_intersect_box: 'so_intersect_box',
   boolean_subtract_cylinder: 'so_cut_cylinder',
-  // Selection-heavy profile/path dialogs (catalog row `so_press_pull` already exists).
-  press_pull_profile: 'so_press_pull'
+  // Selection-heavy profile/path dialogs (catalog rows already exist).
+  press_pull_profile: 'so_press_pull',
+  boolean_combine_profile: 'so_combine',
+  pipe_path: 'so_pipe',
+  pattern_path: 'so_pattern_path',
+  sweep_profile_path_true: 'so_sweep'
 }
 
 /**
