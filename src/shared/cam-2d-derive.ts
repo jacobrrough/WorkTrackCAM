@@ -34,6 +34,10 @@ export function contourPointSignature(points: ReadonlyArray<readonly [number, nu
 export function listContourCandidatesFromDesign(design: DesignFileV2): DerivedContourCandidate[] {
   const out: DerivedContourCandidate[] = []
   for (const e of design.entities) {
+    // Construction (reference) geometry is dashed guide geometry — it must
+    // NEVER derive into a CAM contour (conservative: entities are only ever
+    // REMOVED from derivation here, never added).
+    if (e.construction === true) continue
     if (e.kind === 'polyline') {
       const pts = polylinePositions(e, design.points)
       if (!e.closed || pts.length < 3) continue
@@ -116,7 +120,8 @@ export function deriveContourPointsFromDesign(design: DesignFileV2, sourceId?: s
 export function deriveDrillPointsFromDesign(design: DesignFileV2): [number, number][] {
   const out: [number, number][] = []
   for (const e of design.entities) {
-    if (e.kind === 'circle') out.push([e.cx, e.cy])
+    // A construction circle is a layout guide, not a hole — never a drill point.
+    if (e.kind === 'circle' && e.construction !== true) out.push([e.cx, e.cy])
   }
   return out
 }

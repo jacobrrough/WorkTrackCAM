@@ -17,6 +17,10 @@ import {
 export function shapesFromEntities(entities: SketchEntity[], pointsMap: Record<string, { x: number; y: number }>): THREE.Shape[] {
   const shapes: THREE.Shape[] = []
   for (const e of entities) {
+    // Construction (reference) geometry never previews as solid — mirrors the
+    // kernel-side exclusion in `extractKernelProfiles` so the Three preview and
+    // the built part always agree.
+    if (e.construction === true) continue
     if (e.kind === 'polyline') {
       const pts = polylinePositions(e, pointsMap)
       if (!e.closed || pts.length < 3) continue

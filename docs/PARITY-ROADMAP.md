@@ -1,69 +1,100 @@
 # Fusion-Parity Roadmap
 
-Grounded scorecard from a 5-area code survey (2026-06-25). Percentages are **code-capability**;
-user-**reachable** parity is materially lower because of orphaned (built-but-unwired) surfaces.
+Grounded scorecard from a **6-area parallel code audit (2026-07-01)** — sketch, solid, assembly,
+drawings, CAM, core UX — each verified against the live shell (reachable ≠ merely built).
+Supersedes the 2026-06-25 5-area survey.
 
-## Scorecard
+## Scorecard (2026-07-01)
 
-| Workspace | Code parity | Note |
+| Area | Parity | One-line verdict |
 |---|---:|---|
-| Manufacture (CAM) | ~65–70% | Strongest; near-full parity for the 3 shop machines. Gaps deliberate (no 5-axis/turning). |
-| Drawings | ~60–70% | Ortho/iso/section/detail views, 7 dim types, 14 GD&T chars, title block, multi-sheet, BOM. No HLR, notes, DXF. |
-| Solid modeling | ~45–55% | 30+ real kernel ops; ~15 have **no dialog**. No surface/direct-edit, no feature re-edit. |
-| Sketch | ~45–50% | Inference + auto-constraints + 15 constraint types + solver. No construction geo, project, face-sketch. |
-| Assemble | ~25–30% | Real 6-DOF mate solver, thin UI. No motion, bbox-only interference, one mate panel unreachable. |
+| Manufacture (CAM) | ~87% | Strongest. All 2D/3D/4-axis strategies real + posted; gaps are deliberate (thread-mill/scallop blocked) or frontier (true gouge check, G2/G3 at source). |
+| Sketch | ~65–75% | Production-ready for 2D profiles: all entities, 15 constraints, driving dims, inference. Gaps: construction geo, project-model-edges, conflict naming. |
+| Drawings | ~60–70% | Solid foundation + associativity. Notes/ordinate/baseline/chain are schema-ready with NO toolbar. HLR exists in sidecar but unused for export. DXF is a stub. |
+| Solid modeling | ~55–60% | 21 wired dialogs + timeline (reorder/suppress/rollback/delete). **NO feature re-edit** — the core parametric gap. No user params/expressions, no hole wizard. |
+| Assemble | ~40% | Real solver (all joints, 6 mate kinds, limits, over-constraint gating). Thin UX: no mate list/edit UI, motion poses computed but never animated, no limits form. |
+| Core UX | — | Undo/redo, palette, themes, onboarding done. Missing: window-select, ortho toggle, autosave/crash recovery, edge/vertex pick (sidecar gap), right-click menus. |
 
-**Overall:** ~50% (code) / ~40% (reachable) within the app's intended scope (design → drawing → CAM
-for the 3 machines); ~25–30% against *all* of Fusion (which includes Render/Sim/Generative/Surface —
-deliberately out of scope).
+**Overall:** ~60% code / ~50% reachable within intended scope (design → drawing → CAM for the
+3 shop machines). The engine remains ahead of the UI; most parity is still *surfacing*, not building.
 
-## The dominant theme
+## Master plan — phased, parity-per-effort, shop-weighted
 
-**The engine is consistently more capable than the UI exposes.** The expensive part (kernel, solvers,
-posts) exists and works; much of the road to parity is *surfacing* capability, not creating it.
+Rule of engagement: each improvement cycle takes 2–4 items from the **lowest unfinished phase**,
+runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 
-## Prioritized backlog (parity-per-effort)
+### Phase 1 — "Feels professional" (highest value ÷ effort)
+- ✅ **Feature re-edit (M-L)** — ✎ on timeline rows opens the REAL dialogs pre-filled for 24 op
+  kinds (`featureDialogSpecForOp`), schema-gated `GenericOpEditor` covers the rest (picked-id /
+  profile-path / sheet ops — deliberate, so ids never silently drop). `updateKernelOpAt` +
+  `update` TimelineAction, replace-in-place, DOM-spec-proven. *(done 2026-07-01, wave 1)*
+- ✅ **Ortho ⇄ perspective toggle + fit-to-view (S)** — CameraRig camera swap with exact
+  scale-preserving zoom⇄distance math (viewport3d-camera-fit.ts); fit frames the bounding sphere
+  along the current view direction. *(done 2026-07-01, wave 1)*
+- ✅ **Drawings: notes + leaders toolbar (S)** — one-click place (snap → leader note, free → float),
+  edit/delete/clear, re-anchor + dangling badge, client-side SVG with escaping trust boundary.
+  Persistence threaded through DesignWorkspace → drawing.json. *(done 2026-07-01, wave 1;
+  aligned-dimension orientation UI deferred)*
+- ✅ **Sketch: construction-geometry toggle (M) + collinear toolbar button (S)** — optional
+  `construction` flag, dashed render, excluded at all 3 derivation sources (kernel profiles,
+  cam-2d-derive contour/drill, preview mesh) — gcode-safety-verified remove-only. Collinear
+  resolves 2 line-like selections → two 3-point constraints. *(done 2026-07-01, wave 1; X-key
+  shortcut deferred)*
+- [ ] **Autosave + crash recovery (M)** — periodic design-session snapshot + restore-on-launch offer.
+  (Deferred from wave 1: touches DesignSessionContext concurrently with feature re-edit.)
 
-### Tier 1 — Wire orphaned engine work to the UI (cheap, high reachable-parity gain)
-- ✅ **DONE (16 params-only solid feature dialogs)** — Move/Copy, Mirror, Split Body, Rectangular/
-  Circular/Linear Pattern, Add/Cut/Intersect Box, Cut Cylinder, Thread, Thicken, Coil, Rule Fillet,
-  Boss, Lip/Groove. Each: params dialog + pure `build<Op>()` + DOM interaction test + op-builder
-  schema test; reachable from the data-driven Design ribbon. Built by the `tier1-feature-dialogs`
-  fan-out wave, independently verified (typecheck, test:dom 66, npm test 17415).
-- ✅ **DONE (selection-heavy solid dialogs)** — press/pull, combine, pipe, pattern-along-path, sweep,
-  on a reusable **profile/path picker** (`ProfileSelectField` / `PathSelectField` fed from the sketch
-  via `profileOptions` / `pathOptions`): a labelled-dropdown upgrade over the blind numeric index.
-  Each reachable from the ribbon; DOM + op tests per dialog. NOTE: `loft` is NOT a post-op dialog —
-  it's a base-solid build mode (`loft_guide_rails` is a marker), set from the sketch profiles at base
-  build, so it stays out of the feature-dialog set. A true viewport click-to-pick (highlighted profile
-  selection) is the polish layer on top of the dropdowns (armSketchPlane pattern).
-- ✅ **DONE (sketch offset + array) — was already wired.** The `SketchSurface` palette has the
-  Offset / Boolean / Array buttons → `OffsetSketchDialog` / `ArraySketchDialog` → the pure modules
-  (`offsetSketchEntities` / `rectangularArray` / `circularArray`) → `applyDesignEdit`. Now also
-  DOM-interaction-tested (`SketchEditDialogs.dom.spec.tsx`); the roadmap entry was stale.
-- ✅ **DONE (assembly mates) — already reachable.** The live mate surface is `AssemblyMatePanel`
-  (3-vector point/axis/plane/distance mates), mounted on the assemble route, wired to `onMateAdded` →
-  `runPersistMate` (assembly.json) and fed to the solver via `mateConstraints`. The V1.5 FACE-ID panel
-  in `AssemblyView` is DEAD BY DESIGN (incompatible shape — its own comment says don't wire it), so the
-  roadmap's "thread the V1.5 panel" was misguided. Open follow-up (not Tier-1): confirm a freshly
-  persisted mate reaches the in-memory solver state without a reload.
+### Phase 2 — Selection & viewport depth
+- [ ] **Window/box select (L)** — drag-rectangle → frustum test → multi-face selection. The #1
+  batch-operation friction.
+- [ ] **Edge + vertex picking (L)** — sidecar `tessellate_with_ids` must emit per-edge polylines +
+  stable edge ids (faceIds pattern exists); then fillet/chamfer pick edges in-viewport.
+- [ ] **Right-click context menu in viewport (M)** — selection-aware shortcut menu (sketch-on-face,
+  fillet, shell…); command handlers already exist in design-commands.ts.
+- [ ] **Sketch over-constraint conflict naming (M)** — solver already rank-detects; surface WHICH
+  constraint conflicts (highlight + HUD).
 
-**Tier-1 is CLEARED.** The remaining nicety is viewport **click-to-pick** for profile/path selection —
-but the profiles live in the 2D SKETCH, not the 3D feature-editing view, so it's a Tier-2-sized
-interaction problem; the labeled dropdowns are the functional Tier-1 answer.
+### Phase 3 — Parametric depth
+- [ ] **User parameters + expressions (L)** — named params + `d1*2` evaluator feeding dialogs and
+  sketch dims. Design-intent capture.
+- [ ] **Hole wizard (M)** — counterbore/countersink/tap designation on hole_from_profile; kernel
+  geometry in build_part.py.
+- [ ] **Feature-timeline undo/redo (M)** — route append/remove/move/suppress through the existing
+  undo-manager command classes.
+- [ ] **Project model edges into sketch (L)** — face/edge extraction → plane projection → snappable
+  reference geometry. ~25% faster complex sketches.
+- [ ] **Multi-format design export (M)** — STEP/3MF/OBJ export beyond STL (sidecar exporters exist).
 
-### Tier 2 — Parametric depth
-- **Feature re-edit** — timeline is append-only via dialogs (delete+re-add to change a fillet). Editable
-  features is the core parametric-CAD expectation.
-- ✅ **DONE (face-sketching)** — pick a model face → sketch on it → the solid builds on that face. The
-  whole stack was already built + pinned (face-pick, `sketchPreviewPlacementMatrix`, kernel
-  `_apply_placement`); the loop only broke because `DesignWorkspaceHost.onSketchPlanePicked` never
-  persisted the picked plane. One-line fix (`withSketchFacePlane` + the host callback), pinned by
-  `sketch-face-plane.test.ts`. Open follow-up: a "new sketch" inherits the last plane (no re-prompt).
+### Phase 4 — Assembly UX
+- [ ] **Motion-study playback (M)** — assembly:simulate poses already computed; apply to viewport
+  with a timeline slider.
+- [ ] **Mate list/edit/delete panel (M)** — persisted mateConstraints are invisible today.
+- [ ] **Joint limits authoring UI (S)** — schema + solver clamps done; needs min/max fields.
+- [ ] **Copy/mirror component + visibility toggles (M)**.
+- [ ] **External STEP part import as component (L)** — vendor hardware in assemblies.
+- [ ] **Free-body SE(3) rotation (L)** — deferred from Cycle 276; destabilization risk documented.
 
-### Tier 3 — Documentation / output
-- Drawings: hidden-line removal (Tier B / OCC HLR), free-text notes, real DXF export (currently a stub).
+### Phase 5 — Drawings output
+- [ ] **Ordinate/baseline/chain toolbar (M)** — schema-ready; needs set-based pickers.
+- [ ] **Centerlines + center marks (S-M)** — detect arcs/circles in projection.
+- [ ] **HLR for orthographic export (M)** — cadquery_hlr.py pipeline exists; add includeHlr to
+  cad.project_drawing + UI toggle.
+- [ ] **Real DXF export (L)** — dimensions/GD&T/notes as DXF entities (currently frame + mesh only).
+  Highest shop ROI in this phase: DXF feeds lasers/other CAM.
+- [ ] **Hole table (M)** — topology scan for bored holes.
 
-## Verification gap (cross-cutting — see self-optimization plan)
-No DOM/interaction test env and no app-driving harness, so "wired" ≠ "works." Closing this is the
-precondition for trusting any Tier-1/2 work. Sidecar venv ready at `C:\Users\jrrou\wtcam-sidecar-venv`.
+### Phase 6 — CAM frontier (already strongest; polish last)
+- [ ] **G2/G3 arcs at adaptive source (M)** — today post-side arc-fitting only.
+- [ ] **True waterline/adaptive via OCL in bundled venv (env/M)** — install into the 3.11 sidecar
+  venv; fallback chain already honest.
+- [ ] **True gouge detection (L)** — SDF/BVH toolpath-vs-model check (voxel approximation today).
+- [ ] **Helical/orbital entry for face/pocket (M)** — tool-life win on Laguna sheet work.
+
+### Explicitly out of scope (do not build)
+5-axis, turning, thread-mill + scallop engines (dead-engine gated), 3D sketch, surface/NURBS
+workbench, render/sim/generative — per CLAUDE.md machine scope and the 2026-05-27 pivot.
+
+## Verification bar (unchanged)
+"Wired" claims require: typecheck + full node suite green, a DOM interaction spec for any new
+dialog/tool (`npm run test:dom`), and honest logging in `.claude/improvement-log.md`. G-code-adjacent
+changes invoke the gcode-safety skill. The operator hands-on pass on real hardware remains the
+final gate before "ready."

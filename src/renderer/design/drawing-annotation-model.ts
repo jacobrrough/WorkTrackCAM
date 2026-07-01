@@ -43,6 +43,7 @@ import type {
   DrawingDimension,
   DrawingDimensionAnchor,
   DrawingLinearOrientation,
+  DrawingNote,
   DrawingPoint2D
 } from '../../shared/drawing-annotation-schema'
 
@@ -514,4 +515,331 @@ export function reanchorDimensions(
     if (dangling) danglingIds.add(dimension.id)
   }
   return { dimensions: out, danglingIds }
+}
+
+// ---------------------------------------------------------------------------
+// Free-text notes (general / leader notes)
+// ---------------------------------------------------------------------------
+//
+// The note annotation (`drawingNoteSchema`) follows the SAME persistence +
+// associativity pattern as GD&T frames / surface-finish symbols, with two
+// differences:
+//
+//  1. The associative link is OPTIONAL — `note.leader` is a
+//     `DrawingDimensionAnchor` when the placement click snapped to a feature
+//     (the note points at that feature via a leader line) and absent for a
+//     free-floating note block. A note without a leader is associative-inert:
+//     it can never dangle.
+//  2. The note text is OPERATOR FREE-TEXT rendered by a CLIENT-SIDE SVG
+//     emitter ({@link noteToSvg}) — there is no sidecar round-trip, so unlike
+//     GD&T datums the escaping trust boundary is HERE. {@link escapeSvgText}
+//     entity-escapes every line before it reaches the `<text>` markup the
+//     renderer drops in via `dangerouslySetInnerHTML` (Safety Rule 4: a note
+//     like `</text><script>` must render as literal text, never as markup).
+//
+// Safety Rule 1 still holds: documentation overlays only — nothing here is
+// read by CAM / G-code / post-processing.
+
+/**
+ * Monotonic-ish unique id for a freshly placed note. Combines a kind prefix, a
+ * base-36 timestamp, and a per-call counter so two notes placed in the same
+ * millisecond never collide. Opaque — only equality matters. (Mirrors
+ * `makeGdtFrameId` / `makeSurfaceFinishId`.)
+ */
+let noteIdCounter = 0
+export function makeNoteId(): string {
+  noteIdCounter += 1
+  return `note:${Date.now().toString(36)}:${noteIdCounter.toString(36)}`
+}
+
+/**
+ * Offset (SVG-mm) from a snapped leader target to the note text block, so the
+ * leader line has visible length and the text does not sit on the geometry.
+ * Up-and-right of the target, the drafting-convention default.
+ */
+export const NOTE_LEADER_OFFSET: DrawingPoint2D = { x: 12, y: -12 }
+
+/**
+ * Build an anchored {@link DrawingNote} from a single resolved placement click
+ * and the operator's note text.
+ *
+ *  * Snapped click (`sourceId` non-null) → the snap target becomes the note's
+ *    LEADER anchor (`refId` = the live associative link, exactly like a GD&T
+ *    frame anchor) and the text block is offset by {@link NOTE_LEADER_OFFSET}
+ *    so the leader line is visible.
+ *  * Free click → a free-floating note block at the click point, NO leader.
+ *
+ * The text is stored VERBATIM (schema `z.string()`); escaping happens at the
+ * SVG emitter ({@link noteToSvg}), the client-side trust boundary. Pure.
+ */
+export function buildDrawingNote(click: ResolvedClick, text: string): DrawingNote {
+  if (click.sourceId !== null) {
+    const leader = anchorFromClick(click)
+    return {
+      id: makeNoteId(),
+      text,
+      placement: {
+        x: click.point.x + NOTE_LEADER_OFFSET.x,
+        y: click.point.y + NOTE_LEADER_OFFSET.y
+      },
+      leader
+    }
+  }
+  return {
+    id: makeNoteId(),
+    text,
+    placement: { x: click.point.x, y: click.point.y }
+  }
+}
+
+/** Replace one note's text (per-note edit affordance). Pure — new list, inputs untouched. */
+export function updateNoteText(
+  notes: readonly DrawingNote[],
+  id: string,
+  text: string
+): DrawingNote[] {
+  return notes.map((n) => (n.id === id ? { ...n, text } : n))
+}
+
+/** Remove one note by id (per-note delete affordance). Pure — new list, inputs untouched. */
+export function removeNote(notes: readonly DrawingNote[], id: string): DrawingNote[] {
+  return notes.filter((n) => n.id !== id)
+}
+
+/**
+ * A note re-resolved against fresh geometry, paired with whether its leader
+ * anchor lost its link. (Mirrors `ReanchoredGdtFrame` / `ReanchoredSurfaceFinish`.)
+ */
+export interface ReanchoredNote {
+  /** The note with its resolved leader `cachedPoint` (and placement) refreshed. */
+  readonly note: DrawingNote
+  /**
+   * `true` when the note's associative leader `refId` no longer resolves against
+   * the fresh geometry. The renderer badges these `dangling` (drawn from the
+   * stale `cachedPoint` fallback). A leaderless or free-anchored note never
+   * dangles.
+   */
+  readonly dangling: boolean
+}
+
+/**
+ * Re-resolve one persisted note's leader anchor against the fresh snap index.
+ * A resolved leader refreshes its `cachedPoint` AND translates the note
+ * `placement` by the same delta — the text block keeps the offset the operator
+ * gave it, riding along with the feature it points at (unlike GD&T frames,
+ * whose placement is pinned to the anchor). Dangling / free leaders keep the
+ * stale coordinates as the graceful fallback. Leaderless notes pass through
+ * untouched. Pure — returns a new note; the input is never mutated.
+ */
+export function reanchorNote(
+  note: DrawingNote,
+  index: ReadonlyMap<string, { readonly x: number; readonly y: number }>
+): ReanchoredNote {
+  if (note.leader === undefined) {
+    return { note, dangling: false }
+  }
+  const { anchor, status } = resolveAnchor(note.leader, index)
+  if (status === 'resolved') {
+    const dx = anchor.cachedPoint.x - note.leader.cachedPoint.x
+    const dy = anchor.cachedPoint.y - note.leader.cachedPoint.y
+    return {
+      note: {
+        ...note,
+        leader: anchor,
+        placement: { x: note.placement.x + dx, y: note.placement.y + dy }
+      },
+      dangling: false
+    }
+  }
+  // free / dangling: keep the anchor + placement as-is (graceful fallback).
+  return { note: { ...note, leader: anchor }, dangling: status === 'dangling' }
+}
+
+/**
+ * Re-resolve a whole list of persisted notes against a fresh snap-point list
+ * (typically the `snapPoints` from a fresh `cad.extract_drawing_geometry`
+ * call). Returns the refreshed notes plus a parallel set of the ids that are
+ * now `dangling`. Pure. The single entry point `DrawingView` calls on every
+ * geometry refresh — the exact sibling of `reanchorGdtFrames` /
+ * `reanchorSurfaceFinishes`.
+ */
+export function reanchorNotes(
+  notes: readonly DrawingNote[],
+  snapPoints: readonly FreshSnapPoint[]
+): { notes: DrawingNote[]; danglingIds: ReadonlySet<string> } {
+  const index = buildSnapIndex(snapPoints)
+  const out: DrawingNote[] = []
+  const danglingIds = new Set<string>()
+  for (const note of notes) {
+    const { note: next, dangling } = reanchorNote(note, index)
+    out.push(next)
+    if (dangling) danglingIds.add(next.id)
+  }
+  return { notes: out, danglingIds }
+}
+
+// ---------------------------------------------------------------------------
+// Note SVG emitter (client-side composition — the escaping trust boundary)
+// ---------------------------------------------------------------------------
+
+/** Note text size (SVG-mm), matching the surface-finish label scale. */
+export const NOTE_FONT_SIZE = 3.5
+/** Vertical advance per note line (SVG-mm). */
+export const NOTE_LINE_HEIGHT = 4.6
+/** Approximate glyph advance for the background-box width estimate (SVG-mm). */
+const NOTE_CHAR_WIDTH = NOTE_FONT_SIZE * 0.62
+/** Horizontal / vertical padding between the text and its backing box (SVG-mm). */
+const NOTE_PAD_X = 1.6
+const NOTE_PAD_Y = 1.2
+
+/**
+ * Entity-escape operator free-text for injection into SVG markup. This is the
+ * CLIENT-SIDE escaping trust boundary for the note layer (Safety Rule 4): the
+ * composed SVG string is rendered via `dangerouslySetInnerHTML`, so React's JSX
+ * escaping never sees it — every interpolated text node MUST pass through here.
+ * Order matters: `&` first, so already-escaped entities are not double-broken.
+ * Pure.
+ */
+export function escapeSvgText(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * Format a finite number for SVG markup with bounded precision (3 dp, trailing
+ * zeros trimmed). `NaN`/`Infinity` collapse to `0` so the emitted geometry is
+ * always valid. Markup-safe (digits/dot/minus). (Local sibling of the
+ * surface-finish module's private formatter.)
+ */
+function svgNum(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  return Number(value.toFixed(3)).toString()
+}
+
+/**
+ * Split note text into render lines. Handles `\r\n` / `\r` / `\n`; an empty
+ * string yields one empty line so the note box never collapses to nothing.
+ */
+export function noteTextLines(text: string): string[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  return lines.length === 0 ? [''] : lines
+}
+
+/**
+ * Emit one note as a self-contained SVG `<g>` fragment:
+ *
+ *  * a subtle backing box (`currentColor` at low opacity) sized to the text,
+ *    with `note.placement` as its TOP-LEFT corner,
+ *  * one `<text>` element per line (multi-line notes stack down the box),
+ *    every line entity-escaped by {@link escapeSvgText},
+ *  * when `note.leader` is present: a leader line from the box edge nearest the
+ *    target to `leader.cachedPoint`, with a small dot at the target. A dangling
+ *    leader draws dashed.
+ *
+ * The fragment carries `data-note-id` and, when `dangling`, the
+ * `drawing-note--dangling` class + `data-note-dangling="true"` (the exact
+ * surface-finish dangling-badge analogue). Coordinates are SVG-mm sheet space.
+ * Pure: same input → byte-identical output.
+ */
+export function noteToSvg(
+  note: DrawingNote,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const lines = noteTextLines(note.text)
+  const maxChars = lines.reduce((m, l) => Math.max(m, l.length), 1)
+  const boxX = note.placement.x
+  const boxY = note.placement.y
+  const boxW = maxChars * NOTE_CHAR_WIDTH + 2 * NOTE_PAD_X
+  const boxH = lines.length * NOTE_LINE_HEIGHT + 2 * NOTE_PAD_Y
+
+  const parts: string[] = []
+
+  // Leader first so the box + text paint on top of the line.
+  if (note.leader !== undefined) {
+    const target = note.leader.cachedPoint
+    // Attach the leader to the box edge nearest the target.
+    let attachX = boxX + boxW / 2
+    let attachY = boxY + boxH / 2
+    if (target.x <= boxX) {
+      attachX = boxX
+    } else if (target.x >= boxX + boxW) {
+      attachX = boxX + boxW
+    } else if (target.y <= boxY) {
+      attachY = boxY
+    } else {
+      attachY = boxY + boxH
+    }
+    const dash = dangling ? ' stroke-dasharray="1.5 1"' : ''
+    parts.push(
+      `<line fill="none" stroke="currentColor" stroke-width="0.3"${dash} x1="${svgNum(attachX)}" y1="${svgNum(attachY)}" x2="${svgNum(target.x)}" y2="${svgNum(target.y)}" />`
+    )
+    parts.push(
+      `<circle fill="currentColor" stroke="none" cx="${svgNum(target.x)}" cy="${svgNum(target.y)}" r="0.7" />`
+    )
+  }
+
+  // Subtle backing box.
+  parts.push(
+    `<rect fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.35" stroke-width="0.25" x="${svgNum(boxX)}" y="${svgNum(boxY)}" width="${svgNum(boxW)}" height="${svgNum(boxH)}" />`
+  )
+
+  // Text lines — every line entity-escaped (the trust boundary).
+  const textCommon = `fill="currentColor" stroke="none" font-size="${svgNum(NOTE_FONT_SIZE)}" font-family="sans-serif" text-anchor="start"`
+  lines.forEach((line, i) => {
+    const baselineY = boxY + NOTE_PAD_Y + i * NOTE_LINE_HEIGHT + NOTE_FONT_SIZE * 0.85
+    parts.push(
+      `<text ${textCommon} x="${svgNum(boxX + NOTE_PAD_X)}" y="${svgNum(baselineY)}">${escapeSvgText(line)}</text>`
+    )
+  })
+
+  const cls = dangling ? 'drawing-note drawing-note--dangling' : 'drawing-note'
+  const danglingAttr = dangling ? ' data-note-dangling="true"' : ''
+  // The note id is minted internally (makeNoteId) but escape defensively — a
+  // hydrated drawing.json could carry an arbitrary string id.
+  return `<g class="${cls}" data-note-id="${escapeSvgText(note.id)}"${danglingAttr}>${parts.join('')}</g>`
+}
+
+/**
+ * Compose every note into one `<g class="drawing-note-layer">` fragment (render
+ * order preserved), badging any note whose id is in `danglingIds`. Returns the
+ * empty string when there are no notes so the caller can skip composition. Pure.
+ */
+export function notesLayerSvg(
+  notes: readonly DrawingNote[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  if (notes.length === 0) return ''
+  const inner = notes
+    .map((n) => noteToSvg(n, { dangling: danglingIds?.has(n.id) === true }))
+    .join('')
+  return `<g class="drawing-note-layer" data-testid="design-drawing-note-layer">${inner}</g>`
+}
+
+/**
+ * Splice the note `<g>` layer into an existing projection SVG, just before the
+ * closing `</svg>` so it paints on top of the linework + dimension + GD&T +
+ * surface-finish layers. When the SVG has no `</svg>` close tag (defensive) the
+ * layer is appended. When there are no notes the input SVG is returned
+ * unchanged. Pure. (Mirrors `composeSurfaceFinishIntoSvg`.)
+ */
+export function composeNotesIntoSvg(
+  svg: string,
+  notes: readonly DrawingNote[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  const layer = notesLayerSvg(notes, danglingIds)
+  if (layer === '') return svg
+  const closeIdx = svg.lastIndexOf('</svg>')
+  if (closeIdx === -1) return svg + layer
+  return svg.slice(0, closeIdx) + layer + svg.slice(closeIdx)
+}
+
+/** Test whether a note has a live associative leader link. Pure. */
+export function isAssociativeNote(note: DrawingNote): boolean {
+  return note.leader !== undefined && note.leader.refId !== FREE_ANCHOR_REF_ID
 }

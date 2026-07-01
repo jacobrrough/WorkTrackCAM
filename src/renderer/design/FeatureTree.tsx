@@ -258,6 +258,14 @@ export interface FeatureTreeProps {
    * button renders disabled (read-only timeline).
    */
   readonly onKernelDelete?: (index: number) => void
+  /**
+   * FEATURE RE-EDIT — open the parameter-edit dialog for the op at `index`
+   * (the row's ✎ button). The host opens the matching feature dialog
+   * PRE-FILLED with the op's current parameters; its Apply replaces the op IN
+   * PLACE via the session's `updateKernelOpAt`. When omitted, the per-row
+   * edit button renders disabled (read-only timeline).
+   */
+  readonly onKernelEdit?: (index: number) => void
 }
 
 /**
@@ -562,6 +570,7 @@ interface KernelTimelineProps {
   readonly onSetRollback: ((index: number) => void) | undefined
   readonly onClearRollback: (() => void) | undefined
   readonly onDelete: ((index: number) => void) | undefined
+  readonly onEdit: ((index: number) => void) | undefined
 }
 
 /**
@@ -582,6 +591,7 @@ function KernelTimeline({
   onSetRollback,
   onClearRollback,
   onDelete,
+  onEdit,
 }: KernelTimelineProps): JSX.Element {
   // Index of the row currently being dragged (null when idle). Drives the
   // drop-target styling + the reorder dispatch.
@@ -761,6 +771,18 @@ function KernelTimeline({
                 </button>
                 <button
                   type="button"
+                  className="btn btn-ghost btn-xs cad-kernel-row__btn"
+                  data-testid="cad-kernel-edit"
+                  tabIndex={tabbable ? 0 : -1}
+                  disabled={onEdit == null}
+                  aria-label={`Edit ${kernelOpLabel(op)}`}
+                  title="Edit this op's parameters (updates it in place)"
+                  onClick={() => onEdit?.(index)}
+                >
+                  {'✎'}
+                </button>
+                <button
+                  type="button"
                   className="btn btn-ghost btn-xs cad-kernel-row__btn cad-kernel-row__btn--delete"
                   data-testid="cad-kernel-delete"
                   tabIndex={tabbable ? 0 : -1}
@@ -795,6 +817,7 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
     onKernelSetRollback,
     onKernelClearRollback,
     onKernelDelete,
+    onKernelEdit,
   } = props
 
   const editable = onParamsChange != null
@@ -885,6 +908,7 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
           onSetRollback={onKernelSetRollback}
           onClearRollback={onKernelClearRollback}
           onDelete={onKernelDelete}
+          onEdit={onKernelEdit}
         />
       )}
     </div>

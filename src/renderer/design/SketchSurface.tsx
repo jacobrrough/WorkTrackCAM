@@ -68,6 +68,7 @@ import { sketchToolForDesignCommand } from './design-command-map'
 import {
   createSketchHistory,
   deleteSelectedSketchEntities,
+  toggleConstructionOnSelectedSketchEntities,
   translateSelectedSketchEntities,
   type SketchHistory
 } from './sketch-history'
@@ -570,6 +571,28 @@ export function SketchSurface({
     )
   }
 
+  /**
+   * Toggle CONSTRUCTION (reference) geometry on the live selection — Fusion's
+   * X-key concept, ONE history step through the same seam as every other
+   * surface mutation (`applyDesignEdit`). Each selected entity toggles
+   * individually (pure `toggleConstructionOnSelectedSketchEntities`); the
+   * applier returns the SAME reference for an empty/stale selection, so no
+   * undo step is recorded then. Construction entities render dashed, keep
+   * constraints/dimensions/snapping, and never derive into the solid or CAM.
+   */
+  function handleToggleConstruction(): void {
+    const cur = liveDesignRef.current
+    const ids = new Set(selectedIds)
+    const next = toggleConstructionOnSelectedSketchEntities(cur, ids)
+    if (next === cur) return
+    applyDesignEdit(next)
+    onSketchHint?.(
+      ids.size === 1
+        ? 'Toggled construction on 1 vector.'
+        : `Toggled construction on ${ids.size} vectors.`
+    )
+  }
+
   // Surface-level keyboard seam: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z via the central
   // shortcut catalog matchers, plus Delete for the selection. Window-level so it
   // works regardless of which child has focus; gated off while typing in an
@@ -860,6 +883,21 @@ export function SketchSurface({
                 </button>
               )
             })}
+            {group === 'Modify' && (
+              /* Construction is an ACTION on the selection (not a draw tool):
+                 it toggles the reference-geometry flag on the selected
+                 entities in ONE undo step. Disabled with nothing selected. */
+              <button
+                type="button"
+                className="sketch-surface__tool sketch-surface__tool--construction"
+                data-testid="sketch-surface-construction"
+                disabled={selectedIds.length === 0}
+                title="Toggle construction (reference) geometry on the selection — dashed guide geometry: snappable and constrainable, but never part of the solid or CAM toolpaths"
+                onClick={handleToggleConstruction}
+              >
+                Construction
+              </button>
+            )}
           </div>
         ))}
       </div>

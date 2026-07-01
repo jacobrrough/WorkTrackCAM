@@ -192,6 +192,95 @@ describe('applyTimelineAction / suppress', () => {
   })
 })
 
+describe('applyTimelineAction / update (feature re-edit, in place)', () => {
+  it('replaces the op at the SAME index — no append, no reorder', () => {
+    const state: TimelineState = { kernelOps: [unionBox(), filletAll(2)] }
+    const r = applyTimelineAction(state, { type: 'update', index: 1, op: filletAll(7) })
+    expect(r.changed).toBe(true)
+    if (r.changed) {
+      expect(r.state.kernelOps).toHaveLength(2)
+      expect(r.state.kernelOps[1]).toEqual({ kind: 'fillet_all', radiusMm: 7 })
+      expect(r.state.kernelOps[0]).toEqual(unionBox())
+      expect(r.status).toMatch(/updated/i)
+    }
+  })
+
+  it('rejects an update out of range (unchanged state, same reference)', () => {
+    const state: TimelineState = { kernelOps: [unionBox()] }
+    for (const index of [-1, 1, 99]) {
+      const r = applyTimelineAction(state, { type: 'update', index, op: filletAll(1) })
+      expect(r.changed).toBe(false)
+      if (!r.changed) expect(r.reason).toMatch(/range/i)
+      expect(r.state).toBe(state)
+    }
+  })
+
+  it('preserves suppressed:true when the replacement omits the flag', () => {
+    const state: TimelineState = {
+      kernelOps: [unionBox(), { ...filletAll(2), suppressed: true }]
+    }
+    const r = applyTimelineAction(state, { type: 'update', index: 1, op: filletAll(9) })
+    expect(r.changed).toBe(true)
+    if (r.changed) {
+      expect(r.state.kernelOps[1]).toEqual({
+        kind: 'fillet_all',
+        radiusMm: 9,
+        suppressed: true
+      })
+    }
+  })
+
+  it('an explicit suppressed:false in the replacement wins (and DROPS the key)', () => {
+    const state: TimelineState = { kernelOps: [{ ...filletAll(2), suppressed: true }] }
+    const r = applyTimelineAction(state, {
+      type: 'update',
+      index: 0,
+      op: { ...filletAll(2), suppressed: false }
+    })
+    expect(r.changed).toBe(true)
+    if (r.changed) {
+      expect('suppressed' in r.state.kernelOps[0]!).toBe(false)
+      expect(r.state.kernelOps[0]).toEqual(filletAll(2))
+    }
+  })
+
+  it('is a no-op when the merged op deep-equals the current one', () => {
+    const state: TimelineState = {
+      kernelOps: [unionBox(), { ...filletAll(2), suppressed: true }]
+    }
+    // Replacement omits `suppressed`, so the merge re-inherits it -> identical.
+    const r = applyTimelineAction(state, { type: 'update', index: 1, op: filletAll(2) })
+    expect(r.changed).toBe(false)
+    if (!r.changed) expect(r.reason).toMatch(/unchanged/i)
+    expect(r.state).toBe(state)
+  })
+
+  it('rejects a kind change that lands a finishing op before a create op', () => {
+    const state: TimelineState = { kernelOps: [unionBox(), patternRect()] }
+    const r = applyTimelineAction(state, { type: 'update', index: 0, op: filletAll(1) })
+    expect(r.changed).toBe(false)
+    if (!r.changed) expect(r.reason).toMatch(/finishing/i)
+    expect(r.state).toBe(state)
+  })
+
+  it('keeps the roll-back marker where it is (list length unchanged)', () => {
+    const state: TimelineState = {
+      kernelOps: [unionBox(), patternRect(), filletAll(2)],
+      rolledBackTo: 1
+    }
+    const r = applyTimelineAction(state, { type: 'update', index: 2, op: filletAll(4) })
+    expect(r.changed).toBe(true)
+    if (r.changed) expect(r.state.rolledBackTo).toBe(1)
+  })
+
+  it('does not mutate the input state or its ops array', () => {
+    const state: TimelineState = { kernelOps: [unionBox(), filletAll(2)] }
+    const snapshot = JSON.parse(JSON.stringify(state))
+    applyTimelineAction(state, { type: 'update', index: 1, op: filletAll(6) })
+    expect(JSON.parse(JSON.stringify(state))).toEqual(snapshot)
+  })
+})
+
 describe('applyTimelineAction / rollback marker', () => {
   it('sets an inclusive roll-back marker', () => {
     const state: TimelineState = { kernelOps: [unionBox(), patternRect(), filletAll()] }

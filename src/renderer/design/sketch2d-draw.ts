@@ -38,6 +38,15 @@ import type { SketchTool } from './Sketch2DCanvas'
 
 const CANVAS_SLOT_SEGMENTS = 24
 
+/**
+ * CONSTRUCTION (reference) geometry render tokens — Fusion's X-key concept.
+ * Construction entities stroke dashed + dimmer (same purple family, lower
+ * alpha) and are never filled; they read as guides, not part geometry.
+ * Exported so the render-pin test shares one source of truth.
+ */
+export const CONSTRUCTION_DASH: readonly number[] = [5, 4]
+export const CONSTRUCTION_STROKE = 'rgba(196, 181, 253, 0.55)'
+
 export type ConstraintPickHit = { kind: 'vertex'; id: string } | { kind: 'segment'; a: string; b: string }
 
 export interface DrawSketch2DParams {
@@ -382,6 +391,16 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
   }
 
   for (const e of entities) {
+    // Construction (reference) geometry: dashed + dimmer, never filled. The
+    // save/restore fences the override so the next entity paints normally.
+    const isConstruction = e.construction === true
+    if (isConstruction) {
+      ctx.save()
+      ctx.setLineDash([...CONSTRUCTION_DASH])
+      ctx.strokeStyle = CONSTRUCTION_STROKE
+      ctx.lineWidth = 1.5
+      ctx.fillStyle = 'transparent'
+    }
     if (e.kind === 'polyline') {
       const pts = polylinePositions(e, points)
       drawShape(pts, e.closed)
@@ -417,7 +436,7 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
     } else if (e.kind === 'arc') {
       const apt = arcSamplePositions(e, points, 28)
       if (apt.length >= 2) {
-        ctx.fillStyle = e.closed ? 'rgba(147, 51, 234, 0.12)' : 'transparent'
+        ctx.fillStyle = e.closed && !isConstruction ? 'rgba(147, 51, 234, 0.12)' : 'transparent'
         drawShape(apt, !!e.closed)
         ctx.fillStyle = 'rgba(147, 51, 234, 0.12)'
       }
@@ -428,11 +447,12 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
       const loop =
         e.kind === 'spline_fit' ? splineFitPolylineFromEntity(e, points) : splineCpPolylineFromEntity(e, points)
       if (loop && loop.length >= 2) {
-        ctx.fillStyle = e.closed ? 'rgba(147, 51, 234, 0.12)' : 'transparent'
+        ctx.fillStyle = e.closed && !isConstruction ? 'rgba(147, 51, 234, 0.12)' : 'transparent'
         drawShape(loop, !!e.closed)
         ctx.fillStyle = 'rgba(147, 51, 234, 0.12)'
       }
     }
+    if (isConstruction) ctx.restore()
   }
 
   const dims = design.dimensions ?? []
@@ -658,8 +678,13 @@ export function drawSketch2D(params: DrawSketch2DParams): void {
       if (!selectedEntityIds.has(e.id)) continue
       const outline = entityOutlineWorld(e, points)
       if (!outline) continue
+      // Selected CONSTRUCTION geometry keeps its dashed identity: solid green
+      // is reserved for selected normal geometry, dashed green = selected
+      // construction — both states stay visually distinct.
+      ctx.setLineDash(e.construction === true ? [...CONSTRUCTION_DASH] : [])
       drawShape(outline.pts, outline.closed)
     }
+    ctx.setLineDash([])
     const ghost = selectionGhostOffsetMm
     if (ghost && (ghost[0] !== 0 || ghost[1] !== 0)) {
       ctx.setLineDash([4, 4])

@@ -292,6 +292,32 @@ export function translateSelectedSketchEntities(
   return { ...moved, entities }
 }
 
+/**
+ * Toggle the CONSTRUCTION (reference-geometry) flag on the selected entities —
+ * the applier behind the palette's "Construction" action (Fusion's X-key
+ * concept). Each selected entity toggles INDIVIDUALLY (a mixed selection flips
+ * each entity's own state, matching Fusion), so toggling twice always
+ * round-trips. Construction entities render dashed, keep participating in
+ * constraints / dimensions / snapping, and are EXCLUDED from profile
+ * derivation (`extractKernelProfiles` / `cam-2d-derive`) — they never become
+ * solid or cut geometry.
+ *
+ * Returns the SAME design reference when the selection matches nothing, so
+ * callers can skip the apply + history push (the S1 applier convention).
+ */
+export function toggleConstructionOnSelectedSketchEntities(
+  design: DesignFileV2,
+  selectedEntityIds: ReadonlySet<string>
+): DesignFileV2 {
+  const anySelected = design.entities.some((e) => selectedEntityIds.has(e.id))
+  if (!anySelected) return design
+  const entities = design.entities.map((e): SketchEntity => {
+    if (!selectedEntityIds.has(e.id)) return e
+    return { ...e, construction: e.construction !== true }
+  })
+  return { ...design, entities }
+}
+
 export interface SketchDeleteResult {
   readonly design: DesignFileV2
   /** Entity ids actually removed (selection ∩ live entities). */

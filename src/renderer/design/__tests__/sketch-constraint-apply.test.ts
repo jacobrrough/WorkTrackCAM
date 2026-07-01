@@ -56,15 +56,21 @@ function lastConstraint(d: DesignFileV2): SketchConstraint {
 }
 
 describe('applicableConstraints', () => {
-  it('two lines → parallel/perpendicular/equal (and coincident on their vertices)', () => {
+  it('two lines → parallel/perpendicular/collinear/equal (and coincident on their vertices)', () => {
     const d = fixture()
     const kinds = applicableConstraints(d, sel('line1', 'line2'))
     expect(kinds).toContain('parallel')
     expect(kinds).toContain('perpendicular')
+    expect(kinds).toContain('collinear')
     expect(kinds).toContain('equal')
     expect(kinds).toContain('coincident')
     expect(kinds).not.toContain('concentric')
     expect(kinds).not.toContain('horizontal')
+  })
+
+  it('one line → NO collinear (needs two line-like selections)', () => {
+    const d = fixture()
+    expect(applicableConstraints(d, sel('line1'))).not.toContain('collinear')
   })
 
   it('one line → horizontal/vertical only (no two-line kinds)', () => {
@@ -141,6 +147,66 @@ describe('addConstraintFromSelection — each kind: right selection adds the con
     expect(c.type).toBe('equal')
   })
 
+  it('collinear: two lines → TWO 3-point constraints (both l2 endpoints on the l1 line)', () => {
+    const d = fixture()
+    const out = addConstraintFromSelection(d, sel('line1', 'line2'), 'collinear')
+    expect(out).not.toBeNull()
+    // ONE apply appends the PAIR — true segment collinearity needs both of the
+    // second segment's endpoints pinned to the first segment's infinite line.
+    expect(out!.constraints).toHaveLength(2)
+    expect(out!.constraints[0]).toMatchObject({
+      id: 'con_1',
+      type: 'collinear',
+      a: { pointId: 'l1a' },
+      b: { pointId: 'l1b' },
+      c: { pointId: 'l2a' }
+    })
+    expect(out!.constraints[1]).toMatchObject({
+      id: 'con_2',
+      type: 'collinear',
+      a: { pointId: 'l1a' },
+      b: { pointId: 'l1b' },
+      c: { pointId: 'l2b' }
+    })
+  })
+
+  it('collinear pair ids skip taken con_<n> slots', () => {
+    const d = fixture()
+    d.constraints = [{ id: 'con_1', type: 'horizontal', a: { pointId: 'l1a' }, b: { pointId: 'l1b' } }]
+    const out = addConstraintFromSelection(d, sel('line1', 'line2'), 'collinear')!
+    expect(out.constraints.map((c) => c.id)).toEqual(['con_1', 'con_2', 'con_3'])
+  })
+
+  it('collinear then re-solve drives line2 onto line1 (exact landing)', () => {
+    // Nearly-collinear start (mirrors the horizontal exact-landing test: the
+    // contract is the WIRING + landing, not gradient-descent range) — line1's
+    // infinite line is y = 0.1x, line2 sits ~0.5 mm off it.
+    const d: DesignFileV2 = {
+      ...emptyDesign(),
+      points: {
+        l1a: { x: 0, y: 0 },
+        l1b: { x: 10, y: 1 },
+        l2a: { x: 20, y: 2.5 },
+        l2b: { x: 30, y: 3.5 }
+      },
+      entities: [
+        { id: 'line1', kind: 'polyline', pointIds: ['l1a', 'l1b'], closed: false },
+        { id: 'line2', kind: 'polyline', pointIds: ['l2a', 'l2b'], closed: false }
+      ]
+    }
+    const withC = addConstraintFromSelection(d, sel('line1', 'line2'), 'collinear')!
+    const solved = solveSketchToTolerance(withC)
+    const a = solved.points['l1a']!
+    const b = solved.points['l1b']!
+    for (const pid of ['l2a', 'l2b'] as const) {
+      const p = solved.points[pid]!
+      // Perpendicular distance from p to the (a,b) infinite line → ~0.
+      const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+      const len = Math.hypot(b.x - a.x, b.y - a.y)
+      expect(Math.abs(cross) / Math.max(len, 1e-9)).toBeLessThan(1e-3)
+    }
+  })
+
   it('tangent: line + arc → tangent referencing the arc 3 points + the line', () => {
     const d = fixture()
     const c = lastConstraint(addConstraintFromSelection(d, sel('line1', 'arc1'), 'tangent')!)
@@ -199,6 +265,9 @@ describe('addConstraintFromSelection — wrong selection → null', () => {
   const cases: ReadonlyArray<{ kind: ConstraintKind; sel: Set<string>; why: string }> = [
     { kind: 'parallel', sel: sel('line1'), why: 'needs two lines' },
     { kind: 'perpendicular', sel: sel('circ1', 'circ2'), why: 'circles are not lines' },
+    { kind: 'collinear', sel: sel('line1'), why: 'needs two lines' },
+    { kind: 'collinear', sel: sel('circ1', 'circ2'), why: 'circles are not line-like' },
+    { kind: 'collinear', sel: sel('line1', 'rect1'), why: 'rect is not line-like' },
     { kind: 'equal', sel: sel('line1', 'rect1'), why: 'rect is not line-like' },
     { kind: 'tangent', sel: sel('line1', 'line2'), why: 'needs an arc' },
     { kind: 'tangent', sel: sel('circ1', 'arc1'), why: 'circle is not a line' },

@@ -530,7 +530,7 @@ export function entitiesToResolvedSketch(d: DesignFileV2): SketchEntity[] {
     if (e.kind !== 'polyline') return e
     const pts = polylinePositions(e, d.points)
     if (pts.length < 2) return e
-    return { id: e.id, kind: 'polyline' as const, points: pts, closed: e.closed }
+    return { id: e.id, kind: 'polyline' as const, points: pts, closed: e.closed, construction: e.construction }
   })
 }
 
@@ -749,11 +749,15 @@ export function splineCpPolylineFromEntity(
 /**
  * Extract closed profiles from design (same rules as Three preview: closed polyline, rect, circle,
  * `slot` (tessellated stadium), and `arc` with `closed: true` as a tessellated loop + chord).
+ * CONSTRUCTION (reference) entities are excluded at this source: they exist for
+ * constraints/dimensions/snapping only and must never become solid or cut
+ * geometry (conservative filter — entities are only ever REMOVED, never added).
  * Returns null if nothing to build.
  */
 export function extractKernelProfiles(design: DesignFileV2): KernelProfileV1[] | null {
   const profiles: KernelProfileV1[] = []
   for (const e of design.entities) {
+    if (e.construction === true) continue
     if (e.kind === 'polyline') {
       const pts = polylinePositions(e, design.points)
       if (!e.closed || pts.length < 3) continue

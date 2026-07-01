@@ -406,6 +406,12 @@ export function DesignWorkspaceHost({
       onKernelDelete={(index) => {
         void session.removeKernelOpAt(index)
       }}
+      // FEATURE RE-EDIT — a timeline row's ✎ opens the matching dialog
+      // pre-filled; its Apply replaces the op IN PLACE (same index) through the
+      // session's validate → replace → persist → rebuild path.
+      onUpdateKernelOp={(index, op) => {
+        void session.updateKernelOpAt(index, op)
+      }}
       onAppendKernelOp={(op) => {
         void session.appendKernelOp(op)
       }}

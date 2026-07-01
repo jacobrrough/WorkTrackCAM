@@ -104,6 +104,7 @@ function fakeSession(features: PartFeaturesFile | null): DesignSessionValue {
     undo: () => {},
     setFeatures: () => {},
     appendKernelOp: asyncNoop,
+    updateKernelOpAt: asyncNoop,
     removeKernelOpAt: asyncNoop,
     moveKernelOp: asyncNoop,
     reorderKernelOps: asyncNoop,

@@ -558,6 +558,15 @@
   color: #fff;
   border-color: var(--accent);
 }
+/* Construction is an ACTION on the selection (not an armable tool): dashed
+   border echoes the dashed construction-geometry render on the canvas. */
+.sketch-surface__tool--construction {
+  border-style: dashed;
+}
+.sketch-surface__tool--construction:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* Canvas column: status row (snap + params + count) over the canvas host. */
 .sketch-surface__canvas-col {

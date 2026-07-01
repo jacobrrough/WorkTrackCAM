@@ -76,12 +76,16 @@ export { solveSketchToTolerance } from './solver2d'
 /**
  * The constraint kinds the S5 toolbar can create from an ENTITY selection.
  * A subset of `SketchConstraint['type']` — the toolbar deliberately omits the
- * point-pick-only kinds (distance/angle/collinear/midpoint/symmetric/fix/
- * radius/diameter) which the dimension tool + canvas constraint-pick already own.
+ * point-pick-only kinds (distance/angle/midpoint/symmetric/fix/radius/
+ * diameter) which the dimension tool + canvas constraint-pick already own.
+ * `collinear` IS a toolbar kind: two line-like selections resolve to TWO
+ * three-point collinear constraints (both endpoints of the second segment on
+ * the first segment's infinite line — true segment collinearity, per Fusion).
  */
 export type ConstraintKind =
   | 'parallel'
   | 'perpendicular'
+  | 'collinear'
   | 'equal'
   | 'tangent'
   | 'coincident'
@@ -93,6 +97,7 @@ export type ConstraintKind =
 export const TOOLBAR_CONSTRAINT_KINDS: readonly ConstraintKind[] = [
   'parallel',
   'perpendicular',
+  'collinear',
   'equal',
   'tangent',
   'coincident',
@@ -188,7 +193,7 @@ function selectedEntityIdsInDrawOrder(
  * `TOOLBAR_CONSTRAINT_KINDS` order so the UI is stable.
  *
  * Requirements per kind:
- *   parallel / perpendicular / equal -> exactly TWO line-like selections.
+ *   parallel / perpendicular / collinear / equal -> exactly TWO line-like selections.
  *   tangent                          -> one line-like LINE (polyline) + one ARC.
  *   coincident                       -> exactly TWO point-bearing selections.
  *   horizontal / vertical            -> exactly ONE line-like selection.
@@ -214,7 +219,7 @@ export function applicableConstraints(
   const tangentOk = ids.length === 2 && lineForTangent != null && arcForTangent != null
 
   if (twoLines) {
-    out.push('parallel', 'perpendicular', 'equal')
+    out.push('parallel', 'perpendicular', 'collinear', 'equal')
   }
   if (tangentOk) out.push('tangent')
   if (pointBearing.length === 2 && ids.length === 2) out.push('coincident')
@@ -233,10 +238,20 @@ export function applicableConstraints(
 
 /** First `con_<n>` (n ≥ 1) not already used by a constraint. */
 function freeConstraintId(design: DesignFileV2): string {
+  return freeConstraintIds(design, 1)[0]!
+}
+
+/** The first `count` free `con_<n>` ids (n ≥ 1), in ascending order. */
+function freeConstraintIds(design: DesignFileV2, count: number): string[] {
   const taken = new Set(design.constraints.map((c) => c.id))
+  const out: string[] = []
   let n = 1
-  while (taken.has(`con_${n}`)) n += 1
-  return `con_${n}`
+  while (out.length < count) {
+    const id = `con_${n}`
+    if (!taken.has(id)) out.push(id)
+    n += 1
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +260,14 @@ function freeConstraintId(design: DesignFileV2): string {
 
 /**
  * Resolve `selectedEntityIds` to the ids `kind` needs and return a NEW design
- * with the built `SketchConstraint` appended, or `null` when the selection
+ * with the built `SketchConstraint`(s) appended, or `null` when the selection
  * cannot satisfy the kind (so the caller records no undo step). Never mutates
  * `design`. The new constraint's residual is non-zero in general — the caller
  * re-solves; this function does NOT move geometry.
+ *
+ * Every kind appends exactly ONE constraint except `collinear`, which appends
+ * TWO three-point collinear constraints (see `buildCollinearPair`) — still ONE
+ * apply, ONE undo step for the caller.
  *
  * The result is a DEEP clone (`cloneDesign`): `solveSketchToTolerance` mutates
  * its argument's points in place, so a deep clone keeps the surface's undo
@@ -264,36 +283,46 @@ export function addConstraintFromSelection(
   // clean null rather than a malformed constraint.
   if (!applicableConstraints(design, selectedEntityIds).includes(kind)) return null
 
-  const id = freeConstraintId(design)
-  const constraint = buildConstraint(design, selectedEntityIds, kind, id)
-  if (!constraint) return null
+  const constraints = buildConstraints(design, selectedEntityIds, kind)
+  if (!constraints || constraints.length === 0) return null
 
   const next = cloneDesign(design)
-  next.constraints = [...next.constraints, constraint]
+  next.constraints = [...next.constraints, ...constraints]
   return next
 }
 
-function buildConstraint(
+function buildConstraints(
   design: DesignFileV2,
   selectedEntityIds: ReadonlySet<string>,
-  kind: ConstraintKind,
-  id: string
-): SketchConstraint | null {
+  kind: ConstraintKind
+): SketchConstraint[] | null {
   const ids = selectedEntityIdsInDrawOrder(design, selectedEntityIds)
   switch (kind) {
     case 'parallel':
     case 'perpendicular':
-    case 'equal':
-      return buildTwoLine(design, ids, kind, id)
-    case 'tangent':
-      return buildTangent(design, ids, id)
-    case 'coincident':
-      return buildCoincident(design, ids, id)
+    case 'equal': {
+      const c = buildTwoLine(design, ids, kind, freeConstraintId(design))
+      return c ? [c] : null
+    }
+    case 'collinear':
+      return buildCollinearPair(design, ids)
+    case 'tangent': {
+      const c = buildTangent(design, ids, freeConstraintId(design))
+      return c ? [c] : null
+    }
+    case 'coincident': {
+      const c = buildCoincident(design, ids, freeConstraintId(design))
+      return c ? [c] : null
+    }
     case 'horizontal':
-    case 'vertical':
-      return buildAxisAligned(design, ids, kind, id)
-    case 'concentric':
-      return buildConcentric(design, ids, id)
+    case 'vertical': {
+      const c = buildAxisAligned(design, ids, kind, freeConstraintId(design))
+      return c ? [c] : null
+    }
+    case 'concentric': {
+      const c = buildConcentric(design, ids, freeConstraintId(design))
+      return c ? [c] : null
+    }
     default: {
       const _exhaustive: never = kind
       void _exhaustive
@@ -319,6 +348,39 @@ function buildTwoLine(
     a2: { pointId: l2.aId },
     b2: { pointId: l2.bId }
   }
+}
+
+/**
+ * Collinear from TWO line-like selections — mirrors the parallel/perpendicular
+ * resolution (first straight segments (a1,b1) / (a2,b2)) but the schema's
+ * `collinear` is a THREE-point relation (a, b, c on one line). One three-point
+ * constraint only pins ONE endpoint of the second segment to the first's
+ * infinite line; TRUE segment collinearity (what the Fusion button means)
+ * needs BOTH, so this builds the pair:
+ *   collinear(a1, b1, a2)  and  collinear(a1, b1, b2)
+ * with consecutive collision-free `con_<n>` ids.
+ */
+function buildCollinearPair(design: DesignFileV2, ids: string[]): SketchConstraint[] | null {
+  const l1 = lineLikeFromEntity(design, ids[0] ?? '')
+  const l2 = lineLikeFromEntity(design, ids[1] ?? '')
+  if (!l1 || !l2) return null
+  const [id1, id2] = freeConstraintIds(design, 2)
+  return [
+    {
+      id: id1!,
+      type: 'collinear',
+      a: { pointId: l1.aId },
+      b: { pointId: l1.bId },
+      c: { pointId: l2.aId }
+    },
+    {
+      id: id2!,
+      type: 'collinear',
+      a: { pointId: l1.aId },
+      b: { pointId: l1.bId },
+      c: { pointId: l2.bId }
+    }
+  ]
 }
 
 function buildTangent(design: DesignFileV2, ids: string[], id: string): SketchConstraint | null {
@@ -384,6 +446,8 @@ export function constraintKindLabel(kind: ConstraintKind): string {
       return 'Parallel'
     case 'perpendicular':
       return 'Perpendicular'
+    case 'collinear':
+      return 'Collinear'
     case 'equal':
       return 'Equal'
     case 'tangent':
@@ -411,6 +475,8 @@ export function constraintKindHint(kind: ConstraintKind): string {
     case 'perpendicular':
     case 'equal':
       return 'Select two lines (or line/arc chords).'
+    case 'collinear':
+      return 'Select two lines — makes them lie on one line.'
     case 'tangent':
       return 'Select one line and one arc.'
     case 'coincident':

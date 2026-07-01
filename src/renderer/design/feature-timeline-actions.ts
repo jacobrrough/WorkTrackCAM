@@ -66,6 +66,13 @@ export interface TimelineState {
  *   - `reorder`     — a completed drag: move the op at `from` to land at `to`
  *                     (post-removal index). Honors the finishing-op rule.
  *   - `suppress`    — toggle a single op's own `suppressed` flag.
+ *   - `update`      — FEATURE RE-EDIT: replace the op at `index` IN PLACE (same
+ *                     timeline position) with an edited op. Preserves the
+ *                     existing op's `suppressed` flag unless the replacement
+ *                     explicitly carries one, keeps the roll-back bar where it
+ *                     is (the list length is unchanged), and honors the
+ *                     finishing-op rule (a kind change may not land a finishing
+ *                     op before a create/boolean/pattern op).
  *   - `setRollback` — drop / move the roll-back bar to an inclusive index.
  *   - `clearRollback` — remove the roll-back bar (back to "build all").
  */
@@ -73,6 +80,7 @@ export type TimelineAction =
   | { readonly type: 'move'; readonly index: number; readonly delta: -1 | 1 }
   | { readonly type: 'reorder'; readonly from: number; readonly to: number }
   | { readonly type: 'suppress'; readonly index: number; readonly suppressed: boolean }
+  | { readonly type: 'update'; readonly index: number; readonly op: KernelPostSolidOp }
   | { readonly type: 'setRollback'; readonly index: number }
   | { readonly type: 'clearRollback' }
 
@@ -208,6 +216,42 @@ export function applyTimelineAction(
           ? 'Kernel op suppressed (skipped in build).'
           : 'Kernel op active again.'
       }
+    }
+
+    case 'update': {
+      const { index, op } = action
+      if (index < 0 || index >= len) {
+        return { changed: false, state, reason: 'Update out of range.' }
+      }
+      const cur = ops[index]!
+      // Suppress preservation: the edit dialogs re-emit the op's PARAMETERS,
+      // not its enable/disable state — so an incoming op that omits the
+      // `suppressed` key inherits the current flag. An op that explicitly
+      // carries the key wins (normalized through `withSuppressed` so clearing
+      // still DROPS the key rather than writing `suppressed: false`).
+      const merged: KernelPostSolidOp =
+        op.suppressed === undefined
+          ? cur.suppressed === true
+            ? { ...op, suppressed: true }
+            : op
+          : withSuppressed(op, op.suppressed === true)
+      if (JSON.stringify(merged) === JSON.stringify(cur)) {
+        return { changed: false, state, reason: 'Kernel op unchanged.' }
+      }
+      const nextOps = ops.map((existing, i) => (i === index ? merged : existing))
+      // A replacement that CHANGES the op's kind could break the finishing-op
+      // rule in place (e.g. editing a create op into a fillet ahead of a
+      // boolean). Validate the replaced list with the identity permutation —
+      // the same rule move/reorder enforce.
+      const identity = nextOps.map((_, i) => i)
+      const valid: TimelineOrderValidation = validateTimelineOrder(nextOps, identity)
+      if (!valid.ok) {
+        return { changed: false, state, reason: valid.reason }
+      }
+      // Length is unchanged, so the roll-back marker still addresses the same
+      // row; normalizeState only re-canonicalizes (drops a stale no-op cut).
+      const next = normalizeState(nextOps, state.rolledBackTo)
+      return { changed: true, state: next, status: 'Kernel op updated.' }
     }
 
     case 'setRollback': {

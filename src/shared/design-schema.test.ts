@@ -163,3 +163,63 @@ describe('design-schema round-trip', () => {
     expect(again.dimensions).toHaveLength(3)
   })
 })
+
+describe('design-schema construction (reference) geometry flag', () => {
+  it('round-trips construction: true on every entity kind', () => {
+    const d = emptyDesign()
+    d.points = {
+      a: { x: 0, y: 0 },
+      b: { x: 10, y: 0 },
+      v: { x: 5, y: 5 },
+      c: { x: 10, y: 10 },
+      e: { x: 0, y: 10 }
+    }
+    d.entities = [
+      { id: 'p1', kind: 'polyline', pointIds: ['a', 'b'], closed: false, construction: true },
+      { id: 'r1', kind: 'rect', cx: 0, cy: 0, w: 4, h: 2, rotation: 0, construction: true },
+      { id: 'c1', kind: 'circle', cx: 0, cy: 0, r: 3, construction: true },
+      { id: 's1', kind: 'slot', cx: 0, cy: 0, length: 8, width: 2, rotation: 0, construction: true },
+      { id: 'a1', kind: 'arc', startId: 'a', viaId: 'v', endId: 'b', construction: true },
+      { id: 'e1', kind: 'ellipse', cx: 0, cy: 0, rx: 5, ry: 3, rotation: 0, construction: true },
+      { id: 'f1', kind: 'spline_fit', pointIds: ['a', 'v', 'b'], closed: false, construction: true },
+      { id: 'v1', kind: 'spline_cp', pointIds: ['a', 'v', 'c', 'e'], closed: false, construction: true }
+    ]
+    const again = designFileSchemaV2.parse(JSON.parse(JSON.stringify(d)) as unknown)
+    expect(again.entities).toHaveLength(8)
+    for (const e of again.entities) {
+      expect(e.construction, e.id).toBe(true)
+    }
+  })
+
+  it('LEGACY entities without the flag parse unchanged (construction stays undefined)', () => {
+    // Exactly what an existing saved design/sketch.json contains — no flag at all.
+    const raw = {
+      version: 2,
+      extrudeDepthMm: 10,
+      solidKind: 'extrude',
+      loftSeparationMm: 20,
+      revolve: { angleDeg: 360, axisX: 0 },
+      parameters: {},
+      points: { a: { x: 0, y: 0 }, b: { x: 10, y: 0 } },
+      entities: [
+        { id: 'p1', kind: 'polyline', pointIds: ['a', 'b'], closed: false },
+        { id: 'r1', kind: 'rect', cx: 0, cy: 0, w: 4, h: 2, rotation: 0 },
+        { id: 'c1', kind: 'circle', cx: 0, cy: 0, r: 3 }
+      ],
+      constraints: [],
+      dimensions: []
+    }
+    const again = designFileSchemaV2.parse(raw as unknown)
+    expect(again.entities).toHaveLength(3)
+    for (const e of again.entities) {
+      expect(e.construction).toBeUndefined()
+    }
+  })
+
+  it('normalizeDesign keeps the flag through the v2 normalize path', () => {
+    const d = emptyDesign()
+    d.entities = [{ id: 'c1', kind: 'circle', cx: 0, cy: 0, r: 3, construction: true }]
+    const n = normalizeDesign(JSON.parse(JSON.stringify(d)))
+    expect(n.entities[0]?.construction).toBe(true)
+  })
+})

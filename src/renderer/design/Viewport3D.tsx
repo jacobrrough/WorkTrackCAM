@@ -1,4 +1,4 @@
-import { Canvas, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Bounds, GizmoHelper, GizmoViewcube, Grid, OrbitControls } from '@react-three/drei'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -22,6 +22,21 @@ import {
   type CameraAnimationState,
   type StandardView
 } from './viewport3d-camera-animate'
+import {
+  computeFitViewGoal,
+  createInactiveZoomAnimation,
+  orthoZoomForPerspectiveDistance,
+  perspectiveDistanceForOrthoZoom,
+  readFitBounds,
+  startZoomAnimation,
+  tickZoomAnimation,
+  MAX_FIT_DISTANCE_MM,
+  MIN_FIT_DISTANCE_MM,
+  ORTHO_CAMERA_FAR_MM,
+  ORTHO_CAMERA_NEAR_MM,
+  type ProjectionMode,
+  type ZoomAnimationState
+} from './viewport3d-camera-fit'
 import {
   makeEdgeSelection,
   makeFaceSelection,
@@ -165,6 +180,18 @@ type Props = {
 }
 
 const HOME_POS: [number, number, number] = [120, 90, 120]
+
+/** Perspective vertical fov (deg) -- single source for the Canvas camera AND the ortho/persp scale equivalence. */
+const DESIGN_FOV_DEG = 45
+
+/** Orthographic dolly (zoom) range -- the ortho counterpart of the 6-6000 mm perspective dolly range. */
+const ORTHO_MIN_ZOOM = 0.05
+const ORTHO_MAX_ZOOM = 400
+
+/** Type guard: is the active viewport camera orthographic? */
+function isOrthoCamera(cam: THREE.Camera): cam is THREE.OrthographicCamera {
+  return (cam as THREE.OrthographicCamera).isOrthographicCamera === true
+}
 
 /**
  * Read the `faceIds` parallel array stashed on the geometry's `userData`
@@ -909,11 +936,131 @@ export function applyStandardViewAnimated(
   )
 }
 
+/**
+ * CameraRig -- zero-render Canvas child that owns the projection swap
+ * (perspective <-> orthographic), the orthographic fit-zoom animation, and
+ * the HUD-side viewport-size bridge.
+ *
+ * The swap preserves the view direction AND the apparent scale: entering
+ * ortho derives `zoom` from the current perspective distance
+ * (`orthoZoomForPerspectiveDistance`); leaving ortho re-derives the
+ * distance from the current zoom (`perspectiveDistanceForOrthoZoom`), so
+ * the geometry never jumps in size. The default camera is swapped via
+ * `set({ camera })` -- drei's `<OrbitControls makeDefault>` reacts by
+ * recreating its controls instance with a RESET target, so the previous
+ * target is stashed in `pendingTargetRef` and restored inside `useFrame`
+ * on the first frame the new controls exist (useFrame runs before the
+ * render pass, so there is no one-frame flash).
+ */
+function CameraRig({
+  projection,
+  controlsRef,
+  zoomAnimRef,
+  sizeRef
+}: {
+  projection: ProjectionMode
+  controlsRef: React.RefObject<OrbitControlsImpl | null>
+  zoomAnimRef: React.RefObject<ZoomAnimationState>
+  sizeRef: React.RefObject<{ width: number; height: number }>
+}) {
+  const camera = useThree((s) => s.camera)
+  const set = useThree((s) => s.set)
+  const size = useThree((s) => s.size)
+  const orthoCamRef = useRef<THREE.OrthographicCamera | null>(null)
+  const perspCamRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const pendingTargetRef = useRef<THREE.Vector3 | null>(null)
+
+  /* Bridge the Canvas pixel size out to the HUD's fit-view handler. */
+  useEffect(() => {
+    sizeRef.current = { width: size.width, height: size.height }
+  }, [size, sizeRef])
+
+  useEffect(() => {
+    const wantOrtho = projection === 'orthographic'
+    if (wantOrtho === isOrthoCamera(camera)) return
+    const controls = controlsRef.current
+    const target = controls ? controls.target.clone() : new THREE.Vector3()
+
+    if (wantOrtho) {
+      const persp = camera as THREE.PerspectiveCamera
+      perspCamRef.current = persp
+      const distance = Math.max(persp.position.distanceTo(target), 1e-3)
+      let ortho = orthoCamRef.current
+      if (!ortho) {
+        ortho = new THREE.OrthographicCamera()
+        orthoCamRef.current = ortho
+      }
+      /* R3F's resize handler keeps this frustum synced afterwards
+         (updateCamera writes +-size/2 for non-manual ortho cameras). */
+      ortho.near = ORTHO_CAMERA_NEAR_MM
+      ortho.far = ORTHO_CAMERA_FAR_MM
+      ortho.left = size.width / -2
+      ortho.right = size.width / 2
+      ortho.top = size.height / 2
+      ortho.bottom = size.height / -2
+      ortho.zoom = orthoZoomForPerspectiveDistance(distance, persp.fov, size.height)
+      ortho.position.copy(persp.position)
+      ortho.up.copy(persp.up)
+      ortho.lookAt(target)
+      ortho.updateProjectionMatrix()
+      pendingTargetRef.current = target
+      set({ camera: ortho })
+    } else {
+      const ortho = camera as THREE.OrthographicCamera
+      const persp = perspCamRef.current
+      if (!persp) return
+      /* Clamp to the OrbitControls dolly range so the controls do not
+         snap the camera on the next user interaction. */
+      const distance = Math.min(
+        MAX_FIT_DISTANCE_MM,
+        Math.max(perspectiveDistanceForOrthoZoom(ortho.zoom, persp.fov, size.height), MIN_FIT_DISTANCE_MM)
+      )
+      const dir = ortho.position.clone().sub(target)
+      if (dir.lengthSq() < 1e-10) dir.set(1, 0.75, 1)
+      dir.normalize()
+      persp.position.copy(target).addScaledVector(dir, distance)
+      persp.up.copy(ortho.up)
+      persp.lookAt(target)
+      persp.aspect = size.width / Math.max(size.height, 1)
+      persp.updateProjectionMatrix()
+      pendingTargetRef.current = target
+      set({ camera: persp })
+    }
+  }, [projection, camera, controlsRef, set, size])
+
+  useFrame(() => {
+    /* Restore the stashed orbit target on the first frame the recreated
+       controls exist. */
+    const pending = pendingTargetRef.current
+    const controls = controlsRef.current
+    if (pending && controls) {
+      controls.target.copy(pending)
+      controls.update()
+      pendingTargetRef.current = null
+    }
+    /* Ortho fit-to-view: apply the animated zoom (position/up/target ride
+       the existing CameraAnimator on the same 400 ms smoothstep clock). */
+    const zoomState = zoomAnimRef.current
+    if (zoomState) {
+      const z = tickZoomAnimation(zoomState, performance.now())
+      if (z !== null) {
+        camera.zoom = z
+        camera.updateProjectionMatrix()
+      }
+    }
+  })
+
+  return null
+}
+
 function ViewportHud({
   controlsRef,
   animRef,
   navMode,
   onNavMode,
+  projection,
+  onToggleProjection,
+  onFitView,
   onCenterOnBed,
   onSnapToBed,
   layOnFaceMode,
@@ -923,6 +1070,9 @@ function ViewportHud({
   animRef: React.RefObject<CameraAnimationState>
   navMode: NavMode
   onNavMode: (m: NavMode) => void
+  projection: ProjectionMode
+  onToggleProjection: () => void
+  onFitView: () => void
   onCenterOnBed?: () => void
   onSnapToBed?: () => void
   layOnFaceMode?: boolean
@@ -976,6 +1126,25 @@ function ViewportHud({
           aria-label="Reset to home view"
         >
           &#8962;
+        </button>
+        <button
+          type="button"
+          className="viewport-3d__cube-btn viewport-3d__cube-btn--wide"
+          onClick={onFitView}
+          title="Fit view"
+          aria-label="Fit view"
+        >
+          FIT
+        </button>
+        <button
+          type="button"
+          className={`viewport-3d__cube-btn viewport-3d__cube-btn--wide${projection === 'orthographic' ? ' viewport-3d__cube-btn--active' : ''}`}
+          onClick={onToggleProjection}
+          title={projection === 'orthographic' ? 'Perspective view' : 'Orthographic view'}
+          aria-label={projection === 'orthographic' ? 'Switch to perspective view' : 'Switch to orthographic view'}
+          aria-pressed={projection === 'orthographic'}
+        >
+          {projection === 'orthographic' ? 'ORTHO' : 'PERSP'}
         </button>
       </div>
 
@@ -1076,6 +1245,10 @@ export function Viewport3D({
   const [navMode, setNavMode] = useState<NavMode>('orbit')
   const [layOnFaceInternal, setLayOnFaceInternal] = useState(false)
   const layOnFaceActive = layOnFaceModeExternal ?? layOnFaceInternal
+  const [projection, setProjection] = useState<ProjectionMode>('perspective')
+  const zoomAnimRef = useRef<ZoomAnimationState>(createInactiveZoomAnimation())
+  /** Canvas pixel size, bridged out of the Canvas by CameraRig for the HUD fit handler. */
+  const viewportSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
 
   /* Built-in measurement tool (independent from parent measureMode/measureMarkers). */
   const measureTool = useMeasurementTool(measureUnit)
@@ -1153,6 +1326,44 @@ export function Viewport3D({
    */
   const linePickThresholdMm = Math.min(4, Math.max(0.6, measureMarkerRadiusMm * 0.9))
 
+  const handleToggleProjection = useCallback(() => {
+    setProjection((p) => (p === 'perspective' ? 'orthographic' : 'perspective'))
+  }, [])
+
+  /**
+   * Fit-to-view (zoom to extents): frame the displayed geometry along the
+   * CURRENT view direction -- never a reset to home; an empty scene falls
+   * back to the home pose. Works in both projections: the pose animates
+   * through the existing CameraAnimationState; in ortho mode the zoom
+   * rides the parallel ZoomAnimationState (applied by CameraRig).
+   */
+  const handleFitView = useCallback(() => {
+    const c = controlsRef.current
+    if (!c) return
+    const cam = c.object as THREE.PerspectiveCamera | THREE.OrthographicCamera
+    const orthoActive = isOrthoCamera(cam)
+    const { width, height } = viewportSizeRef.current
+    const goal = computeFitViewGoal(readFitBounds(stable), cam.position, cam.up, c.target, {
+      projection: orthoActive ? 'orthographic' : 'perspective',
+      fovDeg: orthoActive ? DESIGN_FOV_DEG : (cam as THREE.PerspectiveCamera).fov,
+      aspect: height > 0 ? width / height : 1,
+      viewportHeightPx: height,
+      homePosition: new THREE.Vector3(HOME_POS[0], HOME_POS[1], HOME_POS[2])
+    })
+    if (animRef.current) {
+      startCameraAnimation(animRef.current, cam.position, cam.up, c.target, goal, 400)
+    } else {
+      cam.position.copy(goal.position)
+      cam.up.copy(goal.up)
+      c.target.copy(goal.target)
+      cam.lookAt(goal.target)
+      c.update()
+    }
+    if (goal.zoom !== null) {
+      startZoomAnimation(zoomAnimRef.current, cam.zoom, goal.zoom, 400)
+    }
+  }, [stable])
+
   const enableRotate = navMode === 'orbit'
   const enablePan = navMode !== 'zoom'
   const enableZoom = true
@@ -1160,7 +1371,7 @@ export function Viewport3D({
   return (
     <div className="viewport-3d" role="region" aria-label="3D model viewport">
       <Canvas
-        camera={{ position: HOME_POS, fov: 45, near: 0.5, far: 8000 }}
+        camera={{ position: HOME_POS, fov: DESIGN_FOV_DEG, near: 0.5, far: 8000 }}
         dpr={[1, 2]}
         gl={{ antialias: true, powerPreference: 'high-performance', alpha: false, localClippingEnabled: clipping }}
       >
@@ -1245,8 +1456,10 @@ export function Viewport3D({
           rotateSpeed={0.72}
           zoomSpeed={0.8}
           panSpeed={0.88}
-          minDistance={6}
-          maxDistance={6000}
+          minDistance={MIN_FIT_DISTANCE_MM}
+          maxDistance={MAX_FIT_DISTANCE_MM}
+          minZoom={ORTHO_MIN_ZOOM}
+          maxZoom={ORTHO_MAX_ZOOM}
           maxPolarAngle={Math.PI - 0.06}
           minPolarAngle={0}
           screenSpacePanning={true}
@@ -1256,6 +1469,13 @@ export function Viewport3D({
         />
         {/* Animated camera fly-to driver (zero-render, runs in useFrame) */}
         <CameraAnimator animRef={animRef} controlsRef={controlsRef} />
+        {/* Projection swap (persp <-> ortho) + ortho fit-zoom animation + HUD size bridge */}
+        <CameraRig
+          projection={projection}
+          controlsRef={controlsRef}
+          zoomAnimRef={zoomAnimRef}
+          sizeRef={viewportSizeRef}
+        />
         {/* Interactive 3D orientation cube (Fusion 360 style) — top-right corner */}
         <GizmoHelper alignment="top-right" margin={[72, 72]}>
           <GizmoViewcube
@@ -1272,6 +1492,9 @@ export function Viewport3D({
         animRef={animRef}
         navMode={navMode}
         onNavMode={setNavMode}
+        projection={projection}
+        onToggleProjection={handleToggleProjection}
+        onFitView={handleFitView}
         onCenterOnBed={onCenterOnBed}
         onSnapToBed={onSnapToBed}
         layOnFaceMode={layOnFaceActive}

@@ -104,6 +104,24 @@ export {
   type FeatureDialogHostProps
 } from './FeatureDialogHost'
 
+// FEATURE RE-EDIT — edit a timeline op in place: the op→spec pre-fill mapper,
+// the generic fallback editor, and the edit host that routes Apply to
+// `updateKernelOpAt` instead of append.
+export { featureDialogSpecForOp } from './kernel-op-edit'
+export {
+  GenericOpEditor,
+  genericFieldsForOp,
+  buildGenericOpCandidate,
+  type GenericOpField,
+  type GenericOpFieldKind,
+  type GenericOpEditorProps
+} from './GenericOpEditor'
+export {
+  EditKernelOpDialog,
+  EDIT_KERNEL_OP_DIALOG_TESTID,
+  type EditKernelOpDialogProps
+} from './EditKernelOpDialog'
+
 // Wave 3f — Text → machinable sketch vectors dialog (own surface dialog, not
 // routed through FeatureDialogHost since it merges into the sketch model, not a
 // kernel op / script param).

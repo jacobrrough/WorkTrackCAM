@@ -86,9 +86,14 @@ import {
 import {
   buildAngularDimension,
   buildDiameterDimension,
+  buildDrawingNote,
   buildLinearDimension,
   buildRadialDimension,
+  composeNotesIntoSvg,
   reanchorDimensions,
+  reanchorNotes,
+  removeNote,
+  updateNoteText,
   type FreshSnapPoint,
   type ResolvedClick,
 } from './drawing-annotation-model'
@@ -106,6 +111,7 @@ import {
 import type {
   DrawingBomRow,
   DrawingDimension,
+  DrawingNote,
   GdtCharacteristic,
   GdtFeatureControlFrame,
   SurfaceFinishLay,
@@ -267,6 +273,28 @@ export interface DrawingViewProps {
    * (mirrors `onPersistGdt`).
    */
   readonly onPersistSurfaceFinishes?: (next: readonly SurfaceFinishSymbol[]) => void
+  /**
+   * CAD V1.5 Notes -- the persisted free-text notes for this sheet
+   * (`sheet.annotations.notes`). When supplied (controlled mode), the Note tool
+   * is enabled: a one-click placement mints a `DrawingNote` pushed up via
+   * {@link onPersistNotes}, and the notes compose onto the projection
+   * client-side (a pure SVG `<g>` overlay -- no sidecar round-trip, exactly
+   * like surface finishes; the note text is entity-escaped by the pure emitter
+   * in `drawing-annotation-model.ts`, the client-side trust boundary). A click
+   * that lands on a snap point records the feature as the note's LEADER anchor
+   * (re-resolved on every re-projection, dangling badge); a free click places a
+   * free-floating note block.
+   */
+  readonly persistedNotes?: readonly DrawingNote[]
+  /**
+   * CAD V1.5 Notes -- called whenever the persisted note list changes (a new
+   * note placed, a note's text edited, a note deleted, the list cleared, or
+   * leader anchors refreshed / flagged dangling after a re-projection). The
+   * host writes the result into `sheet.annotations.notes`. Optional + readonly
+   * (additive): when omitted the Note toolbar still renders but placement is
+   * inert (mirrors `onPersistSurfaceFinishes`).
+   */
+  readonly onPersistNotes?: (next: readonly DrawingNote[]) => void
   /**
    * CAD V1.5 Detail -- called when a detail (crop) view is produced. The host
    * owns what to do with the magnified crop SVG (open in a new sheet, export,
@@ -937,6 +965,7 @@ type ToolMode =
   | null
   | { readonly tool: 'gdt' }
   | { readonly tool: 'surface-finish' }
+  | { readonly tool: 'note' }
   | { readonly tool: 'detail'; readonly step: 0 }
   | { readonly tool: 'detail'; readonly step: 1; readonly center: { readonly x: number; readonly y: number } }
 
@@ -970,6 +999,8 @@ export function DrawingView({
   onPersistGdt,
   persistedSurfaceFinishes,
   onPersistSurfaceFinishes,
+  persistedNotes,
+  onPersistNotes,
   onDetail,
   onPersistTitleBlock,
   sheets,
@@ -1089,6 +1120,25 @@ export function DrawingView({
    */
   const [surfaceFinishDanglingIds, setSurfaceFinishDanglingIds] =
     useState<ReadonlySet<string>>(new Set())
+
+  // -- CAD V1.5 Note form + tool state ---------------------------------------
+
+  /** Whether this instance is in CONTROLLED (persisted) notes mode. */
+  const noteControlled = persistedNotes !== undefined
+
+  /**
+   * Draft text for the NEXT placed note. Operator free-text -- entity-escaped
+   * by the client-side SVG emitter (`noteToSvg` in the pure model module), the
+   * escaping trust boundary for this annotation (Safety Rule 4).
+   */
+  const [noteDraft, setNoteDraft] = useState<string>('')
+
+  /**
+   * Ids of persisted notes whose leader anchor no longer resolves against the
+   * latest fetched geometry (badged `dangling`). Recomputed on every fetch
+   * (mirrors `surfaceFinishDanglingIds`).
+   */
+  const [noteDanglingIds, setNoteDanglingIds] = useState<ReadonlySet<string>>(new Set())
 
   // -- CAD V2 placement state -----------------------------------------------
 
@@ -1327,6 +1377,34 @@ export function DrawingView({
   )
 
   /**
+   * Commit a free-text note from a single resolved click. Mints a
+   * {@link DrawingNote} carrying the toolbar draft text: a snapped click records
+   * the feature as the note's LEADER anchor (associative, dangling-badged on
+   * rebuild); a free click places a free-floating note block. The text flows
+   * through VERBATIM -- it is entity-escaped client-side by the pure SVG emitter
+   * (`noteToSvg`), the escaping trust boundary for this annotation (no sidecar
+   * round-trip, Safety Rule 4). No-op when notes are not controlled.
+   */
+  const commitNote = useCallback(
+    (click: ResolvedClick): void => {
+      if (!noteControlled) {
+        toast('warn', 'Note placement is unavailable -- no persistence host wired.')
+        return
+      }
+      const text = noteDraft.trim()
+      if (text.length === 0) {
+        toast('warn', 'Type the note text before placing it.')
+        return
+      }
+      const note = buildDrawingNote(click, text)
+      onPersistNotes?.([...(persistedNotes ?? []), note])
+      setNoteDraft('')
+      toast('ok', note.leader !== undefined ? 'Leader note added.' : 'Note added.')
+    },
+    [noteControlled, noteDraft, onPersistNotes, persistedNotes, toast]
+  )
+
+  /**
    * Run a detail (crop) view from a centre + radius via `cad.detailDrawing`. The
    * sidecar projects the parent ONCE, crops the circular window, magnifies it by
    * `detailScale`, and stamps the escaped `detailLabel`. The resulting SVG is
@@ -1423,6 +1501,19 @@ export function DrawingView({
           commitSurfaceFinish(resolvedClick)
           return
         }
+        if (toolMode.tool === 'note') {
+          // One-click placement (mirrors the surface-finish tool). A snapped
+          // click becomes the note's leader anchor; a free click is a floating
+          // note block.
+          const resolvedClick: ResolvedClick = {
+            point: { x: clickSvg.x, y: clickSvg.y },
+            sourceId,
+          }
+          setToolMode(null)
+          setHoveredSnap(null)
+          commitNote(resolvedClick)
+          return
+        }
         // detail: two clicks -- centre, then a point defining the radius.
         if (toolMode.step === 0) {
           setToolMode({ tool: 'detail', step: 1, center: { x: clickSvg.x, y: clickSvg.y } })
@@ -1461,6 +1552,7 @@ export function DrawingView({
       commitPlacement,
       commitGdtFrame,
       commitSurfaceFinish,
+      commitNote,
       runDetail,
     ]
   )
@@ -1536,6 +1628,47 @@ export function DrawingView({
     setToolMode(null)
     setHoveredSnap(null)
   }, [onPersistSurfaceFinishes])
+
+  /**
+   * Start the note one-click placement. Cancels any dimension placement (mirrors
+   * {@link startSurfaceFinish}). Toggling the active Note tool off returns to
+   * idle. Arming requires non-empty draft text so an armed click always has
+   * content to place.
+   */
+  const startNote = useCallback((): void => {
+    const arming = toolMode === null || toolMode.tool !== 'note'
+    if (arming && noteDraft.trim().length === 0) {
+      toast('warn', 'Type the note text first, then click Place note.')
+      return
+    }
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) => (prev !== null && prev.tool === 'note' ? null : { tool: 'note' }))
+  }, [toolMode, noteDraft, toast])
+
+  /** Remove every note overlay (controlled mode only). */
+  const clearNotes = useCallback((): void => {
+    onPersistNotes?.([])
+    setToolMode(null)
+    setHoveredSnap(null)
+  }, [onPersistNotes])
+
+  /** Persist an edited note text (per-note edit affordance). */
+  const editNoteText = useCallback(
+    (id: string, text: string): void => {
+      onPersistNotes?.(updateNoteText(persistedNotes ?? [], id, text))
+    },
+    [onPersistNotes, persistedNotes]
+  )
+
+  /** Delete one note (per-note delete affordance). */
+  const deleteNote = useCallback(
+    (id: string): void => {
+      onPersistNotes?.(removeNote(persistedNotes ?? [], id))
+    },
+    [onPersistNotes, persistedNotes]
+  )
 
   const toggleSection = useCallback((): void => {
     setSectionEnabled((prev) => {
@@ -1746,21 +1879,37 @@ export function DrawingView({
 
   /**
    * The SVG actually painted into the canvas: the base projection (`svg`) with
-   * the surface-finish symbols composed in CLIENT-SIDE as a pure `<g>` overlay.
-   * Unlike GD&T (which composes through the `cad.annotateGdt` sidecar in the
-   * async projection effect), the surface-finish glyph is fully deterministic, so
-   * it is composed synchronously at render time -- this keeps a surface-finish
-   * edit from re-firing the whole async projection pipeline and matches the
-   * "documentation overlays only" Safety Rule 1 (no sidecar / G-code touch).
-   * When there are no symbols (or no base SVG) this is `svg` verbatim.
+   * the surface-finish symbols AND the free-text notes composed in CLIENT-SIDE
+   * as pure `<g>` overlays. Unlike GD&T (which composes through the
+   * `cad.annotateGdt` sidecar in the async projection effect), both layers are
+   * fully deterministic, so they are composed synchronously at render time --
+   * this keeps a surface-finish / note edit from re-firing the whole async
+   * projection pipeline and matches the "documentation overlays only" Safety
+   * Rule 1 (no sidecar / G-code touch). Note text is entity-escaped inside
+   * `noteToSvg` (the client-side trust boundary, Safety Rule 4). When there are
+   * no symbols and no notes (or no base SVG) this is `svg` verbatim.
    */
   const displaySvg = useMemo<string | null>(() => {
     if (svg === null) return null
-    if (persistedSurfaceFinishes === undefined || persistedSurfaceFinishes.length === 0) {
-      return svg
+    let composed = svg
+    if (persistedSurfaceFinishes !== undefined && persistedSurfaceFinishes.length > 0) {
+      composed = composeSurfaceFinishIntoSvg(
+        composed,
+        persistedSurfaceFinishes,
+        surfaceFinishDanglingIds,
+      )
     }
-    return composeSurfaceFinishIntoSvg(svg, persistedSurfaceFinishes, surfaceFinishDanglingIds)
-  }, [svg, persistedSurfaceFinishes, surfaceFinishDanglingIds])
+    if (persistedNotes !== undefined && persistedNotes.length > 0) {
+      composed = composeNotesIntoSvg(composed, persistedNotes, noteDanglingIds)
+    }
+    return composed
+  }, [
+    svg,
+    persistedSurfaceFinishes,
+    surfaceFinishDanglingIds,
+    persistedNotes,
+    noteDanglingIds,
+  ])
 
   // Re-project whenever `partHandle` or the active view changes.
   useEffect(() => {
@@ -2073,6 +2222,34 @@ export function DrawingView({
     }
   }, [geometryLoaded, freshSnapPoints, persistedSurfaceFinishes, onPersistSurfaceFinishes])
 
+  // -- CAD V1.5 Notes -- re-anchor persisted note leaders against fresh geometry
+  //
+  // Mirror of the surface-finish re-anchor pass: whenever a fresh projection
+  // lands or the persisted note list changes, re-resolve every note's LEADER
+  // anchor (refresh its cachedPoint and translate the text block by the same
+  // delta so the operator's offset is preserved; badge a vanished leader
+  // `dangling`). Leaderless notes pass through untouched and never dangle. Push
+  // the refreshed list up only when a note actually moved (deep-equality guard)
+  // so a placement->re-render->re-resolve cycle converges instead of looping.
+  useEffect(() => {
+    if (persistedNotes === undefined) return
+    if (!geometryLoaded) {
+      setNoteDanglingIds(new Set())
+      return
+    }
+    const { notes: reanchored, danglingIds: nextDangling } = reanchorNotes(
+      persistedNotes,
+      freshSnapPoints,
+    )
+    setNoteDanglingIds(nextDangling)
+    if (
+      onPersistNotes !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedNotes)
+    ) {
+      onPersistNotes(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedNotes, onPersistNotes])
+
   // -- Empty-state branch ---------------------------------------------------
   if (partHandle === null) {
     return (
@@ -2140,16 +2317,25 @@ export function DrawingView({
   /** How many surface-finish symbols are currently dangling. */
   const surfaceFinishDanglingCount = surfaceFinishDanglingIds.size
 
-  /** Status line for the GD&T / surface-finish / detail tool area. */
+  /** Persisted note count (controlled mode). Drives the count readout + Clear. */
+  const noteCount = (persistedNotes ?? []).length
+  /** How many notes are currently dangling (lost their leader anchor). */
+  const noteDanglingCount = noteDanglingIds.size
+  /** Whether the note one-click tool is armed. */
+  const notePlacing = toolMode !== null && toolMode.tool === 'note'
+
+  /** Status line for the GD&T / surface-finish / note / detail tool area. */
   const toolStatusLabel: string | null = gdtPlacing
     ? `Placing ${GDT_CHARACTERISTIC_LABELS[gdtCharacteristic]} frame -- click the feature`
     : surfaceFinishPlacing
       ? `Placing ${SURFACE_FINISH_MATERIAL_LABELS[surfaceFinishMaterial]} finish -- click the feature`
-      : detailPlacing
-        ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
-          ? 'Detail view -- click the crop centre'
-          : 'Detail view -- click to set the crop radius'
-        : null
+      : notePlacing
+        ? 'Placing note -- click the sheet (snap to a feature to attach a leader)'
+        : detailPlacing
+          ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
+            ? 'Detail view -- click the crop centre'
+            : 'Detail view -- click to set the crop radius'
+          : null
 
   return (
     <div className="design-drawing" data-testid="design-drawing-view">
@@ -2634,6 +2820,116 @@ export function DrawingView({
           >
             {`${surfaceFinishDanglingCount} dangling`}
           </div>
+        )}
+      </div>
+
+      {/* CAD V1.5 -- Free-text notes toolbar */}
+      <div
+        className="design-drawing__gdt-toolbar design-drawing__note-toolbar"
+        role="toolbar"
+        aria-label="Drawing notes"
+        data-testid="design-drawing-note-toolbar"
+      >
+        <div
+          className="design-drawing__gdt-group"
+          role="group"
+          aria-label="Place a note"
+        >
+          <label className="design-drawing__gdt-field design-drawing__note-field">
+            Note:
+            <textarea
+              className="design-drawing__note-text"
+              data-testid="design-drawing-note-text"
+              value={noteDraft}
+              rows={2}
+              maxLength={500}
+              placeholder="e.g. DEBURR ALL EDGES"
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNoteDraft(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className={
+              notePlacing
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-note-place"
+            aria-pressed={notePlacing}
+            onClick={startNote}
+            title={
+              noteControlled
+                ? 'Click, then click the sheet to place the note (snap to a feature to attach a leader)'
+                : 'Note placement needs a persistence host'
+            }
+          >
+            {notePlacing ? 'Click sheet...' : 'Place note'}
+          </button>
+          {noteCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-note-clear"
+              onClick={clearNotes}
+              title="Remove every note overlay"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div
+          className="design-drawing__gdt-count"
+          data-testid="design-drawing-note-count"
+          aria-live="polite"
+        >
+          {toolStatusLabel !== null && notePlacing
+            ? toolStatusLabel
+            : noteCount === 0
+              ? 'No notes'
+              : `${noteCount} note${noteCount === 1 ? '' : 's'}`}
+        </div>
+        {noteDanglingCount > 0 && (
+          <div
+            className="design-drawing__gdt-dangling"
+            data-testid="design-drawing-note-dangling"
+            role="status"
+            title="These notes lost their leader's anchored feature on rebuild and are drawn from the last-known position."
+          >
+            {`${noteDanglingCount} dangling`}
+          </div>
+        )}
+        {noteCount > 0 && (
+          <ul
+            className="design-drawing__note-list"
+            data-testid="design-drawing-note-list"
+            aria-label="Placed notes"
+          >
+            {(persistedNotes ?? []).map((note) => (
+              <li key={note.id} className="design-drawing__note-row">
+                <textarea
+                  className="design-drawing__note-edit"
+                  data-testid={`design-drawing-note-edit-${note.id}`}
+                  value={note.text}
+                  rows={1}
+                  maxLength={500}
+                  aria-label="Edit note text"
+                  onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+                    editNoteText(note.id, e.target.value)
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost design-drawing__note-delete"
+                  data-testid={`design-drawing-note-delete-${note.id}`}
+                  aria-label="Delete note"
+                  title="Delete this note"
+                  onClick={() => deleteNote(note.id)}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 

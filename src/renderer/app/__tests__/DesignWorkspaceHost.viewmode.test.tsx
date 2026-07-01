@@ -80,6 +80,7 @@ function fakeSession(): DesignSessionValue {
     undo: () => {},
     setFeatures: () => {},
     appendKernelOp: asyncNoop,
+    updateKernelOpAt: asyncNoop,
     removeKernelOpAt: asyncNoop,
     moveKernelOp: asyncNoop,
     reorderKernelOps: asyncNoop,

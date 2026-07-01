@@ -87,6 +87,7 @@ import {
 } from '../../shared/drawing-hydrate'
 import type {
   DrawingDimension,
+  DrawingNote,
   GdtFeatureControlFrame,
   SurfaceFinishSymbol,
 } from '../../shared/drawing-annotation-schema'
@@ -97,6 +98,7 @@ import {
 } from './FeatureTree'
 import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 import {
+  EditKernelOpDialog,
   FeatureDialogHost,
   type FeatureDialogKind,
   type FeatureDialogSpec
@@ -372,6 +374,17 @@ export interface DesignWorkspaceProps {
   readonly onKernelClearRollback?: () => void
   /** Delete the kernel op at `index` from `part/features.json` `kernelOps[]`. */
   readonly onKernelDelete?: (index: number) => void
+  /**
+   * FEATURE RE-EDIT — replace the kernel op at `index` IN PLACE (same timeline
+   * position). Threaded from the host's `DesignSessionContext.updateKernelOpAt`.
+   * When supplied, each timeline row grows an Edit (✎) button that opens the
+   * matching feature dialog PRE-FILLED with the op's current parameters (or the
+   * generic editor for kinds without a faithful dialog mapping); its Apply
+   * routes HERE instead of appending. Optional + additive: omitted by hosts
+   * without a session, in which case the edit button renders disabled and
+   * every existing pin holds.
+   */
+  readonly onUpdateKernelOp?: (index: number, op: KernelPostSolidOp) => void
   /**
    * FG-5b — append a kernel post-solid op to `part/features.json` `kernelOps[]`.
    * Threaded from the host's `DesignSessionContext.appendKernelOp`. When
@@ -664,6 +677,7 @@ export function DesignWorkspace({
   onKernelSetRollback,
   onKernelClearRollback,
   onKernelDelete,
+  onUpdateKernelOp,
   onAppendKernelOp,
   kernelOpsDisabled = false,
   sketchActive = false,
@@ -873,6 +887,11 @@ export function DesignWorkspace({
   const effectiveDrawingSurfaceFinishes = effectiveDrawing
     ? effectiveDrawing.surfaceFinishes
     : drawingSurfaceFinishes
+  // Notes are controlled-only: uncontrolled hosts (SSR pins / splash preview)
+  // pass undefined so the DrawingView note tool stays inert (additive back-compat).
+  const effectiveDrawingNotes: readonly DrawingNote[] | undefined = effectiveDrawing
+    ? effectiveDrawing.notes
+    : undefined
   const effectiveDrawingTitleBlock: DrawingTitleBlock | undefined = effectiveDrawing
     ? effectiveDrawing.titleBlock
     : undefined
@@ -907,6 +926,14 @@ export function DesignWorkspace({
       } else {
         setDrawingSurfaceFinishes(next)
       }
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingNotes = useCallback(
+    (next: readonly DrawingNote[]): void => {
+      if (!drawingControlled) return
+      const base = drawing ?? emptyDrawingViewState()
+      onDrawing?.({ ...base, notes: next })
     },
     [drawingControlled, drawing, onDrawing],
   )
@@ -1126,6 +1153,13 @@ export function DesignWorkspace({
    */
   const [activeFeatureDialog, setActiveFeatureDialog] =
     useState<FeatureDialogKind | null>(null)
+  /**
+   * FEATURE RE-EDIT — timeline index of the op being edited in the Properties
+   * pane, or `null`. Opened by a timeline row's ✎ button; closed by the edit
+   * card's ✕, by a successful Apply, or automatically when the index no
+   * longer addresses a row (delete shrank the list).
+   */
+  const [editingKernelOpIndex, setEditingKernelOpIndex] = useState<number | null>(null)
 
   const firstMesh: CadExecuteScriptMesh | null =
     lastTessellation?.meshes[0] ?? null
@@ -1733,6 +1767,36 @@ export function DesignWorkspace({
     [onAppendKernelOp],
   )
 
+  /**
+   * FEATURE RE-EDIT — the timeline op currently being edited, derived LIVE
+   * from `kernelOps` so a delete/reorder that invalidates the index closes
+   * the editor instead of showing a stale op. `null` when nothing is edited.
+   */
+  const editingKernelOp: KernelPostSolidOp | null =
+    editingKernelOpIndex !== null && kernelOps !== undefined
+      ? kernelOps[editingKernelOpIndex] ?? null
+      : null
+
+  /** FEATURE RE-EDIT — a timeline row's ✎ button was clicked. */
+  const handleKernelEditRequest = useCallback((index: number): void => {
+    setEditingKernelOpIndex(index)
+  }, [])
+
+  /**
+   * FEATURE RE-EDIT — apply sink for the edit dialog: replace the op at
+   * `index` IN PLACE via the host's `onUpdateKernelOp` (the session's
+   * `updateKernelOpAt` — validate → replace → persist → rebuild), then close
+   * the editor. Never appends.
+   */
+  const handleUpdateKernelOp = useCallback(
+    (index: number, op: KernelPostSolidOp): void => {
+      if (!onUpdateKernelOp) return
+      onUpdateKernelOp(index, op)
+      setEditingKernelOpIndex(null)
+    },
+    [onUpdateKernelOp],
+  )
+
   // ── Derived feature rows for the right panel ──────────────────────────────
   const featureRows: readonly FeatureTreeOperation[] = useMemo(
     () => operations.map(toFeatureRow),
@@ -1851,6 +1915,10 @@ export function DesignWorkspace({
             onPersistGdt={handlePersistDrawingGdt}
             persistedSurfaceFinishes={effectiveDrawingSurfaceFinishes}
             onPersistSurfaceFinishes={handlePersistDrawingSurfaceFinishes}
+            persistedNotes={effectiveDrawingNotes}
+            onPersistNotes={
+              drawingControlled ? handlePersistDrawingNotes : undefined
+            }
             initialTitleBlock={effectiveDrawingTitleBlock}
             onPersistTitleBlock={
               drawingControlled ? handlePersistDrawingTitleBlock : undefined
@@ -1948,6 +2016,7 @@ export function DesignWorkspace({
                 onKernelSetRollback={onKernelSetRollback}
                 onKernelClearRollback={onKernelClearRollback}
                 onKernelDelete={onKernelDelete}
+                onKernelEdit={onUpdateKernelOp ? handleKernelEditRequest : undefined}
               />
             )}
           </div>
@@ -2405,6 +2474,45 @@ export function DesignWorkspace({
                   selectionInfo={featureDialogSelectionInfo}
                   onAppendKernelOp={handleFeatureKernelOp}
                   onScriptParams={handleParamsChange}
+                  busy={busy}
+                  disabled={kernelOpsDisabled}
+                  sketchProfiles={sketchProfiles}
+                  sketchPaths={sketchPaths}
+                />
+              </div>
+            )}
+
+            {/*
+              FEATURE RE-EDIT — edit an existing timeline op in place. Opened by a
+              timeline row's ✎ button (left browser); the matching feature dialog
+              renders PRE-FILLED with the op's current parameters (or the generic
+              editor when no dialog maps faithfully) and its Apply replaces the op
+              at the SAME index via `onUpdateKernelOp` — Fusion's core parametric
+              expectation. Derived from the LIVE `kernelOps` so a stale index
+              closes the card instead of editing the wrong op.
+            */}
+            {onUpdateKernelOp && editingKernelOpIndex !== null && editingKernelOp !== null && (
+              <div
+                className="dc-prop-card design-workspace__feature-dialogs"
+                data-testid="design-workspace-edit-feature-dialog"
+              >
+                <div className="design-workspace__feature-dialog-head">
+                  <h3 className="dc-prop-card-title">Edit feature</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm design-workspace__feature-dialog-close"
+                    data-testid="design-workspace-edit-feature-close"
+                    aria-label="Close edit dialog"
+                    onClick={() => setEditingKernelOpIndex(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <EditKernelOpDialog
+                  index={editingKernelOpIndex}
+                  op={editingKernelOp}
+                  selectionInfo={featureDialogSelectionInfo}
+                  onUpdateKernelOp={handleUpdateKernelOp}
                   busy={busy}
                   disabled={kernelOpsDisabled}
                   sketchProfiles={sketchProfiles}

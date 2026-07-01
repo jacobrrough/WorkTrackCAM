@@ -146,12 +146,23 @@ export const constraintSchema = z.discriminatedUnion('type', [
 
 export type SketchConstraint = z.infer<typeof constraintSchema>
 
+/**
+ * Construction (reference) geometry flag — Fusion's X-key concept. Optional +
+ * additive (legacy saved designs parse unchanged; absent = normal geometry).
+ * A `construction: true` entity renders dashed, participates in constraints /
+ * dimensions / snapping, but is EXCLUDED from profile derivation — it never
+ * becomes part of the built solid or a CAM contour/drill (see
+ * `extractKernelProfiles` and `cam-2d-derive`).
+ */
+const constructionFlag = z.boolean().optional()
+
 /** v2 polylines — must stay a plain ZodObject (no .superRefine) for use in unions. */
 export const polylineByPointIdsSchema = z.object({
   id: z.string(),
   kind: z.literal('polyline'),
   pointIds: z.array(z.string()).min(2),
-  closed: z.boolean()
+  closed: z.boolean(),
+  construction: constructionFlag
 })
 
 /** v1 / legacy polylines with inline coordinates */
@@ -159,7 +170,8 @@ export const polylineByPointsSchema = z.object({
   id: z.string(),
   kind: z.literal('polyline'),
   points: z.array(vec2).min(2),
-  closed: z.boolean()
+  closed: z.boolean(),
+  construction: constructionFlag
 })
 
 export const rectEntitySchema = z.object({
@@ -169,7 +181,8 @@ export const rectEntitySchema = z.object({
   cy: z.number(),
   w: z.number().positive(),
   h: z.number().positive(),
-  rotation: z.number().default(0)
+  rotation: z.number().default(0),
+  construction: constructionFlag
 })
 
 export const circleEntitySchema = z.object({
@@ -177,7 +190,8 @@ export const circleEntitySchema = z.object({
   kind: z.literal('circle'),
   cx: z.number(),
   cy: z.number(),
-  r: z.number().positive()
+  r: z.number().positive(),
+  construction: constructionFlag
 })
 
 /** Rounded slot (stadium): semicircle centers `length` mm apart on local +X; `width` is the narrow opening (cap diameter). */
@@ -188,7 +202,8 @@ export const slotEntitySchema = z.object({
   cy: z.number(),
   length: z.number().nonnegative(),
   width: z.number().positive(),
-  rotation: z.number().default(0)
+  rotation: z.number().default(0),
+  construction: constructionFlag
 })
 
 /**
@@ -202,7 +217,8 @@ export const arcByThreePointsSchema = z.object({
   viaId: z.string(),
   endId: z.string(),
   /** When true, arc plus chord is a closed profile (extrude / kernel uses tessellated loop; matches Three preview). */
-  closed: z.boolean().optional()
+  closed: z.boolean().optional(),
+  construction: constructionFlag
 })
 
 /** Axis-aligned ellipse in sketch mm; `rotation` rotates the major axis from +X. */
@@ -213,7 +229,8 @@ export const ellipseEntitySchema = z.object({
   cy: z.number(),
   rx: z.number().positive(),
   ry: z.number().positive(),
-  rotation: z.number().default(0)
+  rotation: z.number().default(0),
+  construction: constructionFlag
 })
 
 /** Interpolating spline through point IDs (Catmull–Rom tessellation for display/kernel). */
@@ -221,7 +238,8 @@ export const splineFitEntitySchema = z.object({
   id: z.string(),
   kind: z.literal('spline_fit'),
   pointIds: z.array(z.string()).min(3),
-  closed: z.boolean().optional()
+  closed: z.boolean().optional(),
+  construction: constructionFlag
 })
 
 /** Uniform cubic B-spline style curve from control point IDs (does not pass through every control). */
@@ -229,7 +247,8 @@ export const splineCpEntitySchema = z.object({
   id: z.string(),
   kind: z.literal('spline_cp'),
   pointIds: z.array(z.string()).min(4),
-  closed: z.boolean().optional()
+  closed: z.boolean().optional(),
+  construction: constructionFlag
 })
 
 /**

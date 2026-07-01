@@ -20,7 +20,12 @@ import {
 } from '../../shared/kernel-inspect-hash'
 import { formatKernelBuildStatus } from '../../shared/kernel-build-messages'
 import type { KernelManifest } from '../../shared/kernel-manifest-schema'
-import { defaultPartFeatures, type KernelPostSolidOp, type PartFeaturesFile } from '../../shared/part-features-schema'
+import {
+  defaultPartFeatures,
+  kernelPostSolidOpSchema,
+  type KernelPostSolidOp,
+  type PartFeaturesFile
+} from '../../shared/part-features-schema'
 import {
   emptyDrawingViewState,
   emptyDrawingWorkspaceState,
@@ -191,6 +196,15 @@ export type DesignSessionValue = {
   undo: () => void
   setFeatures: (f: PartFeaturesFile) => void
   appendKernelOp: (op: KernelPostSolidOp) => Promise<void>
+  /**
+   * FEATURE RE-EDIT — replace the kernel op at `index` IN PLACE (same timeline
+   * position). Validates the replacement against `kernelPostSolidOpSchema`
+   * before accepting, preserves the op's `suppressed` flag unless the edit
+   * explicitly changes it, and keeps the roll-back bar where it is (list
+   * length is unchanged). Persists + rebuilds through the same serialized
+   * commit path as the other timeline editors.
+   */
+  updateKernelOpAt: (index: number, op: KernelPostSolidOp) => Promise<void>
   removeKernelOpAt: (index: number) => Promise<void>
   moveKernelOp: (index: number, delta: -1 | 1) => Promise<void>
   /** Drag-to-reorder: move the kernel op at `from` to land at `to`. */
@@ -1327,6 +1341,33 @@ export function DesignSessionProvider({
     [commitKernelFeatures, foldTimelineState]
   )
 
+  /**
+   * FEATURE RE-EDIT — replace the kernel op at `index` in place. The edited op
+   * is validated against the REAL `kernelPostSolidOpSchema` before it can touch
+   * the timeline (a malformed op is rejected with the schema's reason — the
+   * kernel is sacred, Safety Rule 1); the pure `update` timeline action then
+   * enforces the finishing-op order rule, preserves the current `suppressed`
+   * flag when the replacement omits it, and keeps the roll-back marker intact.
+   * Runs through {@link commitKernelFeatures} so concurrent gestures serialize
+   * exactly like every other timeline editor.
+   */
+  const updateKernelOpAt = useCallback(
+    async (index: number, op: KernelPostSolidOp) => {
+      commitKernelFeatures((base) => {
+        const parsed = kernelPostSolidOpSchema.safeParse(op)
+        if (!parsed.success) {
+          const first = parsed.error.issues[0]?.message ?? 'invalid op'
+          return { reject: `Edited op failed validation (${first}) — nothing was changed.` }
+        }
+        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+        const result = applyTimelineAction(state, { type: 'update', index, op: parsed.data })
+        if (!result.changed) return { reject: result.reason }
+        return { next: foldTimelineState(base, result.state), status: 'Kernel op updated — rebuilding model…' }
+      })
+    },
+    [commitKernelFeatures, foldTimelineState]
+  )
+
   const setKernelRollbackMarker = useCallback(
     async (index: number | null) => {
       commitKernelFeatures((base) => {
@@ -1390,6 +1431,7 @@ export function DesignSessionProvider({
       removeKernelOpAt,
       moveKernelOp,
       reorderKernelOps,
+      updateKernelOpAt,
       setKernelOpSuppressedAt,
       setKernelRollbackMarker,
       updateFeatureSuppressed,
@@ -1435,6 +1477,7 @@ export function DesignSessionProvider({
       removeKernelOpAt,
       moveKernelOp,
       reorderKernelOps,
+      updateKernelOpAt,
       setKernelOpSuppressedAt,
       setKernelRollbackMarker,
       updateFeatureSuppressed,

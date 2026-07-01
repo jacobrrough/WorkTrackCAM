@@ -2405,6 +2405,16 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
 .viewport-3d__cube-btn--home:hover {
   color: var(--accent);
 }
+.viewport-3d__cube-btn--wide {
+  width: auto;
+  min-width: 32px;
+  padding: 0 6px;
+}
+.viewport-3d__cube-btn--active {
+  background: var(--accent-10);
+  border-color: var(--accent-20);
+  color: var(--accent);
+}
 
 /* ── Navigation-mode strip (Orbit / Pan / Zoom) ── */
 .viewport-3d__navstrip {
