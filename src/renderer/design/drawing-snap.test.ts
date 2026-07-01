@@ -192,6 +192,44 @@ describe('resolveSnap — tie-break by kind (vertex beats midpoint at equal dist
   })
 })
 
+describe('resolveSnap — quadrant is vertex-class', () => {
+  it('prefers quadrant over center at equal distance', () => {
+    // Quadrant (0/90/180/270° circle point) is treated as vertex-class, so it
+    // outranks the curve-derived center kind when equidistant.
+    const dist = 5
+    const points: SnapPoint[] = [pt(dist, 0, 'center', 'ctr'), pt(0, dist, 'quadrant', 'quad')]
+    const result = resolveSnap({ x: 0, y: 0 }, points, 20, false)
+    expect(result!.kind).toBe('quadrant')
+    expect(result!.sourceId).toBe('quad')
+  })
+
+  it('prefers quadrant over midpoint at equal distance', () => {
+    const dist = 5
+    const points: SnapPoint[] = [pt(dist, 0, 'midpoint', 'mid'), pt(0, dist, 'quadrant', 'quad')]
+    const result = resolveSnap({ x: 0, y: 0 }, points, 20, false)
+    expect(result!.kind).toBe('quadrant')
+  })
+
+  it('yields to vertex and endpoint at equal distance', () => {
+    const dist = 5
+    const quad = pt(dist, 0, 'quadrant', 'quad')
+    const endpoint = pt(0, dist, 'endpoint', 'end')
+    const vertex = pt(-dist, 0, 'vertex', 'vtx')
+    // vertex outranks all
+    expect(resolveSnap({ x: 0, y: 0 }, [quad, endpoint, vertex], 20, false)!.kind).toBe('vertex')
+    // endpoint outranks quadrant
+    expect(resolveSnap({ x: 0, y: 0 }, [quad, endpoint], 20, false)!.kind).toBe('endpoint')
+  })
+
+  it('a nearer quadrant point still wins on pure distance over a farther vertex', () => {
+    // Distance dominates kind priority: nearer quadrant beats farther vertex.
+    const nearQuad = pt(3, 0, 'quadrant', 'near-quad') // distance 3
+    const farVertex = pt(0, 8, 'vertex', 'far-vertex') // distance 8
+    const result = resolveSnap({ x: 0, y: 0 }, [farVertex, nearQuad], 20, false)
+    expect(result!.sourceId).toBe('near-quad')
+  })
+})
+
 describe('resolveSnap — tie-break by stable array index', () => {
   it('returns the first point when kind and distance are identical', () => {
     const points: SnapPoint[] = [
