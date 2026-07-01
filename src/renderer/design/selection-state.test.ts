@@ -29,13 +29,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   EMPTY_SELECTION_SURFACE,
+  addFacesToSelection,
   clearSelection,
   isSameEntity,
   makeEdgeSelection,
   makeFaceSelection,
+  makeMultiFaceSelection,
   makeVertexSelection,
+  selectedFaceIds,
   selectionToSurface,
   setSelection,
+  toggleFaceInSelection,
   toggleSelection,
   type Selection,
 } from './selection-state'
@@ -197,5 +201,168 @@ describe('selectionToSurface — command-surface bridge', () => {
       makeVertexSelection(0),
     ]
     for (const sel of kinds) expect(selectionToSurface(sel).hasSelection).toBe(true)
+  })
+})
+
+// ── WINDOW/BOX SELECT — multi-face selection (Phase 2) ─────────────────────
+
+describe('selectedFaceIds — the single multi-face accessor', () => {
+  it('returns [] for null / edge / vertex selections', () => {
+    expect(selectedFaceIds(null)).toEqual([])
+    expect(selectedFaceIds(makeEdgeSelection(3))).toEqual([])
+    expect(selectedFaceIds(makeVertexSelection(3))).toEqual([])
+  })
+
+  it('returns [faceId] for a plain single-click face pick', () => {
+    expect(selectedFaceIds(makeFaceSelection(7))).toEqual([7])
+  })
+
+  it('returns the faceIds payload verbatim for a multi-face pick', () => {
+    const multi = makeMultiFaceSelection([4, 9, 2])
+    expect(multi).not.toBeNull()
+    expect(selectedFaceIds(multi)).toEqual([4, 9, 2])
+  })
+})
+
+describe('makeMultiFaceSelection — normalization contract', () => {
+  it('returns null for an empty id list', () => {
+    expect(makeMultiFaceSelection([])).toBeNull()
+  })
+
+  it('drops non-finite / non-integer / duplicate ids (and nulls out when nothing survives)', () => {
+    expect(makeMultiFaceSelection([Number.NaN, 1.5, Number.POSITIVE_INFINITY])).toBeNull()
+    expect(selectedFaceIds(makeMultiFaceSelection([3, 3, Number.NaN, 5, 3]))).toEqual([3, 5])
+  })
+
+  it('normalizes a ONE-face set to the classic single shape — no faceIds key', () => {
+    const sel = makeMultiFaceSelection([6])
+    expect(sel).toEqual({ kind: 'face', faceId: 6 })
+    expect(Object.keys(sel ?? {}).sort()).toEqual(['faceId', 'kind'])
+  })
+
+  it('a 2+ set carries faceIds and seats the FIRST id as primary by default', () => {
+    const sel = makeMultiFaceSelection([8, 2, 5])
+    expect(sel).toEqual({ kind: 'face', faceId: 8, faceIds: [8, 2, 5] })
+  })
+
+  it('a member primary donates its faceId + occtHash/signature metadata', () => {
+    const primary = makeFaceSelection(2, 'f:abc')
+    const sel = makeMultiFaceSelection([8, 2, 5], primary)
+    expect(sel).toEqual({ kind: 'face', faceId: 2, occtHash: 'f:abc', faceIds: [8, 2, 5] })
+  })
+
+  it('a NON-member primary is ignored (never fabricates membership)', () => {
+    const primary = makeFaceSelection(99, 'f:zzz')
+    const sel = makeMultiFaceSelection([8, 2], primary)
+    expect(sel).toEqual({ kind: 'face', faceId: 8, faceIds: [8, 2] })
+    expect(sel).not.toHaveProperty('occtHash')
+  })
+})
+
+describe('addFacesToSelection — box-select union transition', () => {
+  it('an empty hit-set changes NOTHING (returns prev by reference)', () => {
+    const prev = makeFaceSelection(4)
+    expect(addFacesToSelection(prev, [])).toBe(prev)
+    expect(addFacesToSelection(null, [])).toBeNull()
+  })
+
+  it('selects the boxed set when nothing was selected', () => {
+    expect(addFacesToSelection(null, [3, 1])).toEqual({
+      kind: 'face',
+      faceId: 3,
+      faceIds: [3, 1],
+    })
+  })
+
+  it('a one-face box over nothing behaves exactly like a click (single shape)', () => {
+    expect(addFacesToSelection(null, [5])).toEqual({ kind: 'face', faceId: 5 })
+  })
+
+  it('unions into an existing face selection, keeping prev primary + metadata', () => {
+    const prev = makeFaceSelection(4, 'f:keep')
+    const next = addFacesToSelection(prev, [9, 4, 11])
+    expect(next).toEqual({
+      kind: 'face',
+      faceId: 4,
+      occtHash: 'f:keep',
+      faceIds: [4, 9, 11],
+    })
+  })
+
+  it('replaces an edge/vertex selection with the boxed face set (kind switch)', () => {
+    const prev = makeEdgeSelection(2, 'e:x')
+    expect(addFacesToSelection(prev, [7, 8])).toEqual({
+      kind: 'face',
+      faceId: 7,
+      faceIds: [7, 8],
+    })
+  })
+
+  it('is idempotent for already-selected faces (dedupe union)', () => {
+    const prev = addFacesToSelection(null, [1, 2])
+    expect(addFacesToSelection(prev, [2, 1])).toEqual({
+      kind: 'face',
+      faceId: 1,
+      faceIds: [1, 2],
+    })
+  })
+})
+
+describe('toggleFaceInSelection — Ctrl/Cmd-click membership toggle', () => {
+  it('selects the clicked face when nothing / edge / vertex was selected', () => {
+    const next = makeFaceSelection(4)
+    expect(toggleFaceInSelection(null, next)).toBe(next)
+    expect(toggleFaceInSelection(makeEdgeSelection(4), next)).toBe(next)
+  })
+
+  it('ADDS an unselected face — the clicked face becomes primary with metadata', () => {
+    const prev = makeFaceSelection(1)
+    const clicked = makeFaceSelection(6, 'f:new')
+    expect(toggleFaceInSelection(prev, clicked)).toEqual({
+      kind: 'face',
+      faceId: 6,
+      occtHash: 'f:new',
+      faceIds: [1, 6],
+    })
+  })
+
+  it('REMOVES a selected non-primary face — the primary + metadata survive', () => {
+    const prev = makeMultiFaceSelection([2, 5, 9], makeFaceSelection(2, 'f:keep'))
+    expect(prev).not.toBeNull()
+    const next = toggleFaceInSelection(prev, makeFaceSelection(5))
+    expect(next).toEqual({ kind: 'face', faceId: 2, occtHash: 'f:keep', faceIds: [2, 9] })
+  })
+
+  it('REMOVES the primary — the first survivor is re-seated WITHOUT metadata (honest V1)', () => {
+    const prev = makeMultiFaceSelection([2, 5], makeFaceSelection(2, 'f:gone'))
+    const next = toggleFaceInSelection(prev, makeFaceSelection(2))
+    expect(next).toEqual({ kind: 'face', faceId: 5 })
+    expect(next).not.toHaveProperty('occtHash')
+  })
+
+  it('removing the LAST face clears the selection to null', () => {
+    expect(toggleFaceInSelection(makeFaceSelection(3), makeFaceSelection(3))).toBeNull()
+  })
+
+  it('a two-step add/remove round-trips back to the single-face shape', () => {
+    const single = makeFaceSelection(1)
+    const added = toggleFaceInSelection(single, makeFaceSelection(2))
+    const removed = toggleFaceInSelection(added, makeFaceSelection(2))
+    expect(removed).toEqual({ kind: 'face', faceId: 1 })
+    expect(Object.keys(removed ?? {}).sort()).toEqual(['faceId', 'kind'])
+  })
+})
+
+describe('multi-face selection — command-surface honesty', () => {
+  it('a multi-face selection presents EXACTLY like a single face pick', () => {
+    const multi = makeMultiFaceSelection([1, 2, 3])
+    expect(selectionToSurface(multi)).toEqual({ hasSelection: true, selectionKind: 'face' })
+  })
+
+  it('single-click regression — setSelection still replaces unconditionally', () => {
+    const multi = makeMultiFaceSelection([1, 2, 3])
+    const single = makeFaceSelection(9)
+    // A plain click over a multi-face selection collapses to the new pick.
+    expect(setSelection(multi, single)).toBe(single)
   })
 })

@@ -69,6 +69,23 @@ export interface FaceSelection {
    * Absent on legacy / pre-Tier-2 geometry.
    */
   readonly signature?: CadFaceSignature
+  /**
+   * WINDOW/BOX SELECT (Phase 2) · OPTIONAL multi-face payload. When present,
+   * EVERY selected face id (finite integers, deduped, always length >= 2 and
+   * always containing `faceId` — the PRIMARY face: the operator's most recent
+   * explicit pick, or the first box hit). ABSENT on a plain single-click pick
+   * and on a one-face box (both normalize to the classic single shape), so
+   * every pre-multi consumer — feature dialogs, status chip, context menu,
+   * command surface — keeps reading the primary `faceId` / `occtHash` exactly
+   * as before. HONEST V1 LIMITATION: per-face occtHash/signature metadata is
+   * NOT tracked for the extra faces; only the primary carries it, so the
+   * kernel-targeting dialogs act on the primary pick.
+   *
+   * `isSameEntity` / `toggleSelection` compare the PRIMARY `faceId` only —
+   * the multi-select transitions below (`addFacesToSelection` /
+   * `toggleFaceInSelection`) are the set-aware paths.
+   */
+  readonly faceIds?: readonly number[]
 }
 
 /**
@@ -207,6 +224,112 @@ export function isSameEntity(a: Selection, b: Selection): boolean {
   return a.faceId === b.faceId
 }
 
+// ── WINDOW/BOX SELECT — multi-face selection (Phase 2) ────────────────────
+
+/**
+ * Every selected face id for a `Selection | null`, in stable order:
+ *   - `null` / edge / vertex selections → `[]` (no faces selected),
+ *   - a single face pick → `[faceId]`,
+ *   - a multi-face pick → the `faceIds` payload verbatim.
+ * The ONE accessor consumers use for the multi-face highlight overlay and the
+ * status-chip count, so “how many faces are selected” has a single source of
+ * truth. Pure — never mutates, never fabricates ids.
+ */
+export function selectedFaceIds(selection: Selection | null): readonly number[] {
+  if (selection === null || selection.kind !== 'face') return []
+  return selection.faceIds ?? [selection.faceId]
+}
+
+/**
+ * Keep finite-integer ids only, first-occurrence order, deduped. Internal —
+ * the multi-face constructors funnel through this so a malformed id can never
+ * enter a `faceIds` payload (mirrors `triangleToFaceId`'s honesty checks).
+ */
+function sanitizeFaceIds(faceIds: readonly number[]): number[] {
+  const seen = new Set<number>()
+  const out: number[] = []
+  for (const id of faceIds) {
+    if (typeof id !== 'number' || !Number.isFinite(id) || !Number.isInteger(id)) continue
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * Build a face selection covering `faceIds` (the box-select release path).
+ * Normalization contract:
+ *   - empty (after dropping non-finite / duplicate ids) → `null`,
+ *   - exactly ONE id → a plain single `FaceSelection` (NO `faceIds` key), so
+ *     a one-face box behaves exactly like a click — the no-stray-key pins and
+ *     every single-pick consumer stay honest,
+ *   - two or more → `{ kind: 'face', faceId: <primary>, faceIds }`.
+ * `primary` (when provided AND still a member of the set) donates the primary
+ * `faceId` + its occtHash/signature metadata so the feature dialogs keep
+ * targeting the operator's explicit pick; otherwise the first id is primary.
+ */
+export function makeMultiFaceSelection(
+  faceIds: readonly number[],
+  primary?: FaceSelection
+): FaceSelection | null {
+  const ids = sanitizeFaceIds(faceIds)
+  if (ids.length === 0) return null
+  const primaryValid = primary !== undefined && ids.includes(primary.faceId)
+  const base = primaryValid
+    ? makeFaceSelection(primary.faceId, primary.occtHash, primary.signature)
+    : makeFaceSelection(ids[0])
+  if (ids.length === 1) return base
+  return { ...base, faceIds: ids }
+}
+
+/**
+ * Box-select release transition: UNION the freshly boxed `faceIds` into the
+ * current selection (SHIFT+drag is the ADDITIVE convention — see
+ * `selection-box.ts`).
+ *   - empty hit-set → `prev` unchanged (an additive box that catches nothing
+ *     adds nothing — it never clears; ESC / empty-click clears),
+ *   - `prev` is a face selection → union; `prev` keeps the primary + metadata,
+ *   - `prev` is null / edge / vertex → just the boxed set (kind switch
+ *     replaces, mirroring `handleSelectionModeChange`'s clear-on-switch).
+ */
+export function addFacesToSelection(
+  prev: Selection | null,
+  faceIds: readonly number[]
+): Selection | null {
+  const incoming = sanitizeFaceIds(faceIds)
+  if (incoming.length === 0) return prev
+  if (prev === null || prev.kind !== 'face') return makeMultiFaceSelection(incoming)
+  return makeMultiFaceSelection([...selectedFaceIds(prev), ...incoming], prev)
+}
+
+/**
+ * Ctrl/Cmd-click transition: toggle ONE face's membership in the selection.
+ *   - nothing / edge / vertex selected → the clicked face (plain single pick),
+ *   - clicked face already selected → remove it (→ `null` when it was the
+ *     last). When the removed face WAS the primary, the first survivor is
+ *     re-seated as primary WITHOUT metadata (honest V1 — extra faces never
+ *     carried occtHash/signature to promote),
+ *   - otherwise → add it; the clicked face becomes the new PRIMARY (with its
+ *     metadata) so the feature dialogs track the latest explicit pick.
+ */
+export function toggleFaceInSelection(
+  prev: Selection | null,
+  next: FaceSelection
+): Selection | null {
+  if (prev === null || prev.kind !== 'face') return next
+  const ids = selectedFaceIds(prev)
+  if (ids.includes(next.faceId)) {
+    const remaining = ids.filter((id) => id !== next.faceId)
+    if (prev.faceId !== next.faceId) {
+      // The primary survives the removal — keep its metadata.
+      return makeMultiFaceSelection(remaining, prev)
+    }
+    return makeMultiFaceSelection(remaining)
+  }
+  return makeMultiFaceSelection([...ids, next.faceId], next)
+}
+
 // ── Command-surface bridge (pure) ──────────────────────────────────
 
 /**
@@ -243,6 +366,13 @@ export const EMPTY_SELECTION_SURFACE: SelectionSurface = Object.freeze({ hasSele
  * Returns the stable {@link EMPTY_SELECTION_SURFACE} for `null` so the
  * consumer's identity comparison stays cheap; otherwise carries the
  * selection's `kind`.
+ *
+ * WINDOW/BOX SELECT: a MULTI-face selection (`faceIds` payload) presents
+ * exactly like a single face pick — `{ hasSelection: true, selectionKind:
+ * 'face' }`. Face-gated commands stay enabled and act on the PRIMARY
+ * `faceId` / `occtHash`; the surface deliberately carries NO count so every
+ * existing consumer (ribbon gating, viewport context menu, host bridge)
+ * keeps its contract byte-for-byte unchanged.
  */
 export function selectionToSurface(selection: Selection | null): SelectionSurface {
   if (selection === null) return EMPTY_SELECTION_SURFACE

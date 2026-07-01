@@ -92,23 +92,28 @@ describe('S5.1 — conflict-aware DOF badge gating (SketchSurface source pins)',
     expect(SURFACE_SRC).not.toContain('useMemo(() => analyzeSketchDof(design)')
   })
 
-  it('only the two re-solving handlers mark the result SETTLED', () => {
-    // Constraint apply + dimension-value edit both re-solve (solveSketchToTolerance
-    // / applyDimensionValue) and pass solved=true — exactly once each, and no
-    // other call site claims settled.
+  it('only the three re-solving handlers mark the result SETTLED', () => {
+    // Constraint apply + dimension-value edit + culprit-constraint removal all
+    // re-solve (solveSketchToTolerance / applyDimensionValue) and pass
+    // solved=true — exactly once each, and no other call site claims settled.
     expect(
       SURFACE_SRC.match(/applyDesignEdit\(solveSketchToTolerance\(withConstraint\), true\)/g) ?? []
     ).toHaveLength(1)
     expect(SURFACE_SRC.match(/applyDesignEdit\(next, true\)/g) ?? []).toHaveLength(1)
+    expect(
+      SURFACE_SRC.match(/applyDesignEdit\(solveSketchToTolerance\(removed\), true\)/g) ?? []
+    ).toHaveLength(1)
     // No OTHER `applyDesignEdit(..., true)` settled apply exists: the only call
-    // sites passing the solved flag as `true` are those two. (Counted as the two
-    // literal forms above; any third settled apply would be a new literal here.)
+    // sites passing the solved flag as `true` are those three. (Counted as the
+    // three literal forms above; any fourth settled apply would be a new
+    // literal here.)
     const settledCalls = [
       ...(SURFACE_SRC.match(/applyDesignEdit\(solveSketchToTolerance\(withConstraint\), true\)/g) ??
         []),
-      ...(SURFACE_SRC.match(/applyDesignEdit\(next, true\)/g) ?? [])
+      ...(SURFACE_SRC.match(/applyDesignEdit\(next, true\)/g) ?? []),
+      ...(SURFACE_SRC.match(/applyDesignEdit\(solveSketchToTolerance\(removed\), true\)/g) ?? [])
     ]
-    expect(settledCalls).toHaveLength(2)
+    expect(settledCalls).toHaveLength(3)
   })
 
   it('applyDesignEdit defaults to UNSETTLED (solved=false) and sets the gate', () => {

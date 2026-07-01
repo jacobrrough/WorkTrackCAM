@@ -84,6 +84,7 @@ import {
   type SnapResult,
 } from './drawing-snap'
 import {
+  advanceDimensionRun,
   buildAngularDimension,
   buildCenterMark,
   buildCenterline,
@@ -93,6 +94,7 @@ import {
   buildRadialDimension,
   composeCenterMarksIntoSvg,
   composeCenterlinesIntoSvg,
+  composeDimensionSetsIntoSvg,
   composeNotesIntoSvg,
   DEFAULT_CENTER_MARK_SIZE_MM,
   reanchorCenterMarks,
@@ -101,9 +103,15 @@ import {
   reanchorNotes,
   removeCenterMark,
   removeCenterline,
+  removeDimension,
   removeNote,
+  startBaselineRun,
+  startChainRun,
+  startOrdinateRun,
   updateNoteText,
+  type DimensionRunState,
   type FreshSnapPoint,
+  type OrdinateAxis,
   type ResolvedClick,
 } from './drawing-annotation-model'
 import {
@@ -724,6 +732,76 @@ export function dimensionToolTestId(kind: DrawingDimensionKind): string {
   return `design-drawing-dim-${kind}`
 }
 
+// -- CAD V2.5 -- Set-based dimension run tools (ordinate / baseline / chain) --
+
+/**
+ * The four set-based run tools in the dimension toolbar. Ordinate is split
+ * into per-axis buttons (rather than an axis toggle field) because the
+ * dimension group is a flat button row -- a pressed button IS the armed
+ * state, so `aria-pressed` per axis keeps the armed axis unambiguous.
+ */
+export type DimensionRunKind = 'ordinate-x' | 'ordinate-y' | 'baseline' | 'chain'
+
+/** Run-tool button order. Stable across renders for the test pin. */
+export const DIMENSION_RUN_TOOL_ORDER: readonly DimensionRunKind[] = [
+  'ordinate-x',
+  'ordinate-y',
+  'baseline',
+  'chain',
+] as const
+
+/** Run-tool button labels. */
+export const DIMENSION_RUN_LABELS: Record<DimensionRunKind, string> = {
+  'ordinate-x': 'Ordinate X',
+  'ordinate-y': 'Ordinate Y',
+  baseline: 'Baseline',
+  chain: 'Chain',
+}
+
+/** Stable testid generator for the run-tool buttons. */
+export function dimensionRunToolTestId(kind: DimensionRunKind): string {
+  return `design-drawing-dim-${kind}`
+}
+
+/** Idle-state tooltip per run tool. */
+const DIMENSION_RUN_TITLES: Record<DimensionRunKind, string> = {
+  'ordinate-x': 'Click the 0-datum origin, then each feature to add X ordinate read-outs',
+  'ordinate-y': 'Click the 0-datum origin, then each feature to add Y ordinate read-outs',
+  baseline: 'Click the base feature, then each feature to stack baseline dimensions',
+  chain: 'Click from point to point to chain dimensions end-to-end',
+}
+
+/** Map an armed run state back to its toolbar button kind (null when idle). */
+function runStateToKind(state: DimensionRunState | null): DimensionRunKind | null {
+  if (state === null) return null
+  if (state.kind === 'ordinate') return state.axis === 'x' ? 'ordinate-x' : 'ordinate-y'
+  return state.kind
+}
+
+/**
+ * One-line list label for a persisted dimension (the per-item delete rows).
+ * Pure; exported for the test pin.
+ */
+export function dimensionRowLabel(dim: DrawingDimension): string {
+  const v = dim.value.toFixed(1)
+  switch (dim.kind) {
+    case 'linear':
+      return `Distance ${v}`
+    case 'radial':
+      return `Radius ${v}`
+    case 'diameter':
+      return `Diameter ${v}`
+    case 'angular':
+      return `Angle ${v} deg`
+    case 'ordinate':
+      return `Ordinate ${dim.axis.toUpperCase()} ${v}`
+    case 'baseline':
+      return `Baseline ${v}`
+    case 'chain':
+      return `Chain ${v}`
+  }
+}
+
 /**
  * Build a DrawingDimensionSpec from completed placement coordinates.
  * For kinds with two-point placement (distance), p1/p2 map directly.
@@ -910,9 +988,11 @@ function readSnapPointsFromGeometry(
  * consumes. The dimension-drawing handler is coordinate-driven (it does NOT
  * understand anchors), so we feed it each anchor's `cachedPoint` -- which is
  * always present and was refreshed by the re-anchor pass on the last geometry
- * fetch. Ordinate / baseline / chain dimensions render as their underlying
- * point-to-point measurement (the handler has no ordinate primitive yet), so
- * they degrade to a `distance` overlay using their two governing anchors.
+ * fetch. Ordinate / baseline / chain members are FILTERED OUT before this
+ * mapper runs (they paint client-side via the pure dimension-set emitters in
+ * `drawing-annotation-model.ts`); the fallback cases below keep the mapper
+ * total over the union should one ever slip through (degrading to a
+ * `distance` overlay from the member's two governing anchors).
  */
 function persistedDimensionToSpec(dim: DrawingDimension): DrawingDimensionSpec {
   switch (dim.kind) {
@@ -1225,6 +1305,15 @@ export function DrawingView({
   const [placementState, setPlacementState] = useState<DimensionPlacementState>(null)
 
   /**
+   * Set-based dimension RUN state (ordinate / baseline / chain -- the pure
+   * machine in `drawing-annotation-model.ts`). Mutually exclusive with both
+   * the two-click `placementState` machine and the GD&T / detail `toolMode`:
+   * arming any pipeline clears the others so a click is never ambiguous.
+   * `null` = no run armed. Esc or re-clicking the armed button ends a run.
+   */
+  const [runState, setRunState] = useState<DimensionRunState | null>(null)
+
+  /**
    * Per-click history for the IN-PROGRESS placement. Parallel to the placement
    * machine's step count: each entry is a {@link ResolvedClick} carrying the
    * resolved SVG-mm coordinate AND the `sourceId` of the snap target it landed
@@ -1308,6 +1397,15 @@ export function DrawingView({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Alt') setAltHeld(true)
+      if (e.key === 'Escape') {
+        // End any in-progress placement: the two-click dimension machine, the
+        // GD&T / note / center / detail tools, and set-based dimension runs.
+        setPlacementState(null)
+        setToolMode(null)
+        setRunState(null)
+        setHoveredSnap(null)
+        clickHistoryRef.current = []
+      }
     }
     const onKeyUp = (e: KeyboardEvent): void => {
       if (e.key === 'Alt') setAltHeld(false)
@@ -1395,6 +1493,55 @@ export function DrawingView({
       setDimensions((prev) => [...prev, spec])
     },
     [controlled, onPersistDimensions, persistedDimensions, toast]
+  )
+
+  /**
+   * Persist one dimension minted by an armed set-based run (ordinate /
+   * baseline / chain). Runs exist only in CONTROLLED mode -- the legacy
+   * ephemeral spec union has no set-based kinds -- so an uncontrolled host
+   * gets the standard "no persistence host" warning instead.
+   */
+  const commitRunDimension = useCallback(
+    (dim: DrawingDimension): void => {
+      if (!controlled) {
+        toast('warn', 'Dimension placement is unavailable -- no persistence host wired.')
+        return
+      }
+      onPersistDimensions?.([...(persistedDimensions ?? []), dim])
+      toast('ok', `${dimensionRowLabel(dim)} added.`)
+    },
+    [controlled, onPersistDimensions, persistedDimensions, toast]
+  )
+
+  /**
+   * Arm (or toggle off) a set-based dimension run. Re-clicking the armed
+   * button ends the run; switching ordinate axis mid-run REUSES the picked
+   * 0-datum origin. Cancels the two-click machine and any GD&T / detail tool
+   * so a click is never ambiguous between pipelines. Esc also ends a run
+   * (see the keydown effect above).
+   */
+  const armRun = useCallback((kind: DimensionRunKind): void => {
+    setPlacementState(null)
+    setToolMode(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setRunState((prev) => {
+      if (runStateToKind(prev) === kind) return null
+      if (kind === 'ordinate-x' || kind === 'ordinate-y') {
+        const axis: OrdinateAxis = kind === 'ordinate-x' ? 'x' : 'y'
+        const carriedOrigin = prev !== null && prev.kind === 'ordinate' ? prev.origin : null
+        return startOrdinateRun(axis, carriedOrigin)
+      }
+      return kind === 'baseline' ? startBaselineRun() : startChainRun()
+    })
+  }, [])
+
+  /** Delete one persisted dimension (per-item delete affordance). */
+  const deleteDimension = useCallback(
+    (id: string): void => {
+      onPersistDimensions?.(removeDimension(persistedDimensions ?? [], id))
+    },
+    [onPersistDimensions, persistedDimensions]
   )
 
   /**
@@ -1591,7 +1738,7 @@ export function DrawingView({
     (e: ReactPointerEvent<HTMLDivElement>): void => {
       // Hover-snap feedback is active during dimension placement OR a GD&T /
       // detail tool (all reuse the same anchored-snap machinery).
-      if (placementState === null && toolMode === null) {
+      if (placementState === null && toolMode === null && runState === null) {
         setHoveredSnap(null)
         return
       }
@@ -1600,7 +1747,7 @@ export function DrawingView({
       const { snap } = resolveCursorSvg(e.clientX, e.clientY, preferKind)
       setHoveredSnap(snap)
     },
-    [placementState, toolMode, resolveCursorSvg]
+    [placementState, toolMode, runState, resolveCursorSvg]
   )
 
   const handlePointerDown = useCallback(
@@ -1690,6 +1837,20 @@ export function DrawingView({
         return
       }
 
+      // -- Set-based dimension runs (ordinate / baseline / chain). A priming
+      // click stores the run's datum; every later click mints one persisted
+      // dimension. The run stays armed until Esc / re-clicking its button.
+      if (runState !== null) {
+        const resolvedClick: ResolvedClick = {
+          point: { x: clickSvg.x, y: clickSvg.y },
+          sourceId,
+        }
+        const { next, minted } = advanceDimensionRun(runState, resolvedClick)
+        setRunState(next)
+        if (minted !== null) commitRunDimension(minted)
+        return
+      }
+
       // -- Dimension placement (legacy two-click machine).
       if (placementState === null) return
       const resolvedClick: ResolvedClick = {
@@ -1711,8 +1872,10 @@ export function DrawingView({
     [
       placementState,
       toolMode,
+      runState,
       resolveCursorSvg,
       commitPlacement,
+      commitRunDimension,
       commitGdtFrame,
       commitSurfaceFinish,
       commitNote,
@@ -1728,6 +1891,7 @@ export function DrawingView({
    */
   const startPlacement = useCallback((kind: DrawingDimensionKind): void => {
     setToolMode(null)
+    setRunState(null)
     setPlacementState(startDimensionPlacement(kind))
     clickHistoryRef.current = []
     setHoveredSnap(null)
@@ -1739,6 +1903,7 @@ export function DrawingView({
    */
   const startGdt = useCallback((): void => {
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) => (prev !== null && prev.tool === 'gdt' ? null : { tool: 'gdt' }))
@@ -1750,6 +1915,7 @@ export function DrawingView({
    */
   const startDetail = useCallback((): void => {
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) => (prev !== null && prev.tool === 'detail' ? null : { tool: 'detail', step: 0 }))
@@ -1762,6 +1928,7 @@ export function DrawingView({
       setDimensions([])
     }
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
   }, [controlled, onPersistDimensions])
@@ -1780,6 +1947,7 @@ export function DrawingView({
    */
   const startSurfaceFinish = useCallback((): void => {
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) =>
@@ -1807,6 +1975,7 @@ export function DrawingView({
       return
     }
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) => (prev !== null && prev.tool === 'note' ? null : { tool: 'note' }))
@@ -1842,6 +2011,7 @@ export function DrawingView({
    */
   const startCenterMark = useCallback((): void => {
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) =>
@@ -1856,6 +2026,7 @@ export function DrawingView({
    */
   const startCenterline = useCallback((): void => {
     setPlacementState(null)
+    setRunState(null)
     clickHistoryRef.current = []
     setHoveredSnap(null)
     setToolMode((prev) =>
@@ -2083,7 +2254,18 @@ export function DrawingView({
    */
   const dimensionsRef = useMemo<DrawingDimensionSpec[]>(() => {
     if (controlled) {
-      return (persistedDimensions ?? []).map(persistedDimensionToSpec)
+      // Ordinate / baseline / chain members paint CLIENT-SIDE via the pure
+      // dimension-set emitters (composed into displaySvg below); only the
+      // four sidecar-native kinds round-trip through `cad.dimension_drawing`.
+      return (persistedDimensions ?? [])
+        .filter(
+          (dim) =>
+            dim.kind === 'linear' ||
+            dim.kind === 'radial' ||
+            dim.kind === 'diameter' ||
+            dim.kind === 'angular'
+        )
+        .map(persistedDimensionToSpec)
     }
     return dimensions
   }, [controlled, persistedDimensions, dimensions])
@@ -2132,6 +2314,12 @@ export function DrawingView({
     if (persistedCenterlines !== undefined && persistedCenterlines.length > 0) {
       composed = composeCenterlinesIntoSvg(composed, persistedCenterlines, centerlineDanglingIds)
     }
+    if (persistedDimensions !== undefined && persistedDimensions.length > 0) {
+      // Set-based dimensions (ordinate / baseline / chain) -- the layer helper
+      // skips the four sidecar-native kinds, so this is a no-op for a list of
+      // plain linear / radial / diameter / angular dimensions.
+      composed = composeDimensionSetsIntoSvg(composed, persistedDimensions, danglingIds)
+    }
     return composed
   }, [
     svg,
@@ -2143,6 +2331,8 @@ export function DrawingView({
     centerMarkDanglingIds,
     persistedCenterlines,
     centerlineDanglingIds,
+    persistedDimensions,
+    danglingIds,
   ])
 
   // Re-project whenever `partHandle` or the active view changes.
@@ -2555,6 +2745,25 @@ export function DrawingView({
         : `Placing ${DIMENSION_LABELS[placementState.kind]} -- click p2`
       : null
 
+  /** Status line for an armed set-based dimension run (ordinate / baseline / chain). */
+  const runStatusLabel: string | null =
+    runState === null
+      ? null
+      : runState.kind === 'ordinate'
+        ? runState.origin === null
+          ? `Ordinate ${runState.axis.toUpperCase()} -- click the 0-datum origin`
+          : `Ordinate ${runState.axis.toUpperCase()} -- click features to add read-outs (Esc ends)`
+        : runState.kind === 'baseline'
+          ? runState.origin === null
+            ? 'Baseline -- click the base feature'
+            : 'Baseline -- click features to stack dimensions (Esc ends)'
+          : runState.prev === null
+            ? 'Chain -- click the first feature'
+            : 'Chain -- click the next feature (Esc ends)'
+
+  /** The toolbar run-button kind currently armed (null when idle). */
+  const armedRunKind = runStateToKind(runState)
+
   /**
    * Effective placed-dimension count -- the persisted list in controlled mode,
    * otherwise the legacy ephemeral list. Drives the Clear button + the count
@@ -2825,6 +3034,30 @@ export function DrawingView({
               </button>
             )
           })}
+          {DIMENSION_RUN_TOOL_ORDER.map((kind) => {
+            const isArmed = armedRunKind === kind
+            return (
+              <button
+                key={kind}
+                type="button"
+                className={
+                  isArmed
+                    ? 'btn btn-primary design-drawing__dim-btn design-drawing__dim-btn--placing'
+                    : 'btn btn-secondary design-drawing__dim-btn'
+                }
+                data-testid={dimensionRunToolTestId(kind)}
+                onClick={() => armRun(kind)}
+                title={
+                  isArmed
+                    ? `End the ${DIMENSION_RUN_LABELS[kind].toLowerCase()} run (Esc)`
+                    : DIMENSION_RUN_TITLES[kind]
+                }
+                aria-pressed={isArmed}
+              >
+                {DIMENSION_RUN_LABELS[kind]}
+              </button>
+            )
+          })}
           {effectiveDimCount > 0 && (
             <button
               type="button"
@@ -2857,9 +3090,11 @@ export function DrawingView({
         >
           {placementLabel !== null
             ? placementLabel
-            : effectiveDimCount === 0
-              ? 'No dimensions added'
-              : `${effectiveDimCount} dimension${effectiveDimCount === 1 ? '' : 's'}`}
+            : runStatusLabel !== null
+              ? runStatusLabel
+              : effectiveDimCount === 0
+                ? 'No dimensions added'
+                : `${effectiveDimCount} dimension${effectiveDimCount === 1 ? '' : 's'}`}
         </div>
         {danglingCount > 0 && (
           <div
@@ -2870,6 +3105,31 @@ export function DrawingView({
           >
             {`${danglingCount} dangling`}
           </div>
+        )}
+        {controlled && effectiveDimCount > 0 && (
+          <ul
+            className="design-drawing__note-list design-drawing__dim-list"
+            data-testid="design-drawing-dim-list"
+            aria-label="Placed dimensions"
+          >
+            {(persistedDimensions ?? []).map((dim) => (
+              <li key={dim.id} className="design-drawing__note-row">
+                <span className="design-drawing__centermark-row-label">
+                  {dimensionRowLabel(dim)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost design-drawing__note-delete"
+                  data-testid={`design-drawing-dim-delete-${dim.id}`}
+                  aria-label="Delete dimension"
+                  title="Delete this dimension"
+                  onClick={() => deleteDimension(dim.id)}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
@@ -3533,12 +3793,16 @@ export function DrawingView({
           <div
             ref={svgHostRef}
             className={
-              placementState !== null || toolMode !== null
+              placementState !== null || toolMode !== null || runState !== null
                 ? 'design-drawing__svg-host design-drawing__svg-host--placing'
                 : 'design-drawing__svg-host'
             }
             data-testid="design-drawing-svg"
-            data-placement-active={placementState !== null || toolMode !== null ? 'true' : undefined}
+            data-placement-active={
+              placementState !== null || toolMode !== null || runState !== null
+                ? 'true'
+                : undefined
+            }
             // eslint-disable-next-line react/no-danger -- sidecar-trusted SVG + client-composed surface-finish layer (markup-safe by construction); see file-header rationale
             dangerouslySetInnerHTML={{ __html: displaySvg ?? svg }}
             onPointerMove={handlePointerMove}

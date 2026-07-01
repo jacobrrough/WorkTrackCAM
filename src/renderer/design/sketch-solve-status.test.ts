@@ -188,11 +188,37 @@ describe('sketch-solve-status — sketchStatusBadgeLabel', () => {
     expect(sketchStatusBadgeLabel(map)).toBe('Under-constrained: 3 DOF')
   })
 
-  it('over-constrained label lists the conflicting ids', () => {
+  it('over-constrained label NAMES the culprit (kind + id) with the removal hint', () => {
     const map = mapSolveDiagnosisToStatus(lineWithHorizontal(), {
       conflictingConstraintIds: ['h1']
     })
-    expect(sketchStatusBadgeLabel(map)).toBe('Over-constrained — h1')
+    expect(sketchStatusBadgeLabel(map)).toBe(
+      'Over-constrained — Horizontal h1 conflicts; remove it or another constraint on these entities'
+    )
+  })
+
+  it('several conflicting constraints are all named, with the pick-one hint', () => {
+    let s = initialSketchState()
+    s = sketchReducer(s, {
+      type: 'addLine',
+      id: 'L1',
+      start: { id: 'a', x: 0, y: 0 },
+      end: { id: 'b', x: 10, y: 1 }
+    })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'h1', kind: 'horizontal', aId: 'a', bId: 'b' }
+    })
+    s = sketchReducer(s, {
+      type: 'addConstraint',
+      constraint: { id: 'd1', kind: 'distance', aId: 'a', bId: 'b', value: 10 }
+    })
+    const map = mapSolveDiagnosisToStatus(s.sketch, {
+      conflictingConstraintIds: ['h1', 'd1']
+    })
+    expect(sketchStatusBadgeLabel(map)).toBe(
+      'Over-constrained — Horizontal h1, Distance d1 conflict; remove one of them'
+    )
   })
 
   it('over-constrained with no ids falls back to the bare label', () => {

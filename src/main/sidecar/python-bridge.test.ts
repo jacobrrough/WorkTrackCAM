@@ -8,6 +8,11 @@
 import { spawnSync } from 'node:child_process'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { resolve } from 'node:path'
+import {
+  isCadEdgeMapEntry,
+  isCadEdgePolyline,
+  type CadExecuteScriptResult,
+} from '../../shared/sidecar-protocol'
 import { PythonBridge } from './python-bridge'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
@@ -98,4 +103,91 @@ describeIfPython('PythonBridge — sidecar round-trip', () => {
     await bridge.stop()
     await expect(bridge.call('ping')).rejects.toMatchObject({ code: 'bridge_closed' })
   }, 15_000)
+})
+
+// ── SIDECAR EDGE-ID EMISSION: typed tessellateWithIds round trip ───────────
+//
+// `PythonBridge.tessellateWithIds` is the typed entry point for the
+// selection-grade tessellation (`cad.tessellate_with_ids`). Two axes:
+//   1. Error threading works without CadQuery — an unknown handle fails the
+//      table lookup BEFORE any cadquery import, so `invalid_handle` is the
+//      deterministic structured error in every environment.
+//   2. When CadQuery IS installed, a real box round-trips end-to-end through
+//      the typed method: 12 stable `e:`-id polylines whose ids exactly key
+//      `edgeMap`, identical across two calls, honestly un-truncated. (The
+//      geometry-level assertions — points on curve, cap truncation — live in
+//      engines/sidecar/__tests__/test_cad_edge_wire_emission.py under the
+//      cadquery venv; this test proves the TYPED BRIDGE surface.)
+
+describeIfPython('PythonBridge.tessellateWithIds — typed edge emission', () => {
+  it('threads params through and surfaces invalid_handle as a structured error', async () => {
+    const bridge = PythonBridge.start({ pythonPath: PYTHON!, appRoot: PROJECT_ROOT })
+    try {
+      await expect(
+        bridge.tessellateWithIds({ handle: 'script:never-created' }, { timeoutMs: 30_000 }),
+      ).rejects.toMatchObject({
+        code: 'sidecar_error',
+        sidecarCode: 'invalid_handle',
+      })
+    } finally {
+      await bridge.stop()
+    }
+  }, 30_000)
+
+  it('rejects a non-positive tolerance with invalid_numeric_params', async () => {
+    const bridge = PythonBridge.start({ pythonPath: PYTHON!, appRoot: PROJECT_ROOT })
+    try {
+      await expect(
+        bridge.tessellateWithIds({ handle: 'script:x', toleranceMm: -0.1 }, { timeoutMs: 30_000 }),
+      ).rejects.toMatchObject({
+        code: 'sidecar_error',
+        sidecarCode: 'invalid_numeric_params',
+      })
+    } finally {
+      await bridge.stop()
+    }
+  }, 30_000)
+
+  it('returns stable per-edge polylines end-to-end when CadQuery is installed', async () => {
+    // Probe cadquery first — on a Python without a cadquery wheel the earlier
+    // tests already cover the structured-error surface; the full-geometry
+    // branch is exercised here when the interpreter has the lib AND (always)
+    // by the venv pytest suite named in the block comment above.
+    const probe = spawnSync(PYTHON!, ['-c', 'import cadquery'], { cwd: PROJECT_ROOT })
+    if (probe.status !== 0) return
+
+    const bridge = PythonBridge.start({ pythonPath: PYTHON!, appRoot: PROJECT_ROOT })
+    try {
+      const exec = await bridge.call<CadExecuteScriptResult>(
+        'cad.execute_script',
+        { script: "import cadquery as cq\nresult = cq.Workplane('XY').box(20, 15, 10)\n" },
+        { timeoutMs: 120_000 },
+      )
+      const mesh = exec.meshes[0]
+      expect(mesh).toBeDefined()
+
+      const r1 = await bridge.tessellateWithIds({ handle: mesh.handle }, { timeoutMs: 120_000 })
+      const r2 = await bridge.tessellateWithIds({ handle: mesh.handle }, { timeoutMs: 120_000 })
+
+      // 12 well-formed stable polylines, ids exactly keying edgeMap.
+      expect(r1.edges).toHaveLength(12)
+      expect(r1.edges.every(isCadEdgePolyline)).toBe(true)
+      expect(Object.values(r1.edgeMap).every(isCadEdgeMapEntry)).toBe(true)
+      expect(new Set(r1.edges.map((e) => e.id))).toEqual(new Set(Object.keys(r1.edgeMap)))
+      for (const poly of r1.edges) expect(poly.id.startsWith('e:')).toBe(true)
+
+      // Stable across two calls on the same handle.
+      expect(r1.edges.map((e) => e.id).sort()).toEqual(r2.edges.map((e) => e.id).sort())
+
+      // Honest truncation flag present and false for a 24-point box.
+      expect(r1.edgesTruncated).toBe(false)
+
+      // The execute_script mesh embeds the same edge surface (wire completion).
+      expect(Array.isArray(mesh.edges)).toBe(true)
+      expect(mesh.edges).toHaveLength(12)
+      expect(mesh.edgesTruncated).toBe(false)
+    } finally {
+      await bridge.stop()
+    }
+  }, 180_000)
 })

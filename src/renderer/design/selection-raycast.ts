@@ -80,3 +80,34 @@ export function trianglesForFace(
   }
   return out
 }
+
+/**
+ * WINDOW/BOX SELECT (Phase 2) — build the triangle-index list for a SET of
+ * face ids in ONE linear pass over the parallel array (vs. N calls to
+ * `trianglesForFace`), preserving ascending triangle order so the highlight
+ * overlay's buffer layout matches the single-face path exactly.
+ *
+ * Returns an empty array when:
+ *   - the faceIds stash is missing (legacy tessellation),
+ *   - the wanted list is empty or holds no finite ids,
+ *   - no wanted face appears in the stash.
+ *
+ * Pure — no Three.js, no DOM. Safe in any environment.
+ */
+export function trianglesForFaces(
+  faceIdsWanted: readonly number[],
+  faceIds: readonly number[] | null | undefined,
+): readonly number[] {
+  if (!faceIds || !Array.isArray(faceIds)) return []
+  if (!Array.isArray(faceIdsWanted) || faceIdsWanted.length === 0) return []
+  const wanted = new Set<number>()
+  for (const id of faceIdsWanted) {
+    if (typeof id === 'number' && Number.isFinite(id)) wanted.add(id)
+  }
+  if (wanted.size === 0) return []
+  const out: number[] = []
+  for (let i = 0; i < faceIds.length; i++) {
+    if (wanted.has(faceIds[i])) out.push(i)
+  }
+  return out
+}

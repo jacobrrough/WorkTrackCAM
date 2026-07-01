@@ -257,7 +257,9 @@ export function buildAngularDimension(
 /**
  * Build a single `ordinate` dimension: a coordinate read-out from `origin`
  * (the datum) to `feature`, along one `axis`. `value` is the signed coordinate
- * delta along that axis.
+ * delta along that axis. Default `placement` (the leader end / text anchor)
+ * offsets perpendicular to the measured axis -- the drafting convention: X
+ * read-outs sit on vertical leaders, Y read-outs on horizontal leaders.
  */
 export function buildOrdinateDimension(
   origin: ResolvedClick,
@@ -275,7 +277,76 @@ export function buildOrdinateDimension(
     feature: f,
     axis,
     value,
-    placement: { x: f.cachedPoint.x, y: f.cachedPoint.y },
+    placement:
+      axis === 'x'
+        ? { x: f.cachedPoint.x, y: f.cachedPoint.y - DEFAULT_DIMENSION_OFFSET }
+        : { x: f.cachedPoint.x + DEFAULT_DIMENSION_OFFSET, y: f.cachedPoint.y },
+    ...(options?.label !== undefined ? { label: options.label } : {})
+  }
+}
+
+/**
+ * Build a single `baseline` dimension: one member of a baseline (datum) set,
+ * measured from the shared `origin` datum to `feature`. `memberIndex` is the
+ * member's 0-based position within its set and drives the standard stacked
+ * placement (each subsequent dimension line offset one more `stepMm` from the
+ * geometry), so an INCREMENTAL run (one click at a time) stacks exactly like
+ * a batch {@link expandBaselineSet}. Omitted options mint a fresh setId and
+ * place the first row.
+ */
+export function buildBaselineDimension(
+  origin: ResolvedClick,
+  feature: ResolvedClick,
+  options?: {
+    readonly setId?: string
+    readonly memberIndex?: number
+    readonly stepMm?: number
+    readonly label?: string
+  }
+): Extract<DrawingDimension, { kind: 'baseline' }> {
+  const setId = options?.setId ?? makeSetId('baseline')
+  const memberIndex = options?.memberIndex ?? 0
+  const step = options?.stepMm ?? DEFAULT_DIMENSION_OFFSET
+  const o = anchorFromClick(origin)
+  const f = anchorFromClick(feature)
+  return {
+    kind: 'baseline',
+    id: makeDimensionId('baseline'),
+    origin: o,
+    feature: f,
+    setId,
+    value: distance(o.cachedPoint, f.cachedPoint),
+    placement: {
+      x: f.cachedPoint.x,
+      y: o.cachedPoint.y - step * (memberIndex + 1)
+    },
+    ...(options?.label !== undefined ? { label: options.label } : {})
+  }
+}
+
+/**
+ * Build a single `chain` dimension: one segment of a continuous (chained)
+ * dimension run between two adjacent anchors. Members of one run share the
+ * caller-supplied `setId` (omitted mints a fresh one). Placement is the
+ * standard perpendicular-offset midpoint, so consecutive collinear segments
+ * align on one row.
+ */
+export function buildChainDimension(
+  start: ResolvedClick,
+  end: ResolvedClick,
+  options?: { readonly setId?: string; readonly label?: string }
+): Extract<DrawingDimension, { kind: 'chain' }> {
+  const setId = options?.setId ?? makeSetId('chain')
+  const a = anchorFromClick(start)
+  const b = anchorFromClick(end)
+  return {
+    kind: 'chain',
+    id: makeDimensionId('chain'),
+    start: a,
+    end: b,
+    setId,
+    value: distance(a.cachedPoint, b.cachedPoint),
+    placement: offsetMidpoint(a.cachedPoint, b.cachedPoint, DEFAULT_DIMENSION_OFFSET),
     ...(options?.label !== undefined ? { label: options.label } : {})
   }
 }
@@ -301,22 +372,9 @@ export function expandBaselineSet(
 ): Array<Extract<DrawingDimension, { kind: 'baseline' }>> {
   const setId = options?.setId ?? makeSetId('baseline')
   const step = options?.stepMm ?? DEFAULT_DIMENSION_OFFSET
-  const originAnchor = anchorFromClick(origin)
-  return features.map((feat, i) => {
-    const featAnchor = anchorFromClick(feat)
-    return {
-      kind: 'baseline',
-      id: makeDimensionId('baseline'),
-      origin: { refId: originAnchor.refId, cachedPoint: { ...originAnchor.cachedPoint } },
-      feature: featAnchor,
-      setId,
-      value: distance(originAnchor.cachedPoint, featAnchor.cachedPoint),
-      placement: {
-        x: featAnchor.cachedPoint.x,
-        y: originAnchor.cachedPoint.y - step * (i + 1)
-      }
-    }
-  })
+  return features.map((feat, i) =>
+    buildBaselineDimension(origin, feat, { setId, memberIndex: i, stepMm: step })
+  )
 }
 
 /**
@@ -336,17 +394,7 @@ export function expandChainSet(
   const setId = options?.setId ?? makeSetId('chain')
   const out: Array<Extract<DrawingDimension, { kind: 'chain' }>> = []
   for (let i = 0; i < clicks.length - 1; i++) {
-    const a = anchorFromClick(clicks[i])
-    const b = anchorFromClick(clicks[i + 1])
-    out.push({
-      kind: 'chain',
-      id: makeDimensionId('chain'),
-      start: a,
-      end: b,
-      setId,
-      value: distance(a.cachedPoint, b.cachedPoint),
-      placement: offsetMidpoint(a.cachedPoint, b.cachedPoint, DEFAULT_DIMENSION_OFFSET)
-    })
+    out.push(buildChainDimension(clicks[i], clicks[i + 1], { setId }))
   }
   return out
 }
@@ -1201,4 +1249,361 @@ export function composeCenterlinesIntoSvg(
 /** Test whether a center mark has a live associative anchor link. Pure. */
 export function isAssociativeCenterMark(mark: DrawingCenterMark): boolean {
   return mark.anchor.refId !== FREE_ANCHOR_REF_ID
+}
+
+// ---------------------------------------------------------------------------
+// Set-based dimension runs (ordinate / baseline / chain) -- pure run machine
+// ---------------------------------------------------------------------------
+//
+// The Phase-5 drawings toolbar arms one of four run tools (Ordinate X,
+// Ordinate Y, Baseline, Chain). Unlike the fixed two-click machine in
+// `dimension-placement.ts`, a RUN is open-ended: after a priming click (the
+// ordinate 0-datum origin / the baseline base feature / the first chain
+// point), EVERY subsequent click mints one persisted dimension, until the
+// operator ends the run (Esc or re-clicking the armed button -- the caller
+// owns termination; this machine only advances). Pure and framework-agnostic
+// so the whole flow is unit-testable in the node-env suite; `DrawingView`
+// holds the state in a `useState` and feeds resolved clicks through
+// {@link advanceDimensionRun}.
+
+/** Axis of an ordinate read-out run. */
+export type OrdinateAxis = 'x' | 'y'
+
+/**
+ * The in-progress state of one set-based dimension run.
+ *
+ *  * `ordinate` -- `origin` is the 0-datum (null until the priming click);
+ *    every later click mints one ordinate read-out from that SHARED origin
+ *    along `axis`. Switching axis mid-run may carry the origin over (the
+ *    caller passes it to {@link startOrdinateRun}).
+ *  * `baseline` -- `origin` is the shared base feature; `minted` counts the
+ *    members already placed so each new member stacks one step further out.
+ *  * `chain`    -- `prev` is the last clicked point; each click mints the
+ *    `prev -> click` segment and becomes the new `prev`.
+ */
+export type DimensionRunState =
+  | {
+      readonly kind: 'ordinate'
+      readonly axis: OrdinateAxis
+      readonly origin: ResolvedClick | null
+    }
+  | {
+      readonly kind: 'baseline'
+      readonly setId: string
+      readonly origin: ResolvedClick | null
+      readonly minted: number
+    }
+  | {
+      readonly kind: 'chain'
+      readonly setId: string
+      readonly prev: ResolvedClick | null
+    }
+
+/**
+ * Arm an ordinate run along `axis`. `origin` seeds an already-picked 0-datum
+ * (the axis-switch mid-run case -- the origin is REUSED, the operator does
+ * not re-pick it); null waits for the priming click.
+ */
+export function startOrdinateRun(
+  axis: OrdinateAxis,
+  origin: ResolvedClick | null = null
+): DimensionRunState {
+  return { kind: 'ordinate', axis, origin }
+}
+
+/** Arm a baseline (datum) run. Mints the set's shared setId up front. */
+export function startBaselineRun(): DimensionRunState {
+  return { kind: 'baseline', setId: makeSetId('baseline'), origin: null, minted: 0 }
+}
+
+/** Arm a chained (continuous) run. Mints the run's shared setId up front. */
+export function startChainRun(): DimensionRunState {
+  return { kind: 'chain', setId: makeSetId('chain'), prev: null }
+}
+
+/** Result of feeding one resolved click into an armed run. */
+export interface AdvanceRunResult {
+  /** The run state after this click (a run NEVER self-terminates). */
+  readonly next: DimensionRunState
+  /** The dimension this click minted, or null for a priming click. */
+  readonly minted: DrawingDimension | null
+}
+
+/**
+ * Advance an armed run by one resolved click.
+ *
+ *  * ordinate: priming click stores the origin; every later click mints one
+ *    `ordinate` dimension from the SHARED origin along the run's axis.
+ *  * baseline: priming click stores the base; every later click mints one
+ *    `baseline` member (shared setId), stacked `minted + 1` steps out.
+ *  * chain: priming click stores the first point; every later click mints
+ *    the `prev -> click` segment (shared setId) and the click becomes `prev`.
+ *
+ * Pure aside from id minting inside the builders.
+ */
+export function advanceDimensionRun(
+  state: DimensionRunState,
+  click: ResolvedClick
+): AdvanceRunResult {
+  if (state.kind === 'ordinate') {
+    if (state.origin === null) {
+      return { next: { ...state, origin: click }, minted: null }
+    }
+    return { next: state, minted: buildOrdinateDimension(state.origin, click, state.axis) }
+  }
+  if (state.kind === 'baseline') {
+    if (state.origin === null) {
+      return { next: { ...state, origin: click }, minted: null }
+    }
+    const minted = buildBaselineDimension(state.origin, click, {
+      setId: state.setId,
+      memberIndex: state.minted
+    })
+    return { next: { ...state, minted: state.minted + 1 }, minted }
+  }
+  if (state.prev === null) {
+    return { next: { ...state, prev: click }, minted: null }
+  }
+  const minted = buildChainDimension(state.prev, click, { setId: state.setId })
+  return { next: { ...state, prev: click }, minted }
+}
+
+/** Remove one dimension by id (per-item delete affordance). Pure -- new list, inputs untouched. */
+export function removeDimension(
+  dimensions: readonly DrawingDimension[],
+  id: string
+): DrawingDimension[] {
+  return dimensions.filter((d) => d.id !== id)
+}
+
+// ---------------------------------------------------------------------------
+// Ordinate / baseline / chain SVG emitters (client-side composition)
+// ---------------------------------------------------------------------------
+//
+// The sidecar `cad.dimension_drawing` handler renders the four native kinds
+// (distance / radius / diameter / angle) and has NO ordinate / baseline /
+// chain primitive, so these three kinds compose CLIENT-SIDE as pure `<g>`
+// overlays -- the exact centerline / note emitter pattern (same layer +
+// compose + splice shape, same dangling badging). They stay on the SAME
+// persisted dimension list, the SAME re-anchor pass, and the SAME dangling
+// set as every other dimension -- only the paint path differs. The optional
+// `label` is operator free-text and is entity-escaped here
+// ({@link escapeSvgText}), the client-side trust boundary (Safety Rule 4).
+
+/** Text size (SVG-mm) of the client-side dimension read-outs. */
+export const DIMENSION_SET_FONT_SIZE = 3
+/** Half-length (SVG-mm) of the oblique end ticks on baseline / chain dimension lines. */
+export const DIMENSION_TICK_MM = 1.2
+/** Radius (SVG-mm) of the ordinate 0-datum origin marker circle. */
+export const ORDINATE_ORIGIN_MARK_R = 1
+
+/**
+ * The read-out a set-dimension shows: the escaped operator label override
+ * when present, else the measured value (3 dp, trailing zeros trimmed).
+ * Escaping here is the trust boundary -- the composed string reaches
+ * `dangerouslySetInnerHTML` (Safety Rule 4).
+ */
+function dimensionSetText(value: number, label: string | undefined): string {
+  return escapeSvgText(label !== undefined ? label : svgNum(value))
+}
+
+/**
+ * Emit one ordinate read-out as a self-contained SVG `<g>` fragment:
+ *
+ *  * a small circle at the 0-datum origin ({@link ORDINATE_ORIGIN_MARK_R}),
+ *  * a dot on the measured feature,
+ *  * a short leader from the feature to `placement` (perpendicular to the
+ *    measured axis by construction of {@link buildOrdinateDimension}), and
+ *  * the read-out text (the signed distance from the origin along the axis,
+ *    or the escaped label override) at the leader end.
+ *
+ * The fragment carries `data-dim-id` / `data-dim-kind` / `data-dim-axis` and,
+ * when `dangling`, the `drawing-dim-set--dangling` modifier + data attr +
+ * dashed leader + halved stroke opacity (the centerline badge analogue).
+ * `currentColor` styling. Coordinates are SVG-mm sheet space. Pure.
+ */
+export function ordinateDimensionToSvg(
+  dim: Extract<DrawingDimension, { kind: 'ordinate' }>,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const o = dim.origin.cachedPoint
+  const f = dim.feature.cachedPoint
+  const p = dim.placement
+  const opacity = dangling ? ' stroke-opacity="0.5"' : ''
+  const dash = dangling ? ' stroke-dasharray="1.5 1"' : ''
+  const parts: string[] = []
+  parts.push(
+    `<circle fill="none" stroke="currentColor" stroke-width="0.25"${opacity} cx="${svgNum(o.x)}" cy="${svgNum(o.y)}" r="${svgNum(ORDINATE_ORIGIN_MARK_R)}" />`
+  )
+  parts.push(
+    `<circle fill="currentColor" stroke="none" cx="${svgNum(f.x)}" cy="${svgNum(f.y)}" r="0.6" />`
+  )
+  parts.push(
+    `<line fill="none" stroke="currentColor" stroke-width="0.25"${dash}${opacity} x1="${svgNum(f.x)}" y1="${svgNum(f.y)}" x2="${svgNum(p.x)}" y2="${svgNum(p.y)}" />`
+  )
+  parts.push(
+    `<text fill="currentColor" stroke="none" font-size="${svgNum(DIMENSION_SET_FONT_SIZE)}" font-family="sans-serif" text-anchor="middle" x="${svgNum(p.x)}" y="${svgNum(p.y - 1)}">${dimensionSetText(dim.value, dim.label)}</text>`
+  )
+  const cls = dangling
+    ? 'drawing-dim-set drawing-dim-set--ordinate drawing-dim-set--dangling'
+    : 'drawing-dim-set drawing-dim-set--ordinate'
+  const danglingAttr = dangling ? ' data-dim-dangling="true"' : ''
+  return `<g class="${cls}" data-dim-id="${escapeSvgText(dim.id)}" data-dim-kind="ordinate" data-dim-axis="${dim.axis}"${danglingAttr}>${parts.join('')}</g>`
+}
+
+/**
+ * Shared linear-dimension paintwork for baseline / chain members: extension
+ * lines from both measured points out to the dimension-line row (the parallel
+ * line through `placement`), the dimension line itself with oblique drafting
+ * ticks at both ends, and the read-out text nudged off the line on the
+ * placement side. The row is wherever `placement` sits, so baseline members
+ * stack by construction (their builder steps `placement` out per member) and
+ * collinear chain segments align on one row. A degenerate zero-length span
+ * falls back to the +x direction so the emitted geometry stays valid. Pure.
+ */
+function linearDimensionFragment(
+  a: DrawingPoint2D,
+  b: DrawingPoint2D,
+  placement: DrawingPoint2D,
+  text: string,
+  dangling: boolean
+): string {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  const ux = len === 0 ? 1 : dx / len
+  const uy = len === 0 ? 0 : dy / len
+  // Perpendicular unit normal (rotate the direction 90 degrees).
+  const nx = -uy
+  const ny = ux
+  // Signed offset from the a-b line to the placement point along the normal.
+  const d = (placement.x - a.x) * nx + (placement.y - a.y) * ny
+  const a2 = { x: a.x + nx * d, y: a.y + ny * d }
+  const b2 = { x: b.x + nx * d, y: b.y + ny * d }
+  const opacity = dangling ? ' stroke-opacity="0.5"' : ''
+  const dash = dangling ? ' stroke-dasharray="1.5 1"' : ''
+  const lineCommon = `fill="none" stroke="currentColor" stroke-width="0.25"${dash}${opacity}`
+  const parts: string[] = []
+  // Extension lines from the measured points out to the dimension-line row.
+  parts.push(
+    `<line ${lineCommon} x1="${svgNum(a.x)}" y1="${svgNum(a.y)}" x2="${svgNum(a2.x)}" y2="${svgNum(a2.y)}" />`
+  )
+  parts.push(
+    `<line ${lineCommon} x1="${svgNum(b.x)}" y1="${svgNum(b.y)}" x2="${svgNum(b2.x)}" y2="${svgNum(b2.y)}" />`
+  )
+  // The dimension line itself.
+  parts.push(
+    `<line ${lineCommon} x1="${svgNum(a2.x)}" y1="${svgNum(a2.y)}" x2="${svgNum(b2.x)}" y2="${svgNum(b2.y)}" />`
+  )
+  // Oblique 45-degree drafting ticks at both ends of the dimension line.
+  const tx = ((ux + nx) / Math.SQRT2) * DIMENSION_TICK_MM
+  const ty = ((uy + ny) / Math.SQRT2) * DIMENSION_TICK_MM
+  parts.push(
+    `<line ${lineCommon} x1="${svgNum(a2.x - tx)}" y1="${svgNum(a2.y - ty)}" x2="${svgNum(a2.x + tx)}" y2="${svgNum(a2.y + ty)}" />`
+  )
+  parts.push(
+    `<line ${lineCommon} x1="${svgNum(b2.x - tx)}" y1="${svgNum(b2.y - ty)}" x2="${svgNum(b2.x + tx)}" y2="${svgNum(b2.y + ty)}" />`
+  )
+  // Read-out text just off the dimension line, on the placement side.
+  const side = d >= 0 ? 1 : -1
+  const textX = (a2.x + b2.x) / 2 + nx * 1.5 * side
+  const textY = (a2.y + b2.y) / 2 + ny * 1.5 * side
+  parts.push(
+    `<text fill="currentColor" stroke="none" font-size="${svgNum(DIMENSION_SET_FONT_SIZE)}" font-family="sans-serif" text-anchor="middle" x="${svgNum(textX)}" y="${svgNum(textY)}">${text}</text>`
+  )
+  return parts.join('')
+}
+
+/**
+ * Emit one baseline (datum) member: a linear dimension from the SHARED origin
+ * datum to this member's feature, painted on its own stacked row (the
+ * builder's `placement` stepping). Carries `data-dim-set` so one whole set is
+ * addressable. Dangling badge mirrors the centerline pattern. Pure.
+ */
+export function baselineDimensionToSvg(
+  dim: Extract<DrawingDimension, { kind: 'baseline' }>,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const frag = linearDimensionFragment(
+    dim.origin.cachedPoint,
+    dim.feature.cachedPoint,
+    dim.placement,
+    dimensionSetText(dim.value, dim.label),
+    dangling
+  )
+  const cls = dangling
+    ? 'drawing-dim-set drawing-dim-set--baseline drawing-dim-set--dangling'
+    : 'drawing-dim-set drawing-dim-set--baseline'
+  const danglingAttr = dangling ? ' data-dim-dangling="true"' : ''
+  return `<g class="${cls}" data-dim-id="${escapeSvgText(dim.id)}" data-dim-kind="baseline" data-dim-set="${escapeSvgText(dim.setId)}"${danglingAttr}>${frag}</g>`
+}
+
+/**
+ * Emit one chained (continuous) segment: a linear dimension between its two
+ * adjacent anchors. Carries `data-dim-set` so one whole run is addressable.
+ * Dangling badge mirrors the centerline pattern. Pure.
+ */
+export function chainDimensionToSvg(
+  dim: Extract<DrawingDimension, { kind: 'chain' }>,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const frag = linearDimensionFragment(
+    dim.start.cachedPoint,
+    dim.end.cachedPoint,
+    dim.placement,
+    dimensionSetText(dim.value, dim.label),
+    dangling
+  )
+  const cls = dangling
+    ? 'drawing-dim-set drawing-dim-set--chain drawing-dim-set--dangling'
+    : 'drawing-dim-set drawing-dim-set--chain'
+  const danglingAttr = dangling ? ' data-dim-dangling="true"' : ''
+  return `<g class="${cls}" data-dim-id="${escapeSvgText(dim.id)}" data-dim-kind="chain" data-dim-set="${escapeSvgText(dim.setId)}"${danglingAttr}>${frag}</g>`
+}
+
+/**
+ * Compose every ordinate / baseline / chain member of a dimension list into
+ * one `<g class="drawing-dim-set-layer">` fragment (render order preserved),
+ * badging any member whose id is in `danglingIds`. The four sidecar-native
+ * kinds are SKIPPED (they render through `cad.dimension_drawing`). Empty
+ * string when the list holds no set-based members. Pure.
+ */
+export function dimensionSetsLayerSvg(
+  dimensions: readonly DrawingDimension[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  const parts: string[] = []
+  for (const dim of dimensions) {
+    const dangling = danglingIds?.has(dim.id) === true
+    if (dim.kind === 'ordinate') {
+      parts.push(ordinateDimensionToSvg(dim, { dangling }))
+    } else if (dim.kind === 'baseline') {
+      parts.push(baselineDimensionToSvg(dim, { dangling }))
+    } else if (dim.kind === 'chain') {
+      parts.push(chainDimensionToSvg(dim, { dangling }))
+    }
+  }
+  if (parts.length === 0) return ''
+  return `<g class="drawing-dim-set-layer" data-testid="design-drawing-dim-set-layer">${parts.join('')}</g>`
+}
+
+/**
+ * Splice the set-dimension `<g>` layer into an existing projection SVG, just
+ * before the closing `</svg>` (appended when the close tag is missing --
+ * defensive). Unchanged input when the list holds no ordinate / baseline /
+ * chain members. Pure. (Mirrors `composeCenterlinesIntoSvg`.)
+ */
+export function composeDimensionSetsIntoSvg(
+  svg: string,
+  dimensions: readonly DrawingDimension[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  const layer = dimensionSetsLayerSvg(dimensions, danglingIds)
+  if (layer === '') return svg
+  const closeIdx = svg.lastIndexOf('</svg>')
+  if (closeIdx === -1) return svg + layer
+  return svg.slice(0, closeIdx) + layer + svg.slice(closeIdx)
 }

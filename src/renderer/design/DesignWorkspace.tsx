@@ -59,7 +59,11 @@ import type { BufferGeometry } from 'three'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { ViewportChrome } from './ViewportChrome'
-import { Viewport3D, type Viewport3DActions } from './Viewport3D'
+import {
+  Viewport3D,
+  type SelectionPickModifiers,
+  type Viewport3DActions
+} from './Viewport3D'
 import { ViewportContextMenu } from './ViewportContextMenu'
 import {
   deriveViewportContextMenuItems,
@@ -126,9 +130,12 @@ import type {
 } from '../../shared/sidecar-protocol'
 import type { CadExportResponse } from '../../main/ipc-cad'
 import {
+  addFacesToSelection,
   clearSelection,
+  selectedFaceIds,
   setSelection,
   selectionToSurface,
+  toggleFaceInSelection,
   type Selection,
   type SelectionKind,
   type SelectionSurface
@@ -1362,14 +1369,33 @@ export function DesignWorkspace({
 
   // ── CAD V1 Workflow H — selection plumbing ────────────────────────────────
   /**
-   * Plain-click pick callback wired into `Viewport3D.onSelect`. Replaces
-   * the current selection unconditionally (toggle behavior lives in the
-   * pure helper but isn't exposed at this layer until the user has a
-   * second affordance — e.g. ctrl-click for multi-select — to avoid
-   * accidental deselects in V1).
+   * Plain-click pick callback wired into `Viewport3D.onSelect`. A plain
+   * click REPLACES the current selection (the classic V1 behavior — no
+   * accidental deselects); a Ctrl/Cmd-click (`modifiers.toggle`) runs the
+   * Phase-2 membership toggle instead, adding/removing the clicked FACE in
+   * the multi-face set (`toggleFaceInSelection`). Edge/vertex picks always
+   * replace — multi-select is face-only in V1.
    */
-  const handleViewportSelect = useCallback((next: Selection): void => {
-    setSelectionState((prev) => setSelection(prev, next))
+  const handleViewportSelect = useCallback(
+    (next: Selection, modifiers?: SelectionPickModifiers): void => {
+      setSelectionState((prev) =>
+        modifiers?.toggle === true && next.kind === 'face'
+          ? toggleFaceInSelection(prev, next)
+          : setSelection(prev, next)
+      )
+    },
+    []
+  )
+
+  /**
+   * WINDOW/BOX SELECT (Phase 2) — the viewport released a SHIFT+left-drag
+   * box over the solid. UNION the boxed face ids into the current selection
+   * (SHIFT is the additive convention); a box that caught nothing changes
+   * nothing (`addFacesToSelection` no-ops on an empty hit-set), and a
+   * non-face selection is replaced by the boxed face set.
+   */
+  const handleViewportBoxSelect = useCallback((faceIds: readonly number[]): void => {
+    setSelectionState((prev) => addFacesToSelection(prev, faceIds))
   }, [])
 
   // -- Fusion-style right-click context menu (viewport) -----------------------
@@ -1487,6 +1513,12 @@ export function DesignWorkspace({
   const selectionLabel: string | null = useMemo(() => {
     if (selection === null) return null
     if (selection.kind === 'face') {
+      const ids = selectedFaceIds(selection)
+      if (ids.length > 1) {
+        // WINDOW/BOX SELECT — the count IS the label for a multi-face pick
+        // (a summed area would imply a precision the faceMap doesn't promise).
+        return `${ids.length} faces`
+      }
       const entry: CadFaceMapEntry | undefined =
         selectionTessellation?.faceMap?.[String(selection.faceId)]
       if (entry?.area && Number.isFinite(entry.area)) {
@@ -2293,6 +2325,15 @@ export function DesignWorkspace({
                   ? handleViewportSelect
                   : undefined
               }
+              // WINDOW/BOX SELECT (Phase 2): SHIFT+left-drag over the solid
+              // unions the boxed faces into the selection. Same gating as
+              // onSelect — only the kernel-tagged geometry can map hits back,
+              // and the sketch-plane pick must keep owning face clicks.
+              onBoxSelectFaces={
+                pickableGeometryActive && !facePickForSketchActive
+                  ? handleViewportBoxSelect
+                  : undefined
+              }
               // Wave 3n — the viewport reports the raycast point ONLY for a
               // registered pick (gated inside Viewport3D on onSelect), so this
               // can be threaded unconditionally.
@@ -2311,6 +2352,14 @@ export function DesignWorkspace({
               highlightedFaceId={
                 pickableGeometryActive && selection?.kind === 'face'
                   ? selection.faceId
+                  : null
+              }
+              // WINDOW/BOX SELECT — every face in the multi-select set gets the
+              // highlight overlay (a single pick yields a one-entry array, so
+              // the visual is identical to the classic single-face path).
+              highlightedFaceIds={
+                pickableGeometryActive && selection?.kind === 'face'
+                  ? selectedFaceIds(selection)
                   : null
               }
               highlightedEdgeId={

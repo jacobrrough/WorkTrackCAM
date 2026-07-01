@@ -17,7 +17,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { triangleToFaceId, trianglesForFace } from './selection-raycast'
+import {
+  triangleToFaceId,
+  trianglesForFace,
+  trianglesForFaces,
+} from './selection-raycast'
 
 describe('triangleToFaceId — happy path', () => {
   it('returns the face id at the given triangle index', () => {
@@ -82,5 +86,41 @@ describe('trianglesForFace — face → triangle indices', () => {
   it('returns an empty array when faceId is non-finite', () => {
     expect(trianglesForFace(NaN, [0, 1])).toEqual([])
     expect(trianglesForFace(Infinity, [0, 1])).toEqual([])
+  })
+})
+
+// ── WINDOW/BOX SELECT — trianglesForFaces (multi-face highlight) ───────────
+
+describe('trianglesForFaces — face-SET triangle lookup', () => {
+  // Parallel array: triangles 0,1 -> face 0; 2 -> face 3; 3,4 -> face 1.
+  const faceIds = [0, 0, 3, 1, 1]
+
+  it('unions the triangles of every wanted face, in ascending triangle order', () => {
+    expect(trianglesForFaces([0, 1], faceIds)).toEqual([0, 1, 3, 4])
+    expect(trianglesForFaces([3], faceIds)).toEqual([2])
+  })
+
+  it('matches N single-face lookups concatenated (parity with trianglesForFace)', () => {
+    const viaSet = trianglesForFaces([0, 3, 1], faceIds)
+    const viaSingles = [0, 3, 1]
+      .flatMap((id) => [...trianglesForFace(id, faceIds)])
+      .sort((a, b) => a - b)
+    expect([...viaSet]).toEqual(viaSingles)
+  })
+
+  it('returns [] for an empty wanted list, a missing stash, or zero matches', () => {
+    expect(trianglesForFaces([], faceIds)).toEqual([])
+    expect(trianglesForFaces([0], null)).toEqual([])
+    expect(trianglesForFaces([0], undefined)).toEqual([])
+    expect(trianglesForFaces([99], faceIds)).toEqual([])
+  })
+
+  it('ignores non-finite wanted ids (never fabricates a match)', () => {
+    expect(trianglesForFaces([Number.NaN, Number.POSITIVE_INFINITY], faceIds)).toEqual([])
+    expect(trianglesForFaces([Number.NaN, 3], faceIds)).toEqual([2])
+  })
+
+  it('duplicate wanted ids do not duplicate triangles', () => {
+    expect(trianglesForFaces([0, 0, 0], faceIds)).toEqual([0, 1])
   })
 })

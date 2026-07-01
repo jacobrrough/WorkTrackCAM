@@ -510,6 +510,139 @@ export function cloneDesign(d: DesignFileV2): DesignFileV2 {
   }
 }
 
+/**
+ * Per-constraint scalar residual COMPONENTS — the pre-squared terms whose
+ * squares {@link energy} sums. Exposed for the over-constraint blame analysis
+ * (`sketch-overconstraint.analyzeConstraintBlame`), which needs the raw
+ * residual VECTOR (not the squared total) to build a constraint Jacobian and
+ * rank-test the system for redundant/conflicting rows.
+ *
+ * Contract: `Σ_c Σ_i constraintResidualComponents(d, c)[i]² === energy(d)`
+ * exactly (pinned by `sketch-overconstraint-blame.test.ts`). The skip rules
+ * mirror `energy()` byte-for-byte: a missing / non-finite parameter, a
+ * degenerate arc/segment, or a missing entity contributes NO components, and
+ * the `fix` kind contributes none (the solver pins those points via the
+ * `fixed` flag — `applyFixConstraints` — not an energy term).
+ */
+export function constraintResidualComponents(d: DesignFileV2, c: SketchConstraint): number[] {
+  const P = d.parameters
+  if (c.type === 'coincident') {
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    return [a.x - b.x, a.y - b.y]
+  }
+  if (c.type === 'distance') {
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    const target = P[c.parameterKey]
+    if (target == null || !Number.isFinite(target)) return []
+    return [dist(a, b) - target]
+  }
+  if (c.type === 'horizontal') {
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    return [a.y - b.y]
+  }
+  if (c.type === 'vertical') {
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    return [a.x - b.x]
+  }
+  if (c.type === 'perpendicular') {
+    const a1 = getPoint(d, c.a1.pointId)
+    const b1 = getPoint(d, c.b1.pointId)
+    const a2 = getPoint(d, c.a2.pointId)
+    const b2 = getPoint(d, c.b2.pointId)
+    return [perpDot(a1, b1, a2, b2)]
+  }
+  if (c.type === 'parallel') {
+    const a1 = getPoint(d, c.a1.pointId)
+    const b1 = getPoint(d, c.b1.pointId)
+    const a2 = getPoint(d, c.a2.pointId)
+    const b2 = getPoint(d, c.b2.pointId)
+    return [parallelCross(a1, b1, a2, b2)]
+  }
+  if (c.type === 'equal') {
+    const a1 = getPoint(d, c.a1.pointId)
+    const b1 = getPoint(d, c.b1.pointId)
+    const a2 = getPoint(d, c.a2.pointId)
+    const b2 = getPoint(d, c.b2.pointId)
+    return [dist(a1, b1) - dist(a2, b2)]
+  }
+  if (c.type === 'collinear') {
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    const p = getPoint(d, c.c.pointId)
+    return [collinearCross(a, b, p)]
+  }
+  if (c.type === 'midpoint') {
+    const m = getPoint(d, c.m.pointId)
+    const a = getPoint(d, c.a.pointId)
+    const b = getPoint(d, c.b.pointId)
+    return [2 * m.x - a.x - b.x, 2 * m.y - a.y - b.y]
+  }
+  if (c.type === 'angle') {
+    const a1 = getPoint(d, c.a1.pointId)
+    const b1 = getPoint(d, c.b1.pointId)
+    const a2 = getPoint(d, c.a2.pointId)
+    const b2 = getPoint(d, c.b2.pointId)
+    const targetDeg = P[c.parameterKey]
+    if (targetDeg == null || !Number.isFinite(targetDeg)) return []
+    const r = angleConstraintResidual(a1, b1, a2, b2, targetDeg)
+    return r === null ? [] : [r]
+  }
+  if (c.type === 'tangent') {
+    const pa = getPoint(d, c.lineA.pointId)
+    const pb = getPoint(d, c.lineB.pointId)
+    const sa = getPoint(d, c.arcStart.pointId)
+    const sv = getPoint(d, c.arcVia.pointId)
+    const se = getPoint(d, c.arcEnd.pointId)
+    const circ = circleThroughThreePoints(sa.x, sa.y, sv.x, sv.y, se.x, se.y)
+    if (!circ) return []
+    const at = c.arcTangentAt === 'start' ? sa : se
+    const radialx = at.x - circ.ox
+    const radialy = at.y - circ.oy
+    const rlen = Math.hypot(radialx, radialy)
+    if (rlen < LEN_EPS) return []
+    let ldx: number, ldy: number
+    if (c.lineTangentAt === 'a') {
+      ldx = pb.x - pa.x
+      ldy = pb.y - pa.y
+    } else {
+      ldx = pa.x - pb.x
+      ldy = pa.y - pb.y
+    }
+    const llen = Math.hypot(ldx, ldy)
+    if (llen < LEN_EPS) return []
+    const dot = ldx * radialx + ldy * radialy
+    // energy() adds dot² / (llen²·rlen² + LEN_EPS²) — the component is the square root of that term.
+    return [dot / Math.sqrt(llen * llen * rlen * rlen + LEN_EPS * LEN_EPS)]
+  }
+  if (c.type === 'symmetric') {
+    const p1 = getPoint(d, c.p1.pointId)
+    const p2 = getPoint(d, c.p2.pointId)
+    const la = getPoint(d, c.la.pointId)
+    const lb = getPoint(d, c.lb.pointId)
+    const rx = reflectAcrossLine(p1.x, p1.y, la.x, la.y, lb.x, lb.y)
+    return [p2.x - rx.x, p2.y - rx.y]
+  }
+  if (c.type === 'concentric') {
+    const a = arcCircleFromEntity(d, c.entityAId)
+    const b = arcCircleFromEntity(d, c.entityBId)
+    if (!a || !b) return []
+    return [a.center.x - b.center.x, a.center.y - b.center.y]
+  }
+  if (c.type === 'radius' || c.type === 'diameter') {
+    const arc = arcCircleFromEntity(d, c.entityId)
+    const target = P[c.parameterKey]
+    if (!arc || target == null || !Number.isFinite(target)) return []
+    const targetR = c.type === 'diameter' ? target * 0.5 : target
+    return [arc.radius - targetR]
+  }
+  // 'fix' — pinned via the point's `fixed` flag, never an energy term.
+  return []
+}
+
 export function sketchResidualReport(d: DesignFileV2): { total: number; lines: string[] } {
   const lines: string[] = []
   let total = 0

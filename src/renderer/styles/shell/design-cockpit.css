@@ -857,6 +857,35 @@
   background: color-mix(in srgb, var(--warn, #d97706) 14%, transparent);
 }
 
+/* Over-constraint CONFLICT NAMING — the culprit line + one-click removal next
+   to the DOF badge. Danger-keyed to match the structural `--over` pill (it
+   names the constraint that pill complains about). */
+.sketch-surface__conflict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--text-xs, 11px);
+  color: var(--danger, #c0392b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sketch-surface__conflict-remove {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--danger, #c0392b);
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent);
+  color: var(--danger, #c0392b);
+  font-size: var(--text-xs, 11px);
+  line-height: 1.6;
+  cursor: pointer;
+}
+.sketch-surface__conflict-remove:hover {
+  background: color-mix(in srgb, var(--danger, #c0392b) 24%, transparent);
+}
+
 /* Sketch S5 — constraints toolbar (one row of relation buttons under the status
    row). Buttons disable when the current selection can't form the relation. */
 .sketch-surface__constraints {

@@ -90,8 +90,11 @@ describe('DesignWorkspace — provider-less pass-through of both sources', () =>
 
 describe('Viewport3D — last-pick point only (honest scope)', () => {
   it('fires onPickPoint with the raycast point ONLY alongside a registered face pick', () => {
+    // Phase-2 multi-select: the pick now ALSO carries the Ctrl/Cmd toggle
+    // modifier — but the point-forwarding still rides directly alongside the
+    // registered pick, exactly as before.
     expect(VIEWPORT).toMatch(
-      /onSelect\(next\)\s*\n\s*\/\/ Wave 3n[^\n]*\n\s*onPickPoint\?\.\(\{ x: e\.point\.x, y: e\.point\.y, z: e\.point\.z \}\)/
+      /onSelect\(next, \{ toggle: e\.ctrlKey \|\| e\.metaKey \}\)\s*\n\s*\/\/ Wave 3n[^\n]*\n\s*onPickPoint\?\.\(\{ x: e\.point\.x, y: e\.point\.y, z: e\.point\.z \}\)/
     )
   })
 
@@ -104,7 +107,19 @@ describe('Viewport3D — last-pick point only (honest scope)', () => {
   })
 
   it('adds NO per-frame hover raycast (deliberately rejected as too heavy)', () => {
-    expect(VIEWPORT).not.toContain('onPointerMove')
+    // WINDOW/BOX SELECT added an onPointerMove on the WRAPPER DIV — but it
+    // only stretches the screen-space rectangle overlay (setBoxDrag), it
+    // never raycasts. Pin the move handler to EXACTLY that shape so a hover
+    // raycast can never sneak in through it…
+    expect(VIEWPORT).toMatch(
+      /const handleBoxPointerMove = useCallback\(\s*\n\s*\(e: React\.PointerEvent<HTMLDivElement>\): void => \{\s*\n\s*if \(boxDrag === null \|\| e\.pointerId !== boxDrag\.pointerId\) return\s*\n\s*const p = boxLocalPoint\(e\.clientX, e\.clientY\)\s*\n\s*setBoxDrag/
+    )
+    // …and the wrapper's only move wiring IS that tracker (no other
+    // onPointerMove exists in the viewport component).
+    expect(VIEWPORT.match(/onPointerMove/g)?.length).toBe(1)
+    expect(VIEWPORT).toContain('onPointerMove={handleBoxPointerMove}')
+    // The box hit-test runs ONCE, on release — inside the UP handler only.
+    expect(VIEWPORT).toMatch(/const handleBoxPointerUp[\s\S]*?computeBoxSelectedFaceIds\(/)
   })
 })
 

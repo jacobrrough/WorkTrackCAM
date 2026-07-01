@@ -421,6 +421,14 @@ def execute_script(
             # selection immediately without a second cad.tessellate_with_ids
             # round trip. Best-effort: absent when face-tagging failed (above).
             mesh_entry["edgeMap"] = face_tagged.get("edgeMap", {})
+            # FG-5 wire completion: ALSO embed the sampled edge polylines (the
+            # same ``edges`` shape cad.tessellate_with_ids returns) plus the
+            # honest truncation flag, so the renderer can draw + raycast edges
+            # straight off the execute_script result with no second round trip.
+            mesh_entry["edges"] = face_tagged.get("edges", [])
+            mesh_entry["edgesTruncated"] = bool(
+                face_tagged.get("edgesTruncated", False)
+            )
         meshes_out.append(mesh_entry)
         face_count_total += int(mesh_payload["triangleCount"])
 
@@ -526,6 +534,14 @@ def tessellate_with_face_ids(
             },
             ...
           },
+          "edges": [                     # FG-5 -- pickable edge POLYLINES
+            {"id": "e:<fnv>",            # same stable id that keys edgeMap
+             "points": [[x, y, z], ...]},  # ordered samples; >= 2 points
+            ...
+          ],
+          "edgesTruncated": bool,       # True when the defensive TOTAL point
+                                        # cap dropped whole polylines (edgeMap
+                                        # metadata stays complete -- honest)
         }
 
     The ``edgeMap`` is keyed by the STABLE per-edge id (``"e:<fnv>"``), NOT by a
@@ -659,6 +675,14 @@ def tessellate_with_face_ids(
     # and ADDITIVE: a failure to enumerate edges leaves both maps empty and the
     # renderer falls back to face-only picking (the STL/CAM path is untouched).
     edge_polylines: List[Dict[str, Any]] = []
+    # Honest wire-size guard: total sampled points across all polylines. Once
+    # the budget is spent, remaining polylines are dropped WHOLE (their edgeMap
+    # metadata entries are still emitted) and ``edgesTruncated`` flips True so
+    # the renderer can surface an "edge overlay simplified" notice instead of
+    # silently missing pickable edges. Per-edge sample density is separately
+    # bounded by ``_EDGE_POLYLINE_MAX_POINTS``.
+    edge_point_total = 0
+    edges_truncated = False
     try:
         for edge in solid.Edges():
             eid = _safe_edge_geom_id(edge)
@@ -671,12 +695,22 @@ def tessellate_with_face_ids(
                     "occtHash": _safe_edge_hash(edge),
                     "length": _safe_edge_length(edge),
                 }
+                if edges_truncated:
+                    continue  # point budget spent; metadata-only from here on
                 pts = _safe_edge_polyline(edge, tolerance_mm=float(tolerance_mm))
-                if len(pts) >= 2:
-                    edge_polylines.append({"id": eid, "points": pts})
+                if len(pts) < 2:
+                    continue  # degenerate / unreadable edge honestly omitted
+                if edge_point_total + len(pts) > _EDGE_TOTAL_POINT_CAP:
+                    # NEVER emit a partially-sampled polyline: a half-drawn
+                    # edge would lie about the edge's extent in the viewport.
+                    edges_truncated = True
+                    continue
+                edge_point_total += len(pts)
+                edge_polylines.append({"id": eid, "points": pts})
     except Exception:  # noqa: BLE001 - edge ids are non-critical metadata
         edge_map = {}
         edge_polylines = []
+        edges_truncated = False
 
     # Tier-2: attach the geometry-INVARIANT signature to each edgeMap entry,
     # keyed by the same stable id. Best-effort + additive (see the face block).
@@ -698,6 +732,7 @@ def tessellate_with_face_ids(
         "faceMap": face_map,
         "edgeMap": edge_map,
         "edges": edge_polylines,
+        "edgesTruncated": edges_truncated,
     }
 
 
@@ -1605,6 +1640,14 @@ def resolve_pick_id(
 _EDGE_POLYLINE_MAX_POINTS = 128
 # Min samples for any curved edge (so a tiny arc still reads as a curve, not a chord).
 _EDGE_POLYLINE_MIN_CURVED = 8
+# Defensive TOTAL point budget across ALL edge polylines in ONE tessellation.
+# A pathological part (thousands of edges) could otherwise balloon the one-line
+# JSON-RPC response; 20k points is ~1.2 MB of JSON and far beyond any part the
+# three target machines see (a box is 24 points; a filleted bracket ~1-2k).
+# Truncation is HONEST: ``tessellate_with_face_ids`` drops whole polylines once
+# the budget is spent and flips ``edgesTruncated`` True on the wire (never a
+# silent cut, never a half-sampled polyline).
+_EDGE_TOTAL_POINT_CAP = 20_000
 
 
 def _edge_is_straight(edge: Any) -> bool:

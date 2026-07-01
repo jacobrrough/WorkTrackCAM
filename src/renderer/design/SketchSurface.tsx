@@ -64,6 +64,11 @@ import {
   type ConstraintKind
 } from './sketch-constraint-apply'
 import { analyzeSketchDofSettled } from './sketch-dof-seam'
+import {
+  analyzeConstraintBlame,
+  describeSketchConstraint,
+  type ConstraintBlameReport
+} from './sketch-overconstraint'
 import { sketchToolForDesignCommand } from './design-command-map'
 import {
   createSketchHistory,
@@ -763,6 +768,54 @@ export function SketchSurface({
     [design, designSettled]
   )
 
+  // Over-constraint CONFLICT NAMING (Fusion parity): WHICH constraint is to
+  // blame. Gated on the badge already reading over/conflicting so the
+  // O(N x rank) leave-one-out scan never runs on a healthy sketch;
+  // `analyzeConstraintBlame` additionally caps itself (BLAME_MAX_CONSTRAINTS
+  // => the honest 'too-large' fallback instead of a stall). Deterministic and
+  // pure — safe to derive during render.
+  const conflictBlame = useMemo<ConstraintBlameReport | null>(() => {
+    if (dofReport.status !== 'over' && dofReport.status !== 'conflicting') return null
+    return analyzeConstraintBlame(design)
+  }, [design, dofReport.status])
+
+  /** The blamed constraints resolved to human labels (stale ids dropped). */
+  const conflictCulprits = useMemo(() => {
+    if (!conflictBlame) return []
+    const out: Array<{ id: string; label: string }> = []
+    for (const id of conflictBlame.culpritIds) {
+      const con = design.constraints.find((c) => c.id === id)
+      if (con) out.push({ id, label: describeSketchConstraint(design, con) })
+    }
+    return out
+  }, [conflictBlame, design])
+
+  /** Set form of the culprit ids for the canvas's error-glyph prop. */
+  const conflictCulpritIdSet = useMemo(
+    () => new Set(conflictCulprits.map((cc) => cc.id)),
+    [conflictCulprits]
+  )
+
+  /**
+   * Over-constraint conflict naming — remove the blamed constraint and
+   * RE-SOLVE, as ONE undo step through the standard seam. This is the
+   * message's actionable path: the surface has no constraint-manager panel,
+   * so the named culprit gets a one-click removal (Undo restores it). The
+   * re-solve is a settled edit, so the DOF badge immediately reflects the
+   * resolution instead of waiting for the next solve-bearing edit.
+   */
+  function handleRemoveCulpritConstraint(constraintId: string): void {
+    const cur = liveDesignRef.current
+    const con = cur.constraints.find((c) => c.id === constraintId)
+    if (!con) return
+    const removed: DesignFileV2 = {
+      ...cur,
+      constraints: cur.constraints.filter((c) => c.id !== constraintId)
+    }
+    applyDesignEdit(solveSketchToTolerance(removed), true)
+    onSketchHint?.(`Removed ${describeSketchConstraint(cur, con)} — geometry re-solved.`)
+  }
+
   // S1 selection bridge → canvas (see SketchSurfaceCanvasBridge). Spread as a
   // variable so this compiles before the canvas declares the props; extra props
   // are inert at runtime until the canvas's hit-test half lands.
@@ -1107,6 +1160,49 @@ export function SketchSurface({
             </span>
           )}
 
+          {/* Over-constraint CONFLICT NAMING (Fusion parity): the leave-one-out
+              rank analysis names WHICH constraint fights. Rendered only when
+              the badge already shows an over/conflicting verdict (the blame
+              memo is gated identically). The Remove button deletes the named
+              culprit and re-solves in ONE undo step — the surface's only
+              delete-constraint affordance (no constraint-manager panel exists;
+              Undo remains the fallback). 'too-large' and 'unresolved' degrade
+              to honest generic guidance. */}
+          {conflictBlame !== null &&
+            conflictBlame.status !== 'independent' &&
+            conflictBlame.status !== 'empty' && (
+              <span
+                className="sketch-surface__conflict"
+                data-testid="sketch-surface-conflict-culprit"
+                data-blame-status={conflictBlame.status}
+                aria-live="polite"
+              >
+                {conflictBlame.status === 'too-large'
+                  ? 'Over-constrained (too large to isolate) — remove recent constraints or Undo.'
+                  : conflictCulprits.length === 0
+                    ? 'Over-constrained — multiple constraints interact; no single removal resolves it (Undo the recent ones).'
+                    : `${dofReport.status === 'conflicting' ? 'Conflicting' : 'Over-constrained'} — ${conflictCulprits[0]!.label} conflicts; remove it or another constraint on these entities.${
+                        conflictCulprits.length > 1
+                          ? ` Also sufficient: ${conflictCulprits
+                              .slice(1)
+                              .map((cc) => cc.label)
+                              .join(', ')}.`
+                          : ''
+                      }`}
+                {conflictCulprits.length > 0 && (
+                  <button
+                    type="button"
+                    className="sketch-surface__conflict-remove"
+                    data-testid="sketch-surface-conflict-remove"
+                    title={`Delete ${conflictCulprits[0]!.label} and re-solve (one undo step)`}
+                    onClick={() => handleRemoveCulpritConstraint(conflictCulprits[0]!.id)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </span>
+            )}
+
           <span
             className="sketch-surface__count"
             data-testid="sketch-surface-count"
@@ -1167,6 +1263,7 @@ export function SketchSurface({
             onPlaceDimension={handlePlaceDimension}
             onCommitDimensionValue={handleCommitDimensionValue}
             planeLabel={planeLabel}
+            conflictConstraintIds={conflictCulpritIdSet}
           />
           {textDialogOpen && (
             <div className="sketch-surface__text-overlay" data-testid="sketch-surface-text-overlay">

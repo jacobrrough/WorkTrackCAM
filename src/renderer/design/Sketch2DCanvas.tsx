@@ -38,6 +38,15 @@ import {
   inferredPerpendicularCandidates
 } from './sketch-auto-constraints'
 import { keepRankIndependent } from './sketch-overconstraint'
+// Over-constraint conflict naming: the blame helpers live beside the rank
+// gate. Kept as a SEPARATE import statement so the `keepRankIndependent`
+// import-line pin in sketch-auto-constraints.test.ts stays byte-stable.
+import {
+  constraintAnchorWorld,
+  constraintDisplayPointsWorld,
+  explainRedundantAutoConstraint,
+  sketchConstraintTypeLabel
+} from './sketch-overconstraint'
 import {
   collectOsnapCandidates,
   collectOsnapCandidatesDetailed,
@@ -236,6 +245,15 @@ type Props = {
    * step. Optional + additive: absent disables inline editing entirely.
    */
   onCommitDimensionValue?: (dimensionId: string, value: number) => void
+  /**
+   * Over-constraint conflict naming — ids of the constraint(s) the
+   * leave-one-out rank analysis blames for an over-constrained sketch
+   * (`analyzeConstraintBlame`, computed by the surface). The canvas paints
+   * an error-styled glyph at each culprit's anchor with dashed spokes to
+   * its referenced points, so the operator sees WHICH relation to remove.
+   * Optional + additive: absent keeps every legacy mount byte-identical.
+   */
+  conflictConstraintIds?: ReadonlySet<string>
 }
 
 const CROSSHAIR_TOOLS: ReadonlySet<SketchTool> = new Set([
@@ -339,7 +357,8 @@ export function Sketch2DCanvas({
   onToolHotkey,
   onGridSnapToggle,
   onPlaceDimension,
-  onCommitDimensionValue
+  onCommitDimensionValue,
+  conflictConstraintIds
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const { entities, points } = design
@@ -1134,6 +1153,56 @@ export function Sketch2DCanvas({
       extendCutter,
       viewportSize
     })
+    // Over-constraint culprit glyphs — painted AFTER the base scene so the
+    // error badge always reads on top. Anchor + spokes come from the pure
+    // helpers (constraintAnchorWorld / constraintDisplayPointsWorld); colour
+    // is the live --err token (theme-driven, literal fallback for detached /
+    // test canvases), matching the MVP canvas's token resolution.
+    if (conflictConstraintIds && conflictConstraintIds.size > 0) {
+      const octx = c.getContext('2d')
+      if (octx) {
+        const view = viewportSize()
+        const ccx = view.w / 2
+        const ccy = view.h / 2
+        const project = (wx: number, wy: number): [number, number] => [
+          ccx + (wx - ox) * scale,
+          ccy - (wy - oy) * scale
+        ]
+        const liveErr =
+          typeof window !== 'undefined'
+            ? window.getComputedStyle(c).getPropertyValue('--err').trim()
+            : ''
+        const errColor = liveErr.length > 0 ? liveErr : '#e0726f'
+        for (const con of design.constraints) {
+          if (!conflictConstraintIds.has(con.id)) continue
+          const anchor = constraintAnchorWorld(design, con)
+          if (!anchor) continue
+          const [gx, gy] = project(anchor[0], anchor[1])
+          octx.save()
+          octx.strokeStyle = errColor
+          octx.fillStyle = errColor
+          octx.lineWidth = 1
+          octx.setLineDash([3, 3])
+          for (const [px, py] of constraintDisplayPointsWorld(design, con)) {
+            const [sx, sy] = project(px, py)
+            octx.beginPath()
+            octx.moveTo(gx, gy)
+            octx.lineTo(sx, sy)
+            octx.stroke()
+          }
+          octx.setLineDash([])
+          octx.beginPath()
+          octx.arc(gx, gy, 8, 0, Math.PI * 2)
+          octx.fill()
+          octx.fillStyle = '#ffffff'
+          octx.font = 'bold 11px system-ui, sans-serif'
+          octx.textAlign = 'center'
+          octx.textBaseline = 'middle'
+          octx.fillText('!', gx, gy + 0.5)
+          octx.restore()
+        }
+      }
+    }
   }, [
     width,
     height,
@@ -1187,7 +1256,9 @@ export function Sketch2DCanvas({
     constraintHover,
     trimCutter,
     extendCutter,
-    viewportSize
+    viewportSize,
+    conflictConstraintIds,
+    design
   ])
 
   useEffect(() => {
@@ -2051,6 +2122,27 @@ export function Sketch2DCanvas({
       allPoints[v.id] = { x: v.pt[0], y: v.pt[1] }
     })
     const keptPerps = keepRankIndependent(base, perpCandidates, allPoints, ids)
+    // Over-constraint conflict naming: when the rank gate DROPS a right-angle
+    // candidate, say WHICH existing constraint made it redundant (the same
+    // leave-one-out machinery, run at add time) instead of dropping silently.
+    const droppedPerps = perpCandidates.filter((cand) => !keptPerps.includes(cand))
+    if (droppedPerps.length > 0) {
+      const blocker = explainRedundantAutoConstraint(
+        [...base, ...keptPerps],
+        droppedPerps[0]!,
+        allPoints,
+        ids
+      )
+      const droppedNote =
+        droppedPerps.length === 1
+          ? 'Skipped a redundant right-angle constraint'
+          : `Skipped ${droppedPerps.length} redundant right-angle constraints`
+      onSketchHint?.(
+        blocker
+          ? `${droppedNote} — already implied by ${sketchConstraintTypeLabel(blocker.type)} ${blocker.id} + the closed loop.`
+          : `${droppedNote} — already implied by the loop's other constraints.`
+      )
+    }
     const autoCons = [...base, ...keptPerps]
     onDesignChange({
       ...design,

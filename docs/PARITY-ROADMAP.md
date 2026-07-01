@@ -49,16 +49,24 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   recovery coverage.
 
 ### Phase 2 — Selection & viewport depth
-- [ ] **Window/box select (L)** — drag-rectangle → frustum test → multi-face selection. The #1
-  batch-operation friction.
-- [ ] **Edge + vertex picking (L)** — sidecar `tessellate_with_ids` must emit per-edge polylines +
-  stable edge ids (faceIds pattern exists); then fillet/chamfer pick edges in-viewport.
+- ✅ **Window/box select (L)** — Shift+left-drag rectangle (capture-phase, OrbitControls untouched),
+  crossing semantics, both projections, Ctrl/Cmd-click toggles; multi-face selection normalizes to
+  the classic single shape so all consumers held. Batch kernel ops on the full set are a follow-up
+  (dialogs act on the primary pick). *(done 2026-07-01, wave 3)*
+- ✅ **Sidecar edge emission (engine half)** — stable per-edge polylines (`e:<fnv1a64>` ids,
+  sagitta-bound sampling at face tolerance, 20k-point cap with honest `edgesTruncated`) ride
+  tessellate_with_ids AND execute_script; protocol guards + typed bridge; validated on real
+  geometry in the 3.11 venv. *(done 2026-07-01, wave 3)*
+- [ ] **Edge picking in viewport (renderer half, M-L)** — render the emitted edge polylines,
+  raycast-pick them, pre-fill fillet/chamfer `pickedEdgeIds` from viewport clicks.
 - ✅ **Right-click context menu in viewport (M)** — selection-aware (face → sketch-on-face/shell/
   press-pull, edge → fillet/chamfer, camera section always), items derive from the SHARED command
   registry (`deriveViewportContextMenuItems` + `runCommand`), 5px drag threshold preserves
   right-drag pan, full menu a11y. *(done 2026-07-01, wave 2)*
-- [ ] **Sketch over-constraint conflict naming (M)** — solver already rank-detects; surface WHICH
-  constraint conflicts (highlight + HUD).
+- ✅ **Sketch over-constraint conflict naming (M)** — leave-one-out Jacobian-rank blame
+  (newest-first, ≤200-constraint cap, honest `unresolved`/`too-large` verdicts), HUD names the
+  culprit + one-click Remove (single undo step), err-styled canvas glyph, auto-constraint skip
+  hints name the blocker. *(done 2026-07-01, wave 3)*
 
 ### Phase 3 — Parametric depth
 - [ ] **User parameters + expressions (L)** — named params + `d1*2` evaluator feeding dialogs and
@@ -87,7 +95,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - [ ] **Free-body SE(3) rotation (L)** — deferred from Cycle 276; destabilization risk documented.
 
 ### Phase 5 — Drawings output
-- [ ] **Ordinate/baseline/chain toolbar (M)** — schema-ready; needs set-based pickers.
+- ✅ **Ordinate/baseline/chain toolbar (M)** — run-style placement (prime datum, then click-click
+  minting), origin reuse across axis switch, setId stacking, proper client-side callout rendering
+  (replaced the degraded sidecar-distance fallback), plus a NEW per-item delete list covering all
+  7 dimension kinds. *(done 2026-07-01, wave 3)*
 - ✅ **Centerlines + center marks (S-M)** — one-click center mark (center-kind snap priority),
   two-click centerline (chain dash, extended past anchors), associative re-anchor + dangling,
   lossless drawing.json round-trip. *(done 2026-07-01, wave 2)*

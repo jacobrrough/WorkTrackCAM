@@ -87,6 +87,13 @@ export type SketchConstraintStatusMap = {
   conflictingConstraintIds: ReadonlySet<string>
   /** Redundant constraint ids as a set. */
   redundantConstraintIds: ReadonlySet<string>
+  /**
+   * Human-readable labels for the conflicting constraints ("Horizontal h1"),
+   * in sketch constraint order — the badge names the culprit instead of
+   * dumping raw ids (Fusion parity: the operator learns WHICH relation
+   * fights, not just that one does).
+   */
+  conflictingConstraintLabels: readonly string[]
   /** constraintId → UI state. Every constraint in the sketch is present. */
   constraintState: ReadonlyMap<string, ConstraintUiState>
   /** entityId → flags. Every entity in the sketch is present. */
@@ -134,6 +141,34 @@ function constraintEntityRefs(c: Constraint): readonly string[] {
   if (c.kind === 'radius') return [c.entityId]
   if (c.kind === 'concentric') return [c.entityAId, c.entityBId]
   return []
+}
+
+/** Human label per constraint kind (the badge's culprit-naming vocabulary). */
+const CONSTRAINT_KIND_LABELS: Record<Constraint['kind'], string> = {
+  horizontal: 'Horizontal',
+  vertical: 'Vertical',
+  coincident: 'Coincident',
+  distance: 'Distance',
+  radius: 'Radius',
+  parallel: 'Parallel',
+  perpendicular: 'Perpendicular',
+  equal: 'Equal',
+  tangent: 'Tangent',
+  concentric: 'Concentric',
+  symmetric: 'Symmetric',
+  midpoint: 'Midpoint',
+  pointOnLine: 'Point-on-line',
+  angle: 'Angle',
+  fix: 'Fix'
+}
+
+/**
+ * Human-readable culprit label for one conflicting constraint: its kind name
+ * plus the id ("Perpendicular pp1"), so the badge names WHICH relation fights
+ * rather than echoing a bare id.
+ */
+export function constraintConflictLabel(c: Constraint): string {
+  return `${CONSTRAINT_KIND_LABELS[c.kind]} ${c.id}`
 }
 
 /** Every point id an entity owns (so a conflict on a point lights its entity). */
@@ -224,11 +259,13 @@ export function mapSolveDiagnosisToStatus(
   }
 
   const constraintState = new Map<string, ConstraintUiState>()
+  const conflictingConstraintLabels: string[] = []
   for (const c of sketch.constraints) {
     constraintState.set(
       c.id,
       conflicting.has(c.id) ? 'conflicting' : redundant.has(c.id) ? 'redundant' : 'ok'
     )
+    if (conflicting.has(c.id)) conflictingConstraintLabels.push(constraintConflictLabel(c))
   }
 
   const entityFlags = new Map<string, EntityUiFlags>()
@@ -243,6 +280,7 @@ export function mapSolveDiagnosisToStatus(
     dof: diagnosis.dof,
     conflictingConstraintIds: conflicting,
     redundantConstraintIds: redundant,
+    conflictingConstraintLabels,
     constraintState,
     entityFlags
   }
@@ -259,9 +297,17 @@ export function sketchStatusBadgeLabel(map: SketchConstraintStatusMap): string {
     const n = map.dof ?? 0
     return `Under-constrained: ${n} DOF`
   }
-  // over
-  const ids = [...map.conflictingConstraintIds]
-  return ids.length > 0 ? `Over-constrained — ${ids.join(', ')}` : 'Over-constrained'
+  // over — name the culprit(s) so the operator knows WHICH relation to remove
+  // (Fusion parity); a single culprit gets the actionable long form, several
+  // are listed, and no ids at all falls back to the bare verdict.
+  const labels = map.conflictingConstraintLabels
+  if (labels.length === 1) {
+    return `Over-constrained — ${labels[0]} conflicts; remove it or another constraint on these entities`
+  }
+  if (labels.length > 1) {
+    return `Over-constrained — ${labels.join(', ')} conflict; remove one of them`
+  }
+  return 'Over-constrained'
 }
 
 // ── Bridge adapter ───────────────────────────────────────────────────────────

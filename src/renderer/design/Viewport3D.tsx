@@ -46,8 +46,17 @@ import {
 } from './selection-state'
 import {
   triangleToFaceId,
-  trianglesForFace
+  trianglesForFace,
+  trianglesForFaces
 } from './selection-raycast'
+import {
+  beginBoxDrag,
+  boxDragRect,
+  computeBoxSelectedFaceIds,
+  isBoxDragClick,
+  updateBoxDrag,
+  type BoxDragState
+} from './selection-box'
 import {
   shouldOpenViewportContextMenu,
   type RightPointerDownSample,
@@ -65,6 +74,17 @@ type FacePick = {
   origin: [number, number, number]
   normal: [number, number, number]
   xAxis: [number, number, number]
+}
+
+/**
+ * Modifier context for a plain-click entity pick (Workflow H / Phase 2
+ * multi-select). `toggle` is `true` for a Ctrl/Cmd-click — the parent runs
+ * the membership-toggle transition (`toggleFaceInSelection`) instead of the
+ * replace transition, so the operator can build up / prune a face set one
+ * click at a time. Plain clicks keep the classic replace behavior.
+ */
+export interface SelectionPickModifiers {
+  readonly toggle: boolean
 }
 
 type NavMode = 'orbit' | 'pan' | 'zoom'
@@ -172,7 +192,7 @@ type Props = {
    * geometry has the `faceOcctIds` stash (FG-5b). The wider union is in place
    * so the edge / vertex picks extend the callback without breaking consumers.
    */
-  onSelect?: (selection: Selection) => void
+  onSelect?: (selection: Selection, modifiers?: SelectionPickModifiers) => void
   /**
    * Wave 3n — fires with the raycast intersection's WORLD point (mm) for the
    * exact click that produced an {@link onSelect} face/edge pick. Feeds the
@@ -200,6 +220,28 @@ type Props = {
    * Silently no-ops when absent (legacy tessellation / no edges).
    */
   highlightedEdgeId?: number | null
+  /**
+   * WINDOW/BOX SELECT (Phase 2) · ALL currently-selected face ids. When
+   * non-empty, the highlight overlay covers EVERY face in the set (union
+   * built by `trianglesForFaces`); takes precedence over the single
+   * `highlightedFaceId` when both are provided. Gracefully no-ops when the
+   * geometry has no `faceIds` stash, exactly like the single prop.
+   */
+  highlightedFaceIds?: readonly number[] | null
+  /**
+   * WINDOW/BOX SELECT (Phase 2) · fires on a SHIFT+left-drag release with
+   * the face ids whose projected triangle vertices fall inside the drag
+   * rectangle (CROSSING semantics — `selection-box.ts`; the hit-test runs
+   * ONCE on release, never per-frame). The parent owns the transition
+   * (additive union via `addFacesToSelection`). The gesture arms ONLY when
+   * this callback is wired AND the plain-click pick mode is `'face'` AND no
+   * other click mode (measure / sketch-plane / project / lay-flat) owns the
+   * pointer — and the pointerdown is intercepted in the CAPTURE phase
+   * before OrbitControls sees it, so camera navigation is never rebound
+   * (plain left-drag still orbits; right-drag still pans). Fires only when
+   * at least one face is hit — an empty box changes nothing.
+   */
+  onBoxSelectFaces?: (faceIds: readonly number[]) => void
   /**
    * Fusion-style right-click context menu request. Fired on a right-button
    * RELEASE with negligible pointer travel (<= CONTEXT_MENU_MAX_TRAVEL_PX
@@ -619,6 +661,7 @@ const Solid = memo(function Solid({
   onPickPoint,
   selectionMode,
   highlightedFaceId,
+  highlightedFaceIds,
   highlightedEdgeId,
   clipPlane
 }: {
@@ -631,11 +674,12 @@ const Solid = memo(function Solid({
   onPickFace?: (pick: FacePick) => void
   layOnFaceMode?: boolean
   onLayOnFace?: (faceNormal: { x: number; y: number; z: number }) => void
-  onSelect?: (selection: Selection) => void
+  onSelect?: (selection: Selection, modifiers?: SelectionPickModifiers) => void
   /** Wave 3n — world point (mm) of a registered face/edge pick. */
   onPickPoint?: (pointMm: { x: number; y: number; z: number }) => void
   selectionMode?: SelectionKind
   highlightedFaceId?: number | null
+  highlightedFaceIds?: readonly number[] | null
   highlightedEdgeId?: number | null
   clipPlane?: THREE.Plane | null
 }) {
@@ -664,18 +708,28 @@ const Solid = memo(function Solid({
    * `faceIds` stash.
    */
   const highlightGeom = useMemo(() => {
-    if (highlightedFaceId == null) return null
-    if (!Number.isFinite(highlightedFaceId)) return null
+    // WINDOW/BOX SELECT — the multi-face set (when provided and non-empty)
+    // takes precedence; otherwise fall back to the classic single-face prop.
+    const wanted: readonly number[] =
+      highlightedFaceIds && highlightedFaceIds.length > 0
+        ? highlightedFaceIds
+        : highlightedFaceId != null && Number.isFinite(highlightedFaceId)
+          ? [highlightedFaceId]
+          : []
+    if (wanted.length === 0) return null
     const faceIds = readGeometryFaceIds(geometry)
     if (!faceIds) return null
-    const triangles = trianglesForFace(highlightedFaceId, faceIds)
+    const triangles =
+      wanted.length === 1
+        ? trianglesForFace(wanted[0], faceIds)
+        : trianglesForFaces(wanted, faceIds)
     if (triangles.length === 0) return null
     const positions = buildFaceHighlightSegments(geometry, triangles)
     if (positions.length === 0) return null
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     return g
-  }, [geometry, highlightedFaceId])
+  }, [geometry, highlightedFaceId, highlightedFaceIds])
   const prevHighlightRef = useRef<THREE.BufferGeometry | null>(null)
   useEffect(() => {
     if (prevHighlightRef.current && prevHighlightRef.current !== highlightGeom) {
@@ -764,7 +818,9 @@ const Solid = memo(function Solid({
             const next = resolveSelectionFromPick(selectionMode ?? 'face', geometry, e.faceIndex)
             if (next === null) return
             e.stopPropagation()
-            onSelect(next)
+            // Phase 2 multi-select: Ctrl/Cmd-click toggles membership in the
+            // parent's face set; a plain click keeps the replace behavior.
+            onSelect(next, { toggle: e.ctrlKey || e.metaKey })
             // Wave 3n — the resolved pick registered; report its world point.
             onPickPoint?.({ x: e.point.x, y: e.point.y, z: e.point.z })
           }
@@ -1279,7 +1335,9 @@ export function Viewport3D({
   onPickPoint,
   selectionMode = 'face',
   highlightedFaceId = null,
+  highlightedFaceIds = null,
   highlightedEdgeId = null,
+  onBoxSelectFaces,
   onContextMenuRequest,
   actionsRef
 }: Props) {
@@ -1429,6 +1487,102 @@ export function Viewport3D({
     [onContextMenuRequest]
   )
 
+  /* -- WINDOW/BOX SELECT (Phase 2): SHIFT + left-drag --------------------------
+     The pointerdown is intercepted in the CAPTURE phase (before the Canvas --
+     and therefore OrbitControls -- receives it) so camera navigation is never
+     rebound: plain left-drag still orbits, right-drag still pans, and the box
+     only arms under SHIFT while the plain 'face' pick mode owns clicks (never
+     while measure / sketch-plane / project / lay-flat modes own the pointer,
+     and never on a geometry without the kernel faceIds stash). The pointer is
+     captured to the wrapper so moves/release keep flowing during fast drags.
+     The face hit-test (projected-vertex CROSSING -- selection-box.ts) runs
+     ONCE on release against the live camera, never per-frame. */
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [boxDrag, setBoxDrag] = useState<BoxDragState | null>(null)
+  const boxSelectArmed =
+    onBoxSelectFaces !== undefined &&
+    selectionMode === 'face' &&
+    !effectiveMeasureMode &&
+    !projectSketchMode &&
+    !facePickMode &&
+    !layOnFaceActive &&
+    stable !== null &&
+    readGeometryFaceIds(stable) !== null
+
+  /** Client px -> wrapper-local px (the overlay + hit-test coordinate space). */
+  const boxLocalPoint = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
+    const rect = rootRef.current?.getBoundingClientRect()
+    return { x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) }
+  }, [])
+
+  const handleBoxPointerDownCapture = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (!boxSelectArmed || boxDrag !== null) return
+      if (e.button !== 0 || !e.shiftKey) return
+      // Only gestures that START on the WebGL canvas qualify -- shift-clicks
+      // on the HUD buttons / measure chrome must keep working untouched.
+      if (!(e.target instanceof HTMLCanvasElement)) return
+      // Claim the gesture BEFORE the Canvas / OrbitControls see the pointerdown.
+      e.stopPropagation()
+      e.preventDefault()
+      if (typeof e.currentTarget.setPointerCapture === 'function') {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }
+      const p = boxLocalPoint(e.clientX, e.clientY)
+      setBoxDrag(beginBoxDrag(e.pointerId, p.x, p.y))
+    },
+    [boxSelectArmed, boxDrag, boxLocalPoint]
+  )
+
+  const handleBoxPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (boxDrag === null || e.pointerId !== boxDrag.pointerId) return
+      const p = boxLocalPoint(e.clientX, e.clientY)
+      setBoxDrag((prev) => (prev === null ? null : updateBoxDrag(prev, p.x, p.y)))
+    },
+    [boxDrag, boxLocalPoint]
+  )
+
+  const handleBoxPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (boxDrag === null || e.pointerId !== boxDrag.pointerId) return
+      const p = boxLocalPoint(e.clientX, e.clientY)
+      const finalState = updateBoxDrag(boxDrag, p.x, p.y)
+      setBoxDrag(null)
+      if (
+        typeof e.currentTarget.hasPointerCapture === 'function' &&
+        e.currentTarget.hasPointerCapture(e.pointerId)
+      ) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+      // Below-slop travel = a shift+click, not a box -- change nothing.
+      if (isBoxDragClick(finalState)) return
+      if (!onBoxSelectFaces || stable === null) return
+      const faceIds = readGeometryFaceIds(stable)
+      if (!faceIds) return
+      const camera = controlsRef.current?.object
+      if (!camera) return
+      const hits = computeBoxSelectedFaceIds(
+        stable,
+        faceIds,
+        camera,
+        boxDragRect(finalState),
+        viewportSizeRef.current
+      )
+      // An empty box adds nothing (additive SHIFT convention) -- stay silent.
+      if (hits.length > 0) onBoxSelectFaces(hits)
+    },
+    [boxDrag, boxLocalPoint, onBoxSelectFaces, stable]
+  )
+
+  const handleBoxPointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (boxDrag === null || e.pointerId !== boxDrag.pointerId) return
+      setBoxDrag(null)
+    },
+    [boxDrag]
+  )
+
   /* Imperative camera-action bridge: expose the EXISTING HUD handlers to the
      parent (right-click context menu) -- assigned while mounted, nulled on
      unmount so a stale ref can never drive an unmounted viewport. */
@@ -1454,10 +1608,15 @@ export function Viewport3D({
 
   return (
     <div
+      ref={rootRef}
       className="viewport-3d"
       role="region"
       aria-label="3D model viewport"
       onPointerDown={handleRootPointerDown}
+      onPointerDownCapture={handleBoxPointerDownCapture}
+      onPointerMove={handleBoxPointerMove}
+      onPointerUp={handleBoxPointerUp}
+      onPointerCancel={handleBoxPointerCancel}
       onContextMenu={handleRootContextMenu}
     >
       <Canvas
@@ -1488,6 +1647,7 @@ export function Viewport3D({
               onPickPoint={onPickPoint}
               selectionMode={selectionMode}
               highlightedFaceId={highlightedFaceId}
+              highlightedFaceIds={highlightedFaceIds}
               highlightedEdgeId={highlightedEdgeId}
               clipPlane={clipPlane}
             />
@@ -1577,6 +1737,26 @@ export function Viewport3D({
           />
         </GizmoHelper>
       </Canvas>
+      {/*
+        WINDOW/BOX SELECT -- the dashed drag rectangle (screen-space overlay).
+        Rendered only while an above-slop drag is in flight. Position/size ARE
+        the live drag rect, so this is the one place an inline style is
+        load-bearing (dynamic geometry); the visual styling (dash, tint,
+        z-order) lives in workspace.css under .viewport-3d__box-select.
+      */}
+      {boxDrag !== null && !isBoxDragClick(boxDrag) ? (
+        <div
+          className="viewport-3d__box-select"
+          data-testid="viewport-3d-box-select"
+          aria-hidden="true"
+          style={{
+            left: `${boxDragRect(boxDrag).minX}px`,
+            top: `${boxDragRect(boxDrag).minY}px`,
+            width: `${boxDragRect(boxDrag).maxX - boxDragRect(boxDrag).minX}px`,
+            height: `${boxDragRect(boxDrag).maxY - boxDragRect(boxDrag).minY}px`
+          }}
+        />
+      ) : null}
       <ViewportHud
         controlsRef={controlsRef}
         animRef={animRef}

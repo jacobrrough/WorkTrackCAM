@@ -373,7 +373,12 @@ def list_operations(params: dict[str, Any]) -> dict[str, Any]:
 #       "faceIds":       [0, 0, 1, 1, ...]           # length == triangleCount
 #       "triangleCount": int,
 #       "bbox":          {"min":[..3], "max":[..3]},
-#       "faceMap":       {"<id>": {"kind":"face", "occtHash":int, "area":float}}
+#       "faceMap":       {"<id>": {"kind":"face", "occtHash":int, "area":float}},
+#       "edgeMap":       {"<e-id>": {"kind":"edge", "occtId":str,
+#                          "occtHash":int, "length":float}},   # keyed by stable id
+#       "edges":         [{"id": "<e-id>", "points": [[x,y,z], ...]}, ...],
+#       "edgesTruncated": bool   # honest flag: the defensive TOTAL point cap
+#                                 # dropped whole polylines (edgeMap complete)
 #     }
 
 

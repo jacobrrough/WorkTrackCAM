@@ -135,10 +135,10 @@ describe('DOF-badge text selection (the ribbon badge render path)', () => {
     expect(badgeFor(lineWithHorizontal(), { dof: 4, status: 'under' })).toBe('Under-constrained: 4 DOF')
   })
 
-  it('over-constrained from wire "conflicting" lists the conflicting source ids', () => {
+  it('over-constrained from wire "conflicting" NAMES the culprit (kind + id) with the removal hint', () => {
     expect(
       badgeFor(lineWithHorizontal(), { dof: 0, status: 'conflicting', conflictingConstraintIds: ['h1'] })
-    ).toBe('Over-constrained — h1')
+    ).toBe('Over-constrained — Horizontal h1 conflicts; remove it or another constraint on these entities')
   })
 
   it('over-constrained from negative dof falls back to the bare label', () => {
@@ -152,7 +152,7 @@ describe('DOF-badge text selection (the ribbon badge render path)', () => {
         status: 'conflicting',
         conflictingConstraintIds: ['ghost', 'h1']
       })
-    ).toBe('Over-constrained — h1')
+    ).toBe('Over-constrained — Horizontal h1 conflicts; remove it or another constraint on these entities')
   })
 })
 
@@ -235,14 +235,16 @@ describe('selectDofBadgeView — the badge honesty contract', () => {
     })
   })
 
-  it('authoritative over → "Over-constrained — ids"', () => {
+  it('authoritative over → "Over-constrained — <named culprit>"', () => {
     const overMap = mapSolveDiagnosisToStatus(
       sketch,
       adaptSolveResultToDiagnosis({ status: 'conflicting', conflictingConstraintIds: ['h1'] })
     )
     const v = selectDofBadgeView({ status: 'over', conflictingConstraintIds: ['h1'] }, true, overMap)
     expect(v.status).toBe('over')
-    expect(v.label).toBe('Over-constrained — h1')
+    expect(v.label).toBe(
+      'Over-constrained — Horizontal h1 conflicts; remove it or another constraint on these entities'
+    )
   })
 
   it('authoritative view agrees with the underlying label + modifier helpers', () => {

@@ -2369,6 +2369,19 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
   z-index: 2;
 }
 
+/* -- WINDOW/BOX SELECT: SHIFT+left-drag rectangle (Viewport3D overlay) --
+   Position/size come from the live drag rect as inline styles (dynamic
+   geometry); everything visual lives here. pointer-events: none so the
+   rectangle never eats the very pointermove/up events that drive it. */
+.viewport-3d__box-select {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border: 1px dashed var(--accent);
+  background: var(--accent-10);
+  border-radius: 2px;
+}
+
 /* ── View-preset cluster (ISO / T / F / R) ── */
 .viewport-3d__viewcube {
   position: absolute;

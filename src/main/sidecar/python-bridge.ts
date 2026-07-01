@@ -29,6 +29,8 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import {
   isSidecarResponse,
+  type CadTessellateWithIdsParams,
+  type CadTessellateWithIdsResult,
   type SidecarRequest,
   type SidecarResponse,
 } from '../../shared/sidecar-protocol'
@@ -146,6 +148,27 @@ export class PythonBridge {
 
       this.child!.stdin.write(line)
     })
+  }
+
+  /**
+   * Typed wrapper for `cad.tessellate_with_ids` — the selection-grade
+   * tessellation whose result carries `faceIds` / `faceMap` PLUS the FG-5
+   * edge-emission surface: per-edge sampled `edges` polylines (stable
+   * `"e:<fnv>"` ids), the `edgeMap` metadata dict keyed by those same ids,
+   * and the honest `edgesTruncated` flag (true only when the sidecar's
+   * defensive total point cap dropped whole polylines).
+   *
+   * Purely a typing convenience over {@link call}: the wire behavior is
+   * identical and existing generic `call('cad.tessellate_with_ids', ...)`
+   * users are unaffected. The result is the RAW sidecar payload typed as
+   * `CadTessellateWithIdsResult` — callers that cannot trust the sidecar
+   * build (e.g. the IPC layer) should still run their shape coercers over it.
+   */
+  async tessellateWithIds(
+    params: CadTessellateWithIdsParams,
+    opts: PythonBridgeCallOptions = {},
+  ): Promise<CadTessellateWithIdsResult> {
+    return this.call<CadTessellateWithIdsResult>('cad.tessellate_with_ids', params, opts)
   }
 
   /** Send `shutdown` and wait for the child to exit. */

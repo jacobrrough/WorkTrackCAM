@@ -356,6 +356,16 @@ export type CadTessellateWithIdsResult = {
    * Empty ``[]`` when edges could not be enumerated. See {@link CadEdgePolyline}.
    */
   edges: CadEdgePolyline[]
+  /**
+   * FG-5 · True when the sidecar's defensive TOTAL edge-point budget dropped
+   * one or more polylines from ``edges`` (pathological part with thousands of
+   * edges). Polylines are dropped WHOLE (never half-sampled) and ``edgeMap``
+   * metadata stays complete. Honest truncation: the renderer should surface
+   * an "edge overlay simplified" notice for the missing edges rather than
+   * silently offering fewer pickable edges. OPTIONAL + additive — absent on
+   * a response from an older sidecar build ⇒ treat as false.
+   */
+  edgesTruncated?: boolean
 }
 
 // ── cad.execute_script ──────────────────────────────────────────────────────
@@ -421,6 +431,12 @@ export type CadExecuteScriptMesh = {
    * Absent for the same reason ``edgeMap`` is absent. See {@link CadEdgePolyline}.
    */
   edges?: CadEdgePolyline[]
+  /**
+   * FG-5 · Mirror of {@link CadTessellateWithIdsResult.edgesTruncated} for
+   * the embedded ``edges`` list above. Absent ⇒ false / unknown (older
+   * sidecar build or a mesh whose face-tagged tessellation failed).
+   */
+  edgesTruncated?: boolean
 }
 
 export type CadScriptError = {
@@ -1633,4 +1649,45 @@ export function isSidecarResponse(value: unknown): value is SidecarResponse {
     )
   }
   return false
+}
+
+/**
+ * Type guard: a single well-formed entry of the ``edges`` polyline list on
+ * {@link CadTessellateWithIdsResult} / {@link CadExecuteScriptMesh}.
+ *
+ * Mirrors the sidecar emitter contract exactly: a non-empty stable id plus an
+ * ordered list of >= 2 finite ``[x, y, z]`` samples. Consumers (the
+ * main-process coercer, the renderer's edge overlay) drop entries this guard
+ * rejects — a malformed polyline disables picking for that ONE edge; it never
+ * poisons the rest of the tessellation.
+ */
+export function isCadEdgePolyline(value: unknown): value is CadEdgePolyline {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const e = value as Record<string, unknown>
+  if (typeof e.id !== 'string' || e.id.length === 0) return false
+  if (!Array.isArray(e.points) || e.points.length < 2) return false
+  for (const pt of e.points) {
+    if (!Array.isArray(pt) || pt.length !== 3) return false
+    for (const c of pt) {
+      if (typeof c !== 'number' || !Number.isFinite(c)) return false
+    }
+  }
+  return true
+}
+
+/**
+ * Type guard: a single well-formed ``edgeMap`` entry (see
+ * {@link CadEdgeMapEntry}). Validates the discriminant ``kind: "edge"``, the
+ * non-empty stable ``occtId``, and finite ``occtHash`` / ``length`` numbers.
+ * The optional Tier-2 ``signature`` is NOT validated here — it is additive
+ * metadata the tiered resolver re-checks field-by-field on use.
+ */
+export function isCadEdgeMapEntry(value: unknown): value is CadEdgeMapEntry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const e = value as Record<string, unknown>
+  if (e.kind !== 'edge') return false
+  if (typeof e.occtId !== 'string' || e.occtId.length === 0) return false
+  if (typeof e.occtHash !== 'number' || !Number.isFinite(e.occtHash)) return false
+  if (typeof e.length !== 'number' || !Number.isFinite(e.length)) return false
+  return true
 }
