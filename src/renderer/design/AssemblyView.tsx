@@ -75,6 +75,20 @@ import {
   type BomRow,
   type InterferenceReport,
 } from './assembly-render-seam'
+import {
+  MOTION_LOOP_DURATION_MS,
+  advancePlaybackT,
+  clamp01,
+  firstDrivenJointKind,
+  formatPoseSummary,
+  interpolatePosesAtT,
+  parseMotionPoses,
+  playbackDisabledHint,
+  playbackReadout,
+  type DrivenJointKind,
+  type MotionPose,
+  type MotionPoseTransform,
+} from './assembly-motion-playback'
 
 /**
  * One row in the assembly's parts list.
@@ -300,6 +314,15 @@ export interface AssemblyViewProps {
    * disabled with an honest hint (never a silent no-op).
    */
   readonly projectDir?: string | null
+  /**
+   * Render-pin escape hatch: seeds the motion-study playback bar with known
+   * poses so a static render can assert the bar without invoking the
+   * `assembly:simulate` IPC (mirrors `initialConvergenceReport`). Playback is
+   * a VIEW-layer overlay — poses are never written into `parts` or persisted.
+   */
+  readonly initialMotionPoses?: readonly MotionPose[] | null
+  /** Render-pin escape hatch: seeds the playback scrub position (0..1). */
+  readonly initialPlaybackT?: number
 }
 
 /**
@@ -603,6 +626,8 @@ export function AssemblyView({
   mateConstraints = [],
   onSolvedTransforms,
   projectDir,
+  initialMotionPoses = null,
+  initialPlaybackT = 0,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
@@ -887,6 +912,11 @@ export function AssemblyView({
     }
     setSolving(true)
     setError(null)
+    // A fresh solve supersedes any motion-study overlay — exit playback so the
+    // solved (non-animated) poses are what the operator sees.
+    setPlaying(false)
+    setMotionPoses(null)
+    setPlaybackT(0)
     const assemblyInput = {
       version: 2,
       name: '',
@@ -995,6 +1025,78 @@ export function AssemblyView({
   // error banner; never thrown. Disabled when empty or a study is in flight.
   const [motionStudying, setMotionStudying] = useState(false)
   const [motionSampleCount, setMotionSampleCount] = useState<number | null>(null)
+
+  // ── Motion-study playback (VIEW-layer overlay — never persisted) ─────────
+  // Poses come from the `assembly:simulate` IPC. Scrubbing / playing maps a
+  // playhead t ∈ [0,1] onto per-part transforms (interpolated between the two
+  // adjacent samples) that OVERRIDE the rows' displayed placement while the
+  // bar is open. Closing the bar, editing the parts list, or starting a new
+  // solve drops the overlay and the rows fall back to the host-owned
+  // transforms — nothing here writes into `parts`, the host state, or the
+  // project file.
+  const [motionPoses, setMotionPoses] = useState<readonly MotionPose[] | null>(initialMotionPoses)
+  const [playbackT, setPlaybackT] = useState<number>(clamp01(initialPlaybackT))
+  const [playing, setPlaying] = useState(false)
+
+  const exitPlayback = useCallback((): void => {
+    setPlaying(false)
+    setMotionPoses(null)
+    setPlaybackT(0)
+  }, [])
+
+  // Any parts change (add / remove / host transform edit) invalidates the
+  // study's poses — drop the overlay so stale motion never poses fresh parts.
+  // The mount pass is skipped so the render-pin seed (`initialMotionPoses`)
+  // survives the first render.
+  const playbackKeyDidMount = useRef(false)
+  useEffect(() => {
+    if (!playbackKeyDidMount.current) {
+      playbackKeyDidMount.current = true
+      return
+    }
+    setPlaying(false)
+    setMotionPoses(null)
+    setPlaybackT(0)
+  }, [key])
+
+  // Play loop: requestAnimationFrame drives the playhead with wall-clock
+  // DELTAS; all wrap/advance math lives in the pure module (deterministic in
+  // tests — this effect never runs under renderToStaticMarkup).
+  useEffect(() => {
+    if (!playing) return undefined
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      return undefined
+    }
+    let raf = 0
+    let last: number | null = null
+    const step = (now: number): void => {
+      const dt = last === null ? 0 : now - last
+      last = now
+      setPlaybackT((prev) => advancePlaybackT(prev, dt, MOTION_LOOP_DURATION_MS))
+      raf = window.requestAnimationFrame(step)
+    }
+    raf = window.requestAnimationFrame(step)
+    return () => {
+      window.cancelAnimationFrame(raf)
+    }
+  }, [playing])
+
+  const playbackHint = useMemo<string | null>(
+    () => (motionPoses === null ? null : playbackDisabledHint(motionPoses)),
+    [motionPoses]
+  )
+  const playbackUsable = motionPoses !== null && playbackHint === null
+  const playbackOverlay = useMemo<ReadonlyMap<string, MotionPoseTransform> | null>(
+    () =>
+      motionPoses !== null && playbackHint === null
+        ? interpolatePosesAtT(motionPoses, playbackT)
+        : null,
+    [motionPoses, playbackHint, playbackT]
+  )
+  const drivenJointKind = useMemo<DrivenJointKind | null>(
+    () => firstDrivenJointKind(parts),
+    [parts]
+  )
   const handleMotionStudy = useCallback((): void => {
     if (parts.length === 0 || motionStudying) return
     const simulateBridgeAny = (fab() as unknown) as {
@@ -1032,6 +1134,10 @@ export function AssemblyView({
           ryDeg: part.transform?.rotation?.[1] ?? 0,
           rzDeg: part.transform?.rotation?.[2] ?? 0,
         },
+        // Thread the row's joint kind through: `assembly:simulate` only steps
+        // `revolute` / `slider` components across their limit range — without
+        // it every sample solves to the same pose and playback is frozen.
+        ...(part.joint !== undefined ? { joint: part.joint } : {}),
       })),
       mateConstraints,
     }
@@ -1040,6 +1146,12 @@ export function AssemblyView({
         setMotionStudying(false)
         if (!res.ok) return
         setMotionSampleCount(res.sampleCount)
+        // Stash the poses for the playback bar (VIEW-layer overlay only) and
+        // rewind. parseMotionPoses is the tolerant wire guard — a malformed
+        // pose degrades to "fewer poses", never a crash.
+        setMotionPoses(parseMotionPoses(res.poses))
+        setPlaybackT(0)
+        setPlaying(false)
         const report = res.convergenceReport ?? res.diagnostics?.convergenceReport ?? null
         if (report) setConvergenceReport(report)
         toast('ok', `Motion study: ${res.sampleCount} pose${res.sampleCount === 1 ? '' : 's'} computed`)
@@ -1254,6 +1366,83 @@ export function AssemblyView({
         )}
       </div>
 
+      {/* Motion-study playback bar — appears once a study has produced poses.
+          Scrub + Play/Pause + joint-scalar read-out. The overlay is strictly
+          view-layer: Done (or any parts edit / new solve) restores the
+          non-animated poses. Degenerate studies (0 / 1 / identical poses)
+          disable the controls with an honest hint. */}
+      {motionPoses !== null && (
+        <div
+          className="design-assembly__playback"
+          data-testid="design-assembly-playback"
+          role="group"
+          aria-label="Motion study playback"
+        >
+          <button
+            type="button"
+            className="btn btn-ghost design-assembly__playback-toggle"
+            data-testid="design-assembly-playback-toggle"
+            onClick={() => setPlaying((prev) => !prev)}
+            disabled={!playbackUsable}
+            aria-disabled={!playbackUsable}
+            title={
+              playbackUsable
+                ? playing
+                  ? 'Pause the motion study'
+                  : 'Play the motion study (loops until paused)'
+                : playbackHint ?? undefined
+            }
+          >
+            {playing ? 'Pause' : 'Play'}
+          </button>
+          <input
+            type="range"
+            className="design-assembly__playback-scrub"
+            data-testid="design-assembly-playback-scrub"
+            min={0}
+            max={1000}
+            step={1}
+            value={Math.round(clamp01(playbackT) * 1000)}
+            onChange={(e) => setPlaybackT(Number(e.target.value) / 1000)}
+            disabled={!playbackUsable}
+            aria-label="Scrub motion study playhead"
+          />
+          {playbackUsable ? (
+            <span
+              className="design-assembly__playback-readout"
+              data-testid="design-assembly-playback-readout"
+            >
+              {playbackReadout(motionPoses.length, playbackT, drivenJointKind)}
+            </span>
+          ) : (
+            <span
+              className="design-assembly__playback-hint"
+              data-testid="design-assembly-playback-hint"
+            >
+              {playbackHint}
+            </span>
+          )}
+          {convergenceReport !== null && convergenceReport.status !== 'converged' && (
+            <span
+              className="design-assembly__playback-quality"
+              data-testid="design-assembly-playback-quality"
+              title="The kinematic solve behind this study did not fully converge — treat the animated poses as approximate. (The wire carries one final convergence report, not per-sample diagnostics, so the whole study is marked rather than individual samples.)"
+            >
+              approximate
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost design-assembly__playback-close"
+            data-testid="design-assembly-playback-close"
+            onClick={exitPlayback}
+            title="Exit playback and restore the parts to their non-animated poses"
+          >
+            Done
+          </button>
+        </div>
+      )}
+
       <div className="design-assembly__body">
         <aside
           className="design-assembly__list-col"
@@ -1268,7 +1457,15 @@ export function AssemblyView({
               const isSelected = part.id === selectedPartId
               const isClashing = clashIds.has(part.id)
               const rowId = rowTestId(part.id)
-              const summary = formatTransformSummary(part)
+              // Playback overlay: while the motion-study bar is open the pose
+              // at the playhead OVERRIDES the displayed placement (view-layer
+              // only — `parts` is untouched, so closing the bar restores this
+              // summary automatically).
+              const playbackPose = playbackOverlay?.get(part.id)
+              const summary =
+                playbackPose !== undefined
+                  ? formatPoseSummary(playbackPose)
+                  : formatTransformSummary(part)
               const rowClass = [
                 'design-assembly__row',
                 isSelected ? 'design-assembly__row--selected' : '',
@@ -1286,6 +1483,7 @@ export function AssemblyView({
                   className={rowClass}
                   data-testid={rowId}
                   data-clash={isClashing ? 'true' : undefined}
+                  data-motion={playbackPose !== undefined ? 'true' : undefined}
                   role="listitem"
                   aria-selected={isSelected}
                 >
@@ -1568,6 +1766,14 @@ export function AssemblyView({
                 ? 'Building assembly…'
                 : triangleSummary ?? `${parts.length} part${parts.length === 1 ? '' : 's'}`}
             </div>
+            {playbackOverlay !== null && (
+              <div
+                className="design-assembly__viewport-playback-note"
+                data-testid="design-assembly-playback-note"
+              >
+                Motion playback — preview overlay, not saved
+              </div>
+            )}
             {mateConstraints.length > 0 && (
               <div
                 className="design-assembly__viewport-mates"

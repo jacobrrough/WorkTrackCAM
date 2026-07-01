@@ -38,6 +38,8 @@ import {
 import { addSectionView, addSheet, setActiveSheet } from './drawing-sheet-ops'
 import type { DrawingSectionView } from './drawing-sheet-schema'
 import type {
+  DrawingCenterline,
+  DrawingCenterMark,
   DrawingDimension,
   GdtFeatureControlFrame,
   SurfaceFinishSymbol,
@@ -110,6 +112,18 @@ const NOTE: DrawingNote = {
   placement: { x: 40, y: 40 }
 }
 
+const CENTER_MARK: DrawingCenterMark = {
+  id: 'cm-1',
+  anchor: ANCHOR('hole-1', 12, 8),
+  sizeMm: 3
+}
+
+const CENTERLINE: DrawingCenterline = {
+  id: 'cl-1',
+  start: ANCHOR('hole-1', 12, 8),
+  end: ANCHOR('hole-2', 42, 8)
+}
+
 const REVISION: DrawingRevision = {
   rev: 'A',
   date: '2026-06-15',
@@ -124,7 +138,7 @@ const BOM_ROW: DrawingBomRow = {
   description: 'Aluminium plate'
 }
 
-/** A fully-populated renderer drawing state (all seven pieces non-empty). */
+/** A fully-populated renderer drawing state (every piece non-empty). */
 function fullViewState(): DrawingViewState {
   return {
     dimensions: [LINEAR_DIM, RADIAL_DIM],
@@ -132,6 +146,8 @@ function fullViewState(): DrawingViewState {
     surfaceFinishes: [SURFACE_FINISH],
     titleBlock: TITLE_BLOCK,
     notes: [NOTE],
+    centerMarks: [CENTER_MARK],
+    centerlines: [CENTERLINE],
     revisions: [REVISION],
     bom: [BOM_ROW]
   }
@@ -150,6 +166,8 @@ describe('foldDrawingState — shape', () => {
     expect(sheet.annotations?.featureControlFrames).toHaveLength(1)
     expect(sheet.annotations?.surfaceFinishes).toHaveLength(1)
     expect(sheet.annotations?.notes).toHaveLength(1)
+    expect(sheet.annotations?.centerMarks).toHaveLength(1)
+    expect(sheet.annotations?.centerlines).toHaveLength(1)
     expect(sheet.annotations?.revisions).toHaveLength(1)
     expect(sheet.annotations?.bom).toHaveLength(1)
     expect(sheet.titleBlock).toEqual(TITLE_BLOCK)
@@ -254,6 +272,19 @@ describe('fold → save/load → hydrate round-trip', () => {
     expect(hydrated.surfaceFinishes[0]?.anchor.refId).toBe('e1')
   })
 
+  it('center marks + centerlines survive the round-trip (anchor refIds intact)', () => {
+    const state: DrawingViewState = {
+      ...emptyDrawingViewState(),
+      centerMarks: [CENTER_MARK],
+      centerlines: [CENTERLINE]
+    }
+    const hydrated = hydrateDrawingFile(saveLoadRoundTrip(foldDrawingState(state)))
+    expect(hydrated.centerMarks).toEqual([CENTER_MARK])
+    expect(hydrated.centerlines).toEqual([CENTERLINE])
+    expect(hydrated.centerMarks[0]?.anchor.refId).toBe('hole-1')
+    expect(hydrated.centerlines[0]?.end.refId).toBe('hole-2')
+  })
+
   it('re-folding the hydrated state is a fixed point (idempotent normalization)', () => {
     const state = fullViewState()
     const file1 = saveLoadRoundTrip(foldDrawingState(state))
@@ -283,6 +314,8 @@ describe('hydrateDrawingFile — legacy / empty back-compat', () => {
     expect(hydrated.featureControlFrames).toEqual([])
     expect(hydrated.surfaceFinishes).toEqual([])
     expect(hydrated.notes).toEqual([])
+    expect(hydrated.centerMarks).toEqual([])
+    expect(hydrated.centerlines).toEqual([])
     expect(hydrated.revisions).toEqual([])
     expect(hydrated.bom).toEqual([])
     expect(hydrated.titleBlock).toEqual(emptyDrawingTitleBlock())

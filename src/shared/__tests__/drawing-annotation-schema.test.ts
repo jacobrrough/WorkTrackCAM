@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   drawingBomRowSchema,
+  drawingCenterlineSchema,
+  drawingCenterMarkSchema,
   drawingDimensionAnchorSchema,
   drawingDimensionSchema,
   drawingNoteSchema,
@@ -269,6 +271,8 @@ describe('drawingSheetAnnotationsSchema', () => {
       featureControlFrames: [],
       surfaceFinishes: [],
       notes: [],
+      centerMarks: [],
+      centerlines: [],
       revisions: [],
       bom: []
     })
@@ -313,6 +317,8 @@ describe('drawingSheetAnnotationsSchema', () => {
         }
       ],
       notes: [{ id: 'n1', text: 'NOTE', placement: { x: 0, y: 0 } }],
+      centerMarks: [{ id: 'cm1', anchor: anchor('hole-1', 5, 5), sizeMm: 3 }],
+      centerlines: [{ id: 'cl1', start: anchor('hole-1', 5, 5), end: anchor('hole-2', 25, 5) }],
       revisions: [{ rev: 'A', date: '2026-06-04', desc: 'Init', author: 'JR' }],
       bom: [{ item: 1, qty: 2, partNumber: 'PN-1', description: 'Widget' }]
     }
@@ -509,5 +515,101 @@ describe('drawingSheetAnnotationsSchema — surfaceFinishes additive back-compat
     expect(ann.surfaceFinishes[0]!.material).toBe('prohibited')
     // refId survived the round-trip — the symbol is associative.
     expect(ann.surfaceFinishes[0]!.anchor.refId).toBe('face-9')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Center marks + centerlines — schema round-trip + additive back-compat
+// ---------------------------------------------------------------------------
+
+describe('drawingCenterMarkSchema / drawingCenterlineSchema', () => {
+  it('round-trips a center mark (anchor + sizeMm)', () => {
+    const mark = { id: 'cm1', anchor: anchor('hole-1', 12, 34), sizeMm: 3 }
+    expect(drawingCenterMarkSchema.parse(mark)).toEqual(mark)
+  })
+
+  it('rejects a non-positive / non-finite mark size', () => {
+    expect(() =>
+      drawingCenterMarkSchema.parse({ id: 'cm1', anchor: anchor('h', 0, 0), sizeMm: 0 })
+    ).toThrow()
+    expect(() =>
+      drawingCenterMarkSchema.parse({ id: 'cm1', anchor: anchor('h', 0, 0), sizeMm: -1 })
+    ).toThrow()
+    expect(() =>
+      drawingCenterMarkSchema.parse({
+        id: 'cm1',
+        anchor: anchor('h', 0, 0),
+        sizeMm: Number.POSITIVE_INFINITY
+      })
+    ).toThrow()
+  })
+
+  it('round-trips a centerline (two anchors)', () => {
+    const line = { id: 'cl1', start: anchor('hole-1', 0, 0), end: anchor('hole-2', 40, 0) }
+    expect(drawingCenterlineSchema.parse(line)).toEqual(line)
+  })
+})
+
+describe('drawingSheetAnnotationsSchema — centerMarks/centerlines additive back-compat', () => {
+  it('a legacy annotations payload with NEITHER array defaults both to []', () => {
+    const legacy = drawingSheetAnnotationsSchema.parse({
+      dimensions: [],
+      featureControlFrames: [],
+      surfaceFinishes: [],
+      notes: [],
+      revisions: [],
+      bom: []
+    })
+    expect(legacy.centerMarks).toEqual([])
+    expect(legacy.centerlines).toEqual([])
+  })
+
+  it('emptyDrawingSheetAnnotations() includes both empty arrays', () => {
+    expect(emptyDrawingSheetAnnotations().centerMarks).toEqual([])
+    expect(emptyDrawingSheetAnnotations().centerlines).toEqual([])
+  })
+
+  it('a legacy drawing.json sheet (no centerMarks/centerlines) parses unchanged through parseDrawingFile', () => {
+    const file = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: 'legacy',
+          name: 'Old Sheet',
+          annotations: {
+            dimensions: [],
+            notes: [{ id: 'n1', text: 'LEGACY NOTE', placement: { x: 0, y: 0 } }]
+          }
+        }
+      ]
+    })
+    const ann = file.sheets[0]!.annotations!
+    expect(ann.notes).toHaveLength(1)
+    expect(ann.centerMarks).toEqual([])
+    expect(ann.centerlines).toEqual([])
+  })
+
+  it('round-trips a sheet carrying a center mark + centerline through parseDrawingFile', () => {
+    const file = parseDrawingFile({
+      version: 1,
+      sheets: [
+        {
+          id: 'b',
+          name: 'Detail',
+          annotations: {
+            centerMarks: [{ id: 'cm1', anchor: anchor('hole-7', 2, 2), sizeMm: 4 }],
+            centerlines: [
+              { id: 'cl1', start: anchor('hole-7', 2, 2), end: anchor('hole-8', 30, 2) }
+            ]
+          }
+        }
+      ]
+    })
+    const ann = file.sheets[0]!.annotations!
+    expect(ann.centerMarks).toHaveLength(1)
+    expect(ann.centerMarks[0]!.anchor.refId).toBe('hole-7')
+    expect(ann.centerMarks[0]!.sizeMm).toBe(4)
+    expect(ann.centerlines).toHaveLength(1)
+    expect(ann.centerlines[0]!.end.refId).toBe('hole-8')
   })
 })

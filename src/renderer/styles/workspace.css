@@ -4719,3 +4719,53 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; 
   flex: 1;
   overflow: hidden;
 }
+
+/* == Viewport right-click context menu (ViewportContextMenu.tsx) ==========
+   Fusion-style selection-aware shortcut menu, anchored at the cursor inside
+   the viewport pane (.design-workspace__viewport-col is the positioned
+   ancestor; the component clamps itself to that pane's bounds). */
+.viewport-context-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 184px;
+  padding: 4px;
+  background: rgba(15, 10, 22, 0.94);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+.viewport-context-menu__item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 1px);
+  color: var(--txt1);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.viewport-context-menu__item:hover,
+.viewport-context-menu__item:focus {
+  background: var(--accent-10);
+  color: var(--txt0);
+  outline: none;
+}
+.viewport-context-menu__item[aria-disabled='true'] {
+  color: var(--txt2);
+  opacity: 0.55;
+  cursor: default;
+}
+.viewport-context-menu__item[aria-disabled='true']:hover,
+.viewport-context-menu__item[aria-disabled='true']:focus {
+  background: var(--bg2);
+  color: var(--txt2);
+}
+.viewport-context-menu__separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}

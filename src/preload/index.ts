@@ -16,6 +16,10 @@ import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
 import type {
+  DesignRecoveryReadResult,
+  DesignRecoveryWriteResult
+} from '../shared/design-recovery'
+import type {
   AssemblyFile,
   AssemblyInterferenceReport,
   AssemblySummaryReport
@@ -349,6 +353,23 @@ export type Api = {
   featuresLoad: (projectDir: string) => Promise<PartFeaturesFile>
   featuresSave: (projectDir: string, json: string) => Promise<void>
   designSave: (projectDir: string, json: string) => Promise<void>
+  /**
+   * AUTOSAVE + CRASH RECOVERY - persist a design recovery snapshot to
+   * userData/recovery/ (the main handler re-validates the payload against
+   * `designRecoverySnapshotSchema` before writing; a malformed snapshot is
+   * rejected, never written). Delegates to `recovery:designWrite`.
+   * SAFETY: data-only - writes recovery JSON, never project files or G-code.
+   */
+  designRecoveryWrite: (snapshotJson: string) => Promise<DesignRecoveryWriteResult>
+  /**
+   * Read + schema-validate the recovery snapshot for a project, plus the
+   * mtime of the persisted design/sketch.json so the renderer can run the
+   * newer-than offer decision. Delegates to `recovery:designRead`.
+   * SAFETY: read-only.
+   */
+  designRecoveryRead: (projectDir: string) => Promise<DesignRecoveryReadResult>
+  /** Delete a project's recovery snapshot (clean save / discard). Idempotent. */
+  designRecoveryDelete: (projectDir: string) => Promise<void>
   designReadKernelManifest: (projectDir: string) => Promise<KernelManifest | null>
   designReadKernelStlBase64: (projectDir: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
   /** Pick tessellation persisted by the kernel build (task_f76b39b3): pre-placement
@@ -1040,6 +1061,9 @@ const api: Api = {
   featuresLoad: (projectDir) => ipcRenderer.invoke('features:load', projectDir),
   featuresSave: (projectDir, json) => ipcRenderer.invoke('features:save', projectDir, json),
   designSave: (projectDir, json) => ipcRenderer.invoke('design:save', projectDir, json),
+  designRecoveryWrite: (snapshotJson) => ipcRenderer.invoke('recovery:designWrite', snapshotJson),
+  designRecoveryRead: (projectDir) => ipcRenderer.invoke('recovery:designRead', projectDir),
+  designRecoveryDelete: (projectDir) => ipcRenderer.invoke('recovery:designDelete', projectDir),
   designReadKernelManifest: (projectDir) => ipcRenderer.invoke('design:readKernelManifest', projectDir),
   designReadKernelStlBase64: (projectDir) => ipcRenderer.invoke('design:readKernelStlBase64', projectDir),
   designReadKernelPickJson: (projectDir) => ipcRenderer.invoke('design:readKernelPickJson', projectDir),

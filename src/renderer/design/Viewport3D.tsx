@@ -49,6 +49,11 @@ import {
   trianglesForFace
 } from './selection-raycast'
 import {
+  shouldOpenViewportContextMenu,
+  type RightPointerDownSample,
+  type ViewportContextMenuRequest
+} from './viewport-context-menu-items'
+import {
   readGeometryPickableEdges,
   type PickableEdge
 } from './viewport3d-geometry'
@@ -63,6 +68,24 @@ type FacePick = {
 }
 
 type NavMode = 'orbit' | 'pan' | 'zoom'
+
+/**
+ * The camera actions `Viewport3D` exposes through its optional `actionsRef`
+ * prop -- the SAME handlers the HUD buttons invoke (fit-to-view, animated
+ * standard-view fly-to, perspective/orthographic swap), so external surfaces
+ * (the right-click context menu in `DesignWorkspace`) reuse them without
+ * duplicating any camera logic.
+ */
+export interface Viewport3DActions {
+  /** Frame the displayed geometry along the current view direction. */
+  readonly fitView: () => void
+  /** Animated fly-to to a standard view preset (`'iso' | 'top' | ...`). */
+  readonly standardView: (preset: StandardView) => void
+  /** Toggle perspective <-> orthographic (scale-preserving swap). */
+  readonly toggleProjection: () => void
+  /** The projection mode currently active. */
+  readonly getProjection: () => ProjectionMode
+}
 
 type Props = {
   geometry: THREE.BufferGeometry | null
@@ -177,6 +200,25 @@ type Props = {
    * Silently no-ops when absent (legacy tessellation / no edges).
    */
   highlightedEdgeId?: number | null
+  /**
+   * Fusion-style right-click context menu request. Fired on a right-button
+   * RELEASE with negligible pointer travel (<= CONTEXT_MENU_MAX_TRAVEL_PX
+   * between the recorded `pointerdown` and the `contextmenu` event, which
+   * Chromium fires at release) so OrbitControls right-DRAG panning is never
+   * interrupted -- see `viewport-context-menu-items.ts`. Carries the release
+   * position in CLIENT px; the parent (`DesignWorkspace`) anchors + renders
+   * the menu and owns dispatch. Optional + additive -- when omitted,
+   * right-click only suppresses the native browser menu (OrbitControls
+   * already claims the gesture for pan).
+   */
+  onContextMenuRequest?: (request: ViewportContextMenuRequest) => void
+  /**
+   * Imperative bridge exposing the viewport's EXISTING camera handlers (fit
+   * view / animated standard views / projection toggle) -- see
+   * {@link Viewport3DActions}. Assigned while mounted; reset to `null` on
+   * unmount. Optional + additive.
+   */
+  actionsRef?: React.MutableRefObject<Viewport3DActions | null>
 }
 
 const HOME_POS: [number, number, number] = [120, 90, 120]
@@ -1237,7 +1279,9 @@ export function Viewport3D({
   onPickPoint,
   selectionMode = 'face',
   highlightedFaceId = null,
-  highlightedEdgeId = null
+  highlightedEdgeId = null,
+  onContextMenuRequest,
+  actionsRef
 }: Props) {
   const disposed = useRef<THREE.BufferGeometry | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
@@ -1364,12 +1408,58 @@ export function Viewport3D({
     }
   }, [stable])
 
+  /* -- Fusion-style right-click context menu (viewport-context-menu-items) --
+     OrbitControls owns right-DRAG (pan), so the menu request fires only on a
+     right-button release with <= CONTEXT_MENU_MAX_TRAVEL_PX of travel between
+     the recorded pointerdown and the contextmenu event (Chromium fires
+     `contextmenu` at release). The native menu is always suppressed. */
+  const rightDownRef = useRef<RightPointerDownSample | null>(null)
+  const handleRootPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>): void => {
+    if (e.button === 2) rightDownRef.current = { x: e.clientX, y: e.clientY }
+  }, [])
+  const handleRootContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>): void => {
+      e.preventDefault()
+      const down = rightDownRef.current
+      rightDownRef.current = null
+      if (!onContextMenuRequest) return
+      if (!shouldOpenViewportContextMenu(down, { x: e.clientX, y: e.clientY })) return
+      onContextMenuRequest({ clientX: e.clientX, clientY: e.clientY })
+    },
+    [onContextMenuRequest]
+  )
+
+  /* Imperative camera-action bridge: expose the EXISTING HUD handlers to the
+     parent (right-click context menu) -- assigned while mounted, nulled on
+     unmount so a stale ref can never drive an unmounted viewport. */
+  useEffect(() => {
+    if (!actionsRef) return undefined
+    actionsRef.current = {
+      fitView: handleFitView,
+      standardView: (preset: StandardView) => {
+        const c = controlsRef.current
+        if (c) applyStandardViewAnimated(c, preset, animRef)
+      },
+      toggleProjection: handleToggleProjection,
+      getProjection: () => projection
+    }
+    return () => {
+      actionsRef.current = null
+    }
+  }, [actionsRef, handleFitView, handleToggleProjection, projection])
+
   const enableRotate = navMode === 'orbit'
   const enablePan = navMode !== 'zoom'
   const enableZoom = true
 
   return (
-    <div className="viewport-3d" role="region" aria-label="3D model viewport">
+    <div
+      className="viewport-3d"
+      role="region"
+      aria-label="3D model viewport"
+      onPointerDown={handleRootPointerDown}
+      onContextMenu={handleRootContextMenu}
+    >
       <Canvas
         camera={{ position: HOME_POS, fov: DESIGN_FOV_DEG, near: 0.5, far: 8000 }}
         dpr={[1, 2]}

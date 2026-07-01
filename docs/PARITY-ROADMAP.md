@@ -40,16 +40,23 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   cam-2d-derive contour/drill, preview mesh) — gcode-safety-verified remove-only. Collinear
   resolves 2 line-like selections → two 3-point constraints. *(done 2026-07-01, wave 1; X-key
   shortcut deferred)*
-- [ ] **Autosave + crash recovery (M)** — periodic design-session snapshot + restore-on-launch offer.
-  (Deferred from wave 1: touches DesignSessionContext concurrently with feature re-edit.)
+- ✅ **Autosave + crash recovery (M)** — the sketch design model was the fully-volatile piece
+  (lost even on route switch); now 2s-debounced + 30s-floor snapshots to userData/recovery/
+  (atomic, hashed name, Zod-gated), with a strictly-gated restore BANNER (newer-than +
+  content-differs; never auto-applied — Cycle-249 lesson pinned). *(done 2026-07-01, wave 2)*
+- [ ] **CadQuery script buffer disk persistence (S-M)** — wave-2 finding: the editor buffer's
+  "Save" only sets WorkspaceHost React state and NEVER reaches disk. Needs its own save path +
+  recovery coverage.
 
 ### Phase 2 — Selection & viewport depth
 - [ ] **Window/box select (L)** — drag-rectangle → frustum test → multi-face selection. The #1
   batch-operation friction.
 - [ ] **Edge + vertex picking (L)** — sidecar `tessellate_with_ids` must emit per-edge polylines +
   stable edge ids (faceIds pattern exists); then fillet/chamfer pick edges in-viewport.
-- [ ] **Right-click context menu in viewport (M)** — selection-aware shortcut menu (sketch-on-face,
-  fillet, shell…); command handlers already exist in design-commands.ts.
+- ✅ **Right-click context menu in viewport (M)** — selection-aware (face → sketch-on-face/shell/
+  press-pull, edge → fillet/chamfer, camera section always), items derive from the SHARED command
+  registry (`deriveViewportContextMenuItems` + `runCommand`), 5px drag threshold preserves
+  right-drag pan, full menu a11y. *(done 2026-07-01, wave 2)*
 - [ ] **Sketch over-constraint conflict naming (M)** — solver already rank-detects; surface WHICH
   constraint conflicts (highlight + HUD).
 
@@ -65,8 +72,14 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - [ ] **Multi-format design export (M)** — STEP/3MF/OBJ export beyond STL (sidecar exporters exist).
 
 ### Phase 4 — Assembly UX
-- [ ] **Motion-study playback (M)** — assembly:simulate poses already computed; apply to viewport
-  with a timeline slider.
+- ✅ **Motion-study playback (M)** — scrub slider + play/pause + joint-scalar readout; interpolated
+  poses (shortest-path angle lerp) as a view-only overlay, never persisted. Also FIXED the
+  simulate input dropping the joint kind (poses were all identical). CAVEAT: AssemblyView has no
+  live 3D mesh viewport yet — playback animates row placements/readouts; `playbackOverlay` is the
+  ready transform source when a real assembly viewport lands. *(done 2026-07-01, wave 2)*
+- [ ] **Assembly 3D viewport (M-L)** — wave-2 finding: AssemblyView's viewport column is a
+  node-safe summary placeholder, not a Three.js scene. Needed for motion playback + interference
+  to be seen, not just read.
 - [ ] **Mate list/edit/delete panel (M)** — persisted mateConstraints are invisible today.
 - [ ] **Joint limits authoring UI (S)** — schema + solver clamps done; needs min/max fields.
 - [ ] **Copy/mirror component + visibility toggles (M)**.
@@ -75,7 +88,9 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 
 ### Phase 5 — Drawings output
 - [ ] **Ordinate/baseline/chain toolbar (M)** — schema-ready; needs set-based pickers.
-- [ ] **Centerlines + center marks (S-M)** — detect arcs/circles in projection.
+- ✅ **Centerlines + center marks (S-M)** — one-click center mark (center-kind snap priority),
+  two-click centerline (chain dash, extended past anchors), associative re-anchor + dangling,
+  lossless drawing.json round-trip. *(done 2026-07-01, wave 2)*
 - [ ] **HLR for orthographic export (M)** — cadquery_hlr.py pipeline exists; add includeHlr to
   cad.project_drawing + UI toggle.
 - [ ] **Real DXF export (L)** — dimensions/GD&T/notes as DXF entities (currently frame + mesh only).

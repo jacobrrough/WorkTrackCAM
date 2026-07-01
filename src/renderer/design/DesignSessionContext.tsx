@@ -15,6 +15,10 @@ import type { DesignFileV2, SketchConstraint } from '../../shared/design-schema'
 import { emptyDesign } from '../../shared/design-schema'
 import { formatLoadRejection } from '../../shared/file-parse-errors'
 import {
+  decideRecoveryOffer,
+  type DesignRecoverySnapshot
+} from '../../shared/design-recovery'
+import {
   kernelInspectStaleReason,
   type KernelInspectStaleReason
 } from '../../shared/kernel-inspect-hash'
@@ -93,6 +97,18 @@ const KERNEL_AUTO_BUILD_DEBOUNCE_MS = 400
  */
 const DRAWING_SAVE_DEBOUNCE_MS = 400
 
+/**
+ * AUTOSAVE + CRASH RECOVERY (Phase 1, docs/PARITY-ROADMAP.md). A sketch edit
+ * schedules a recovery-snapshot write this many ms after the LAST edit (a
+ * drawing burst coalesces into one write), and the periodic floor guarantees
+ * a dirty session is snapshotted at least this often even while the operator
+ * keeps editing continuously (each edit resets the debounce timer, so the
+ * floor is what bounds worst-case loss). Snapshot writes go to
+ * userData/recovery/ via `recovery:designWrite` and NEVER touch React state.
+ */
+const DESIGN_RECOVERY_DEBOUNCE_MS = 2000
+const DESIGN_RECOVERY_PERIODIC_FLOOR_MS = 30_000
+
 const kernelFinishingOpKinds = new Set<KernelPostSolidOp['kind']>([
   'fillet_all',
   'fillet_select',
@@ -136,6 +152,15 @@ export function designLoadKey(
   return projectDir === null ? null : JSON.stringify([projectDir, designDiskRevision ?? 0])
 }
 
+
+/**
+ * Display metadata for a pending crash-recovery offer (the snapshot itself
+ * stays in a provider ref so the large design payload never churns renders).
+ */
+export type DesignRecoveryOffer = {
+  savedAtMs: number
+  entityCount: number
+}
 
 export type DesignSelection =
   | { scope: 'feature'; id: string }
@@ -261,6 +286,18 @@ export type DesignSessionValue = {
    * is deleted. Persists. No-op without an open project.
    */
   onDrawingDeleteSheet: (sheetId: string) => void
+  /**
+   * AUTOSAVE + CRASH RECOVERY - non-null while a recovery snapshot NEWER than
+   * the persisted sketch is on offer for the open project. The banner renders
+   * from this; restoring is ALWAYS an explicit user action (Cycle-249 rule:
+   * no effect may replace in-memory design state). Optional so existing
+   * hand-built test session values stay valid (additive change).
+   */
+  recoveryOffer?: DesignRecoveryOffer | null
+  /** Apply the offered snapshot to the in-memory design (undoable edit). */
+  restoreRecoveredDesign?: () => void
+  /** Dismiss the offer and delete the snapshot file. */
+  discardRecoveredDesign?: () => void
   onStatus?: (msg: string) => void
   onExportedStl?: (path: string) => void
 }
@@ -336,6 +373,20 @@ export function DesignSessionProvider({
   const kernelBuildInFlightRef = useRef(false)
   const kernelRebuildPendingRef = useRef(false)
   const lastBuiltTimelineSigRef = useRef<string | null>(null)
+  // -- AUTOSAVE + CRASH RECOVERY state ------------------------------------
+  // `recoveryOffer` drives the restore banner; the offered snapshot lives in
+  // `recoverySnapshotRef` until the operator explicitly restores or discards.
+  // `lastPersistedDesignJsonRef` is the dirty baseline: the JSON of the design
+  // as last LOADED from or SAVED to design/sketch.json. null = baseline
+  // unknown (sketch.json failed to load) - then we neither snapshot NOR
+  // delete, so a possibly-valuable existing recovery file is preserved.
+  const [recoveryOffer, setRecoveryOffer] = useState<DesignRecoveryOffer | null>(null)
+  const recoverySnapshotRef = useRef<DesignRecoverySnapshot | null>(null)
+  const lastPersistedDesignJsonRef = useRef<string | null>(null)
+  const lastRecoveryWriteMsRef = useRef(0)
+  // One recovery-offer check per open project (the anti-clobber key pattern:
+  // a re-render re-firing the effect can never re-run the read or the offer).
+  const lastRecoveryOfferKeyRef = useRef<string | null>(null)
 
   const fab = window.fab
 
@@ -406,6 +457,7 @@ export function DesignSessionProvider({
   useEffect(() => {
     if (!projectDir) {
       lastDesignLoadKeyRef.current = null
+      lastPersistedDesignJsonRef.current = null
       dispatch({ type: 'replace', design: emptyDesign() })
       setLoaded(false)
       setFeatures(null)
@@ -426,9 +478,17 @@ export function DesignSessionProvider({
       if (cancelled) return
       const errs: string[] = []
       if (dr.status === 'fulfilled') {
-        dispatch({ type: 'replace', design: dr.value ?? emptyDesign() })
+        const loadedDesign = dr.value ?? emptyDesign()
+        // AUTOSAVE baseline: memory now matches disk (or a fresh empty design
+        // when no sketch.json exists yet); dirty checks compare against this.
+        lastPersistedDesignJsonRef.current = JSON.stringify(loadedDesign)
+        dispatch({ type: 'replace', design: loadedDesign })
       } else {
         errs.push(formatLoadRejection('design/sketch.json', dr.reason))
+        // Load FAILED (unreadable sketch.json, not merely absent): baseline
+        // unknown. Never snapshot the empty fallback over a possibly-valuable
+        // recovery file, and never delete one on teardown.
+        lastPersistedDesignJsonRef.current = null
         dispatch({ type: 'replace', design: emptyDesign() })
       }
       if (fr.status === 'fulfilled') {
@@ -504,6 +564,157 @@ export function DesignSessionProvider({
       cancelled = true
     }
   }, [fab, projectDir])
+
+  // -- AUTOSAVE + CRASH RECOVERY --------------------------------------------
+  //
+  // The in-memory `design` (sketch entities / points / constraints /
+  // parameters / dimensions / plane / extrude settings) is the session's ONLY
+  // fully volatile state: kernel-op gestures persist immediately through
+  // commitKernelFeatures, drawing edits persist behind a 400 ms debounce +
+  // unmount flush, but sketch edits reach disk only on an explicit Save, a
+  // kernel build, or a DXF import. A crash between edits and Save lost them
+  // (Fusion-parity gap). The machinery below snapshots the dirty design to
+  // userData/recovery/ (debounced after each edit + a periodic floor), offers
+  // a restore ONCE per project-open when a newer-than-disk snapshot exists,
+  // and deletes the snapshot on every clean save. CRITICAL (Cycle-249):
+  // NOTHING here ever replaces in-memory state - snapshot writes are
+  // fire-and-forget, and the restore runs only inside the explicit
+  // `restoreRecoveredDesign` user action. All effects below depend ONLY on
+  // stable primitives (fab / projectDir / loaded / design) - never callbacks.
+
+  // Write the snapshot NOW if (and only if) the design is dirty. Reads
+  // everything through refs so the identity is stable and timer/unmount
+  // callers always capture the freshest design. Guarded on the bridge
+  // function existing so older partial `fab` test mocks stay harmless.
+  const writeDesignRecoveryNow = useCallback((): void => {
+    const dir = projectDirRef.current
+    if (!dir || typeof fab.designRecoveryWrite !== 'function') return
+    const baseline = lastPersistedDesignJsonRef.current
+    if (baseline === null) return
+    const liveJson = JSON.stringify(designRef.current)
+    if (liveJson === baseline) return
+    lastRecoveryWriteMsRef.current = Date.now()
+    const snapshot: DesignRecoverySnapshot = {
+      version: 1,
+      projectDir: dir,
+      savedAtMs: Date.now(),
+      design: designRef.current
+    }
+    void fab.designRecoveryWrite(JSON.stringify(snapshot)).catch(() => {})
+  }, [fab])
+  const writeDesignRecoveryNowRef = useRef(writeDesignRecoveryNow)
+  useEffect(() => {
+    writeDesignRecoveryNowRef.current = writeDesignRecoveryNow
+  }, [writeDesignRecoveryNow])
+
+  // Restore-offer check: ONCE per loaded project, read the recovery snapshot
+  // and run the pure decideRecoveryOffer gate (newer-than-disk + genuinely
+  // different content). On offer, stash the snapshot in a ref and surface
+  // banner metadata. NEVER dispatches into the design reducer.
+  useEffect(() => {
+    if (!projectDir || !loaded) {
+      setRecoveryOffer(null)
+      recoverySnapshotRef.current = null
+      if (!projectDir) lastRecoveryOfferKeyRef.current = null
+      return
+    }
+    if (lastRecoveryOfferKeyRef.current === projectDir) return
+    lastRecoveryOfferKeyRef.current = projectDir
+    if (typeof fab.designRecoveryRead !== 'function') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const read = await fab.designRecoveryRead(projectDir)
+        if (cancelled) return
+        const decision = decideRecoveryOffer(read, {
+          projectDir,
+          loadedDesign: designRef.current
+        })
+        if (!decision.offer) return
+        recoverySnapshotRef.current = decision.snapshot
+        setRecoveryOffer({
+          savedAtMs: decision.snapshot.savedAtMs,
+          entityCount: decision.snapshot.design.entities.length
+        })
+      } catch {
+        // Recovery is best-effort; a failed read never blocks project open.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fab, projectDir, loaded])
+
+  // Debounced-after-edit snapshot: every dirty design change re-arms a short
+  // timer; the trailing write captures the freshest state via the ref.
+  useEffect(() => {
+    if (!projectDir || !loaded) return
+    const baseline = lastPersistedDesignJsonRef.current
+    if (baseline === null || JSON.stringify(design) === baseline) return
+    const handle = setTimeout(() => {
+      writeDesignRecoveryNowRef.current()
+    }, DESIGN_RECOVERY_DEBOUNCE_MS)
+    return () => {
+      clearTimeout(handle)
+    }
+  }, [projectDir, loaded, design])
+
+  // Periodic floor: continuous editing keeps resetting the debounce timer, so
+  // this interval bounds worst-case loss to the floor window while dirty
+  // (writeDesignRecoveryNow no-ops when clean).
+  useEffect(() => {
+    if (!projectDir || !loaded) return
+    const interval = setInterval(() => {
+      if (Date.now() - lastRecoveryWriteMsRef.current < DESIGN_RECOVERY_PERIODIC_FLOOR_MS) return
+      writeDesignRecoveryNowRef.current()
+    }, DESIGN_RECOVERY_PERIODIC_FLOOR_MS)
+    return () => {
+      clearInterval(interval)
+    }
+  }, [projectDir, loaded])
+
+  // Teardown flush: a route switch away from Design unmounts this provider and
+  // DROPS the reducer state - flush one final snapshot when dirty so the work
+  // is offered back on the next mount; when clean, delete the now-redundant
+  // snapshot (the on-quit half of delete-on-clean-quit; the on-save half lives
+  // in saveDesign/buildKernelPart).
+  useEffect(() => {
+    return () => {
+      const dir = projectDirRef.current
+      const baseline = lastPersistedDesignJsonRef.current
+      if (!dir || baseline === null) return
+      if (JSON.stringify(designRef.current) !== baseline) {
+        writeDesignRecoveryNowRef.current()
+      } else {
+        const bridge = window.fab
+        if (bridge && typeof bridge.designRecoveryDelete === 'function') {
+          void bridge.designRecoveryDelete(dir).catch(() => {})
+        }
+      }
+    }
+  }, [])
+
+  // EXPLICIT user action - the ONLY code path that applies a recovery
+  // snapshot to the in-memory design (never an effect; Cycle-249 contract).
+  // Dispatched as an `edit` so the pre-restore design lands on the undo
+  // stack: Ctrl+Z reverts the restore.
+  const restoreRecoveredDesign = useCallback((): void => {
+    const snap = recoverySnapshotRef.current
+    if (!snap) return
+    dispatch({ type: 'edit', design: cloneDesign(snap.design) })
+    recoverySnapshotRef.current = null
+    setRecoveryOffer(null)
+    onStatusRef.current?.('Recovered unsaved design changes - Save to keep them.')
+  }, [])
+
+  const discardRecoveredDesign = useCallback((): void => {
+    recoverySnapshotRef.current = null
+    setRecoveryOffer(null)
+    const dir = projectDirRef.current
+    if (dir && typeof fab.designRecoveryDelete === 'function') {
+      void fab.designRecoveryDelete(dir).catch(() => {})
+    }
+  }, [fab])
 
   const geometry = useMemo(() => {
     const g = buildExtrudedGeometry(design)
@@ -658,7 +869,18 @@ export function DesignSessionProvider({
     try {
       // Sync the BASE sketch to disk so build_part.py reads the current profiles.
       try {
-        await fab.designSave(projectDir, JSON.stringify(design))
+        const designJson = JSON.stringify(design)
+        await fab.designSave(projectDir, designJson)
+        // AUTOSAVE baseline: this closure's design is now persisted. Drop the
+        // recovery snapshot only when the LIVE design matches what was just
+        // saved (an edit made mid-build stays protected until its own save).
+        lastPersistedDesignJsonRef.current = designJson
+        if (
+          JSON.stringify(designRef.current) === designJson &&
+          typeof fab.designRecoveryDelete === 'function'
+        ) {
+          void fab.designRecoveryDelete(projectDir).catch(() => {})
+        }
       } catch (e) {
         onStatus?.(e instanceof Error ? e.message : String(e))
         return
@@ -994,7 +1216,14 @@ export function DesignSessionProvider({
   const saveDesign = useCallback(async () => {
     if (!projectDir) return
     try {
-      await fab.designSave(projectDir, JSON.stringify(design))
+      const designJson = JSON.stringify(design)
+      await fab.designSave(projectDir, designJson)
+      // Clean save: disk now matches this design - move the autosave baseline
+      // and delete the recovery snapshot (it protects nothing anymore).
+      lastPersistedDesignJsonRef.current = designJson
+      if (typeof fab.designRecoveryDelete === 'function') {
+        void fab.designRecoveryDelete(projectDir).catch(() => {})
+      }
       const derived = derivePartFeatures(design, features)
       await fab.featuresSave(projectDir, JSON.stringify(derived))
       setFeatures(derived)
@@ -1436,6 +1665,9 @@ export function DesignSessionProvider({
       setKernelRollbackMarker,
       updateFeatureSuppressed,
       solveReport,
+      recoveryOffer,
+      restoreRecoveredDesign,
+      discardRecoveredDesign,
       drawing,
       onDrawingChange,
       drawingWorkspace,
@@ -1462,6 +1694,9 @@ export function DesignSessionProvider({
       buildKernelPart,
       selection,
       solveReport,
+      recoveryOffer,
+      restoreRecoveredDesign,
+      discardRecoveredDesign,
       onDesignChange,
       saveDesign,
       exportStl,

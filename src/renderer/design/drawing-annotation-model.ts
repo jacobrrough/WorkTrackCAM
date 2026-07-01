@@ -40,6 +40,8 @@
  */
 
 import type {
+  DrawingCenterMark,
+  DrawingCenterline,
   DrawingDimension,
   DrawingDimensionAnchor,
   DrawingLinearOrientation,
@@ -842,4 +844,361 @@ export function composeNotesIntoSvg(
 /** Test whether a note has a live associative leader link. Pure. */
 export function isAssociativeNote(note: DrawingNote): boolean {
   return note.leader !== undefined && note.leader.refId !== FREE_ANCHOR_REF_ID
+}
+
+// ---------------------------------------------------------------------------
+// Center marks + centerlines (drafting crosshair + chain-dashed line)
+// ---------------------------------------------------------------------------
+//
+// Both annotations follow the SAME persistence + associativity pattern as
+// notes / surface-finish symbols: anchored to snap points via
+// `drawingDimensionAnchorSchema` (`refId` live link + `cachedPoint` fallback),
+// re-resolved against fresh geometry on every re-projection (dangling badge),
+// and composed into the drawing CLIENT-SIDE as pure SVG `<g>` overlays.
+// Neither carries free text -- every emitted attribute is a number or an
+// internally-minted id -- so (unlike notes) there is no Safety-Rule-4 escaping
+// surface here, though ids are still escaped defensively (a hydrated
+// drawing.json could carry an arbitrary string id).
+//
+// Safety Rule 1 still holds: documentation overlays only -- nothing here is
+// read by CAM / G-code / post-processing.
+
+/**
+ * Monotonic-ish unique id for a freshly placed center mark. Mirrors
+ * `makeNoteId`. Opaque -- only equality matters.
+ */
+let centerMarkIdCounter = 0
+export function makeCenterMarkId(): string {
+  centerMarkIdCounter += 1
+  return `cmark:${Date.now().toString(36)}:${centerMarkIdCounter.toString(36)}`
+}
+
+/** Monotonic-ish unique id for a freshly placed centerline. */
+let centerlineIdCounter = 0
+export function makeCenterlineId(): string {
+  centerlineIdCounter += 1
+  return `cline:${Date.now().toString(36)}:${centerlineIdCounter.toString(36)}`
+}
+
+/** Default crosshair half-extent (SVG-mm) for a freshly placed center mark. */
+export const DEFAULT_CENTER_MARK_SIZE_MM = 3
+
+/**
+ * Standard drafting proportions of the center-mark crosshair, as fractions of
+ * `sizeMm` (the half-extent). Each leg is drawn as ONE line of length
+ * `2 x sizeMm` with a five-entry dash pattern -- long leg, gap, short center
+ * dash (straddling the center exactly), gap, long leg -- whose entries sum to
+ * the full line length so the pattern paints exactly once:
+ * 0.7 + 0.15 + 0.3 + 0.15 + 0.7 = 2.
+ */
+export const CENTER_MARK_LONG_RATIO = 0.7
+export const CENTER_MARK_GAP_RATIO = 0.15
+export const CENTER_MARK_CENTER_DASH_RATIO = 0.3
+
+/** How far (SVG-mm) a centerline extends past each of its two anchors. */
+export const CENTERLINE_EXTENSION_MM = 3
+
+/**
+ * ISO / ASME chain (center) line dash pattern: long dash, gap, short dash,
+ * gap -- repeating. SVG-mm units.
+ */
+export const CENTERLINE_DASH_PATTERN = '6 1.5 1.5 1.5'
+
+/**
+ * Build an anchored {@link DrawingCenterMark} from a single resolved placement
+ * click (typically snapped to a `center`-kind snap point -- the hole / bore /
+ * arc center). A free click mints a free (non-associative) mark at the cursor
+ * point -- honest placement, never fabricated geometry. `sizeMm` falls back to
+ * {@link DEFAULT_CENTER_MARK_SIZE_MM}; a non-finite / non-positive override is
+ * coerced to the default so the schema (`positive()`) always accepts the
+ * result. Pure aside from id minting.
+ */
+export function buildCenterMark(
+  click: ResolvedClick,
+  options?: { readonly sizeMm?: number }
+): DrawingCenterMark {
+  const requested = options?.sizeMm
+  const sizeMm =
+    requested !== undefined && Number.isFinite(requested) && requested > 0
+      ? requested
+      : DEFAULT_CENTER_MARK_SIZE_MM
+  return {
+    id: makeCenterMarkId(),
+    anchor: anchorFromClick(click),
+    sizeMm
+  }
+}
+
+/**
+ * Build an anchored {@link DrawingCenterline} from the two resolved clicks of
+ * the two-click placement flow (first click = `start`, second = `end`). Either
+ * click may be free (empty refId) -- a free endpoint is associative-inert and
+ * never dangles. Pure aside from id minting.
+ */
+export function buildCenterline(start: ResolvedClick, end: ResolvedClick): DrawingCenterline {
+  return {
+    id: makeCenterlineId(),
+    start: anchorFromClick(start),
+    end: anchorFromClick(end)
+  }
+}
+
+/** Remove one center mark by id (per-item delete affordance). Pure -- new list, inputs untouched. */
+export function removeCenterMark(
+  marks: readonly DrawingCenterMark[],
+  id: string
+): DrawingCenterMark[] {
+  return marks.filter((m) => m.id !== id)
+}
+
+/** Remove one centerline by id (per-item delete affordance). Pure -- new list, inputs untouched. */
+export function removeCenterline(
+  lines: readonly DrawingCenterline[],
+  id: string
+): DrawingCenterline[] {
+  return lines.filter((l) => l.id !== id)
+}
+
+/**
+ * A center mark re-resolved against fresh geometry, paired with whether its
+ * anchor lost its link. (Mirrors `ReanchoredNote`.)
+ */
+export interface ReanchoredCenterMark {
+  /** The mark with a resolved anchor's `cachedPoint` refreshed. */
+  readonly mark: DrawingCenterMark
+  /** `true` when the associative anchor `refId` no longer resolves. */
+  readonly dangling: boolean
+}
+
+/**
+ * Re-resolve one persisted center mark's anchor against the fresh snap index.
+ * A resolved anchor refreshes its `cachedPoint` (the mark draws AT the anchor,
+ * so nothing else moves); a dangling anchor keeps the stale coordinate as the
+ * graceful fallback; a free anchor never dangles. Pure -- returns a new mark;
+ * the input is never mutated.
+ */
+export function reanchorCenterMark(
+  mark: DrawingCenterMark,
+  index: ReadonlyMap<string, { readonly x: number; readonly y: number }>
+): ReanchoredCenterMark {
+  const { anchor, status } = resolveAnchor(mark.anchor, index)
+  return { mark: { ...mark, anchor }, dangling: status === 'dangling' }
+}
+
+/**
+ * Re-resolve a whole list of persisted center marks against a fresh snap-point
+ * list. Returns the refreshed marks plus the set of ids that are now
+ * `dangling`. Pure. The exact sibling of `reanchorNotes`.
+ */
+export function reanchorCenterMarks(
+  marks: readonly DrawingCenterMark[],
+  snapPoints: readonly FreshSnapPoint[]
+): { centerMarks: DrawingCenterMark[]; danglingIds: ReadonlySet<string> } {
+  const index = buildSnapIndex(snapPoints)
+  const out: DrawingCenterMark[] = []
+  const danglingIds = new Set<string>()
+  for (const mark of marks) {
+    const { mark: next, dangling } = reanchorCenterMark(mark, index)
+    out.push(next)
+    if (dangling) danglingIds.add(next.id)
+  }
+  return { centerMarks: out, danglingIds }
+}
+
+/**
+ * A centerline re-resolved against fresh geometry, paired with whether EITHER
+ * endpoint anchor lost its link.
+ */
+export interface ReanchoredCenterline {
+  /** The centerline with every resolved anchor's `cachedPoint` refreshed. */
+  readonly centerline: DrawingCenterline
+  /** `true` when at least one associative endpoint `refId` no longer resolves. */
+  readonly dangling: boolean
+}
+
+/**
+ * Re-resolve one persisted centerline's two endpoint anchors against the fresh
+ * snap index. Each resolved anchor refreshes its `cachedPoint`; a dangling
+ * anchor keeps the stale coordinate; free anchors never dangle. The line is
+ * `dangling` when EITHER associative endpoint lost its link. Pure.
+ */
+export function reanchorCenterline(
+  line: DrawingCenterline,
+  index: ReadonlyMap<string, { readonly x: number; readonly y: number }>
+): ReanchoredCenterline {
+  const start = resolveAnchor(line.start, index)
+  const end = resolveAnchor(line.end, index)
+  return {
+    centerline: { ...line, start: start.anchor, end: end.anchor },
+    dangling: start.status === 'dangling' || end.status === 'dangling'
+  }
+}
+
+/**
+ * Re-resolve a whole list of persisted centerlines against a fresh snap-point
+ * list. Returns the refreshed lines plus the set of ids that are now
+ * `dangling`. Pure. The exact sibling of `reanchorCenterMarks`.
+ */
+export function reanchorCenterlines(
+  lines: readonly DrawingCenterline[],
+  snapPoints: readonly FreshSnapPoint[]
+): { centerlines: DrawingCenterline[]; danglingIds: ReadonlySet<string> } {
+  const index = buildSnapIndex(snapPoints)
+  const out: DrawingCenterline[] = []
+  const danglingIds = new Set<string>()
+  for (const line of lines) {
+    const { centerline: next, dangling } = reanchorCenterline(line, index)
+    out.push(next)
+    if (dangling) danglingIds.add(next.id)
+  }
+  return { centerlines: out, danglingIds }
+}
+
+// ---------------------------------------------------------------------------
+// Center-mark / centerline SVG emitters (client-side composition)
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit one center mark as a self-contained SVG `<g>` fragment: two
+ * perpendicular chain-dashed lines crossing at `anchor.cachedPoint`, each of
+ * total length `2 x sizeMm`, dashed with the standard drafting long / gap /
+ * short-center-dash / gap / long pattern (see the `CENTER_MARK_*_RATIO`
+ * constants -- the entries sum to the line length so the pattern paints
+ * exactly once, with the short dash straddling the center).
+ *
+ * The fragment carries `data-center-mark-id` and, when `dangling`, the
+ * `drawing-center-mark--dangling` class + `data-center-mark-dangling="true"`
+ * + halved stroke opacity (the note dangling-badge analogue). `currentColor`
+ * styling throughout. Coordinates are SVG-mm sheet space. Pure: same input ->
+ * byte-identical output.
+ */
+export function centerMarkToSvg(
+  mark: DrawingCenterMark,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const x = mark.anchor.cachedPoint.x
+  const y = mark.anchor.cachedPoint.y
+  const s = mark.sizeMm
+  const dash = [
+    CENTER_MARK_LONG_RATIO * s,
+    CENTER_MARK_GAP_RATIO * s,
+    CENTER_MARK_CENTER_DASH_RATIO * s,
+    CENTER_MARK_GAP_RATIO * s,
+    CENTER_MARK_LONG_RATIO * s
+  ]
+    .map(svgNum)
+    .join(' ')
+  const opacity = dangling ? ' stroke-opacity="0.5"' : ''
+  const lineCommon = `fill="none" stroke="currentColor" stroke-width="0.25" stroke-dasharray="${dash}"${opacity}`
+  const horizontal = `<line ${lineCommon} x1="${svgNum(x - s)}" y1="${svgNum(y)}" x2="${svgNum(x + s)}" y2="${svgNum(y)}" />`
+  const vertical = `<line ${lineCommon} x1="${svgNum(x)}" y1="${svgNum(y - s)}" x2="${svgNum(x)}" y2="${svgNum(y + s)}" />`
+  const cls = dangling
+    ? 'drawing-center-mark drawing-center-mark--dangling'
+    : 'drawing-center-mark'
+  const danglingAttr = dangling ? ' data-center-mark-dangling="true"' : ''
+  return `<g class="${cls}" data-center-mark-id="${escapeSvgText(mark.id)}"${danglingAttr}>${horizontal}${vertical}</g>`
+}
+
+/**
+ * Emit one centerline as a self-contained SVG `<g>` fragment: a single
+ * chain-dashed ({@link CENTERLINE_DASH_PATTERN}) line through both anchors,
+ * extended {@link CENTERLINE_EXTENSION_MM} past each end along the line
+ * direction (the drafting convention -- a centerline overshoots the features
+ * it relates). A degenerate zero-length line falls back to the +x direction so
+ * the emitted geometry stays valid. Dangling: modifier class + data attr +
+ * halved stroke opacity. `currentColor` styling. Pure.
+ */
+export function centerlineToSvg(
+  line: DrawingCenterline,
+  options?: { readonly dangling?: boolean }
+): string {
+  const dangling = options?.dangling === true
+  const a = line.start.cachedPoint
+  const b = line.end.cachedPoint
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  const ux = len === 0 ? 1 : dx / len
+  const uy = len === 0 ? 0 : dy / len
+  const x1 = a.x - ux * CENTERLINE_EXTENSION_MM
+  const y1 = a.y - uy * CENTERLINE_EXTENSION_MM
+  const x2 = b.x + ux * CENTERLINE_EXTENSION_MM
+  const y2 = b.y + uy * CENTERLINE_EXTENSION_MM
+  const opacity = dangling ? ' stroke-opacity="0.5"' : ''
+  const cls = dangling ? 'drawing-centerline drawing-centerline--dangling' : 'drawing-centerline'
+  const danglingAttr = dangling ? ' data-centerline-dangling="true"' : ''
+  return `<g class="${cls}" data-centerline-id="${escapeSvgText(line.id)}"${danglingAttr}><line fill="none" stroke="currentColor" stroke-width="0.25" stroke-dasharray="${CENTERLINE_DASH_PATTERN}"${opacity} x1="${svgNum(x1)}" y1="${svgNum(y1)}" x2="${svgNum(x2)}" y2="${svgNum(y2)}" /></g>`
+}
+
+/**
+ * Compose every center mark into one `<g class="drawing-center-mark-layer">`
+ * fragment (render order preserved), badging any mark whose id is in
+ * `danglingIds`. Empty string when there are no marks. Pure.
+ */
+export function centerMarksLayerSvg(
+  marks: readonly DrawingCenterMark[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  if (marks.length === 0) return ''
+  const inner = marks
+    .map((m) => centerMarkToSvg(m, { dangling: danglingIds?.has(m.id) === true }))
+    .join('')
+  return `<g class="drawing-center-mark-layer" data-testid="design-drawing-center-mark-layer">${inner}</g>`
+}
+
+/**
+ * Compose every centerline into one `<g class="drawing-centerline-layer">`
+ * fragment (render order preserved), badging any line whose id is in
+ * `danglingIds`. Empty string when there are no lines. Pure.
+ */
+export function centerlinesLayerSvg(
+  lines: readonly DrawingCenterline[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  if (lines.length === 0) return ''
+  const inner = lines
+    .map((l) => centerlineToSvg(l, { dangling: danglingIds?.has(l.id) === true }))
+    .join('')
+  return `<g class="drawing-centerline-layer" data-testid="design-drawing-centerline-layer">${inner}</g>`
+}
+
+/**
+ * Splice the center-mark `<g>` layer into an existing projection SVG, just
+ * before the closing `</svg>` (appended when the close tag is missing --
+ * defensive). Unchanged input when there are no marks. Pure. (Mirrors
+ * `composeNotesIntoSvg`.)
+ */
+export function composeCenterMarksIntoSvg(
+  svg: string,
+  marks: readonly DrawingCenterMark[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  const layer = centerMarksLayerSvg(marks, danglingIds)
+  if (layer === '') return svg
+  const closeIdx = svg.lastIndexOf('</svg>')
+  if (closeIdx === -1) return svg + layer
+  return svg.slice(0, closeIdx) + layer + svg.slice(closeIdx)
+}
+
+/**
+ * Splice the centerline `<g>` layer into an existing projection SVG, just
+ * before the closing `</svg>` (appended when the close tag is missing --
+ * defensive). Unchanged input when there are no lines. Pure.
+ */
+export function composeCenterlinesIntoSvg(
+  svg: string,
+  lines: readonly DrawingCenterline[],
+  danglingIds?: ReadonlySet<string>
+): string {
+  const layer = centerlinesLayerSvg(lines, danglingIds)
+  if (layer === '') return svg
+  const closeIdx = svg.lastIndexOf('</svg>')
+  if (closeIdx === -1) return svg + layer
+  return svg.slice(0, closeIdx) + layer + svg.slice(closeIdx)
+}
+
+/** Test whether a center mark has a live associative anchor link. Pure. */
+export function isAssociativeCenterMark(mark: DrawingCenterMark): boolean {
+  return mark.anchor.refId !== FREE_ANCHOR_REF_ID
 }

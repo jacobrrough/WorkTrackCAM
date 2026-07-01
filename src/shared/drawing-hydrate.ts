@@ -48,6 +48,8 @@ import {
 import {
   emptyDrawingSheetAnnotations,
   type DrawingBomRow,
+  type DrawingCenterMark,
+  type DrawingCenterline,
   type DrawingDimension,
   type DrawingNote,
   type DrawingRevision,
@@ -83,8 +85,9 @@ export const PRIMARY_DRAWING_SHEET_NAME = 'Drawing'
  *   - `dimensions`          — associative 2D dimensions (`sheet.annotations.dimensions`).
  *   - `featureControlFrames`— GD&T feature control frames (`sheet.annotations.featureControlFrames`).
  *   - `titleBlock`          — title-block metadata (`sheet.titleBlock`).
- *   - `notes` / `revisions` / `bom` — the remaining annotation arrays, preserved
- *     verbatim so a round-trip is lossless even before the UI edits them.
+ *   - `notes` / `centerMarks` / `centerlines` / `revisions` / `bom` — the
+ *     remaining annotation arrays, preserved verbatim so a round-trip is
+ *     lossless even before / beyond what the UI edits.
  */
 export type DrawingViewState = {
   readonly dimensions: readonly DrawingDimension[]
@@ -92,6 +95,8 @@ export type DrawingViewState = {
   readonly surfaceFinishes: readonly SurfaceFinishSymbol[]
   readonly titleBlock: DrawingTitleBlock
   readonly notes: readonly DrawingNote[]
+  readonly centerMarks: readonly DrawingCenterMark[]
+  readonly centerlines: readonly DrawingCenterline[]
   readonly revisions: readonly DrawingRevision[]
   readonly bom: readonly DrawingBomRow[]
 }
@@ -104,6 +109,8 @@ export function emptyDrawingViewState(): DrawingViewState {
     surfaceFinishes: [],
     titleBlock: emptyDrawingTitleBlock(),
     notes: [],
+    centerMarks: [],
+    centerlines: [],
     revisions: [],
     bom: []
   }
@@ -152,6 +159,8 @@ export function foldDrawingState(
     featureControlFrames: [...state.featureControlFrames],
     surfaceFinishes: [...state.surfaceFinishes],
     notes: [...state.notes],
+    centerMarks: [...state.centerMarks],
+    centerlines: [...state.centerlines],
     revisions: [...state.revisions],
     bom: [...state.bom]
   }
@@ -229,6 +238,8 @@ function sheetToViewState(sheet: DrawingSheet | undefined): DrawingViewState {
     surfaceFinishes: annotations.surfaceFinishes,
     titleBlock,
     notes: annotations.notes,
+    centerMarks: annotations.centerMarks,
+    centerlines: annotations.centerlines,
     revisions: annotations.revisions,
     bom: annotations.bom
   }

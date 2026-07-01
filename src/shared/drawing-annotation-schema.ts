@@ -360,6 +360,53 @@ export const drawingNoteSchema = z.object({
 export type DrawingNote = z.infer<typeof drawingNoteSchema>
 
 // ---------------------------------------------------------------------------
+// Center marks + centerlines
+// ---------------------------------------------------------------------------
+
+/**
+ * A center mark: the standard drafting crosshair (+) stamped on a hole / bore /
+ * arc center. `anchor` is the associative link to the snapped feature
+ * (typically a `center`-kind snap point from `drawing-snap.ts`); the mark is
+ * DRAWN at `anchor.cachedPoint`, so no separate placement field is needed --
+ * the mark rides its feature on rebuild and degrades gracefully (dangling,
+ * drawn from the stale cachedPoint) when the feature vanishes.
+ *
+ * `sizeMm` is the crosshair half-extent in SVG-mm (each leg runs +/-sizeMm from
+ * the center). Positive + finite so the emitted geometry is always valid.
+ *
+ * Additive (Safety Rule 2): lives in a new `.default([])` array on
+ * {@link drawingSheetAnnotationsSchema}, so a legacy `drawing.json` parses
+ * unchanged. No free text reaches markup -- every field is an id or a number,
+ * so there is no Safety-Rule-4 escaping surface on this annotation.
+ */
+export const drawingCenterMarkSchema = z.object({
+  id: z.string(),
+  /** Feature the mark is attached to (associative; typically an arc/circle center). */
+  anchor: drawingDimensionAnchorSchema,
+  /** Crosshair half-extent in SVG-mm (legs run +/-sizeMm from the center). */
+  sizeMm: z.number().finite().positive()
+})
+
+export type DrawingCenterMark = z.infer<typeof drawingCenterMarkSchema>
+
+/**
+ * A centerline between two features: the standard chain-dashed
+ * (long-short-long) line drawn through `start` and `end`, extended slightly
+ * past both anchors by the renderer. Both endpoints are associative anchors
+ * ({@link drawingDimensionAnchorSchema}) with the usual `cachedPoint` fallback,
+ * so the line re-resolves against fresh geometry on rebuild and is flagged
+ * dangling when either endpoint's feature is gone. No free text -- no
+ * Safety-Rule-4 escaping surface.
+ */
+export const drawingCenterlineSchema = z.object({
+  id: z.string(),
+  start: drawingDimensionAnchorSchema,
+  end: drawingDimensionAnchorSchema
+})
+
+export type DrawingCenterline = z.infer<typeof drawingCenterlineSchema>
+
+// ---------------------------------------------------------------------------
 // Revision history
 // ---------------------------------------------------------------------------
 
@@ -414,12 +461,19 @@ export type DrawingBomRow = z.infer<typeof drawingBomRowSchema>
  * existing `drawing.json` (saved before surface-finish symbols existed) parses
  * unchanged and gains an empty surface-finish array in memory (Safety Rule 2 —
  * additive, no version bump, no migration).
+ *
+ * `centerMarks` / `centerlines` are the drafting center-mark (+) and
+ * chain-dashed centerline layers, added with the same `.default([])` pattern
+ * so a legacy `drawing.json` (saved before they existed) parses unchanged
+ * (Safety Rule 2 -- additive, no version bump, no migration).
  */
 export const drawingSheetAnnotationsSchema = z.object({
   dimensions: z.array(drawingDimensionSchema).default([]),
   featureControlFrames: z.array(gdtFeatureControlFrameSchema).default([]),
   surfaceFinishes: z.array(surfaceFinishSymbolSchema).default([]),
   notes: z.array(drawingNoteSchema).default([]),
+  centerMarks: z.array(drawingCenterMarkSchema).default([]),
+  centerlines: z.array(drawingCenterlineSchema).default([]),
   revisions: z.array(drawingRevisionSchema).default([]),
   bom: z.array(drawingBomRowSchema).default([])
 })

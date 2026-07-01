@@ -610,6 +610,45 @@
   width: 1%;
   white-space: nowrap;
 }
+/* Motion-study playback bar (AssemblyView) — scrub + Play/Pause + read-out.
+   VIEW-layer overlay controls; reuses the .btn primitives for the buttons so
+   only the bar frame, scrub, and read-out need rules here. */
+.design-assembly__playback {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+.design-assembly__playback-scrub {
+  flex: 1 1 auto;
+  min-width: 120px;
+  accent-color: var(--accent);
+}
+.design-assembly__playback-readout {
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.design-assembly__playback-hint {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+}
+.design-assembly__playback-quality {
+  font-size: var(--text-sm);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.design-assembly__viewport-playback-note {
+  margin-top: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
 .assembly-mate-panel__deferred {
   margin: var(--sp-4) 0 0;
   font-size: var(--text-sm);

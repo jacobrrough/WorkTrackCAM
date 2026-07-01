@@ -59,7 +59,14 @@ import type { BufferGeometry } from 'three'
 import { EmptyState } from '../src/EmptyState'
 import { CadQueryEditor } from './CadQueryEditor'
 import { ViewportChrome } from './ViewportChrome'
-import { Viewport3D } from './Viewport3D'
+import { Viewport3D, type Viewport3DActions } from './Viewport3D'
+import { ViewportContextMenu } from './ViewportContextMenu'
+import {
+  deriveViewportContextMenuItems,
+  standardViewForCameraAction,
+  type ViewportContextMenuEntry
+} from './viewport-context-menu-items'
+import { commandRegistry, runCommand, type CommandContext } from '../commands/command-engine'
 import { MvpSketchCanvas } from './Sketch2DCanvas'
 import { SketchSurface } from './SketchSurface'
 import { sketchToolForDesignCommand } from './design-command-map'
@@ -86,6 +93,8 @@ import {
   type DrawingViewState,
 } from '../../shared/drawing-hydrate'
 import type {
+  DrawingCenterMark,
+  DrawingCenterline,
   DrawingDimension,
   DrawingNote,
   GdtFeatureControlFrame,
@@ -892,6 +901,12 @@ export function DesignWorkspace({
   const effectiveDrawingNotes: readonly DrawingNote[] | undefined = effectiveDrawing
     ? effectiveDrawing.notes
     : undefined
+  const effectiveDrawingCenterMarks: readonly DrawingCenterMark[] | undefined = effectiveDrawing
+    ? effectiveDrawing.centerMarks
+    : undefined
+  const effectiveDrawingCenterlines: readonly DrawingCenterline[] | undefined = effectiveDrawing
+    ? effectiveDrawing.centerlines
+    : undefined
   const effectiveDrawingTitleBlock: DrawingTitleBlock | undefined = effectiveDrawing
     ? effectiveDrawing.titleBlock
     : undefined
@@ -934,6 +949,22 @@ export function DesignWorkspace({
       if (!drawingControlled) return
       const base = drawing ?? emptyDrawingViewState()
       onDrawing?.({ ...base, notes: next })
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingCenterMarks = useCallback(
+    (next: readonly DrawingCenterMark[]): void => {
+      if (!drawingControlled) return
+      const base = drawing ?? emptyDrawingViewState()
+      onDrawing?.({ ...base, centerMarks: next })
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingCenterlines = useCallback(
+    (next: readonly DrawingCenterline[]): void => {
+      if (!drawingControlled) return
+      const base = drawing ?? emptyDrawingViewState()
+      onDrawing?.({ ...base, centerlines: next })
     },
     [drawingControlled, drawing, onDrawing],
   )
@@ -1341,6 +1372,24 @@ export function DesignWorkspace({
     setSelectionState((prev) => setSelection(prev, next))
   }, [])
 
+  // -- Fusion-style right-click context menu (viewport) -----------------------
+  /**
+   * Open state of the viewport right-click menu: the anchor (local px inside
+   * the viewport pane) + the entry SNAPSHOT derived at open time (so the menu
+   * never mutates under the operator's cursor). `null` when closed. Opened by
+   * `Viewport3D.onContextMenuRequest` (which already filtered out right-drag
+   * pans); closed on ESC / click-away / activation / leaving the 3D branch.
+   */
+  const [viewportMenu, setViewportMenu] = useState<{
+    readonly x: number
+    readonly y: number
+    readonly entries: readonly ViewportContextMenuEntry[]
+  } | null>(null)
+  /** The viewport pane element -- menu anchor space + focus-return target. */
+  const viewportColRef = useRef<HTMLElement | null>(null)
+  /** The mounted Viewport3D's camera actions (fit / standard views / projection). */
+  const viewportActionsRef = useRef<Viewport3DActions | null>(null)
+
   /**
    * ESC clears the active selection. Mounted as a document-level
    * `keydown` listener so the operator can dismiss a selection from
@@ -1354,6 +1403,11 @@ export function DesignWorkspace({
    */
   useEffect(() => {
     if (selection === null) return undefined
+    // While the right-click context menu is open, ESC belongs to the MENU
+    // (its own keydown handler closes it and stops propagation) -- this
+    // listener stands down so one keystroke never clears the selection AND
+    // closes the menu at once.
+    if (viewportMenu !== null) return undefined
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setSelectionState(clearSelection())
@@ -1363,7 +1417,7 @@ export function DesignWorkspace({
     return () => {
       document.removeEventListener('keydown', onKey)
     }
-  }, [selection])
+  }, [selection, viewportMenu])
 
   // ── FG-3 — sketch mode (drives the center-pane swap + contextual ribbon) ────
   /**
@@ -1547,6 +1601,101 @@ export function DesignWorkspace({
   useEffect(() => {
     if (!sketchMode) setSketchFacePlane(null)
   }, [sketchMode])
+
+  // -- Fusion-style right-click context menu: open / dispatch / close --------
+  /**
+   * The command context the menu dispatches against. This workspace IS the
+   * design route; `machineKind` is irrelevant to Design commands (their
+   * enablement gates on route + sketch mode only -- `design-commands.ts`);
+   * selection comes from the same `selectionToSurface` projection the ribbon
+   * reads through `onCommandSurface`.
+   */
+  const viewportMenuCommandContext = useMemo<CommandContext>(() => {
+    const surface = selectionToSurface(selection)
+    return {
+      workspace: 'design',
+      machineKind: null,
+      hasSelection: surface.hasSelection,
+      selectionKind: surface.selectionKind,
+      sketchMode
+    }
+  }, [selection, sketchMode])
+
+  /**
+   * A qualifying right-click released in the viewport (`Viewport3D` already
+   * filtered out right-drag pans via the travel threshold). Snapshot the
+   * selection-aware entries -- labels from the catalog, enablement resolved
+   * against the SHARED command registry (the exact registry the ribbon and
+   * palette dispatch through) -- and open the menu at the cursor, in the
+   * viewport pane's local coordinates so the menu can clamp to its bounds.
+   */
+  const handleViewportContextMenuRequest = useCallback(
+    (request: { readonly clientX: number; readonly clientY: number }): void => {
+      const rect = viewportColRef.current?.getBoundingClientRect()
+      const entries = deriveViewportContextMenuItems({
+        surface: selectionToSurface(selection),
+        projection: viewportActionsRef.current?.getProjection() ?? 'perspective',
+        registry: commandRegistry,
+        ctx: viewportMenuCommandContext
+      })
+      setViewportMenu({
+        x: request.clientX - (rect?.left ?? 0),
+        y: request.clientY - (rect?.top ?? 0),
+        entries
+      })
+    },
+    [selection, viewportMenuCommandContext]
+  )
+
+  /** Close without activating; focus returns to the viewport pane. */
+  const closeViewportMenu = useCallback((): void => {
+    setViewportMenu(null)
+    viewportColRef.current?.focus()
+  }, [])
+
+  /**
+   * Activate a menu entry, then close + return focus. Command entries reuse
+   * the ribbon's dispatch path (`runCommand` on the shared registry -> the
+   * host's `DesignCommandActions`, e.g. `so_shell` -> Shell dialog,
+   * `sk_choose_plane` -> arm sketch-on-face pick); camera entries call the
+   * mounted viewport's own HUD handlers through the actions bridge; Clear
+   * selection is the workspace-local transition. A dispatch the registry
+   * refuses (no handler / disabled) surfaces an honest toast.
+   */
+  const handleViewportMenuActivate = useCallback(
+    (entry: ViewportContextMenuEntry): void => {
+      setViewportMenu(null)
+      viewportColRef.current?.focus()
+      if (entry.type === 'command') {
+        const ran = runCommand(entry.commandId, viewportMenuCommandContext)
+        if (!ran) toast('warn', entry.label + ' is not available here yet.')
+        return
+      }
+      if (entry.type === 'clear_selection') {
+        setSelectionState(clearSelection())
+        return
+      }
+      const actions = viewportActionsRef.current
+      if (!actions) return
+      if (entry.action === 'fit_view') {
+        actions.fitView()
+        return
+      }
+      if (entry.action === 'toggle_projection') {
+        actions.toggleProjection()
+        return
+      }
+      const preset = standardViewForCameraAction(entry.action)
+      if (preset !== null) actions.standardView(preset)
+    },
+    [viewportMenuCommandContext, toast]
+  )
+
+  // The 3D viewport unmounts when sketch mode takes the pane or the geometry
+  // goes away -- drop a lingering menu with it (no focus steal on this path).
+  useEffect(() => {
+    if (sketchMode || displayedViewportGeometry === null) setViewportMenu(null)
+  }, [sketchMode, displayedViewportGeometry])
 
   // ── FG-5b — per-feature property dialogs ──────────────────────────────────
   /**
@@ -1919,6 +2068,14 @@ export function DesignWorkspace({
             onPersistNotes={
               drawingControlled ? handlePersistDrawingNotes : undefined
             }
+            persistedCenterMarks={effectiveDrawingCenterMarks}
+            onPersistCenterMarks={
+              drawingControlled ? handlePersistDrawingCenterMarks : undefined
+            }
+            persistedCenterlines={effectiveDrawingCenterlines}
+            onPersistCenterlines={
+              drawingControlled ? handlePersistDrawingCenterlines : undefined
+            }
             initialTitleBlock={effectiveDrawingTitleBlock}
             onPersistTitleBlock={
               drawingControlled ? handlePersistDrawingTitleBlock : undefined
@@ -2024,9 +2181,13 @@ export function DesignWorkspace({
 
         {/* CENTER — chromed viewport (placeholder body + overlay chrome) */}
         <section
+          ref={viewportColRef}
           className="design-workspace__viewport-col"
           aria-label="3D preview"
           data-testid="design-workspace-viewport"
+          // Focusable programmatically (not tabbable) so the context menu can
+          // return focus to the viewport pane on close.
+          tabIndex={-1}
         >
           <ViewportChrome
             codeOpen={codeOpen}
@@ -2115,6 +2276,12 @@ export function DesignWorkspace({
           ) : displayedViewportGeometry ? (
             <Viewport3D
               geometry={displayedViewportGeometry}
+              // Fusion-style right-click menu: the viewport filters right-drag
+              // pans (travel threshold) and reports qualifying releases here;
+              // the actions bridge exposes its fit/standard-view/projection
+              // handlers so menu entries reuse them without duplication.
+              onContextMenuRequest={handleViewportContextMenuRequest}
+              actionsRef={viewportActionsRef}
               // Face/edge-pick only against the script-path geometry (it carries
               // the userData.faceIds + pickableEdges the picker resolves). The
               // no-code kernel STL has neither, so we don't wire a selectable
@@ -2302,6 +2469,20 @@ export function DesignWorkspace({
             >
               {selectionLabel}
             </div>
+          )}
+          {/*
+            Fusion-style right-click context menu -- selection-aware shortcuts
+            anchored at the cursor (entries snapshotted at open). Rendered
+            inside the viewport pane so it clamps to the pane bounds; closes
+            on ESC / click-away / activation and returns focus to the pane.
+          */}
+          {viewportMenu !== null && (
+            <ViewportContextMenu
+              anchor={{ x: viewportMenu.x, y: viewportMenu.y }}
+              entries={viewportMenu.entries}
+              onActivate={handleViewportMenuActivate}
+              onClose={closeViewportMenu}
+            />
           )}
 
           {/*

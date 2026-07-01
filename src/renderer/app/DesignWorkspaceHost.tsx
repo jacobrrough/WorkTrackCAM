@@ -4,6 +4,7 @@ import type { SolvedMate } from '../design/AssemblyMatePanel'
 import type { AssemblyPart } from '../design/AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import { useDesignSession } from '../design/DesignSessionContext'
+import { DesignRecoveryBannerHost } from '../design/DesignRecoveryBanner'
 import {
   registerDesignCommands,
   useOptionalCommandSurface,
@@ -376,7 +377,12 @@ export function DesignWorkspaceHost({
   }, [session.projectDir])
 
   return (
-    <DesignWorkspace
+    <>
+      {/* AUTOSAVE + CRASH RECOVERY - non-blocking restore offer. Renders only
+          while the session holds a pending recovery snapshot; Restore/Discard
+          dispatch through the session (explicit user action, never an effect). */}
+      <DesignRecoveryBannerHost />
+      <DesignWorkspace
       initialScript={initialScript}
       onSave={handleSave}
       onSendToCam={onSendToCam}
@@ -487,7 +493,8 @@ export function DesignWorkspaceHost({
       onDrawingDeleteSheet={session.onDrawingDeleteSheet}
       // Drawings BOM: rendered from the engine deriveDrawingBom seam.
       drawingBomLines={drawingBomLines}
-    />
+      />
+    </>
   )
 }
 

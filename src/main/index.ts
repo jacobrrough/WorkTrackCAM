@@ -6,6 +6,7 @@ import { registerCoreIpc } from './ipc-core'
 import { registerFabricationIpc } from './ipc-fabrication'
 import { registerMachineIpc } from './ipc-machine'
 import { registerModelingIpc } from './ipc-modeling'
+import { registerRecoveryIpc } from './ipc-recovery'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
 import {
   checkPythonDeps,
@@ -131,6 +132,10 @@ app.whenReady().then(async () => {
   // fallback toast, Laguna physical-e-stop advisory). Registered next to
   // the other IPC namespaces so the ordering invariant keeps holding.
   registerMachineIpc(ipcCtx)
+  // AUTOSAVE + CRASH RECOVERY: recovery:designWrite/Read/Delete - the design
+  // session's snapshot store (userData/recovery/). Registered next to the
+  // other IPC namespaces so the ordering invariant above keeps holding.
+  registerRecoveryIpc(ipcCtx)
 
   createWindow()
 

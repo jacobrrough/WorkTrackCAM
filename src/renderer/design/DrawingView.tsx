@@ -85,13 +85,22 @@ import {
 } from './drawing-snap'
 import {
   buildAngularDimension,
+  buildCenterMark,
+  buildCenterline,
   buildDiameterDimension,
   buildDrawingNote,
   buildLinearDimension,
   buildRadialDimension,
+  composeCenterMarksIntoSvg,
+  composeCenterlinesIntoSvg,
   composeNotesIntoSvg,
+  DEFAULT_CENTER_MARK_SIZE_MM,
+  reanchorCenterMarks,
+  reanchorCenterlines,
   reanchorDimensions,
   reanchorNotes,
+  removeCenterMark,
+  removeCenterline,
   removeNote,
   updateNoteText,
   type FreshSnapPoint,
@@ -110,6 +119,8 @@ import {
 } from './drawing-surface-finish-model'
 import type {
   DrawingBomRow,
+  DrawingCenterMark,
+  DrawingCenterline,
   DrawingDimension,
   DrawingNote,
   GdtCharacteristic,
@@ -295,6 +306,43 @@ export interface DrawingViewProps {
    * inert (mirrors `onPersistSurfaceFinishes`).
    */
   readonly onPersistNotes?: (next: readonly DrawingNote[]) => void
+  /**
+   * CAD V1.5 Center marks -- the persisted center-mark (+) annotations for this
+   * sheet (`sheet.annotations.centerMarks`). When supplied (controlled mode),
+   * the Center mark tool is enabled: a one-click anchored placement (snapping
+   * `center`-kind points FIRST, then the honest nearest snap) mints a
+   * `DrawingCenterMark` pushed up via {@link onPersistCenterMarks}, and the
+   * marks compose onto the projection client-side (pure SVG `<g>` overlay, no
+   * sidecar round-trip -- exactly like notes / surface finishes). Each anchor's
+   * `refId` is re-resolved against fresh geometry on every re-projection
+   * (dangling badge). No free text -- no Safety-Rule-4 escaping surface.
+   */
+  readonly persistedCenterMarks?: readonly DrawingCenterMark[]
+  /**
+   * CAD V1.5 Center marks -- called whenever the persisted center-mark list
+   * changes (a mark placed / deleted / cleared, or anchors refreshed / flagged
+   * dangling after a re-projection). The host writes the result into
+   * `sheet.annotations.centerMarks`. Optional + readonly (additive): when
+   * omitted the tool still renders but placement is inert (mirrors
+   * `onPersistNotes`).
+   */
+  readonly onPersistCenterMarks?: (next: readonly DrawingCenterMark[]) => void
+  /**
+   * CAD V1.5 Centerlines -- the persisted chain-dashed centerlines for this
+   * sheet (`sheet.annotations.centerlines`). When supplied (controlled mode),
+   * the Centerline tool is enabled: a TWO-click placement (start feature, then
+   * end feature -- the Detail tool's step-carrying intermediate-state shape)
+   * mints a `DrawingCenterline` pushed up via {@link onPersistCenterlines}; the
+   * lines compose onto the projection client-side and BOTH anchors re-resolve
+   * on every re-projection (dangling badge when either endpoint's feature is
+   * gone).
+   */
+  readonly persistedCenterlines?: readonly DrawingCenterline[]
+  /**
+   * CAD V1.5 Centerlines -- persist seam for {@link persistedCenterlines}
+   * (mirrors {@link onPersistCenterMarks}).
+   */
+  readonly onPersistCenterlines?: (next: readonly DrawingCenterline[]) => void
   /**
    * CAD V1.5 Detail -- called when a detail (crop) view is produced. The host
    * owns what to do with the magnified crop SVG (open in a new sheet, export,
@@ -966,6 +1014,9 @@ type ToolMode =
   | { readonly tool: 'gdt' }
   | { readonly tool: 'surface-finish' }
   | { readonly tool: 'note' }
+  | { readonly tool: 'center-mark' }
+  | { readonly tool: 'centerline'; readonly step: 0 }
+  | { readonly tool: 'centerline'; readonly step: 1; readonly start: ResolvedClick }
   | { readonly tool: 'detail'; readonly step: 0 }
   | { readonly tool: 'detail'; readonly step: 1; readonly center: { readonly x: number; readonly y: number } }
 
@@ -1001,6 +1052,10 @@ export function DrawingView({
   onPersistSurfaceFinishes,
   persistedNotes,
   onPersistNotes,
+  persistedCenterMarks,
+  onPersistCenterMarks,
+  persistedCenterlines,
+  onPersistCenterlines,
   onDetail,
   onPersistTitleBlock,
   sheets,
@@ -1140,6 +1195,27 @@ export function DrawingView({
    */
   const [noteDanglingIds, setNoteDanglingIds] = useState<ReadonlySet<string>>(new Set())
 
+  // -- CAD V1.5 Center-mark + centerline form + tool state --------------------
+
+  /** Whether this instance is in CONTROLLED (persisted) center-mark mode. */
+  const centerMarkControlled = persistedCenterMarks !== undefined
+  /** Whether this instance is in CONTROLLED (persisted) centerline mode. */
+  const centerlineControlled = persistedCenterlines !== undefined
+
+  /** Crosshair half-extent (SVG-mm) for the NEXT placed center mark. */
+  const [centerMarkSize, setCenterMarkSize] = useState<number>(DEFAULT_CENTER_MARK_SIZE_MM)
+
+  /**
+   * Ids of persisted center marks whose anchor no longer resolves against the
+   * latest fetched geometry (badged `dangling`). Recomputed on every fetch
+   * (mirrors `noteDanglingIds`).
+   */
+  const [centerMarkDanglingIds, setCenterMarkDanglingIds] =
+    useState<ReadonlySet<string>>(new Set())
+  /** Ids of persisted centerlines with at least one dangling endpoint anchor. */
+  const [centerlineDanglingIds, setCenterlineDanglingIds] =
+    useState<ReadonlySet<string>>(new Set())
+
   // -- CAD V2 placement state -----------------------------------------------
 
   /**
@@ -1264,7 +1340,8 @@ export function DrawingView({
   const resolveCursorSvg = useCallback(
     (
       clientX: number,
-      clientY: number
+      clientY: number,
+      preferKind?: SnapPointKind
     ): {
       svgCoord: { x: number; y: number }
       snap: SnapResult | null
@@ -1276,7 +1353,21 @@ export function DrawingView({
         return { svgCoord: { x: clientX, y: clientY }, snap: null, sourceId: null }
       }
       const svgCoord = clientToSvgCoord(clientX, clientY, svgEl as SVGSVGElement)
-      const snap = resolveSnap(svgCoord, snapPoints, snapTolerance, altHeld)
+      // Kind-preferring resolution: when the active tool targets a specific
+      // snap kind (center marks -> 'center'), try that kind ALONE first, then
+      // fall back to the honest nearest-any-kind snap.
+      let snap: SnapResult | null = null
+      if (preferKind !== undefined) {
+        snap = resolveSnap(
+          svgCoord,
+          snapPoints.filter((sp) => sp.kind === preferKind),
+          snapTolerance,
+          altHeld
+        )
+      }
+      if (snap === null) {
+        snap = resolveSnap(svgCoord, snapPoints, snapTolerance, altHeld)
+      }
       const sourceId = snap?.sourceId ?? null
       return { svgCoord, snap, sourceId }
     },
@@ -1405,6 +1496,45 @@ export function DrawingView({
   )
 
   /**
+   * Commit a center mark from a single resolved click. Mints an anchored
+   * {@link DrawingCenterMark} carrying the toolbar mark size, then pushes it
+   * onto the persisted list. No free text -- nothing to escape (Safety
+   * Rule 4). No-op when center marks are not controlled.
+   */
+  const commitCenterMark = useCallback(
+    (click: ResolvedClick): void => {
+      if (!centerMarkControlled) {
+        toast('warn', 'Center-mark placement is unavailable -- no persistence host wired.')
+        return
+      }
+      const mark = buildCenterMark(click, { sizeMm: centerMarkSize })
+      onPersistCenterMarks?.([...(persistedCenterMarks ?? []), mark])
+      toast('ok', 'Center mark added.')
+    },
+    [centerMarkControlled, centerMarkSize, onPersistCenterMarks, persistedCenterMarks, toast]
+  )
+
+  /**
+   * Commit a centerline from the two resolved clicks of the two-click flow
+   * (start feature, then end feature -- the same step-carrying intermediate
+   * state the Detail tool uses, but keeping the FULL ResolvedClick so the
+   * first anchor stays associative). No-op when centerlines are not
+   * controlled.
+   */
+  const commitCenterline = useCallback(
+    (start: ResolvedClick, end: ResolvedClick): void => {
+      if (!centerlineControlled) {
+        toast('warn', 'Centerline placement is unavailable -- no persistence host wired.')
+        return
+      }
+      const line = buildCenterline(start, end)
+      onPersistCenterlines?.([...(persistedCenterlines ?? []), line])
+      toast('ok', 'Centerline added.')
+    },
+    [centerlineControlled, onPersistCenterlines, persistedCenterlines, toast]
+  )
+
+  /**
    * Run a detail (crop) view from a centre + radius via `cad.detailDrawing`. The
    * sidecar projects the parent ONCE, crops the circular window, magnifies it by
    * `detailScale`, and stamps the escaped `detailLabel`. The resulting SVG is
@@ -1465,7 +1595,9 @@ export function DrawingView({
         setHoveredSnap(null)
         return
       }
-      const { snap } = resolveCursorSvg(e.clientX, e.clientY)
+      const preferKind: SnapPointKind | undefined =
+        toolMode !== null && toolMode.tool === 'center-mark' ? 'center' : undefined
+      const { snap } = resolveCursorSvg(e.clientX, e.clientY, preferKind)
       setHoveredSnap(snap)
     },
     [placementState, toolMode, resolveCursorSvg]
@@ -1474,7 +1606,9 @@ export function DrawingView({
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>): void => {
       if (e.button !== 0) return
-      const { svgCoord, snap, sourceId } = resolveCursorSvg(e.clientX, e.clientY)
+      const preferKind: SnapPointKind | undefined =
+        toolMode !== null && toolMode.tool === 'center-mark' ? 'center' : undefined
+      const { svgCoord, snap, sourceId } = resolveCursorSvg(e.clientX, e.clientY, preferKind)
       const clickSvg = snap ?? svgCoord
 
       // -- GD&T / detail tool clicks (mutually exclusive with dimension placement).
@@ -1512,6 +1646,35 @@ export function DrawingView({
           setToolMode(null)
           setHoveredSnap(null)
           commitNote(resolvedClick)
+          return
+        }
+        if (toolMode.tool === 'center-mark') {
+          // One-click anchored placement (center-kind snaps preferred).
+          const resolvedClick: ResolvedClick = {
+            point: { x: clickSvg.x, y: clickSvg.y },
+            sourceId,
+          }
+          setToolMode(null)
+          setHoveredSnap(null)
+          commitCenterMark(resolvedClick)
+          return
+        }
+        if (toolMode.tool === 'centerline') {
+          // Two clicks -- start feature, then end feature (mirrors the Detail
+          // tool's step-carrying intermediate state, but keeps the FULL
+          // ResolvedClick so the first anchor stays associative).
+          const resolvedClick: ResolvedClick = {
+            point: { x: clickSvg.x, y: clickSvg.y },
+            sourceId,
+          }
+          if (toolMode.step === 0) {
+            setToolMode({ tool: 'centerline', step: 1, start: resolvedClick })
+            return
+          }
+          const start = toolMode.start
+          setToolMode(null)
+          setHoveredSnap(null)
+          commitCenterline(start, resolvedClick)
           return
         }
         // detail: two clicks -- centre, then a point defining the radius.
@@ -1553,6 +1716,8 @@ export function DrawingView({
       commitGdtFrame,
       commitSurfaceFinish,
       commitNote,
+      commitCenterMark,
+      commitCenterline,
       runDetail,
     ]
   )
@@ -1668,6 +1833,64 @@ export function DrawingView({
       onPersistNotes?.(removeNote(persistedNotes ?? [], id))
     },
     [onPersistNotes, persistedNotes]
+  )
+
+  /**
+   * Start the center-mark one-click placement (center-kind snaps preferred).
+   * Cancels any dimension placement (mirrors {@link startSurfaceFinish}).
+   * Toggling the active tool off returns to idle.
+   */
+  const startCenterMark = useCallback((): void => {
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) =>
+      prev !== null && prev.tool === 'center-mark' ? null : { tool: 'center-mark' },
+    )
+  }, [])
+
+  /**
+   * Start the centerline TWO-click placement (start feature, then end
+   * feature). Cancels any dimension placement. Toggling the active tool off
+   * (at either step) returns to idle.
+   */
+  const startCenterline = useCallback((): void => {
+    setPlacementState(null)
+    clickHistoryRef.current = []
+    setHoveredSnap(null)
+    setToolMode((prev) =>
+      prev !== null && prev.tool === 'centerline' ? null : { tool: 'centerline', step: 0 },
+    )
+  }, [])
+
+  /** Remove every center-mark overlay (controlled mode only). */
+  const clearCenterMarks = useCallback((): void => {
+    onPersistCenterMarks?.([])
+    setToolMode(null)
+    setHoveredSnap(null)
+  }, [onPersistCenterMarks])
+
+  /** Remove every centerline overlay (controlled mode only). */
+  const clearCenterlines = useCallback((): void => {
+    onPersistCenterlines?.([])
+    setToolMode(null)
+    setHoveredSnap(null)
+  }, [onPersistCenterlines])
+
+  /** Delete one center mark (per-item delete affordance). */
+  const deleteCenterMark = useCallback(
+    (id: string): void => {
+      onPersistCenterMarks?.(removeCenterMark(persistedCenterMarks ?? [], id))
+    },
+    [onPersistCenterMarks, persistedCenterMarks]
+  )
+
+  /** Delete one centerline (per-item delete affordance). */
+  const deleteCenterline = useCallback(
+    (id: string): void => {
+      onPersistCenterlines?.(removeCenterline(persistedCenterlines ?? [], id))
+    },
+    [onPersistCenterlines, persistedCenterlines]
   )
 
   const toggleSection = useCallback((): void => {
@@ -1887,7 +2110,8 @@ export function DrawingView({
    * projection pipeline and matches the "documentation overlays only" Safety
    * Rule 1 (no sidecar / G-code touch). Note text is entity-escaped inside
    * `noteToSvg` (the client-side trust boundary, Safety Rule 4). When there are
-   * no symbols and no notes (or no base SVG) this is `svg` verbatim.
+   * no symbols, notes, center marks, or centerlines (or no base SVG) this is
+   * `svg` verbatim. Center marks + centerlines compose AFTER notes.
    */
   const displaySvg = useMemo<string | null>(() => {
     if (svg === null) return null
@@ -1902,6 +2126,12 @@ export function DrawingView({
     if (persistedNotes !== undefined && persistedNotes.length > 0) {
       composed = composeNotesIntoSvg(composed, persistedNotes, noteDanglingIds)
     }
+    if (persistedCenterMarks !== undefined && persistedCenterMarks.length > 0) {
+      composed = composeCenterMarksIntoSvg(composed, persistedCenterMarks, centerMarkDanglingIds)
+    }
+    if (persistedCenterlines !== undefined && persistedCenterlines.length > 0) {
+      composed = composeCenterlinesIntoSvg(composed, persistedCenterlines, centerlineDanglingIds)
+    }
     return composed
   }, [
     svg,
@@ -1909,6 +2139,10 @@ export function DrawingView({
     surfaceFinishDanglingIds,
     persistedNotes,
     noteDanglingIds,
+    persistedCenterMarks,
+    centerMarkDanglingIds,
+    persistedCenterlines,
+    centerlineDanglingIds,
   ])
 
   // Re-project whenever `partHandle` or the active view changes.
@@ -2250,6 +2484,50 @@ export function DrawingView({
     }
   }, [geometryLoaded, freshSnapPoints, persistedNotes, onPersistNotes])
 
+  // -- CAD V1.5 Center marks / centerlines -- re-anchor against fresh geometry
+  //
+  // Mirrors the notes re-anchor pass (same converge guard): refresh resolved
+  // anchor cachedPoints, badge vanished anchors `dangling`, and push the
+  // refreshed list up only when something actually moved (deep-equality guard)
+  // so a placement->re-render->re-resolve cycle converges instead of looping.
+  useEffect(() => {
+    if (persistedCenterMarks === undefined) return
+    if (!geometryLoaded) {
+      setCenterMarkDanglingIds(new Set())
+      return
+    }
+    const { centerMarks: reanchored, danglingIds: nextDangling } = reanchorCenterMarks(
+      persistedCenterMarks,
+      freshSnapPoints,
+    )
+    setCenterMarkDanglingIds(nextDangling)
+    if (
+      onPersistCenterMarks !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedCenterMarks)
+    ) {
+      onPersistCenterMarks(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedCenterMarks, onPersistCenterMarks])
+
+  useEffect(() => {
+    if (persistedCenterlines === undefined) return
+    if (!geometryLoaded) {
+      setCenterlineDanglingIds(new Set())
+      return
+    }
+    const { centerlines: reanchored, danglingIds: nextDangling } = reanchorCenterlines(
+      persistedCenterlines,
+      freshSnapPoints,
+    )
+    setCenterlineDanglingIds(nextDangling)
+    if (
+      onPersistCenterlines !== undefined &&
+      JSON.stringify(reanchored) !== JSON.stringify(persistedCenterlines)
+    ) {
+      onPersistCenterlines(reanchored)
+    }
+  }, [geometryLoaded, freshSnapPoints, persistedCenterlines, onPersistCenterlines])
+
   // -- Empty-state branch ---------------------------------------------------
   if (partHandle === null) {
     return (
@@ -2324,6 +2602,22 @@ export function DrawingView({
   /** Whether the note one-click tool is armed. */
   const notePlacing = toolMode !== null && toolMode.tool === 'note'
 
+  /** Persisted center-mark count (controlled mode). Drives the count readout + Clear. */
+  const centerMarkCount = (persistedCenterMarks ?? []).length
+  /** Persisted centerline count (controlled mode). */
+  const centerlineCount = (persistedCenterlines ?? []).length
+  /** How many center marks are currently dangling (lost their anchor). */
+  const centerMarkDanglingCount = centerMarkDanglingIds.size
+  /** How many centerlines are currently dangling (either endpoint lost). */
+  const centerlineDanglingCount = centerlineDanglingIds.size
+  /** Whether the center-mark one-click tool is armed. */
+  const centerMarkPlacing = toolMode !== null && toolMode.tool === 'center-mark'
+  /** Whether the centerline two-click tool is armed (either step). */
+  const centerlinePlacing = toolMode !== null && toolMode.tool === 'centerline'
+  /** Whether the armed centerline tool is waiting for its SECOND click. */
+  const centerlineAtStep1 =
+    toolMode !== null && toolMode.tool === 'centerline' && toolMode.step === 1
+
   /** Status line for the GD&T / surface-finish / note / detail tool area. */
   const toolStatusLabel: string | null = gdtPlacing
     ? `Placing ${GDT_CHARACTERISTIC_LABELS[gdtCharacteristic]} frame -- click the feature`
@@ -2331,11 +2625,17 @@ export function DrawingView({
       ? `Placing ${SURFACE_FINISH_MATERIAL_LABELS[surfaceFinishMaterial]} finish -- click the feature`
       : notePlacing
         ? 'Placing note -- click the sheet (snap to a feature to attach a leader)'
-        : detailPlacing
-          ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
-            ? 'Detail view -- click the crop centre'
-            : 'Detail view -- click to set the crop radius'
-          : null
+        : centerMarkPlacing
+          ? 'Placing center mark -- click a hole or arc centre'
+          : centerlinePlacing
+            ? centerlineAtStep1
+              ? 'Placing centerline -- click the second feature'
+              : 'Placing centerline -- click the first feature'
+            : detailPlacing
+              ? toolMode !== null && toolMode.tool === 'detail' && toolMode.step === 0
+                ? 'Detail view -- click the crop centre'
+                : 'Detail view -- click to set the crop radius'
+              : null
 
   return (
     <div className="design-drawing" data-testid="design-drawing-view">
@@ -2924,6 +3224,157 @@ export function DrawingView({
                   aria-label="Delete note"
                   title="Delete this note"
                   onClick={() => deleteNote(note.id)}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* CAD V1.5 -- Center mark + centerline toolbar */}
+      <div
+        className="design-drawing__gdt-toolbar design-drawing__centermark-toolbar"
+        role="toolbar"
+        aria-label="Center marks and centerlines"
+        data-testid="design-drawing-centermark-toolbar"
+      >
+        <div
+          className="design-drawing__gdt-group"
+          role="group"
+          aria-label="Place center marks and centerlines"
+        >
+          <label className="design-drawing__gdt-field">
+            Mark size (mm):
+            <input
+              type="number"
+              className="design-drawing__gdt-tolerance"
+              data-testid="design-drawing-centermark-size"
+              value={centerMarkSize}
+              min={0.5}
+              step={0.5}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const next = parseFloat(e.target.value)
+                if (Number.isFinite(next) && next > 0) setCenterMarkSize(next)
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className={
+              centerMarkPlacing
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-centermark-place"
+            aria-pressed={centerMarkPlacing}
+            onClick={startCenterMark}
+            title={
+              centerMarkControlled
+                ? 'Click, then click a hole or arc centre to stamp a center mark'
+                : 'Center-mark placement needs a persistence host'
+            }
+          >
+            {centerMarkPlacing ? 'Click centre...' : 'Center mark'}
+          </button>
+          <button
+            type="button"
+            className={
+              centerlinePlacing
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-centerline-place"
+            aria-pressed={centerlinePlacing}
+            onClick={startCenterline}
+            title={
+              centerlineControlled
+                ? 'Click, then click two features to draw a chain-dashed centerline between them'
+                : 'Centerline placement needs a persistence host'
+            }
+          >
+            {centerlinePlacing ? (centerlineAtStep1 ? 'Click p2...' : 'Click p1...') : 'Centerline'}
+          </button>
+          {centerMarkCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-centermark-clear"
+              onClick={clearCenterMarks}
+              title="Remove every center-mark overlay"
+            >
+              Clear marks
+            </button>
+          )}
+          {centerlineCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-centerline-clear"
+              onClick={clearCenterlines}
+              title="Remove every centerline overlay"
+            >
+              Clear lines
+            </button>
+          )}
+        </div>
+        <div
+          className="design-drawing__gdt-count"
+          data-testid="design-drawing-centermark-count"
+          aria-live="polite"
+        >
+          {toolStatusLabel !== null && (centerMarkPlacing || centerlinePlacing)
+            ? toolStatusLabel
+            : centerMarkCount === 0 && centerlineCount === 0
+              ? 'No center marks'
+              : `${centerMarkCount} center mark${centerMarkCount === 1 ? '' : 's'}, ${centerlineCount} centerline${centerlineCount === 1 ? '' : 's'}`}
+        </div>
+        {centerMarkDanglingCount + centerlineDanglingCount > 0 && (
+          <div
+            className="design-drawing__gdt-dangling"
+            data-testid="design-drawing-centermark-dangling"
+            role="status"
+            title="These center marks / centerlines lost their anchored feature on rebuild and are drawn from the last-known position."
+          >
+            {`${centerMarkDanglingCount + centerlineDanglingCount} dangling`}
+          </div>
+        )}
+        {(centerMarkCount > 0 || centerlineCount > 0) && (
+          <ul
+            className="design-drawing__note-list design-drawing__centermark-list"
+            data-testid="design-drawing-centermark-list"
+            aria-label="Placed center marks and centerlines"
+          >
+            {(persistedCenterMarks ?? []).map((mark) => (
+              <li key={mark.id} className="design-drawing__note-row">
+                <span className="design-drawing__centermark-row-label">
+                  {`Center mark @ (${mark.anchor.cachedPoint.x.toFixed(1)}, ${mark.anchor.cachedPoint.y.toFixed(1)})`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost design-drawing__note-delete"
+                  data-testid={`design-drawing-centermark-delete-${mark.id}`}
+                  aria-label="Delete center mark"
+                  title="Delete this center mark"
+                  onClick={() => deleteCenterMark(mark.id)}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              </li>
+            ))}
+            {(persistedCenterlines ?? []).map((line) => (
+              <li key={line.id} className="design-drawing__note-row">
+                <span className="design-drawing__centermark-row-label">
+                  {`Centerline (${line.start.cachedPoint.x.toFixed(1)}, ${line.start.cachedPoint.y.toFixed(1)}) -- (${line.end.cachedPoint.x.toFixed(1)}, ${line.end.cachedPoint.y.toFixed(1)})`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost design-drawing__note-delete"
+                  data-testid={`design-drawing-centerline-delete-${line.id}`}
+                  aria-label="Delete centerline"
+                  title="Delete this centerline"
+                  onClick={() => deleteCenterline(line.id)}
                 >
                   <span aria-hidden="true">x</span>
                 </button>
