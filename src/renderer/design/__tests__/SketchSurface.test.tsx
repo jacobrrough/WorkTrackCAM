@@ -2,9 +2,10 @@
  * Wave 3e (keystone unlock) — the LIVE, session-persisted sketch surface.
  *
  * Pins the three things the task requires of the mounted sketcher:
- *   1. RENDER — `SketchSurface` mounts an internal tool palette (one button per
- *      `SKETCH_SURFACE_TOOLS` entry), a snap-to-grid toggle, and the legacy
- *      `Sketch2DCanvas` (which carries the numeric dimension popovers). It is the
+ *   1. RENDER — `SketchSurface` mounts a snap-to-grid toggle and the legacy
+ *      `Sketch2DCanvas` (which carries the numeric dimension popovers). Tool
+ *      selection is owned by the top Sketch ribbon (not a redundant in-surface
+ *      palette — that was removed), so no tool-palette is rendered here. It is the
  *      surface DesignWorkspace mounts in the Sketch stage when the host threads
  *      the session model.
  *   2. WIRE — DesignWorkspace mounts `SketchSurface` (NOT the self-contained,
@@ -26,7 +27,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { SketchSurface, SKETCH_SURFACE_TOOLS } from '../SketchSurface'
+import { SketchSurface } from '../SketchSurface'
 import { DesignWorkspace, STARTER_SCRIPT } from '../DesignWorkspace'
 import {
   emptyDesign,
@@ -58,25 +59,25 @@ const DRAWN_RECT: SketchEntity = {
 }
 
 describe('SketchSurface — render contract', () => {
-  it('renders the surface shell with a tool palette and the canvas', () => {
+  it('renders the surface shell and the canvas', () => {
     const html = renderToStaticMarkup(
       createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
     )
     expect(html).toContain('data-testid="sketch-surface"')
-    expect(html).toContain('data-testid="sketch-surface-palette"')
     // The legacy Sketch2DCanvas mounts (its `.sketch-wrap` + `.sketch-canvas`).
     expect(html).toContain('class="sketch-wrap"')
     expect(html).toContain('class="sketch-canvas"')
   })
 
-  it('renders a button for every tool in SKETCH_SURFACE_TOOLS', () => {
+  it('does NOT render an in-surface tool palette (the Sketch ribbon owns tools)', () => {
     const html = renderToStaticMarkup(
       createElement(SketchSurface, { design: emptyDesign(), onDesignChange: noop })
     )
-    for (const t of SKETCH_SURFACE_TOOLS) {
-      expect(html).toContain(`data-testid="sketch-surface-tool-${t.id}"`)
-      expect(html).toContain(t.label)
-    }
+    // The redundant in-surface palette was removed — tool selection is armed via
+    // the ribbon (`armedToolCommandId`) + hotkeys, not a duplicate button column.
+    expect(html).not.toContain('data-testid="sketch-surface-palette"')
+    expect(html).not.toContain('sketch-surface__palette')
+    expect(html).not.toContain('data-testid="sketch-surface-tool-line"')
   })
 
   it('exposes a snap-to-grid toggle (on by default)', () => {

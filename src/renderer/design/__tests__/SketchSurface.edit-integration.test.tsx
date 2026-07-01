@@ -7,7 +7,8 @@
  *
  *   1. RENDER — the mounted `SketchSurface` exposes the three Modify launchers
  *      (Offset / Boolean / Array) so the operator can reach the tools, and the
- *      surface still mounts the canvas + palette (no regression of Wave 3e/3f).
+ *      surface still mounts the canvas (no regression of Wave 3e/3f; the
+ *      redundant in-surface tool palette was removed).
  *
  *   2. INTEGRATION — drive the exact data path a click produces: the operator
  *      selects a closed loop, opens Offset, and Applies. Apply runs the pure
@@ -91,9 +92,10 @@ describe('SketchSurface — Modify launchers are reachable', () => {
     expect(html).toContain('data-testid="sketch-surface-offset"')
     expect(html).toContain('data-testid="sketch-surface-boolean"')
     expect(html).toContain('data-testid="sketch-surface-array"')
-    // No regression: the canvas + palette still mount.
+    // No regression: the canvas still mounts (the redundant in-surface tool
+    // palette was removed — tools are armed from the ribbon).
     expect(html).toContain('data-testid="sketch-surface"')
-    expect(html).toContain('data-testid="sketch-surface-palette"')
+    expect(html).not.toContain('data-testid="sketch-surface-palette"')
     expect(html).toContain('class="sketch-canvas"')
   })
 
