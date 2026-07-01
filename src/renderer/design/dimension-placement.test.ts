@@ -23,6 +23,8 @@ import type {
   AdvancePlacementResult,
 } from './dimension-placement'
 import type { DrawingDimensionKind } from './DrawingView'
+import { resolveSnap, DEFAULT_SNAP_TOLERANCE_PX } from './drawing-snap'
+import type { SnapPoint } from './drawing-snap'
 
 // ---------------------------------------------------------------------------
 // Module surface
@@ -228,5 +230,91 @@ describe('DrawingDimensionKind integration', () => {
       const state = startDimensionPlacement(kind)
       expect(state!.kind).toBe(kind)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Snap → placement resolution contract
+// ---------------------------------------------------------------------------
+//
+// DrawingView resolves each pointer click to an SVG coordinate, runs
+// `resolveSnap` against the snap candidates fetched from
+// `cad.extract_drawing_geometry`, and feeds the SNAPPED point (or the raw
+// cursor when nothing is in range) into `advanceDimensionPlacement`. These
+// tests pin that contract at the boundary the two pure modules share: a
+// snapped click commits the snapped coordinate; a free click (no candidate in
+// range, or Alt-held override) commits the raw cursor unchanged.
+
+describe('snap → placement resolution', () => {
+  // A small candidate set mimicking projected geometry: a vertex at the origin
+  // and an arc centre well away from it.
+  const candidates: readonly SnapPoint[] = [
+    { x: 0, y: 0, kind: 'vertex', sourceId: 'v:origin' },
+    { x: 100, y: 100, kind: 'center', sourceId: 'e:hole' },
+  ]
+
+  /**
+   * Mirror DrawingView's resolve step: snap the cursor, else use it verbatim.
+   * DrawingView reads only `.x` / `.y` off the result (`clickSvg.x`,
+   * `clickSvg.y`), so the snap result's extra `distanceSvgUnits` / `kind` /
+   * `sourceId` fields are inert here — we narrow to the coordinate the machine
+   * consumes.
+   */
+  function resolveClick(
+    cursor: { readonly x: number; readonly y: number },
+    altHeld: boolean,
+  ): { readonly x: number; readonly y: number } {
+    const snap = resolveSnap(cursor, candidates, DEFAULT_SNAP_TOLERANCE_PX, altHeld)
+    const resolved = snap ?? cursor
+    return { x: resolved.x, y: resolved.y }
+  }
+
+  it('commits the SNAPPED coordinate when the cursor is within tolerance', () => {
+    // Cursor a few SVG units off the origin vertex -> snaps back to (0, 0).
+    const c1 = resolveClick({ x: 3, y: 4 }, false) // dist 5 < 12 tolerance
+    expect(c1).toEqual({ x: 0, y: 0 })
+
+    const s0 = startDimensionPlacement('distance')
+    const { next: s1 } = advanceDimensionPlacement(s0, c1)
+    const c2 = resolveClick({ x: 102, y: 99 }, false) // near the centre -> (100,100)
+    expect(c2).toEqual({ x: 100, y: 100 })
+    const { completed } = advanceDimensionPlacement(s1, c2)
+    expect(completed!.p1).toEqual({ x: 0, y: 0 })
+    expect(completed!.p2).toEqual({ x: 100, y: 100 })
+  })
+
+  it('falls back to the raw cursor when NO candidate is in range', () => {
+    // Cursor far from every candidate -> resolveSnap returns null -> free cursor.
+    const cursor = { x: 50, y: 50 }
+    expect(resolveSnap(cursor, candidates, DEFAULT_SNAP_TOLERANCE_PX, false)).toBeNull()
+    const click = resolveClick(cursor, false)
+    expect(click).toEqual(cursor)
+
+    const s0 = startDimensionPlacement('distance')
+    const { next: s1 } = advanceDimensionPlacement(s0, click)
+    const { completed } = advanceDimensionPlacement(s1, resolveClick({ x: 70, y: 70 }, false))
+    // Both clicks were out of range: the placement records the raw cursors.
+    expect(completed!.p1).toEqual({ x: 50, y: 50 })
+    expect(completed!.p2).toEqual({ x: 70, y: 70 })
+  })
+
+  it('falls back to the raw cursor when Alt overrides snap (even atop a candidate)', () => {
+    // Cursor exactly on the origin vertex, but Alt held -> snap suppressed.
+    const cursor = { x: 0, y: 0 }
+    const click = resolveClick(cursor, true)
+    expect(click).toEqual(cursor)
+    expect(resolveSnap(cursor, candidates, DEFAULT_SNAP_TOLERANCE_PX, true)).toBeNull()
+  })
+
+  it('falls back to the raw cursor when there are no candidates at all', () => {
+    const empty: readonly SnapPoint[] = []
+    const cursor = { x: 5, y: 7 }
+    expect(resolveSnap(cursor, empty, DEFAULT_SNAP_TOLERANCE_PX, false)).toBeNull()
+    const s0 = startDimensionPlacement('radius')
+    const { next: s1 } = advanceDimensionPlacement(
+      s0,
+      resolveSnap(cursor, empty, DEFAULT_SNAP_TOLERANCE_PX, false) ?? cursor,
+    )
+    expect((s1 as { p1: { x: number; y: number } }).p1).toEqual(cursor)
   })
 })

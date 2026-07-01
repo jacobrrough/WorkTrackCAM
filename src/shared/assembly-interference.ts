@@ -263,6 +263,182 @@ export function worldAabbsOverlap(a: WorldAabb, b: WorldAabb): boolean {
   )
 }
 
+/**
+ * The two pieces of true per-part geometry the OBB narrow phase needs: the part's
+ * tight LOCAL axis-aligned box plus its placement transform. Structurally
+ * compatible with an {@link InterferencePart} (which already carries both), and
+ * with a part hydrated from `assembly-part.ts`'s `geometryDimensions`.
+ */
+export type NarrowPhaseGeometry = {
+  /** Tight local-frame AABB (mm) — the part's true body extent before placement. */
+  readonly localBox: LocalAabb
+  /** Placement transform; omit for identity. */
+  readonly transform?: InterferenceTransform
+}
+
+const AXIS_X: readonly [number, number, number] = [1, 0, 0]
+const AXIS_Y: readonly [number, number, number] = [0, 1, 0]
+const AXIS_Z: readonly [number, number, number] = [0, 0, 1]
+
+/** Rotate a local DIRECTION (no translation) by an Euler-ZYX transform. */
+function rotateDir(
+  t: InterferenceTransform,
+  v: readonly [number, number, number]
+): [number, number, number] {
+  const origin = transformPoint(t, [0, 0, 0])
+  const tip = transformPoint(t, v)
+  return [tip[0] - origin[0], tip[1] - origin[1], tip[2] - origin[2]]
+}
+
+function dot3(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+function cross3(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number]
+): [number, number, number] {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/** An oriented bounding box: world center, three orthonormal axes, per-axis half-extents. */
+type Obb = {
+  center: [number, number, number]
+  axes: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number]
+  ]
+  half: [number, number, number]
+}
+
+/** Build the world-space oriented box of a local AABB under a transform. */
+function obbOf(box: LocalAabb, transform?: InterferenceTransform): Obb {
+  const t = transform ?? IDENTITY_TRANSFORM
+  const localCenter: [number, number, number] = [
+    (box.min[0] + box.max[0]) / 2,
+    (box.min[1] + box.max[1]) / 2,
+    (box.min[2] + box.max[2]) / 2
+  ]
+  return {
+    center: transformPoint(t, localCenter),
+    axes: [rotateDir(t, AXIS_X), rotateDir(t, AXIS_Y), rotateDir(t, AXIS_Z)],
+    half: [
+      (box.max[0] - box.min[0]) / 2,
+      (box.max[1] - box.min[1]) / 2,
+      (box.max[2] - box.min[2]) / 2
+    ]
+  }
+}
+
+/**
+ * Separating-Axis-Theorem overlap test for two oriented bounding boxes.
+ *
+ * Tests the 15 candidate separating axes (3 face normals of A, 3 of B, 9 edge
+ * cross-products). Returns `true` only if the boxes overlap with **positive
+ * penetration** — boxes that merely touch (projection gap exactly 0) return
+ * `false`, matching the strict-`<` semantics of {@link worldAabbsOverlap}.
+ *
+ * `epsilon` guards against the degenerate cross-product axes (near-parallel
+ * edges) producing a spuriously-tiny zero vector; such axes are skipped.
+ */
+function obbsOverlap(a: Obb, b: Obb, epsilon = 1e-9): boolean {
+  const T: [number, number, number] = [
+    b.center[0] - a.center[0],
+    b.center[1] - a.center[1],
+    b.center[2] - a.center[2]
+  ]
+  const candidates: Array<readonly [number, number, number]> = [
+    a.axes[0],
+    a.axes[1],
+    a.axes[2],
+    b.axes[0],
+    b.axes[1],
+    b.axes[2]
+  ]
+  for (const ea of a.axes) {
+    for (const eb of b.axes) {
+      candidates.push(cross3(ea, eb))
+    }
+  }
+  for (const axisRaw of candidates) {
+    const len = Math.sqrt(dot3(axisRaw, axisRaw))
+    if (len < epsilon) continue // degenerate (parallel edges) — not a usable separating axis
+    const axis: [number, number, number] = [axisRaw[0] / len, axisRaw[1] / len, axisRaw[2] / len]
+    const ra =
+      a.half[0] * Math.abs(dot3(axis, a.axes[0])) +
+      a.half[1] * Math.abs(dot3(axis, a.axes[1])) +
+      a.half[2] * Math.abs(dot3(axis, a.axes[2]))
+    const rb =
+      b.half[0] * Math.abs(dot3(axis, b.axes[0])) +
+      b.half[1] * Math.abs(dot3(axis, b.axes[1])) +
+      b.half[2] * Math.abs(dot3(axis, b.axes[2]))
+    const separation = Math.abs(dot3(T, axis))
+    if (separation >= ra + rb) return false // a separating axis exists → no overlap
+  }
+  return true
+}
+
+/**
+ * Build a {@link NarrowPhaseDelegate} that refines broad-phase overlaps with a true
+ * **oriented bounding box (OBB) SAT** test using each part's real per-part geometry.
+ *
+ * The broad phase ({@link detectInterferences}) overlaps the **axis-aligned hulls**
+ * of rotated boxes — conservative and over-reporting for rotated parts. This
+ * delegate re-tests the same per-part dims as ORIENTED boxes, so a pair whose
+ * world AABBs overlap only because rotation inflated their hulls is **cleared**
+ * (false positive killed). A pair whose oriented boxes truly intersect is
+ * **confirmed**.
+ *
+ * Resolution rule per pair:
+ *   - both parts have usable dims (via `geometryById`) → run OBB SAT:
+ *       `true` (confirmed) or `false` (cleared);
+ *   - **either** part lacks dims → return `'indeterminate'` so the pair is KEPT
+ *     conservatively (the delegate must never silently drop an unverifiable clash).
+ *
+ * @param geometryById maps part id → its {@link NarrowPhaseGeometry}. A part absent
+ *   from the map (or present with a malformed box) is treated as "no dims".
+ */
+export function makeAabbNarrowPhase(
+  geometryById: ReadonlyMap<string, NarrowPhaseGeometry>
+): NarrowPhaseDelegate {
+  return (aId, bId) => {
+    const ga = geometryById.get(aId)
+    const gb = geometryById.get(bId)
+    if (ga == null || gb == null) return 'indeterminate'
+    if (!isValidBox(ga.localBox) || !isValidBox(gb.localBox)) return 'indeterminate'
+    return obbsOverlap(obbOf(ga.localBox, ga.transform), obbOf(gb.localBox, gb.transform))
+  }
+}
+
+/**
+ * Convenience wrapper: detect interferences, refining the broad phase with the OBB
+ * narrow phase **only when** per-part geometry is supplied.
+ *
+ * - `geometryById` omitted, `undefined`, or **empty** → delegates to
+ *   {@link detectInterferences} with NO narrow phase. The result is therefore
+ *   **byte-identical** to the pure conservative broad-phase path
+ *   (`fidelity: 'bbox'`) — zero regression for assemblies whose parts carry no
+ *   `geometryDimensions`.
+ * - non-empty map → installs {@link makeAabbNarrowPhase}; pairs with dims on both
+ *   parts are confirmed/cleared, pairs missing dims are kept as `'indeterminate'`,
+ *   and `fidelity` becomes `'bbox+narrow'`.
+ *
+ * The per-part geometry is sourced from the parts themselves: every
+ * {@link InterferencePart} already carries `localBox` + `transform`, so a hydrated
+ * assembly that filled `geometryDimensions` (see `assembly-part.ts`) into each
+ * part's `localBox` gets the refinement for free.
+ */
+export function detectInterferencesWithDims(
+  parts: readonly InterferencePart[],
+  geometryById?: ReadonlyMap<string, NarrowPhaseGeometry>
+): InterferenceReport {
+  if (geometryById == null || geometryById.size === 0) {
+    return detectInterferences(parts)
+  }
+  return detectInterferences(parts, { narrowPhase: makeAabbNarrowPhase(geometryById) })
+}
+
 /** Options for {@link detectInterferences}. */
 export type DetectInterferencesOptions = {
   /**

@@ -47,7 +47,7 @@ import type { ManufacturePanelTab } from '../shell/workspaceMemory'
 import { useProjectSession } from './useProjectSession'
 import { runCamForOp } from '../manufacture/run-cam-for-op'
 import { runSliceForOp } from '../manufacture/run-slice-for-op'
-import { getPlates } from '../manufacture/plate-state'
+import { getPlates, getActivePlate } from '../manufacture/plate-state'
 import { useCamHandoff } from './CamHandoffContext'
 import type { CamImportEnv } from './import-stl-into-first-plate'
 import type { PendingMeshImport } from '../manufacture/manufacture-load-guard'
@@ -101,9 +101,58 @@ function findFdmSliceOp(mfg: ManufactureFile): { sourceMesh: string } | null {
   return null
 }
 
-/** Advisory shown for tool-import affordances not yet wired in the new shell. */
-const TOOL_IMPORT_ADVISORY =
-  'Tool import from the new shell is coming — use Utilities → Library for now.'
+/** Tool-library file filter shared with Utilities → Library (LibraryView.importTools). */
+const TOOL_LIBRARY_FILE_FILTERS: ReadonlyArray<{ name: string; extensions: string[] }> = [
+  { name: 'Tool Libraries', extensions: ['json', 'csv', 'tools'] }
+]
+
+/**
+ * Laguna Swift 5x10 default sheet (mm) — used when no Laguna setup stock is
+ * defined. Mirrors LagunaNestingPanel's LAGUNA_DEFAULT_SHEET_{W,H}_MM so the
+ * host's auto-arrange routine nests onto the same physical sheet the panel does.
+ */
+const ARRANGE_DEFAULT_SHEET_W_MM = 1524
+const ARRANGE_DEFAULT_SHEET_H_MM = 3048
+
+/** Part margin (mm) the auto-arrange nest leaves between parts. Matches the panel. */
+const ARRANGE_PART_MARGIN_MM = 3
+/** Sheet edge margin (mm) for auto-arrange. Matches the panel. */
+const ARRANGE_SHEET_MARGIN_MM = 10
+
+/** A nestable 2D part: an op id + its closed contour polygon. */
+export interface NestablePart {
+  readonly id: string
+  readonly points: ReadonlyArray<readonly [number, number]>
+}
+
+/**
+ * Extract the nestable 2D parts from a plate's operations. PURE — mirrors
+ * `LagunaNestingPanel.nestableParts` exactly so the host's auto-arrange feeds
+ * the SAME polygon set the manual nesting panel does: every un-suppressed
+ * `cnc_contour` op whose `contourPoints` form a closed loop (>= 3 points)
+ * contributes one polygon, keyed by the op id so placements map back
+ * unambiguously. Reused (not reimplemented): the actual bin-packing lives in
+ * the `nesting:nestPolygons` engine; this only collects its input.
+ */
+export function extractNestableParts(
+  operations: ReadonlyArray<ManufactureOperation>
+): NestablePart[] {
+  const parts: NestablePart[] = []
+  for (const op of operations) {
+    if (op.kind !== 'cnc_contour') continue
+    if (op.suppressed) continue
+    const raw = op.params?.['contourPoints']
+    if (!Array.isArray(raw)) continue
+    const pts: Array<readonly [number, number]> = []
+    for (const v of raw) {
+      if (Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number') {
+        pts.push([v[0], v[1]])
+      }
+    }
+    if (pts.length >= 3) parts.push({ id: op.id, points: pts })
+  }
+  return parts
+}
 
 /** Advisory shown for the Settings / Project navigation affordances. */
 const NAVIGATE_ADVISORY = 'Open Settings / your project from the top bar.'
@@ -366,13 +415,42 @@ export function ManufactureHost(): ReactElement {
     })()
   }, [projectDir, activeMachineId, settings, pushToast])
 
-  const handleImportTools = useCallback((): void => {
-    pushToast('warn', TOOL_IMPORT_ADVISORY)
-  }, [pushToast])
+  // ── Tool-library import (REUSES Utilities → Library's import IPC) ────────
+  // Both affordances now drive the SAME pipeline `LibraryView.importTools` uses:
+  // a native file picker (`dialog:openFile`) restricted to tool-library files,
+  // then `tools:importFile` (global 'default' library) or
+  // `machineTools:importFile` (per-machine) — no parallel importer. When a CNC
+  // machine is active the tools land in that machine's library (so its ops can
+  // resolve diameters); otherwise they land in the global 'default' library,
+  // exactly mirroring the Library view's `selectedMachineId` branch.
+  const importToolLibrary = useCallback((): void => {
+    void (async () => {
+      try {
+        const path = await fab().dialogOpenFile([...TOOL_LIBRARY_FILE_FILTERS])
+        if (!path) return
+        // Prefer the active CNC machine's library; FDM (K2) and no-machine fall
+        // back to the global 'default' library (FDM uses no cutting tools).
+        const cncMachineId =
+          activeMachineId && machines.some((m) => m.id === activeMachineId && m.kind === 'cnc')
+            ? activeMachineId
+            : null
+        if (cncMachineId) {
+          const lib = await fab().machineToolsImportFile(cncMachineId, path)
+          pushToast('ok', `Imported ${lib.tools.length} tool(s) into the machine library.`)
+        } else {
+          const lib = await fab().toolsImportFile('default', path)
+          pushToast('ok', `Imported ${lib.tools.length} tool(s) into the global library.`)
+        }
+      } catch (e) {
+        pushToast('err', 'Tool import failed', e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [activeMachineId, machines, pushToast])
 
-  const handleImportToolLibraryFromFile = useCallback((): void => {
-    pushToast('warn', TOOL_IMPORT_ADVISORY)
-  }, [pushToast])
+  // ManufactureWorkspace exposes two tool-import entry points (a header button +
+  // a file menu item); both map onto the single reused import pipeline above.
+  const handleImportTools = importToolLibrary
+  const handleImportToolLibraryFromFile = importToolLibrary
 
   const handleGoSettings = useCallback((): void => {
     pushToast('warn', NAVIGATE_ADVISORY)
@@ -450,11 +528,15 @@ export function ManufactureHost(): ReactElement {
   //     G-code here.
   //   - jobPause / jobResume / jobCancel call the existing Moonraker job IPC
   //     on the configured printer URL. No temperature targets move.
-  //   - importModel / arrange / autoOrient surface an honest advisory: the
-  //     mesh-binding import + plate arrange/auto-orient are workspace-internal
-  //     (or not yet built), so the ribbon entry points greet the operator with
-  //     the right place to act rather than pretending. Enablement gating (FDM
-  //     machine + Manufacture route) lives in `fdm-commands.ts`.
+  //   - arrange runs the host's `handleArrangeParts`, which drives the EXISTING
+  //     true-shape nesting engine (`nesting:nestPolygons` — the same engine the
+  //     LagunaNestingPanel uses) over the active plate's nestable contour ops
+  //     and reports the layout. importModel / autoOrient still surface an honest
+  //     advisory: the mesh-binding import is workspace-internal and FDM
+  //     auto-orient (overhang-minimizing mesh analysis) is not yet built, so
+  //     those entry points greet the operator with the right place to act rather
+  //     than pretending. Enablement gating (FDM machine + Manufacture route)
+  //     lives in `fdm-commands.ts`.
   const handleFdmJobControl = useCallback(
     (verb: 'pause' | 'resume' | 'cancel'): void => {
       const url = settings?.moonrakerUrl?.trim() ?? ''
@@ -481,6 +563,71 @@ export function ManufactureHost(): ReactElement {
     [settings, pushToast]
   )
 
+  // ── Auto-arrange (REUSES the existing true-shape nesting engine) ──────────
+  // Drives the SAME `nesting:nestPolygons` engine the LagunaNestingPanel uses:
+  // it loads the live plan, collects the active plate's nestable `cnc_contour`
+  // polygons via `extractNestableParts` (a byte-for-byte mirror of the panel's
+  // `nestableParts`), and runs the nester over them. It does NOT reimplement
+  // bin-packing. The placements are reported; applying them back onto the ops
+  // (the workspace-internal `applyNestingPlacements`) stays in the dedicated
+  // nesting panel, which the operator reaches via the router `nest` ribbon
+  // entry. SAFETY: no G-code — the engine returns placement coordinates only.
+  const handleArrangeParts = useCallback((): void => {
+    if (!projectDir) {
+      pushToast('warn', 'Open a project before auto-arranging the plate.')
+      return
+    }
+    void (async () => {
+      let mfg: ManufactureFile
+      try {
+        mfg = await fab().manufactureLoad(projectDir)
+      } catch {
+        pushToast('err', 'Failed to load the manufacture plan for arranging.')
+        return
+      }
+      const plate = getActivePlate(mfg, null)
+      const parts = extractNestableParts(plate.operations)
+      if (parts.length === 0) {
+        pushToast(
+          'warn',
+          'No nestable contour parts on the plate. Derive cnc_contour geometry first (auto-arrange nests 2D contour outlines).'
+        )
+        return
+      }
+      try {
+        const response = await fab().nestingNestPolygons({
+          parts: parts.map((pt) => ({ id: pt.id, points: pt.points })),
+          sheet: {
+            widthMm: ARRANGE_DEFAULT_SHEET_W_MM,
+            heightMm: ARRANGE_DEFAULT_SHEET_H_MM,
+            marginMm: ARRANGE_SHEET_MARGIN_MM
+          },
+          opts: {
+            engine: 'nfp',
+            partMarginMm: ARRANGE_PART_MARGIN_MM,
+            allowedRotations: [0, 90, 180, 270],
+            maxSheets: 8
+          }
+        })
+        if (!response.ok) {
+          pushToast('err', 'Auto-arrange failed', response.hint ?? response.error)
+          return
+        }
+        const r = response.result
+        const placed = r.placements.length
+        const unplaced = r.unplaced.length
+        pushToast(
+          unplaced > 0 ? 'warn' : 'ok',
+          `Arranged ${placed}/${parts.length} part(s) at ${r.utilizationPct}% utilization` +
+            (unplaced > 0 ? ` (${unplaced} did not fit).` : '.') +
+            ` Open the nesting panel to apply the layout.`
+        )
+      } catch (e) {
+        pushToast('err', 'Auto-arrange failed', e instanceof Error ? e.message : String(e))
+      }
+    })()
+  }, [projectDir, pushToast])
+
   const fdmActions = useMemo<FdmCommandActions>(
     () => ({
       importModel: () =>
@@ -488,7 +635,7 @@ export function ManufactureHost(): ReactElement {
           'warn',
           'Import a mesh from the Manufacture → Plan tab (bind an STL to an FDM slice op).'
         ),
-      arrange: () => pushToast('warn', 'Auto-arrange is coming — place parts on the plate manually for now.'),
+      arrange: () => handleArrangeParts(),
       autoOrient: () => pushToast('warn', 'Auto-orient is coming — set part orientation in Design for now.'),
       openSupports: () => setRequestedStage('device'),
       openProcess: () => setRequestedStage('device'),
@@ -500,7 +647,7 @@ export function ManufactureHost(): ReactElement {
       jobResume: () => handleFdmJobControl('resume'),
       jobCancel: () => handleFdmJobControl('cancel')
     }),
-    [pushToast, handleRunSlice, handleFdmJobControl]
+    [pushToast, handleRunSlice, handleFdmJobControl, handleArrangeParts]
   )
 
   useEffect(() => registerFdmCommands(fdmActions), [fdmActions])

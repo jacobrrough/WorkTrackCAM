@@ -1262,8 +1262,11 @@ export type CadAttachTitleBlockResult = {
 // Safety Rule 1: renderer-only; never touches G-code / STL.
 
 /** Snap-point kinds the renderer's drawing-snap resolver understands. Mirrors
- * ``SnapPointKind`` in ``src/renderer/design/drawing-snap.ts``. */
-export type CadDrawingSnapKind = 'vertex' | 'endpoint' | 'midpoint' | 'center'
+ * ``SnapPointKind`` in ``src/renderer/design/drawing-snap.ts``. ``'quadrant'``
+ * is the 0/90/180/270 degree point on a full circle (holes / bosses) and is
+ * treated as vertex-class by the resolver, matching the sidecar's
+ * ``_emit_circle_snaps`` docstring. */
+export type CadDrawingSnapKind = 'vertex' | 'endpoint' | 'midpoint' | 'center' | 'quadrant'
 
 /** Projected-edge kinds. ``line`` is a straight segment; ``arc`` / ``circle``
  * are curved (the renderer may sample ``points`` for either). Kept open with a

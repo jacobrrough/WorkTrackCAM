@@ -66,6 +66,7 @@ import type {
   AssemblySummaryReport,
 } from '../../shared/assembly-schema'
 import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
+import type { AssemblyPartGeometryDimensions } from '../../shared/assembly-part'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import {
   bomForParts,
@@ -148,6 +149,21 @@ export type AssemblyPart = {
    * additive; defaults to "not grounded" when omitted.
    */
   readonly grounded?: boolean
+  /**
+   * Optional tight **local-frame** axis-aligned bounding box (mm) for this part's
+   * real geometry — the tessellation bbox captured when the part was added (the
+   * sidecar's `CadExecuteScriptMesh.bbox`, or {@link localAabbFromGeometry} over a
+   * live viewport `BufferGeometry`). Mirrors the shared
+   * {@link AssemblyPartGeometryDimensions} schema fragment (`assembly-part.ts`).
+   *
+   * When present it ACTIVATES the engine's OBB narrow phase in the interference
+   * check (`interferencesForParts` → `detectInterferencesWithDims`): rotation-
+   * inflated bounding-box false positives are cleared instead of over-reported.
+   * Optional + additive: a row with no dims (legacy / hydrated / not-yet-measured)
+   * falls back to the conservative nominal-cube broad phase exactly as before — no
+   * regression, never a crash.
+   */
+  readonly geometryDimensions?: AssemblyPartGeometryDimensions
 }
 
 /**
@@ -1436,9 +1452,13 @@ export function AssemblyView({
               <span
                 className="design-assembly__interference-fidelity"
                 data-testid="design-assembly-interference-fidelity"
-                title="Axis-aligned bounding-box overlap on nominal part extents — a coarse clash filter, not a certified solid-intersection check."
+                title={
+                  interferenceReport.fidelity === 'bbox+narrow'
+                    ? 'Oriented bounding-box (OBB) refine on real per-part extents — rotation-induced false positives are cleared. Still a bounding-box check, not a certified solid-intersection.'
+                    : 'Axis-aligned bounding-box overlap on nominal part extents — a coarse clash filter, not a certified solid-intersection check.'
+                }
               >
-                bbox-level
+                {interferenceReport.fidelity === 'bbox+narrow' ? 'bbox-level + OBB' : 'bbox-level'}
               </span>
             </div>
             {interferenceReport.clashingPairs.length === 0 ? (

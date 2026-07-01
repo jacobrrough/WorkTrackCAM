@@ -20,8 +20,14 @@
 // Snap point types
 // ---------------------------------------------------------------------------
 
-/** Geometric classification of a snap point. Lower SNAP_KIND_PRIORITY → higher priority. */
-export type SnapPointKind = 'vertex' | 'endpoint' | 'midpoint' | 'center'
+/**
+ * Geometric classification of a snap point. Lower SNAP_KIND_PRIORITY → higher priority.
+ *
+ * `'quadrant'` is the 0/90/180/270° point on a full circle (prime target on holes /
+ * bosses), emitted by the sidecar's `_emit_circle_snaps`. Per that helper's docstring
+ * it is treated as a **vertex-class** target, so it sits high in SNAP_KIND_PRIORITY.
+ */
+export type SnapPointKind = 'vertex' | 'endpoint' | 'midpoint' | 'center' | 'quadrant'
 
 /** A candidate snap point in SVG coordinate space (mm, same scale as CadQuery getSVG output). */
 export type SnapPoint = {
@@ -43,13 +49,20 @@ export type SnapResult = SnapPoint & {
 
 /**
  * Priority table for tie-breaking when two snap points are equidistant from the cursor.
- * Lower number = higher priority. vertex(0) > endpoint(1) > center(2) > midpoint(3).
+ * Lower number = higher priority:
+ *   vertex(0) > endpoint(1) > quadrant(2) > center(3) > midpoint(4).
+ *
+ * `quadrant` is vertex-class (the sidecar treats it like a vertex target), so it slots
+ * right after endpoint — above `center`/`midpoint`. Adding it shifted `center` 2→3 and
+ * `midpoint` 3→4 to keep a clean, gapless total order while preserving the relative
+ * ranking of the original four kinds.
  */
 export const SNAP_KIND_PRIORITY: Record<SnapPointKind, number> = {
   vertex: 0,
   endpoint: 1,
-  center: 2,
-  midpoint: 3
+  quadrant: 2,
+  center: 3,
+  midpoint: 4
 }
 
 /** Default snap search radius in SVG units (pixels at 1:1 screen mapping). */

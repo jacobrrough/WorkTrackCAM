@@ -1201,6 +1201,12 @@ export function DesignWorkspace({
       const meshes = lastTessellation?.meshes ?? []
       const sourceMesh = meshes.length > 0 ? meshes[prev.length % meshes.length] : firstMesh
       const handle = sourceMesh?.handle ?? firstMesh.handle
+      // Local-frame AABB (mm) from the source body's already-computed bbox. This
+      // populates the part's `geometryDimensions` so the assembly interference
+      // check activates its OBB narrow phase (rotation-aware, kills bbox false
+      // positives) — see `assembly-render-seam.ts`. Optional/self-activating: a
+      // part without dims degrades to the conservative bbox-only path.
+      const srcBbox = sourceMesh?.bbox ?? firstMesh.bbox
       // Stack instances along +X so two parts from one body do not overlap in
       // the viewport (the assembly solver can still move them via mates).
       const offsetX = prev.length * ASSEMBLY_PART_OFFSET_MM
@@ -1213,6 +1219,9 @@ export function DesignWorkspace({
         // when it is the SAME body as a sibling instance (distinct instance,
         // shared source — documented, never silently aliased).
         geometrySource: handle,
+        geometryDimensions: srcBbox
+          ? { aabbMin: srcBbox.min, aabbMax: srcBbox.max }
+          : undefined,
         transform: offsetX !== 0 ? { position } : undefined,
         transformSummary: offsetX !== 0 ? `@(${offsetX}, 0, 0)` : 'identity',
       }

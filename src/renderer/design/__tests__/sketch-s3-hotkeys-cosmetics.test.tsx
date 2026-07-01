@@ -127,9 +127,12 @@ describe('S3 hotkeys -- canvas-scoped gating (source pins; SSR cannot press keys
 })
 
 describe('S3 hotkeys -- SketchSurface maps keys onto the EXISTING state (source pins)', () => {
-  it('tool hotkeys arm the SAME state the palette buttons set', () => {
+  it('tool hotkeys arm the SAME state the ribbon arms (one setActiveTool, no parallel state)', () => {
     expect(SURFACE).toContain('onToolHotkey={setActiveTool}')
-    expect(SURFACE).toContain('onClick={() => setActiveTool(t.id)}')
+    // The redundant in-surface palette was removed; the ribbon path
+    // (`armedToolCommandId` → `toolForArmedCommand`) arms the SAME single
+    // `activeTool` state the hotkeys do — no parallel tool state.
+    expect(SURFACE).toContain('if (t) setActiveTool(t)')
   })
 
   it('G flips the SAME snap state the Snap button flips (no parallel state)', () => {

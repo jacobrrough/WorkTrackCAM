@@ -2196,6 +2196,7 @@ export const V15_SNAP_KINDS: readonly V15CadDrawingSnapKind[] = [
   'endpoint',
   'midpoint',
   'center',
+  'quadrant',
 ] as const
 
 /** Allowed BOM column keys (V1.5). Mirrors the sidecar's ``BOM_TABLE_COLUMNS``. */

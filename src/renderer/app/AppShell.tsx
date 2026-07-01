@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import { useMachineSession } from '../contexts/MachineSessionContext'
@@ -22,7 +22,12 @@ import { HelpPanel } from '../src/HelpPanel'
 import { NewShellCommandPalette } from './NewShellCommandPalette'
 import { KeyboardShortcutsDialog } from '../src/KeyboardShortcutsDialog'
 import { ConfirmDialog } from '../src/ConfirmDialog'
-import { CommandContextProvider, registerStarterCommands } from '../commands'
+import {
+  CommandContextProvider,
+  registerStarterCommands,
+  useCommandEngine,
+  dispatchKeybinding
+} from '../commands'
 import { NavigationGuardProvider, useNavigationGuard } from './NavigationGuardContext'
 import { resolveNavIntent } from './navigation-guard'
 import { applyTheme } from '../theme/useTheme'
@@ -67,6 +72,97 @@ function readLastVariantByEnvId(): Partial<Record<EnvironmentId, string>> {
 }
 
 /**
+ * True when `e` is a key the shell already owns via a dedicated handler, so the
+ * command-keybinding layer must NOT ALSO dispatch it (no double-fire). Covers:
+ *   - Ctrl/Cmd+K            → command palette toggle (AppShellBody `onKey`)
+ *   - Ctrl/Cmd+Shift+?      → shortcuts reference (AppShellBody `onKey`)
+ *   - F1                    → help panel (AppShellBody `onKey`)
+ *   - Escape                → close overlays (AppShellBody `onKey`)
+ *   - bare 1–6              → workspace nav (reserved for the nav rail rows in
+ *                             `app-keyboard-shortcuts`; kept unavailable to the
+ *                             command layer even though no shell `onKey` branch
+ *                             claims them yet, so a future digit command can't
+ *                             silently hijack a reserved nav digit)
+ *
+ * This is the load-bearing guard for the "openCommandPalette is the ONLY command
+ * that declares a keybinding today (Ctrl+K), and AppShell already handles Ctrl+K"
+ * invariant: because Ctrl+K is reserved here, the command layer skips it and the
+ * palette toggle fires exactly once.
+ */
+export function isReservedShellKey(e: KeyboardEvent): boolean {
+  if (matchesCommandPaletteToggle(e)) return true
+  if (matchesKeyboardShortcutsReference(e)) return true
+  if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) return true
+  if (e.key === 'Escape') return true
+  // Bare workspace-nav digits 1–6 (no modifiers) belong to the nav rail.
+  if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && /^[1-6]$/.test(e.key)) return true
+  return false
+}
+
+/**
+ * Pure decision for the command-keybinding layer, extracted so the guard order
+ * is unit-testable without a DOM (the renderer suite runs under the `node`
+ * vitest env — no jsdom). Returns the id of the command that fired, or `null`
+ * when the keystroke was suppressed or matched nothing.
+ *
+ * Guard order (each a hard skip that returns `null`):
+ *   1. palette open  → the palette owns the keyboard while it is up.
+ *   2. typing        → focus is in an input/textarea/select/contenteditable.
+ *   3. reserved key  → {@link isReservedShellKey} (prevents the Ctrl+K etc.
+ *                      double-fire).
+ * Only then is `dispatch(e)` consulted (the live `dispatchKeybinding(e, ctx)`).
+ */
+export function decideCommandKeybinding(args: {
+  readonly e: KeyboardEvent
+  readonly paletteOpen: boolean
+  readonly typing: boolean
+  readonly dispatch: (e: KeyboardEvent) => string | null
+}): string | null {
+  const { e, paletteOpen, typing, dispatch } = args
+  if (paletteOpen) return null
+  if (typing) return null
+  if (isReservedShellKey(e)) return null
+  return dispatch(e)
+}
+
+/**
+ * Child of {@link CommandContextProvider} that makes the command-keybinding
+ * dispatch backbone LIVE. It reads the engine's aggregated {@link CommandContext}
+ * (workspace ∪ machineKind ∪ selection ∪ sketch) and, on each keydown, runs the
+ * pure {@link decideCommandKeybinding} gate before calling the engine's
+ * `dispatchKeybinding`. Mounted UNDER the provider (AppShellBody's own `onKey`
+ * effect cannot reach `useCommandEngine`); its listener is strictly additive —
+ * the reserved shell shortcuts keep their dedicated AppShellBody handling, and a
+ * keystroke that matches no enabled command bubbles exactly as before.
+ *
+ * SAFETY: fires only already-registered command handlers against the live
+ * context; no G-code, no machine writes here.
+ */
+function ShellCommandKeybindings({ paletteOpen }: { paletteOpen: boolean }): null {
+  const engine = useCommandEngine()
+  // Keep the freshest context in a ref so the (deps-stable) listener always
+  // dispatches against current workspace/selection without re-binding per change.
+  const ctxRef = useRef(engine.context)
+  ctxRef.current = engine.context
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const fired = decideCommandKeybinding({
+        e,
+        paletteOpen,
+        typing: isTypableKeyboardTarget(document.activeElement),
+        dispatch: (ev) => dispatchKeybinding(ev, ctxRef.current)
+      })
+      if (fired !== null) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paletteOpen])
+
+  return null
+}
+
+/**
  * The new WorkTrack3D shell frame: a CSS grid of TopBar / WorkspaceNav /
  * WorkspaceHost / StatusBar. Reuses the existing contexts (machine session,
  * toast, UI) and the SettingsDrawer (which carries the 10-theme picker), so the
@@ -96,7 +192,7 @@ function AppShellBody(): ReactElement {
     setLastMachineId,
     loadToolsForMachine
   } = useMachineSession()
-  const { setCmdOpen, showShortcuts, setShowShortcuts, helpOpen, setHelpOpen } = useUI()
+  const { cmdOpen, setCmdOpen, showShortcuts, setShowShortcuts, helpOpen, setHelpOpen } = useUI()
   const { pushToast } = useToast()
   const { activeWorkspace, setActiveWorkspace } = useWorkspaceRouter('design')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -350,6 +446,15 @@ function AppShellBody(): ReactElement {
 
   return (
     <CommandContextProvider workspace={activeWorkspace} onNavigate={guardedNavigate}>
+      {/*
+        FG · make the command-keybinding dispatch backbone LIVE. This lives UNDER
+        the provider (AppShellBody's own reserved-shortcut `onKey` effect cannot
+        reach `useCommandEngine`) and dispatches registered command keybindings
+        against the live context — but only after the palette / typing / reserved
+        guards, so Ctrl+K (the ONLY command declaring a keybinding today) keeps
+        firing exactly once via AppShellBody, never double-dispatched here.
+      */}
+      <ShellCommandKeybindings paletteOpen={cmdOpen} />
       <div className="wt-shell" data-environment={env?.id}>
         <TopBar
           machine={sessionMachine}

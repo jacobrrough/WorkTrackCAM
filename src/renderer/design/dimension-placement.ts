@@ -15,9 +15,15 @@
  * Pressing a NEW dimension kind while a placement is in progress resets the machine
  * (step 0 of the new kind), discarding any partially-captured p1.
  *
- * Plan reference: docs/plans/v2-drawing-dimension-snap-to-vertex.md §3 + §7 (Step 1 +
- * Step 3 free-cursor slice). Sidecar snap-point wiring is a DEFERRED follow-up (Step 2);
- * for now, callers pass raw `clientToSvgCoord` output when `resolveSnap` returns null.
+ * Snap-point wiring is LIVE (no longer deferred): DrawingView fetches projected
+ * geometry via the `cad.extract_drawing_geometry` sidecar method, feeds the
+ * returned snap candidates to `resolveSnap`, and passes the SNAPPED coordinate
+ * (or the raw `clientToSvgCoord` output when `resolveSnap` returns null — out of
+ * tolerance, no candidates, or Alt-held override) into `advanceDimensionPlacement`.
+ * This machine is coordinate-only: it stays agnostic to whether a click was
+ * snapped, so a free-cursor click and a snapped click flow through identically.
+ *
+ * Plan reference: docs/plans/v2-drawing-dimension-snap-to-vertex.md §3 + §7.
  */
 
 import type { DrawingDimensionKind } from './DrawingView'

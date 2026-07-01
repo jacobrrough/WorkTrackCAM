@@ -84,11 +84,12 @@ describe('SketchSurface — S1 history controls render contract', () => {
     expect(html).toContain('data-history-revision="0"')
   })
 
-  it('still mounts the palette + canvas (no regression), with Select as the default tool', () => {
+  it('still mounts the canvas (no regression), with Select as the default tool', () => {
     const html = render(emptyDesign())
-    expect(html).toContain('data-testid="sketch-surface-palette"')
     expect(html).toContain('class="sketch-canvas"')
-    expect(html).toContain('data-testid="sketch-surface-tool-select"')
+    // Tool selection lives in the ribbon now (no in-surface palette); the canvas
+    // still defaults to the Select tool.
+    expect(html).not.toContain('data-testid="sketch-surface-palette"')
     expect(html).toContain('data-active-tool="select"')
   })
 })
@@ -171,13 +172,6 @@ describe('SketchSurface — S1 mutation-seam source pins', () => {
 // ── Sketch S4 — dimension placement + inline value-edit wiring ───────────────
 
 describe('SketchSurface — S4 dimension wiring', () => {
-  it('exposes a Dimension tool in the palette (Annotate group)', () => {
-    const html = render(emptyDesign())
-    expect(html).toContain('data-testid="sketch-surface-tool-dimension"')
-    // The Annotate group heading is rendered for the new group.
-    expect(html).toContain('Annotate')
-  })
-
   it('threads onPlaceDimension + onCommitDimensionValue to the canvas', () => {
     expect(SRC).toContain('onPlaceDimension={handlePlaceDimension}')
     expect(SRC).toContain('onCommitDimensionValue={handleCommitDimensionValue}')

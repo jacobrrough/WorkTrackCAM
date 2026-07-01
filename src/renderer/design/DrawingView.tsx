@@ -53,10 +53,12 @@
  *   onPointerDown  -> clientToSvgCoord -> advanceDimensionPlacement
  *                  -> on completion: append dimension spec with p1/p2
  *
- * snapPoints state defaults to [] (DEFERRED: sidecar fetch via
- * cad.extract_drawing_snap_points will populate this in a follow-up
- * PR; for now resolveSnap always returns null -> free-cursor placement).
- * altHeld disables snap (hold Alt to override).
+ * snapPoints state is populated by the geometry-fetch effect from the
+ * `cad.extract_drawing_geometry` sidecar method (projected vertices /
+ * edge endpoints / midpoints / arc centres with stable ids). resolveSnap
+ * snaps the cursor to the nearest candidate within snapTolerance; it falls
+ * back to free-cursor placement when no candidate is in range OR the bridge
+ * is absent (older build). altHeld disables snap (hold Alt to override).
  */
 import {
   useCallback,

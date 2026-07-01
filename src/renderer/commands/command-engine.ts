@@ -139,12 +139,138 @@ export interface CommandHandler {
    */
   readonly enabled?: (ctx: CommandContext) => boolean
   /**
-   * Optional canonical keybinding hint (e.g. `'L'`, `'Ctrl+K'`). Display-only
-   * for now — surfaced in the palette/ribbon; the actual key wiring still
-   * lives in `app-keyboard-shortcuts.ts` until the hotkey layer (FG-7) reads
-   * this field.
+   * Optional canonical keybinding hint (e.g. `'L'`, `'Ctrl+K'`, `'Ctrl+Shift+Z'`).
+   * Surfaced in the palette/ribbon AND live-dispatched: pressing the bound key
+   * fires this command through {@link CommandRegistry.dispatchKeybinding} (the
+   * React seam is `useShellKeyboardShortcuts`). The hotkey honors the same
+   * `enabled(ctx)` gate as {@link CommandRegistry.run} — a disabled command's
+   * key is ignored. Format is `+`-separated modifiers (`Ctrl`/`Cmd`/`Shift`/
+   * `Alt`, any order/case) plus one main key; a `Ctrl` hint matches Win Ctrl OR
+   * mac ⌘ (see {@link matchesKeybinding}). App-global shortcuts that must work
+   * everywhere (workspace nav 1–6, Ctrl+K, F1) stay in
+   * `app-keyboard-shortcuts.ts`; this field is for per-command tool hotkeys.
    */
   readonly keybinding?: string
+}
+
+// ── Keybinding matching ──────────────────────────────────────────────────────
+
+/**
+ * A parsed {@link CommandHandler.keybinding} spec: the required modifier state
+ * plus the (lower-cased) main key. `key` is matched case-insensitively against
+ * `KeyboardEvent.key` — `'L'` and `'l'` are the same binding (Shift state is a
+ * separate, explicit `shift` flag, mirroring the matchers in
+ * `app-keyboard-shortcuts.ts`).
+ */
+export interface ParsedKeybinding {
+  readonly ctrl: boolean
+  readonly shift: boolean
+  readonly alt: boolean
+  readonly meta: boolean
+  /** Lower-cased main key (e.g. `'l'`, `'k'`, `'f5'`, `'enter'`). */
+  readonly key: string
+}
+
+/**
+ * Aliases for the modifier tokens a keybinding spec may use. `Cmd` / `Meta` /
+ * `Win` all map onto the platform meta key; `Ctrl` / `Control` onto control.
+ * `Ctrl+K` is treated as "the primary modifier" — see {@link matchesKeybinding},
+ * which accepts EITHER Ctrl or Meta for a `Ctrl`-spec so a single catalog hint
+ * works on both Windows and macOS (the same dual-accept convention the shared
+ * `matches*` helpers use, e.g. `matchesSaveProject`).
+ */
+const MODIFIER_TOKENS: ReadonlySet<string> = new Set([
+  'ctrl',
+  'control',
+  'cmd',
+  'command',
+  'meta',
+  'win',
+  'shift',
+  'alt',
+  'option',
+  'opt'
+])
+
+/**
+ * Parse a `keybinding` hint string (`'L'`, `'Ctrl+K'`, `'Ctrl+Shift+Z'`,
+ * `'F5'`) into its {@link ParsedKeybinding} parts. `+`-separated, modifiers in
+ * any order and case; the final non-modifier token is the main key. Returns
+ * `null` for an empty / modifier-only / malformed spec so a typo can never
+ * match every keystroke.
+ */
+export function parseKeybinding(spec: string): ParsedKeybinding | null {
+  const tokens = spec
+    .split('+')
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+  if (tokens.length === 0) return null
+
+  let ctrl = false
+  let shift = false
+  let alt = false
+  let meta = false
+  let key: string | null = null
+
+  for (const raw of tokens) {
+    const tok = raw.toLowerCase()
+    if (MODIFIER_TOKENS.has(tok)) {
+      switch (tok) {
+        case 'ctrl':
+        case 'control':
+          ctrl = true
+          break
+        case 'cmd':
+        case 'command':
+        case 'meta':
+        case 'win':
+          meta = true
+          break
+        case 'shift':
+          shift = true
+          break
+        case 'alt':
+        case 'option':
+        case 'opt':
+          alt = true
+          break
+      }
+      continue
+    }
+    // First (and only) non-modifier token is the main key. A second one means a
+    // malformed spec like `'L+R'` — reject rather than guess.
+    if (key !== null) return null
+    key = tok
+  }
+
+  if (key === null) return null
+  return { ctrl, shift, alt, meta, key }
+}
+
+/**
+ * True when `e` satisfies the parsed `spec`. Modifier rules:
+ *   - A `Ctrl` spec accepts EITHER `ctrlKey` OR `metaKey` (so one catalog hint
+ *     covers Win Ctrl and mac ⌘), and likewise a `Cmd`/`Meta` spec. A spec with
+ *     NEITHER ctrl nor meta requires BOTH `ctrlKey` and `metaKey` to be absent
+ *     (a bare `'L'` must not fire while Ctrl is held — that is `Ctrl+L`).
+ *   - `shift` / `alt` are matched exactly (present in spec ⇔ pressed).
+ *   - The main key matches `KeyboardEvent.key` case-insensitively.
+ */
+export function matchesKeybinding(e: KeyboardEvent, spec: string | ParsedKeybinding): boolean {
+  const parsed = typeof spec === 'string' ? parseKeybinding(spec) : spec
+  if (!parsed) return false
+
+  // Primary-modifier (ctrl/meta) handling: a spec asking for ctrl OR meta is
+  // satisfied by either physical key; a spec asking for neither requires both
+  // to be up.
+  const wantsPrimary = parsed.ctrl || parsed.meta
+  const hasPrimary = e.ctrlKey || e.metaKey
+  if (wantsPrimary !== hasPrimary) return false
+
+  if (parsed.shift !== e.shiftKey) return false
+  if (parsed.alt !== e.altKey) return false
+
+  return e.key.toLowerCase() === parsed.key
 }
 
 // ── Registry ────────────────────────────────────────────────────────────────
@@ -222,6 +348,32 @@ export class CommandRegistry {
     return true
   }
 
+  /**
+   * Dispatch a keyboard event to the first registered handler whose
+   * {@link CommandHandler.keybinding} matches `e` AND whose `enabled(ctx)`
+   * predicate (if any) passes. Returns the id of the command that ran, or
+   * `null` when nothing matched / everything that matched was disabled.
+   *
+   * This is the runtime side of the `keybinding` field that was previously
+   * display-only: a handler that declares `keybinding: 'L'` now actually fires
+   * when the operator presses **L** (subject to the React seam's typing /
+   * focus guards — see `useShellKeyboardShortcuts`). Iteration order is
+   * registration order; ids should declare disjoint keybindings, so at most one
+   * matches in practice. A *disabled* matching handler is skipped (not treated
+   * as a swallow) so the same chord can fall through to a context where it is
+   * enabled — honoring the same enablement contract as {@link run}.
+   */
+  dispatchKeybinding(e: KeyboardEvent, ctx: CommandContext): string | null {
+    for (const handler of this.handlers.values()) {
+      if (!handler.keybinding) continue
+      if (!matchesKeybinding(e, handler.keybinding)) continue
+      if (handler.enabled && !handler.enabled(ctx)) continue
+      handler.run(ctx)
+      return handler.id
+    }
+    return null
+  }
+
   /** Number of registered handlers. Test/diagnostic helper. */
   get size(): number {
     return this.handlers.size
@@ -253,6 +405,18 @@ export function getHandler(id: string): CommandHandler | undefined {
  */
 export function runCommand(id: string, ctx: CommandContext): boolean {
   return commandRegistry.run(id, ctx)
+}
+
+/**
+ * Dispatch a keyboard event through the shared registry: find the first
+ * registered, *enabled* handler whose `keybinding` matches `e`, run it, and
+ * return its id (or `null` if nothing matched). The React seam
+ * (`useShellKeyboardShortcuts`) calls this after its own reserved app shortcuts
+ * + typing/focus guards, so a command keybinding never hijacks a text field or
+ * shadows a global shell shortcut.
+ */
+export function dispatchKeybinding(e: KeyboardEvent, ctx: CommandContext): string | null {
+  return commandRegistry.dispatchKeybinding(e, ctx)
 }
 
 // ── Context filtering / resolution ──────────────────────────────────────────

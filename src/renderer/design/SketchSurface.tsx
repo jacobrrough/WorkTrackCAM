@@ -22,12 +22,11 @@
  *   (c) the entities live in the session, NOT in this component — so toggling
  *       between the Sketch and Model stages preserves them.
  *
- * The legacy canvas is a *controlled* editor (no internal tool palette and no
- * snap toggle — those live in the SELF-contained MVP canvas). To keep the task
- * contract ("internal tool palette, snap-to-grid toggle, and numeric dimension
- * input are all reachable + functional"), this wrapper supplies:
- *   - an internal tool palette (the {@link SKETCH_SURFACE_TOOLS} list) that
- *     drives the canvas's `activeTool`;
+ * The legacy canvas is a *controlled* editor. Tool selection is owned by the
+ * top Sketch ribbon (which arms the canvas `activeTool` via `armedToolCommandId`)
+ * and the keyboard hotkeys — the previously-mounted internal tool palette was a
+ * redundant duplicate of that ribbon and has been removed. This wrapper still
+ * supplies:
  *   - a snap-to-grid toggle that switches the effective `gridMm` between the
  *     grid pitch and an effectively-off fine value;
  *   - per-tool parameter fields (fillet radius / chamfer leg / rotate° / scale×)
@@ -158,65 +157,6 @@ function entityLabel(e: SketchEntity): string {
     }
   }
 }
-
-/** A palette entry: the canvas tool id + its human label + group heading. */
-interface SketchSurfaceToolDef {
-  readonly id: SketchTool
-  readonly label: string
-  readonly group: 'Select' | 'Create' | 'Modify' | 'Transform' | 'Annotate'
-}
-
-/**
- * The tools surfaced in the mounted palette, grouped the way the Vectric /
- * Fusion ribbons group them. Every id is a real `SketchTool` the legacy
- * `Sketch2DCanvas` already handles (verified against its `onMouseDown` switch),
- * so each button drives a working draw/edit path. Exported so the render-pin
- * test can assert one button per entry without re-deriving the list.
- */
-export const SKETCH_SURFACE_TOOLS: readonly SketchSurfaceToolDef[] = [
-  // Sketch S1 — the direct-manipulation tool: click-pick (Ctrl/Shift additive),
-  // drag-move, Delete. The DEFAULT tool, matching MvpSketchCanvas + Fusion.
-  { id: 'select', label: 'Select', group: 'Select' },
-  { id: 'line', label: 'Line', group: 'Create' },
-  { id: 'polyline', label: 'Polyline', group: 'Create' },
-  { id: 'rect', label: 'Rectangle', group: 'Create' },
-  { id: 'rect_3pt', label: 'Rect (3-pt)', group: 'Create' },
-  { id: 'circle', label: 'Circle', group: 'Create' },
-  { id: 'circle_2pt', label: 'Circle (2-pt)', group: 'Create' },
-  { id: 'circle_3pt', label: 'Circle (3-pt)', group: 'Create' },
-  { id: 'ellipse', label: 'Ellipse', group: 'Create' },
-  { id: 'arc', label: 'Arc (3-pt)', group: 'Create' },
-  { id: 'arc_center', label: 'Arc (center)', group: 'Create' },
-  { id: 'polygon', label: 'Polygon', group: 'Create' },
-  { id: 'slot_center', label: 'Slot (center)', group: 'Create' },
-  { id: 'slot_overall', label: 'Slot (overall)', group: 'Create' },
-  { id: 'spline_fit', label: 'Spline (fit)', group: 'Create' },
-  { id: 'spline_cp', label: 'Spline (CV)', group: 'Create' },
-  { id: 'point', label: 'Point', group: 'Create' },
-  { id: 'trim', label: 'Trim', group: 'Modify' },
-  { id: 'extend', label: 'Extend', group: 'Modify' },
-  { id: 'split', label: 'Split', group: 'Modify' },
-  { id: 'break', label: 'Break', group: 'Modify' },
-  { id: 'fillet', label: 'Fillet', group: 'Modify' },
-  { id: 'chamfer', label: 'Chamfer', group: 'Modify' },
-  { id: 'move_sk', label: 'Move', group: 'Transform' },
-  { id: 'rotate_sk', label: 'Rotate', group: 'Transform' },
-  { id: 'scale_sk', label: 'Scale', group: 'Transform' },
-  { id: 'mirror_sk', label: 'Mirror', group: 'Transform' },
-  // Sketch S4 — the dimension tool: click two vertices (aligned distance) or a
-  // circle/arc (radial/diameter) to place a DRIVING dimension. Retyping its
-  // value in select mode re-solves the geometry.
-  { id: 'dimension', label: 'Dimension', group: 'Annotate' }
-]
-
-/** Ordered group headings for the palette render. */
-const TOOL_GROUPS: ReadonlyArray<SketchSurfaceToolDef['group']> = [
-  'Select',
-  'Create',
-  'Modify',
-  'Transform',
-  'Annotate'
-]
 
 /** Grid pitch (mm) used when snap is ON. Matches the cockpit's other 5 mm grids. */
 const SNAP_GRID_MM = 5
@@ -355,15 +295,6 @@ export function SketchSurface({
   // variant + Fusion): the operator picks/moves/deletes by default and arms a
   // draw tool explicitly (palette click or ribbon command).
   const [activeTool, setActiveTool] = useState<SketchTool>('select')
-  // The internal tool palette duplicates the top CREATE/MODIFY ribbon (which also arms tools via
-  // `armedSketchTool`), so let the operator collapse it to a thin rail to cut the overlap. Sticky.
-  const [paletteCollapsed, setPaletteCollapsed] = useState<boolean>(() => {
-    try {
-      return globalThis.localStorage?.getItem('wt.sketch.toolsCollapsed') === '1'
-    } catch {
-      return false
-    }
-  })
   const [snapEnabled, setSnapEnabled] = useState(true)
   // Wave 3n — blank the StatusBar coordinate read-out when this surface
   // unmounts (Sketch->Model stage switch / sketch exit): the canvas can only
@@ -800,70 +731,6 @@ export function SketchSurface({
       data-active-tool={activeTool}
       data-history-revision={historyRevision}
     >
-      {/* ── Tool palette (internal — drives the canvas activeTool) ───────── */}
-      <div
-        className={
-          paletteCollapsed
-            ? 'sketch-surface__palette sketch-surface__palette--collapsed'
-            : 'sketch-surface__palette'
-        }
-        role="toolbar"
-        aria-label="Sketch tools"
-        data-testid="sketch-surface-palette"
-      >
-        <button
-          type="button"
-          className="sketch-surface__palette-collapse"
-          data-testid="sketch-surface-palette-collapse"
-          aria-expanded={!paletteCollapsed}
-          aria-label={paletteCollapsed ? 'Show sketch tools panel' : 'Hide sketch tools panel'}
-          title={
-            paletteCollapsed
-              ? 'Show sketch tools'
-              : 'Hide sketch tools (duplicates the ribbon — use the ribbon instead)'
-          }
-          onClick={() =>
-            setPaletteCollapsed((v) => {
-              const next = !v
-              try {
-                globalThis.localStorage?.setItem('wt.sketch.toolsCollapsed', next ? '1' : '0')
-              } catch {
-                /* best-effort */
-              }
-              return next
-            })
-          }
-        >
-          {paletteCollapsed ? '☰' : '‹'}
-        </button>
-        {!paletteCollapsed &&
-          TOOL_GROUPS.map((group) => (
-          <div key={group} className="sketch-surface__palette-group">
-            <div className="sketch-surface__palette-heading">{group}</div>
-            {SKETCH_SURFACE_TOOLS.filter((t) => t.group === group).map((t) => {
-              const isActive = activeTool === t.id
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={
-                    isActive
-                      ? 'sketch-surface__tool sketch-surface__tool--active'
-                      : 'sketch-surface__tool'
-                  }
-                  aria-pressed={isActive}
-                  data-testid={`sketch-surface-tool-${t.id}`}
-                  data-tool-active={isActive ? 'true' : 'false'}
-                  onClick={() => setActiveTool(t.id)}
-                >
-                  {t.label}
-                </button>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-
       {/* ── Canvas column: status row (snap toggle + params) + the canvas ── */}
       <div className="sketch-surface__canvas-col">
         <div
