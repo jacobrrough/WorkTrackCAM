@@ -198,11 +198,113 @@ function distToRing(ring: ReadonlyArray<CamPoint2d>, x: number, y: number): numb
   return best
 }
 
-// -- Test-local G-code walkers ----------------------------------------------------
+// -- Test-local G-code walkers (ARC-AWARE) -----------------------------------------
+//
+// Phase-6 Change 1 made the trochoid relief loops NATIVE G2/G3 arcs. Every audit
+// below is a geometric SAFETY proof (engagement cap, island/channel containment,
+// wall clearance). If they only parsed G1 lines they would see NO trochoid moves
+// and pass VACUOUSLY -- the safety net would silently stop covering the relief.
+// So the collectors INTERPOLATE each G2/G3 arc into fine straight sub-segments
+// (faithful port of `interpolateArc` in cam-gcode-toolpath.ts, the exact routine
+// the preview parser + guardrail auditor use) and then run the same per-segment /
+// per-point checks over the arc sample points. Result: the audits now enforce the
+// invariants on the TRUE arc, at LEAST as strictly as they did on the old chords
+// (16 sub-segments per <=180deg arc == 32 samples per circle, finer than the old
+// 20 chords). If interpolation were wrong or the arcs escaped containment, these
+// proofs fail -- they are genuinely load-bearing, not vacuous.
+
+/** Sub-segments per G2/G3 arc (matches ARC_INTERPOLATION_SEGMENTS in cam-gcode-toolpath.ts). */
+const ARC_SAMPLES = 16
 
 type CutSegment = { x0: number; y0: number; x1: number; y1: number }
 
-/** XY-moving FEED segments at (or entering) cut depth, tracking modal X/Y/Z. */
+/**
+ * Interpolate a G2/G3 arc (XY plane, I/J centre offsets) into ARC_SAMPLES straight
+ * sub-segments from (x0,y0) to (x1,y1). Faithful port of `interpolateArc`
+ * (cam-gcode-toolpath.ts): centre = start + (I,J); sweep sign forced by direction
+ * (G2/cw => negative, G3/ccw => positive); exact endpoint on the last sub-segment.
+ */
+function interpolateArcSubSegments(
+  cw: boolean,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  i: number,
+  j: number
+): CutSegment[] {
+  const cx = x0 + i
+  const cy = y0 + j
+  const startAngle = Math.atan2(y0 - cy, x0 - cx)
+  const endAngle = Math.atan2(y1 - cy, x1 - cx)
+  const r = Math.hypot(x0 - cx, y0 - cy)
+  let sweep = endAngle - startAngle
+  if (cw) {
+    if (sweep >= 0) sweep -= 2 * Math.PI
+  } else {
+    if (sweep <= 0) sweep += 2 * Math.PI
+  }
+  const segs: CutSegment[] = []
+  let px = x0
+  let py = y0
+  for (let s = 0; s < ARC_SAMPLES; s++) {
+    const t1 = (s + 1) / ARC_SAMPLES
+    const a1 = startAngle + sweep * t1
+    const qx = s === ARC_SAMPLES - 1 ? x1 : cx + r * Math.cos(a1)
+    const qy = s === ARC_SAMPLES - 1 ? y1 : cy + r * Math.sin(a1)
+    segs.push({ x0: px, y0: py, x1: qx, y1: qy })
+    px = qx
+    py = qy
+  }
+  return segs
+}
+
+/**
+ * Expand ONE motion line into its cut sub-segments from the current point. A G1
+ * yields at most one segment; a G2/G3 yields ARC_SAMPLES arc-interpolated
+ * sub-segments (all feed, constant Z => they inherit the modal cut Z). Returns the
+ * sub-segments plus the new modal (x,y,z). Non-cut / non-motion lines return none.
+ */
+function expandMotionLine(
+  l: string,
+  x: number,
+  y: number,
+  z: number
+): { segs: CutSegment[]; isFeedCut: boolean; nx: number; ny: number; nz: number } {
+  const isArc = /^G[23]\b/.test(l)
+  const isLin = /^G[01]\b/.test(l)
+  if (!isArc && !isLin) return { segs: [], isFeedCut: false, nx: x, ny: y, nz: z }
+  const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
+  const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
+  const mz = l.match(/Z(-?\d+(?:\.\d+)?)/)
+  const nx = mx ? Number.parseFloat(mx[1]!) : x
+  const ny = my ? Number.parseFloat(my[1]!) : y
+  const nz = mz ? Number.parseFloat(mz[1]!) : z
+  // A move is a CUT when it is a feed (G1/G2/G3) at or entering negative Z.
+  const atDepth = nz < -1e-9 || z < -1e-9
+  if (isArc) {
+    // G2/G3 are always feed moves; interpolate the arc into sub-segments.
+    const cw = /^G2\b/.test(l)
+    const mi = l.match(/I(-?\d+(?:\.\d+)?)/)
+    const mj = l.match(/J(-?\d+(?:\.\d+)?)/)
+    const ci = mi ? Number.parseFloat(mi[1]!) : 0
+    const cj = mj ? Number.parseFloat(mj[1]!) : 0
+    const arc = interpolateArcSubSegments(cw, x, y, nx, ny, ci, cj)
+    return { segs: atDepth ? arc : [], isFeedCut: atDepth, nx, ny, nz }
+  }
+  const isG1 = l.startsWith('G1')
+  const moved = nx !== x || ny !== y
+  if (isG1 && atDepth && moved) {
+    return { segs: [{ x0: x, y0: y, x1: nx, y1: ny }], isFeedCut: true, nx, ny, nz }
+  }
+  return { segs: [], isFeedCut: false, nx, ny, nz }
+}
+
+/**
+ * XY-moving FEED segments at (or entering) cut depth, tracking modal X/Y/Z.
+ * ARC-AWARE: G2/G3 relief arcs are interpolated into fine sub-segments so every
+ * downstream containment / clearance check sees the TRUE arc path, not a gap.
+ */
 function collectCutSegments(lines: ReadonlyArray<string>): CutSegment[] {
   let x = 0
   let y = 0
@@ -210,19 +312,11 @@ function collectCutSegments(lines: ReadonlyArray<string>): CutSegment[] {
   const segs: CutSegment[] = []
   for (const raw of lines) {
     const l = raw.trim()
-    if (!/^G[01]\b/.test(l)) continue
-    const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
-    const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
-    const mz = l.match(/Z(-?\d+(?:\.\d+)?)/)
-    const nx = mx ? Number.parseFloat(mx[1]!) : x
-    const ny = my ? Number.parseFloat(my[1]!) : y
-    const nz = mz ? Number.parseFloat(mz[1]!) : z
-    if (l.startsWith('G1') && (nz < -1e-9 || z < -1e-9) && (nx !== x || ny !== y)) {
-      segs.push({ x0: x, y0: y, x1: nx, y1: ny })
-    }
-    x = nx
-    y = ny
-    z = nz
+    const r = expandMotionLine(l, x, y, z)
+    segs.push(...r.segs)
+    x = r.nx
+    y = r.ny
+    z = r.nz
   }
   return segs
 }
@@ -307,19 +401,16 @@ function collectAuditSegments(lines: ReadonlyArray<string>, safeZ: number): Audi
       z = Number.parseFloat(lift[1]!)
       continue
     }
-    if (!/^G[01]\b/.test(l)) continue
-    const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
-    const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
-    const mz = l.match(/Z(-?\d+(?:\.\d+)?)/)
-    const nx = mx ? Number.parseFloat(mx[1]!) : x
-    const ny = my ? Number.parseFloat(my[1]!) : y
-    const nz = mz ? Number.parseFloat(mz[1]!) : z
-    if (l.startsWith('G1') && (nz < -1e-9 || z < -1e-9) && (nx !== x || ny !== y)) {
-      segs.push({ x0: x, y0: y, x1: nx, y1: ny, skipMeasure: inEntry })
-    }
-    x = nx
-    y = ny
-    z = nz
+    // ARC-AWARE: expandMotionLine emits one segment for a G1 cut and
+    // ARC_SAMPLES interpolated sub-segments for a G2/G3 relief arc, so every
+    // trochoid arc sample point joins the engagement-audit frontier exactly as
+    // the old chord endpoints did (finer, so stricter). Each sub-segment
+    // inherits the loop's entry-slot skip flag.
+    const r = expandMotionLine(l, x, y, z)
+    for (const s of r.segs) segs.push({ ...s, skipMeasure: inEntry })
+    x = r.nx
+    y = r.ny
+    z = r.nz
   }
   return segs
 }
@@ -430,21 +521,39 @@ describe('generateAdaptiveClearing2dLines -- (b) concave L-pocket relief', () =>
     const relief = r.lines.filter((l) => l.startsWith('; adaptive trochoid relief'))
     expect(relief.length).toBeGreaterThan(0)
     expect(relief.some((l) => /level 1 inset 2\.000 mm/.test(l))).toBe(true)
-    // The relief burst actually reaches into the arm (x > 45 -- the arm
-    // spans x 40..80; the body ends at x = 40).
+    // Phase-6 Change 1: the relief is now NATIVE G2/G3 arcs, not a 20-chord G1
+    // polyline. Walk the burst and assert (a) it is made of native arcs (two
+    // <=180deg G3 arcs per relief circle, NOT 50+ straight chords -- a native
+    // arc is 1-2 moves, the whole burst is arcs interleaved with short G1 chain
+    // feeds), and (b) it reaches into the arm (x > 45; arm spans x 40..80, body
+    // ends at x = 40). maxX is measured over BOTH G1 chain feeds and the arc
+    // endpoints so the reach proof is not fooled by the arc split point.
     const reliefIdx = r.lines.findIndex((l) => l.startsWith('; adaptive trochoid relief'))
     let maxX = Number.NEGATIVE_INFINITY
-    let burstMoves = 0
+    let arcMoves = 0
+    let straightMoves = 0
     for (let i = reliefIdx + 1; i < r.lines.length; i++) {
       const l = r.lines[i]!
       if (l.startsWith(';') || /^G0 Z/.test(l)) break
-      const m = l.match(/^G1 X(-?\d+\.\d+) Y/)
-      if (m) {
-        burstMoves++
-        maxX = Math.max(maxX, Number.parseFloat(m[1]!))
+      const arc = l.match(/^G[23] X(-?\d+\.\d+) Y/)
+      const lin = l.match(/^G1 X(-?\d+\.\d+) Y/)
+      if (arc) {
+        arcMoves++
+        // Native arc: G17 plane, I/J centre-offset (NEVER an R-word), correct
+        // direction. A CCW trochoid sweep is emitted as G3.
+        expect(l).toMatch(/^G3 X-?\d+\.\d+ Y-?\d+\.\d+ I-?\d+\.\d+ J-?\d+\.\d+ F\d+$/)
+        expect(l).not.toMatch(/\bR-?\d/) // I/J centre-offset form, never R-word
+        maxX = Math.max(maxX, Number.parseFloat(arc[1]!))
+      } else if (lin) {
+        straightMoves++
+        maxX = Math.max(maxX, Number.parseFloat(lin[1]!))
       }
     }
-    expect(burstMoves).toBeGreaterThan(50) // trochoid chords, not a straight slot
+    // Native arcs present, and NOT a 50+-chord polyline masquerading as a circle
+    // (that was the old behaviour this change replaced). Two arcs per circle, so
+    // arcMoves is even and > 0; the straight feeds are the short chain hops.
+    expect(arcMoves).toBeGreaterThan(0)
+    expect(arcMoves % 2).toBe(0)
     expect(maxX).toBeGreaterThan(45)
   })
 
@@ -501,17 +610,24 @@ describe('generateAdaptiveClearing2dLines -- (c) 8mm channel / 6mm tool fully tr
 
   it('every cut point stays inside the channel tool-center walls (tool inside the 8mm channel)', () => {
     const r = generateAdaptiveClearing2dLines(params)
-    // Legal tool-center area = strip inset by wallStock 0.25.
+    // Legal tool-center area = strip inset by wallStock 0.25. ARC-AWARE: the
+    // spine is cleared by NATIVE G2/G3 arcs, so scan every arc-interpolated
+    // sub-segment endpoint (collectCutSegments expands the arcs), NOT just the
+    // G1 lines -- otherwise the containment proof would skip the arc bodies and
+    // pass vacuously. The arc bulges OUTWARD from its chord toward the walls, so
+    // sampling the true arc is the strict check.
     const tol = 0.02
-    for (const l of r.lines) {
-      const m = l.match(/^G1 X(-?\d+\.\d+) Y(-?\d+\.\d+)/)
-      if (!m) continue
-      const x = Number.parseFloat(m[1]!)
-      const y = Number.parseFloat(m[2]!)
+    const segs = collectCutSegments(r.lines)
+    expect(segs.length).toBeGreaterThan(50)
+    const check = (x: number, y: number): void => {
       expect(x).toBeGreaterThanOrEqual(5.25 - tol)
       expect(x).toBeLessThanOrEqual(54.75 + tol)
       expect(y).toBeGreaterThanOrEqual(19.25 - tol)
       expect(y).toBeLessThanOrEqual(20.75 + tol)
+    }
+    for (const s of segs) {
+      check(s.x0, s.y0)
+      check(s.x1, s.y1)
     }
   })
 
@@ -639,6 +755,162 @@ describe('generateAdaptiveClearing2dLines -- (g) bounded work on a pathological 
     // Bounded output: the budget bounds the program size.
     expect(r.lines.length).toBeLessThan(60_000)
     expectNoRapidAtDepth(r.lines)
+  })
+})
+
+// -- 1(h). Arc-equivalence: native G2/G3 == the old chord circle -------------------
+//
+// Phase-6 Change 1 replaced each 20-chord G1 trochoid circle with TWO native
+// <=180deg arcs. This proves the emitted arc cuts the SAME geometry as the old
+// chords -- same centre, same radius, same direction (CCW => G3) -- so the cut is
+// identical, just fewer moves. The proof reconstructs the exact 20-chord path the
+// old code produced for each parsed circle and shows the interpolated arc path
+// tracks it within the combined chord/arc sagitta tolerance.
+
+/** Reconstruct the OLD 20-chord CCW circle path (start angle 0), as the pre-arc code did. */
+function oldChordCircle(cx: number, cy: number, r: number): Array<[number, number]> {
+  const SEGMENTS = 20
+  const pts: Array<[number, number]> = []
+  const startAngle = 0 // the old code always started at angle 0 (the +X point)
+  for (let s = 0; s <= SEGMENTS; s++) {
+    const ang = startAngle + (s / SEGMENTS) * Math.PI * 2
+    pts.push([cx + r * Math.cos(ang), cy + r * Math.sin(ang)])
+  }
+  return pts
+}
+
+/** Min distance from a point to a polyline (open) -- for Hausdorff-style comparison. */
+function distPointToPolyline(px: number, py: number, poly: ReadonlyArray<[number, number]>): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i + 1 < poly.length; i++) {
+    const d = distToSegment(px, py, poly[i]![0], poly[i]![1], poly[i + 1]![0], poly[i + 1]![1])
+    if (d < best) best = d
+  }
+  return best
+}
+
+describe('generateAdaptiveClearing2dLines -- (h) native arc equals the old chord circle', () => {
+  const params = baseParams({ outerRing: L_POCKET, wallStockMm: 0.5 })
+
+  it('every relief circle is TWO CCW G3 semicircles with matching centre + radius (I/J form, no R-word)', () => {
+    const r = generateAdaptiveClearing2dLines(params)
+    const arcs = r.lines.filter((l) => /^G[23] /.test(l))
+    expect(arcs.length).toBeGreaterThan(0)
+    // Every relief arc is G3 (the trochoid CCW sweep), I/J centre-offset, no R-word.
+    for (const a of arcs) {
+      expect(a).toMatch(/^G3 X-?\d+\.\d+ Y-?\d+\.\d+ I-?\d+\.\d+ J-?\d+\.\d+ F\d+$/)
+      expect(a).not.toMatch(/\bR-?\d/)
+    }
+    // Two semicircles per circle: the arc count is even and equals 2 x circle count.
+    const circles = Number.parseInt(r.lines[0]!.match(/(\d+) trochoid circle/)![1]!, 10)
+    expect(arcs.length).toBe(2 * circles)
+  })
+
+  it('the interpolated arc path matches the OLD 20-chord circle within tolerance', () => {
+    const r = generateAdaptiveClearing2dLines(params)
+    // Walk the program, expanding arcs, and pair each G3-semicircle with its
+    // reconstructed old-chord counterpart. The centre is start + (I,J); the
+    // radius is |(I,J)|; the interpolated arc points come from the SAME routine
+    // the preview/guardrail use (interpolateArcSubSegments).
+    let x = 0
+    let y = 0
+    let checkedCircles = 0
+    let maxDeviation = 0
+    const lines = r.lines
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]!.trim()
+      const arc = l.match(/^G3 X(-?\d+\.\d+) Y(-?\d+\.\d+) I(-?\d+\.\d+) J(-?\d+\.\d+)/)
+      if (!arc) {
+        // track modal X/Y off any G0/G1 with coords
+        const mx = l.match(/X(-?\d+\.\d+)/)
+        const my = l.match(/Y(-?\d+\.\d+)/)
+        if (mx) x = Number.parseFloat(mx[1]!)
+        if (my) y = Number.parseFloat(my[1]!)
+        continue
+      }
+      const x1 = Number.parseFloat(arc[1]!)
+      const y1 = Number.parseFloat(arc[2]!)
+      const ci = Number.parseFloat(arc[3]!)
+      const cj = Number.parseFloat(arc[4]!)
+      const cx = x + ci
+      const cy = y + cj
+      const radius = Math.hypot(ci, cj)
+      // The next line should be the second semicircle closing the circle.
+      const l2 = lines[i + 1]!.trim()
+      const arc2 = l2.match(/^G3 X(-?\d+\.\d+) Y(-?\d+\.\d+) I(-?\d+\.\d+) J(-?\d+\.\d+)/)
+      expect(arc2, `expected a second semicircle after ${l}`).not.toBeNull()
+      const x2 = Number.parseFloat(arc2![1]!)
+      const y2 = Number.parseFloat(arc2![2]!)
+      const i2 = Number.parseFloat(arc2![3]!)
+      const j2 = Number.parseFloat(arc2![4]!)
+      const cx2 = x1 + i2
+      const cy2 = y1 + j2
+      // Both semicircles share the SAME centre + radius (the true circle).
+      expect(Math.hypot(cx2 - cx, cy2 - cy)).toBeLessThanOrEqual(1e-3)
+      expect(Math.abs(Math.hypot(i2, j2) - radius)).toBeLessThanOrEqual(1e-3)
+      // Interpolate BOTH semicircles into fine points (the routine the preview uses).
+      const seg1 = interpolateArcSubSegments(false, x, y, x1, y1, ci, cj)
+      const seg2 = interpolateArcSubSegments(false, x1, y1, x2, y2, i2, j2)
+      const arcPts: Array<[number, number]> = [[x, y]]
+      for (const s of seg1) arcPts.push([s.x1, s.y1])
+      for (const s of seg2) arcPts.push([s.x1, s.y1])
+      // Reconstruct the OLD chord circle from the same centre + radius and
+      // compare each interpolated arc point to it (Hausdorff, one direction).
+      const oldPts = oldChordCircle(cx, cy, radius)
+      for (const [px, py] of arcPts) {
+        const d = distPointToPolyline(px, py, oldPts)
+        if (d > maxDeviation) maxDeviation = d
+      }
+      // And every old chord vertex is close to the interpolated arc path.
+      for (const [px, py] of oldPts) {
+        const d = distPointToPolyline(px, py, arcPts)
+        if (d > maxDeviation) maxDeviation = d
+      }
+      checkedCircles++
+      x = x2
+      y = y2
+      i++ // consumed the paired semicircle
+    }
+    expect(checkedCircles).toBeGreaterThan(0)
+    // Combined sagitta bound: the 20-chord polygon deviates from the true circle
+    // by up to r(1-cos(pi/20)) ~= 0.0148 mm at R=1.2; the 16-sub interpolation is
+    // finer. 0.02 mm admits both discretizations -- the cut is geometrically the
+    // same circle.
+    expect(maxDeviation).toBeLessThanOrEqual(0.02)
+  })
+
+  it('the arc sweeps the SAME direction the chords did (CCW: first step raises Y from the +X start)', () => {
+    const r = generateAdaptiveClearing2dLines(params)
+    const lines = r.lines
+    let x = 0
+    let y = 0
+    for (const raw of lines) {
+      const l = raw.trim()
+      const arc = l.match(/^G3 X(-?\d+\.\d+) Y(-?\d+\.\d+) I(-?\d+\.\d+) J(-?\d+\.\d+)/)
+      if (!arc) {
+        const mx = l.match(/X(-?\d+\.\d+)/)
+        const my = l.match(/Y(-?\d+\.\d+)/)
+        if (mx) x = Number.parseFloat(mx[1]!)
+        if (my) y = Number.parseFloat(my[1]!)
+        continue
+      }
+      const x1 = Number.parseFloat(arc[1]!)
+      const y1 = Number.parseFloat(arc[2]!)
+      const ci = Number.parseFloat(arc[3]!)
+      const cj = Number.parseFloat(arc[4]!)
+      // First semicircle starts at the +X point of its circle (I = -r, J = 0), so
+      // the CCW sweep first moves toward +Y: the old chords did exactly this
+      // (24.476,11.364 -> 24.417,11.735 -- Y increases). Take the FIRST such arc.
+      if (Math.abs(cj) < 1e-9 && ci < 0) {
+        const seg = interpolateArcSubSegments(false, x, y, x1, y1, ci, cj)
+        // The first interpolated sub-point must have Y > start Y (rising, CCW).
+        expect(seg[0]!.y1).toBeGreaterThan(y)
+        return
+      }
+      x = x1
+      y = y1
+    }
+    throw new Error('no leading +X-start semicircle found to check direction')
   })
 })
 

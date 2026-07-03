@@ -10,8 +10,9 @@
  * ---------------------------------------------------------------------------
  * WHAT "ADAPTIVE-LITE" HONESTLY MEANS HERE (v1 scope)
  * ---------------------------------------------------------------------------
- * This is NOT full HSM parity (no medial-axis spiral morphing, no G2/G3 arcs,
- * no engagement-controlled feed modulation). The defining property delivered:
+ * This is NOT full HSM parity (no medial-axis spiral morphing, no
+ * engagement-controlled feed modulation). The trochoid relief loops ARE emitted
+ * as native G2/G3 arcs (Phase-6 Change 1). The defining property delivered:
  * a CAPPED RADIAL ENGAGEMENT over the Wave-3i offset-level region model:
  *
  *  1. BASE TOOLPATH — the same successive-inset levels as the offset spiral
@@ -35,13 +36,22 @@
  *  3. TROCHOIDAL RELIEF — sampled runs whose clearance exceeds
  *     `maxEngagementMm` (default 40% of tool diameter) are cut as trochoid
  *     loops: full circles of `trochoidRadiusMm` marching along the run at
- *     `trochoidStepMm`, approximated as fine chord polylines (G1 only — G2/G3
- *     output is explicitly OUT of v1 scope; chords are strictly INSIDE the
- *     true circle so containment bounds hold). Each circle advances the
- *     cleared frontier by at most the step, so the instantaneous radial bite
- *     stays <= the cap. Relief circles on a level-k loop are clamped to
- *     radius <= k·stepover, which by the erosion construction keeps them >=
- *     wallStockMm away from the outer wall AND every island.
+ *     `trochoidStepMm`, emitted as NATIVE G2/G3 arcs (Phase-6 Change 1). Each
+ *     full circle is split into TWO <=180° arcs (G17 plane, I/J centre-offset
+ *     form, sweep direction matched to the marching cut — CCW ⇒ G3) so every
+ *     controller accepts it; the constant-Z planar loops carry no Z word. The
+ *     downstream preview parser + guardrail auditor interpolate the arcs, and
+ *     the safety audits in cam-adaptive-clearing.test.ts sample the TRUE arc
+ *     (no longer the chord polygon). Because the native arc cuts the TRUE
+ *     relief circle (radius == the relief-radius-clamped value, LARGER than the
+ *     old inscribed chord polygon), containment is re-derived against that true
+ *     radius: the k·stepover clamp below and the findNarrowSpine erosion are
+ *     both computed against the true radius, so the arc stays inside. Each
+ *     circle advances the cleared frontier by at most the step, so the
+ *     instantaneous radial bite stays <= the cap. Relief circles on a level-k
+ *     loop are clamped to radius <= k·stepover, which by the erosion
+ *     construction keeps them >= wallStockMm away from the outer wall AND every
+ *     island.
  *
  *  4. NARROW REGIONS — a level-0 loop with no deeper level inside it is a
  *     region the offset progression cannot clear at capped engagement at all
@@ -190,8 +200,12 @@ export const ADAPTIVE_MAX_TROCHOID_CIRCLES = 2000
 /** Default engagement cap as a fraction of tool diameter (the classic ~40%). */
 export const ADAPTIVE_DEFAULT_ENGAGEMENT_FRACTION = 0.4
 
-/** Chords per trochoid circle (G1 polyline approximation of the arc). */
-const TROCHOID_CIRCLE_SEGMENTS = 20
+/**
+ * Phase-6 Change 1: the trochoid circle is now emitted as a NATIVE arc, split
+ * into this many <=180° G2/G3 sub-arcs (2 semicircles) for controller safety.
+ * (Previously the circle was a 20-chord G1 polyline; the arc is exact.)
+ */
+const TROCHOID_ARC_SUBDIVISIONS = 2
 
 /** Below this relief radius a trochoid cannot meaningfully relieve — skip. */
 const MIN_TROCHOID_RADIUS_MM = 0.1
@@ -378,9 +392,21 @@ function buildSpikeRuns(spikes: ReadonlyArray<boolean>): SpikeRun[] {
 // Trochoid planning
 // ---------------------------------------------------------------------------
 
+/**
+ * One emitted trochoid-chain step. A `line` is a straight G1 feed to `to`; an
+ * `arc` is a native G2/G3 (constant-Z, G17-plane) to `to` with centre-offset
+ * I/J. The relief circle is a pair of `arc` steps (two <=180° semicircles);
+ * the chain feed between circles is `line` steps. Consumed by the emission
+ * loop's `trochoid` move case AND, in the test suite, interpolated by the
+ * safety audits so they still see every cut point on the TRUE arc.
+ */
+type TrochoidStep =
+  | { kind: 'line'; to: CamPoint2d }
+  | { kind: 'arc'; dir: 'cw' | 'ccw'; to: CamPoint2d; i: number; j: number }
+
 type TrochoidChainResult = {
-  /** G1 targets covering the chain with relief circles interleaved. */
-  targets: CamPoint2d[]
+  /** Ordered line/arc steps covering the chain with relief circles interleaved. */
+  steps: TrochoidStep[]
   circles: number
   /** True when the circle budget ran out before the chain end. */
   truncated: boolean
@@ -398,13 +424,39 @@ function planTrochoidChain(
   step: number,
   budget: { remaining: number }
 ): TrochoidChainResult {
-  const targets: CamPoint2d[] = []
+  const steps: TrochoidStep[] = []
   let circles = 0
   let cur: CamPoint2d = chain[0]!
-  const pushTarget = (p: CamPoint2d): void => {
-    if ((p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2 <= 1e-18) return
-    targets.push(p)
-    cur = p
+  const pushLine = (to: CamPoint2d): void => {
+    if ((to[0] - cur[0]) ** 2 + (to[1] - cur[1]) ** 2 <= 1e-18) return
+    steps.push({ kind: 'line', to })
+    cur = to
+  }
+  // Emit one full relief circle centred at (cx,cy) as a NATIVE arc: two <=180°
+  // arcs so every controller accepts it. The chords used to sweep CCW from the
+  // +X point (start angle 0) back around, so the native arc matches that
+  // direction (CCW ⇒ G3). I/J are centre-offset from the CURRENT point at each
+  // arc start (I/J = centre − currentPoint), never an R-word (codebase-uniform).
+  // Constant Z (planar loop): the arc steps carry no Z.
+  const pushCircle = (cx: number, cy: number): void => {
+    // Feed radially out to the circle start point (angle 0, the +X point — the
+    // same start the old chord polyline used, so direction + geometry match).
+    const startPt: CamPoint2d = [cx + r, cy]
+    pushLine(startPt)
+    // Sweep the full 2π CCW as TROCHOID_ARC_SUBDIVISIONS equal arcs (each <=180°
+    // at the default 2). At sub-arc s the tool stands at angle s·(2π/N); the arc
+    // to angle (s+1)·(2π/N) is CCW ⇒ G3 with I/J = centre − currentPoint. The
+    // final arc lands back EXACTLY on startPt (angle 2π ≡ 0).
+    const n = TROCHOID_ARC_SUBDIVISIONS
+    for (let s = 0; s < n; s++) {
+      const from: CamPoint2d = cur // tool stands here (angle s·2π/n from centre)
+      const nextAng = ((s + 1) / n) * Math.PI * 2
+      const to: CamPoint2d =
+        s === n - 1 ? startPt : [cx + r * Math.cos(nextAng), cy + r * Math.sin(nextAng)]
+      // I/J = centre − currentPoint (centre-offset form, never an R-word).
+      steps.push({ kind: 'arc', dir: 'ccw', to, i: cx - from[0], j: cy - from[1] })
+      cur = to
+    }
   }
   let sinceCircle = step // place the first circle right at the run start
   for (let i = 1; i < chain.length; i++) {
@@ -416,27 +468,23 @@ function planTrochoidChain(
       const cx = cur[0] + t * (next[0] - cur[0])
       const cy = cur[1] + t * (next[1] - cur[1])
       if (budget.remaining <= 0) {
-        return { targets, circles, truncated: true }
+        return { steps, circles, truncated: true }
       }
       budget.remaining--
       circles++
-      // Feed to the circle centre point on the chain, then trace the circle.
-      pushTarget([cx, cy])
-      const startAngle = Math.atan2(cur[1] - cy, cur[0] - cx)
-      for (let s = 0; s <= TROCHOID_CIRCLE_SEGMENTS; s++) {
-        const ang = startAngle + (s / TROCHOID_CIRCLE_SEGMENTS) * Math.PI * 2
-        pushTarget([cx + r * Math.cos(ang), cy + r * Math.sin(ang)])
-      }
-      // Tool is back at the circle start point; rejoin the chain at the centre.
-      pushTarget([cx, cy])
+      // Feed to the circle centre point on the chain, then trace the circle
+      // (native arc), then rejoin the chain at the centre.
+      pushLine([cx, cy])
+      pushCircle(cx, cy)
+      pushLine([cx, cy])
       segLen = Math.hypot(next[0] - cur[0], next[1] - cur[1])
       sinceCircle = 0
       if (segLen <= 1e-12) break
     }
     sinceCircle += Math.hypot(next[0] - cur[0], next[1] - cur[1])
-    pushTarget([next[0], next[1]])
+    pushLine([next[0], next[1]])
   }
-  return { targets, circles, truncated: false }
+  return { steps, circles, truncated: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +611,8 @@ function findNarrowSpine(
 type PlannedMove =
   | { kind: 'note'; text: string }
   | { kind: 'feed'; targets: CamPoint2d[] }
+  /** Native-arc trochoid relief: straight G1 line steps + G2/G3 arc steps. */
+  | { kind: 'trochoid'; steps: TrochoidStep[] }
   | { kind: 'skip'; resume: CamPoint2d }
 
 type LoopPlan = {
@@ -585,10 +635,17 @@ type AdaptivePlan = {
   cappedLevels: boolean
 }
 
-/** First feed target list of a plan (for ramp-entry direction), if any. */
+/**
+ * First feed target list of a plan (for ramp-entry direction), if any. A
+ * trochoid move contributes its first step endpoint so the ramp direction is
+ * unchanged from the pre-arc behaviour (the first target of the old flattened
+ * trochoid `feed` move was the first chain/circle point — the same point the
+ * first `line`/`arc` step now targets).
+ */
 function firstFeedTargets(plan: LoopPlan): CamPoint2d[] | null {
   for (const m of plan.moves) {
     if (m.kind === 'feed' && m.targets.length > 0) return m.targets
+    if (m.kind === 'trochoid' && m.steps.length > 0) return [m.steps[0]!.to]
   }
   return null
 }
@@ -840,7 +897,7 @@ function spikeRunLoopPlan(
           kind: 'note',
           text: `; adaptive trochoid relief -- level ${opts.levelIndex} inset ${opts.insetMm.toFixed(3)} mm, ${res.circles} circle(s), R ${opts.reliefRadius.toFixed(3)} mm`
         })
-        moves.push({ kind: 'feed', targets: res.targets })
+        moves.push({ kind: 'trochoid', steps: res.steps })
         opts.plan.circleCount += res.circles
       }
       if (res.truncated) {
@@ -905,11 +962,11 @@ function planNarrowRegion(
       truncated = true
       plan.truncatedByBudget = true
     }
-    if (res.targets.length > 0) {
+    if (res.steps.length > 0) {
       spinePlans.push({
         preComments: [],
         start: chain[0]!,
-        moves: [{ kind: 'feed', targets: res.targets }],
+        moves: [{ kind: 'trochoid', steps: res.steps }],
         closeToStart: false
       })
     }
@@ -1187,6 +1244,22 @@ export function generateAdaptiveClearing2dLines(
         } else if (move.kind === 'feed') {
           for (const [x, y] of move.targets) {
             lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${feed}`)
+          }
+        } else if (move.kind === 'trochoid') {
+          // Native-arc trochoid relief. Line steps are ordinary G1 feed moves;
+          // arc steps are G2/G3 (G17 plane, I/J centre-offset, constant Z ⇒ no
+          // Z word) at the SAME trochoid feed. Mirrors the cam-entry-move.ts
+          // arc idiom (formatEntryMove) minus the planar Z word, so the arc
+          // splices in byte-consistently with the surrounding G1 body.
+          for (const st of move.steps) {
+            if (st.kind === 'line') {
+              lines.push(`G1 X${st.to[0].toFixed(3)} Y${st.to[1].toFixed(3)} F${feed}`)
+            } else {
+              const word = st.dir === 'cw' ? 'G2' : 'G3'
+              lines.push(
+                `${word} X${st.to[0].toFixed(3)} Y${st.to[1].toFixed(3)} I${st.i.toFixed(3)} J${st.j.toFixed(3)} F${feed}`
+              )
+            }
           }
         } else {
           // Safe-Z skip over uncut material: lift, rapid, plunge re-entry.

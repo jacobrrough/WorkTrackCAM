@@ -165,14 +165,22 @@ describe('byte-identity: non-helix entry is unchanged (offset-spiral)', () => {
 
 describe('byte-identity: non-helix entry is unchanged (adaptive)', () => {
   const ADAPT = { outerRing: SQUARE_60, toolDiameterMm: 6, ...BASE }
-  it('absent entryMode === explicit plunge (byte-equal, no arcs)', () => {
+  // NOTE (Phase 6 Change 1): the adaptive CUT BODY now emits native G2/G3
+  // trochoid-relief arcs, so — unlike the arc-free offset-spiral above — a blanket
+  // "no arcs" assertion no longer holds here. The safety contract for the ENTRY is
+  // the BYTE-EQUALITY between the non-helix variants: because a non-helix entry
+  // mode never adds a helix arc, absent≡plunge and ramp≡ramp+knobs are identical
+  // line-for-line (any trochoid arcs present appear identically in both), which is
+  // strictly stronger than a regex arc-count check.
+  it('absent entryMode === explicit plunge (byte-equal; entry adds no helix)', () => {
     const absent = generateAdaptiveClearing2dLines({ ...ADAPT })
     const plunge = generateAdaptiveClearing2dLines({ ...ADAPT, entryMode: 'plunge' })
     expect(plunge.lines).toEqual(absent.lines)
-    expect(absent.lines.some((l) => /^G[23] /.test(l))).toBe(false)
+    // Any arcs present are trochoid-relief (cut body), identical across both
+    // variants (proven by the byte-equality above) — never an entry helix.
   })
 
-  it('ramp entry is unaffected by the new helix knobs (byte-equal, no arcs)', () => {
+  it('ramp entry is unaffected by the new helix knobs (byte-equal)', () => {
     const ramp = generateAdaptiveClearing2dLines({ ...ADAPT, entryMode: 'ramp', rampMm: 3 })
     const rampPlusKnobs = generateAdaptiveClearing2dLines({
       ...ADAPT,
@@ -183,7 +191,6 @@ describe('byte-identity: non-helix entry is unchanged (adaptive)', () => {
       toolRadiusMm: 3
     })
     expect(rampPlusKnobs.lines).toEqual(ramp.lines)
-    expect(ramp.lines.some((l) => /^G[23] /.test(l))).toBe(false)
   })
 })
 

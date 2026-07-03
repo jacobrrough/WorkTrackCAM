@@ -134,11 +134,68 @@ function buildOneTriangleBinaryStl(): Buffer {
   return buf
 }
 
-// -- Test-local G-code walkers (islands-suite pattern) --------------------------
+// -- Test-local G-code walkers (islands-suite pattern, ARC-AWARE) -----------------
+//
+// Phase-6 Change 1 made the dispatched trochoid relief NATIVE G2/G3 arcs. The
+// island-clearance SAFETY proof below runs collectCutSegments over the POSTED
+// program; if it only parsed G1 lines it would skip every relief arc and pass
+// vacuously (the island-clearance fixture emits hundreds of G3 arcs). So the
+// collector interpolates each G2/G3 arc into fine sub-segments (faithful port of
+// interpolateArc in cam-gcode-toolpath.ts) so the island-margin check samples the
+// TRUE arc path, not a gap. The rigid-placement test compares expanded segments
+// on both sides, so arc expansion is transform-invariant there.
+
+/** Sub-segments per G2/G3 arc (matches ARC_INTERPOLATION_SEGMENTS in cam-gcode-toolpath.ts). */
+const ARC_SAMPLES = 16
 
 type CutSegment = { x0: number; y0: number; x1: number; y1: number }
 
-/** XY-moving FEED segments at (or entering) cut depth, tracking modal X/Y/Z. */
+/**
+ * Interpolate a G2/G3 arc (XY plane, I/J centre offsets) into ARC_SAMPLES straight
+ * sub-segments. Faithful port of `interpolateArc` (cam-gcode-toolpath.ts): centre
+ * = start + (I,J); sweep sign forced by direction (cw => negative, ccw =>
+ * positive); exact endpoint on the last sub-segment.
+ */
+function interpolateArcSubSegments(
+  cw: boolean,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  i: number,
+  j: number
+): CutSegment[] {
+  const cx = x0 + i
+  const cy = y0 + j
+  const startAngle = Math.atan2(y0 - cy, x0 - cx)
+  const endAngle = Math.atan2(y1 - cy, x1 - cx)
+  const r = Math.hypot(x0 - cx, y0 - cy)
+  let sweep = endAngle - startAngle
+  if (cw) {
+    if (sweep >= 0) sweep -= 2 * Math.PI
+  } else {
+    if (sweep <= 0) sweep += 2 * Math.PI
+  }
+  const segs: CutSegment[] = []
+  let px = x0
+  let py = y0
+  for (let s = 0; s < ARC_SAMPLES; s++) {
+    const t1 = (s + 1) / ARC_SAMPLES
+    const a1 = startAngle + sweep * t1
+    const qx = s === ARC_SAMPLES - 1 ? x1 : cx + r * Math.cos(a1)
+    const qy = s === ARC_SAMPLES - 1 ? y1 : cy + r * Math.sin(a1)
+    segs.push({ x0: px, y0: py, x1: qx, y1: qy })
+    px = qx
+    py = qy
+  }
+  return segs
+}
+
+/**
+ * XY-moving FEED segments at (or entering) cut depth, tracking modal X/Y/Z.
+ * ARC-AWARE: G2/G3 relief arcs are interpolated into fine sub-segments so every
+ * downstream clearance check sees the TRUE arc path.
+ */
 function collectCutSegments(lines: ReadonlyArray<string>): CutSegment[] {
   let x = 0
   let y = 0
@@ -146,14 +203,24 @@ function collectCutSegments(lines: ReadonlyArray<string>): CutSegment[] {
   const segs: CutSegment[] = []
   for (const raw of lines) {
     const l = raw.trim()
-    if (!/^G[01]\b/.test(l)) continue
+    const isArc = /^G[23]\b/.test(l)
+    const isLin = /^G[01]\b/.test(l)
+    if (!isArc && !isLin) continue
     const mx = l.match(/X(-?\d+(?:\.\d+)?)/)
     const my = l.match(/Y(-?\d+(?:\.\d+)?)/)
     const mz = l.match(/Z(-?\d+(?:\.\d+)?)/)
     const nx = mx ? Number.parseFloat(mx[1]!) : x
     const ny = my ? Number.parseFloat(my[1]!) : y
     const nz = mz ? Number.parseFloat(mz[1]!) : z
-    if (l.startsWith('G1') && (nz < -1e-9 || z < -1e-9) && (nx !== x || ny !== y)) {
+    const atDepth = nz < -1e-9 || z < -1e-9
+    if (isArc && atDepth) {
+      const cw = /^G2\b/.test(l)
+      const mi = l.match(/I(-?\d+(?:\.\d+)?)/)
+      const mj = l.match(/J(-?\d+(?:\.\d+)?)/)
+      const ci = mi ? Number.parseFloat(mi[1]!) : 0
+      const cj = mj ? Number.parseFloat(mj[1]!) : 0
+      segs.push(...interpolateArcSubSegments(cw, x, y, nx, ny, ci, cj))
+    } else if (isLin && l.startsWith('G1') && atDepth && (nx !== x || ny !== y)) {
       segs.push({ x0: x, y0: y, x1: nx, y1: ny })
     }
     x = nx

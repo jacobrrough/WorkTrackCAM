@@ -168,9 +168,13 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   unchanged). *(done 2026-07-03, wave 8)*
 
 ### Phase 6 — CAM frontier (already strongest; polish last)
-- [ ] **G2/G3 arcs at adaptive source (M)** — today post-side arc-fitting only.
+- ✅ **G2/G3 arcs at adaptive source (M)** — trochoid loops emit native G3 semicircles (G17 I/J, no
+  R-word, planar); the ~6 arc-blind geometric SAFETY audits were rewritten to interpolate the arcs
+  (mutation-proven non-vacuous: they catch island/engagement/containment violations on the arc
+  points); byte-identical outside the trochoid loops; gcode-safety SAFE for Laguna + Carvera-3.
+  *(done 2026-07-03, Phase 6 Change 1)*
 - [ ] **True waterline/adaptive via OCL in bundled venv (env/M)** — install into the 3.11 sidecar
-  venv; fallback chain already honest.
+  venv; fallback chain already honest. NOTE: an ENV/bundling step (pip install, may fail on-platform), not a code change — an operator action, not autonomous-appropriate.
 - [ ] **True gouge detection (L)** — SDF/BVH toolpath-vs-model check (voxel approximation today).
 - ✅ **Helical/orbital entry for POCKET (M)** — offset-spiral + adaptive delegate entry to the proven
   region-clamped, never-degrade `buildEntryMoves` helix (the adaptive fully-buried region core no
