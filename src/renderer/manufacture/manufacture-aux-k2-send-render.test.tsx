@@ -393,3 +393,26 @@ describe('SliceManufacturePanel -- empty-state surface (UX Overhaul #8)', () => 
     expect(html).not.toContain('Ready to slice')
   })
 })
+
+describe('SliceManufacturePanel -- upload-progress SR live region [P2-K2-PUSH]/Cycle 358-359', () => {
+  it('always renders the polite screen-reader live region on the K2 panel', () => {
+    const html = render(baseProps({ activeMachine: k2Plus }))
+    expect(html).toContain('data-testid="k2-send-to-printer-status"')
+    expect(html).toContain('aria-live="polite"')
+    expect(html).toContain('aria-atomic="true"')
+  })
+
+  it('does NOT render the <progress> meter while idle (only mounts during an active Send)', () => {
+    // The meter is gated on `k2Percent !== null`; a static idle render has
+    // k2Percent === null so the meter markup must be absent. The in-flight
+    // appearance is covered interactively by
+    // `ManufactureAuxPanels.send-progress.dom.spec.tsx`.
+    const html = render(baseProps({ activeMachine: k2Plus }))
+    expect(html).not.toContain('data-testid="k2-send-progress-meter"')
+  })
+
+  it('does not leak the SR live region onto a non-K2 (Laguna) render', () => {
+    const html = render(baseProps({ activeMachine: lagunaSwift }))
+    expect(html).not.toContain('data-testid="k2-send-to-printer-status"')
+  })
+})

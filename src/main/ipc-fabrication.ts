@@ -16,6 +16,7 @@ import {
 } from './materials-manager'
 import { deleteFilament, listAllFilaments, saveFilament } from './filament-manager'
 import { carveraUpload, type CarveraUploadPayload } from './carvera-cli-run'
+import type { CarveraSendPhase } from '../shared/carvera-send-progress-phase'
 import {
   generateCarvera4AxisSetup,
   generateCarveraAAxisZero,
@@ -285,6 +286,15 @@ export async function resolveMoonrakerPushCapabilities(
   timeoutMs?: number
   machineCapabilities?: FdmCapabilityFields | null
   cfsSlotId?: number
+  /**
+   * [P2-K2-PUSH]/Cycle 358 upload-progress callback slot. The resolver
+   * never SETS this (it only threads capability resolution); the
+   * `moonraker:push` IPC handler assigns an `onProgress` shim onto the
+   * resolved payload before delegating to `moonrakerPush(resolved)` so
+   * the delegation call site stays byte-identical to the pinned shape.
+   * Additive / optional -- absent callers see zero change.
+   */
+  onProgress?: (sentBytes: number, totalBytes: number) => void
 }> {
   const { machineId, machineCapabilities, ...rest } = payload
   // Rule 1: explicit override wins (including explicit null).
@@ -913,9 +923,27 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
 
   // ── Makera Carvera (carvera-cli upload) ─────────────────────────────────────
 
-  ipcMain.handle('carvera:upload', async (_e, payload: CarveraUploadPayload) => {
+  ipcMain.handle('carvera:upload', async (e, payload: CarveraUploadPayload) => {
     const settings = await loadSettings()
-    return carveraUpload(settings, payload)
+    // [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- inject an onProgress shim that
+    // forwards each phase change to the invoking sender's WebContents over
+    // the `carvera:upload:progress` channel. The renderer subscribes via
+    // `window.fab.onCarveraUploadProgress(cb)` exposed in
+    // `src/preload/index.ts`. Mirrors the [P2-K2-PUSH]/Cycle 358 wiring for
+    // `moonraker:push:progress`. The callback is constructed here (callbacks
+    // are not IPC-serializable) so the renderer payload stays plain JSON.
+    // Each send is guarded on `sender.isDestroyed()` and wrapped in
+    // try/catch so a window closed mid-upload cannot corrupt the upload.
+    const sender = e.sender
+    const onProgress = (phase: CarveraSendPhase): void => {
+      if (sender.isDestroyed()) return
+      try {
+        sender.send('carvera:upload:progress', { phase })
+      } catch {
+        /* Swallow: a closed sender MUST NOT corrupt the upload. */
+      }
+    }
+    return carveraUpload(settings, { ...payload, onProgress })
   })
 
   ipcMain.handle(
@@ -983,7 +1011,7 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
   ipcMain.handle(
     'moonraker:push',
     async (
-      _e,
+      e,
       payload: {
         gcodePath: string
         printerUrl: string
@@ -1021,6 +1049,29 @@ export function registerFabricationIpc(ctx: MainIpcWindowContext): void {
       }
     ) => {
       const resolved = await resolveMoonrakerPushCapabilities(payload)
+      // [P2-K2-PUSH]/Cycle 358 -- inject an onProgress shim that forwards
+      // each chunk's cumulative byte count (+ a derived percent) to the
+      // invoking renderer's WebContents over the `moonraker:push:progress`
+      // channel. The renderer subscribes via
+      // `window.fab.onMoonrakerPushProgress(cb)` exposed in
+      // `src/preload/index.ts`. The callback is constructed here
+      // (callbacks are not IPC-serializable) so the renderer payload stays
+      // plain JSON. Each send is wrapped in try/catch and guarded on
+      // `sender.isDestroyed()` so a window closed mid-upload cannot corrupt
+      // the upload. Assigned onto `resolved` (not passed inline) so the
+      // `return moonrakerPush(resolved)` delegation stays byte-identical to
+      // the pinned shape in `k2-moonraker-push-ui-pin.test.ts` E2.
+      const sender = e.sender
+      resolved.onProgress = (sentBytes: number, totalBytes: number): void => {
+        if (sender.isDestroyed()) return
+        const percent =
+          totalBytes > 0 ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0
+        try {
+          sender.send('moonraker:push:progress', { sentBytes, totalBytes, percent })
+        } catch {
+          /* Swallow: a closed sender MUST NOT corrupt the upload. */
+        }
+      }
       return moonrakerPush(resolved)
     }
   )

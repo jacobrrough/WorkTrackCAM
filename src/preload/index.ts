@@ -12,6 +12,7 @@ import type { MeshImportPlacement, MeshImportTransform, MeshImportUpAxis } from 
 import type { MaterialRecord } from '../shared/material-schema'
 import type { FilamentRecord } from '../shared/filament-schema'
 import type { CarveraUploadPayload, CarveraUploadResult } from '../main/carvera-cli-run'
+import type { CarveraSendPhase } from '../shared/carvera-send-progress-phase'
 import type { GcodeTempSample } from '../shared/gcode-temp-validator'
 import type { FdmLayerBreakdownResult } from '../shared/fdm-gcode-layer-breakdown'
 import type { DesignFileV2 } from '../shared/design-schema'
@@ -546,6 +547,19 @@ export type Api = {
   moonrakerPause: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   moonrakerResume: (printerUrl: string, timeoutMs?: number) => Promise<{ ok: boolean; error?: string }>
   /**
+   * [P2-K2-PUSH]/Cycle 358 -- subscribe to live upload-progress ticks
+   * for the K2 Plus Moonraker push. The main process forwards one event
+   * per 64 KiB chunk over the `moonraker:push:progress` channel with the
+   * cumulative `sentBytes`, the constant `totalBytes`, and a derived
+   * integer `percent` (0..100). Returns an unsubscribe function that
+   * removes the listener (mirrors `onCamProgress`). Callers should
+   * subscribe immediately before invoking `moonrakerPush` and call the
+   * returned disposer when the Send completes.
+   */
+  onMoonrakerPushProgress: (
+    callback: (event: { sentBytes: number; totalBytes: number; percent: number }) => void
+  ) => () => void
+  /**
    * Rich "Test connection" probe for Settings → Network & Printers
    * (Creality K2 Plus). Fetches printer hostname / Klipper firmware
    * version / live bed + nozzle temperatures so the operator can verify
@@ -578,6 +592,18 @@ export type Api = {
     samples: readonly GcodeTempSample[]
   ) => Promise<{ ok: true } | { ok: false; reason: string }>
   carveraUpload: (payload: CarveraUploadPayload) => Promise<CarveraUploadResult>
+  /**
+   * [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- subscribe to live upload-phase
+   * ticks for the Makera Carvera carvera-cli push. The main process
+   * forwards one event per phase change over the `carvera:upload:progress`
+   * channel with the resolved `phase` ('connecting' | 'transferring' |
+   * 'verifying'). Returns an unsubscribe function (mirrors
+   * `onMoonrakerPushProgress` / `onCamProgress`). Subscribe immediately
+   * before `carveraUpload` and dispose when the upload completes.
+   */
+  onCarveraUploadProgress: (
+    callback: (event: { phase: CarveraSendPhase }) => void
+  ) => () => void
   carveraGenerateSetup: (payload: {
     mode: 'a_axis_zero' | 'wcs_zero' | 'z_probe' | 'full_4axis_setup' | 'preflight_check'
     projectDir: string
@@ -1162,6 +1188,16 @@ const api: Api = {
   moonrakerCancel: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:cancel', printerUrl, timeoutMs),
   moonrakerPause: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:pause', printerUrl, timeoutMs),
   moonrakerResume: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:resume', printerUrl, timeoutMs),
+  onMoonrakerPushProgress: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { sentBytes: number; totalBytes: number; percent: number }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('moonraker:push:progress', handler)
+    return () => { ipcRenderer.removeListener('moonraker:push:progress', handler) }
+  },
   moonrakerInfo: (printerUrl, timeoutMs) => ipcRenderer.invoke('moonraker:info', printerUrl, timeoutMs),
   moonrakerPreview: (samples) => {
     // Short-circuit absent / empty samples WITHOUT invoking the IPC
@@ -1175,6 +1211,16 @@ const api: Api = {
     >
   },
   carveraUpload: (payload) => ipcRenderer.invoke('carvera:upload', payload),
+  onCarveraUploadProgress: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { phase: CarveraSendPhase }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('carvera:upload:progress', handler)
+    return () => { ipcRenderer.removeListener('carvera:upload:progress', handler) }
+  },
   carveraGenerateSetup: (payload) => ipcRenderer.invoke('carvera:generateSetup', payload),
 
   // DXF Import

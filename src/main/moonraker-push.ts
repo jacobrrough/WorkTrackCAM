@@ -78,6 +78,22 @@ export type MoonrakerPushPayload = {
    * branch in `SliceManufacturePanel`.
    */
   cfsSlotId?: number
+  /**
+   * [P2-K2-PUSH]/Cycle 358 upload-progress callback. When supplied, the
+   * multipart upload writes the request body in fixed-size chunks
+   * (`MOONRAKER_UPLOAD_CHUNK_BYTES`, 64 KiB) and invokes this callback
+   * after EACH chunk with the cumulative `sentBytes` and the constant
+   * `totalBytes`. The bytes uploaded are byte-identical to the whole-file
+   * write (Safety Rule 1: G-code is sacred -- only the write cadence
+   * changes, never the payload). The main-process IPC handler in
+   * `src/main/ipc-fabrication.ts` injects an `onProgress` shim that
+   * forwards each tick over the `moonraker:push:progress` channel to the
+   * invoking renderer; the callback itself never crosses the IPC boundary.
+   *
+   * Safety Rule 2: additive / optional. Absent callback => byte-identical
+   * pre-Cycle-358 behaviour (single-shot `req.write`).
+   */
+  onProgress?: (sentBytes: number, totalBytes: number) => void
 }
 
 export type MoonrakerPushResult =
@@ -125,6 +141,17 @@ export type MoonrakerStatusResult =
 
 // ─── internal HTTP helpers ─────────────────────────────────────────────────
 
+/**
+ * [P2-K2-PUSH]/Cycle 358 — chunk size for streamed upload writes. Tuned
+ * so a 50 MB G-code yields ~800 progress ticks (~12-13/s on a typical
+ * LAN link) — enough granularity for a smooth percent indicator without
+ * flooding the IPC bus. Module-private (kept off the module's public
+ * exports so the namespace surface is unchanged); a switch back to
+ * single-shot writes is caught by the `moonraker-push-chunked.test.ts`
+ * byte-identity assertion.
+ */
+const MOONRAKER_UPLOAD_CHUNK_BYTES = 64 * 1024
+
 function makeRequest(
   method: 'GET' | 'POST' | 'DELETE',
   rawUrl: string,
@@ -132,6 +159,16 @@ function makeRequest(
     body?: Buffer | string
     contentType?: string
     timeoutMs?: number
+    /**
+     * Optional progress callback. When supplied AND `body` is a Buffer,
+     * the body is written in `MOONRAKER_UPLOAD_CHUNK_BYTES`-sized chunks
+     * and `onProgress(sent, total)` is invoked AFTER each successful
+     * `req.write()` (back-pressure-aware). Callback errors are caught so
+     * a renderer-side bug cannot corrupt the upload. When absent, the
+     * body is written in a single `req.write()` exactly as before — the
+     * bytes sent are byte-identical either way.
+     */
+    onProgress?: (sentBytes: number, totalBytes: number) => void
   } = {}
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -211,6 +248,43 @@ function makeRequest(
     })
     if (opts.body != null) {
       const bodyBuf = typeof opts.body === 'string' ? Buffer.from(opts.body, 'utf-8') : opts.body
+      const totalBytes = bodyBuf.length
+      const onProgress = opts.onProgress
+      if (onProgress != null && Buffer.isBuffer(opts.body) && totalBytes > 0) {
+        // [P2-K2-PUSH]/Cycle 358 — chunked write with back-pressure
+        // awareness. Each chunk slice is bounded by
+        // MOONRAKER_UPLOAD_CHUNK_BYTES so progress fires at a predictable
+        // rate; after EACH successful write we invoke the caller's
+        // onProgress callback inside try/catch so a renderer crash cannot
+        // abort the upload mid-flight. The concatenation of every chunk is
+        // byte-identical to the single-shot `req.write(bodyBuf)` below —
+        // same bytes, same order — so the printer receives the exact same
+        // multipart payload; only the write cadence changes.
+        let sent = 0
+        const writeNext = (): void => {
+          while (sent < totalBytes) {
+            const end = Math.min(sent + MOONRAKER_UPLOAD_CHUNK_BYTES, totalBytes)
+            const chunk = bodyBuf.subarray(sent, end)
+            const drained = req.write(chunk)
+            sent = end
+            try {
+              onProgress(sent, totalBytes)
+            } catch {
+              // Swallow: renderer-side bugs MUST NOT corrupt the upload.
+            }
+            if (!drained) {
+              // Wait for the kernel write buffer to drain before queueing
+              // the next chunk; preserves Node's flow control on slow
+              // network links.
+              req.once('drain', writeNext)
+              return
+            }
+          }
+          req.end()
+        }
+        writeNext()
+        return
+      }
       req.write(bodyBuf)
     }
     req.end()
@@ -268,7 +342,8 @@ async function uploadFileMultipart(
   remoteFilename: string,
   uploadPath: string,
   timeoutMs: number,
-  cfsSlotId?: number
+  cfsSlotId?: number,
+  onProgress?: (sentBytes: number, totalBytes: number) => void
 ): Promise<{ status: number; body: string }> {
   const boundary = `----MoonrakerFormBoundary${Date.now().toString(16)}`
   const fileBuffer = await import('node:fs/promises').then((m) => m.readFile(localPath))
@@ -293,7 +368,8 @@ async function uploadFileMultipart(
   return makeRequest('POST', uploadUrl, {
     body,
     contentType: `multipart/form-data; boundary=${boundary}`,
-    timeoutMs
+    timeoutMs,
+    onProgress
   })
 }
 
@@ -385,7 +461,8 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
     startAfterUpload = false,
     timeoutMs = 15_000,
     machineCapabilities = null,
-    cfsSlotId
+    cfsSlotId,
+    onProgress
   } = payload
 
   const filename = basename(gcodePath)
@@ -504,7 +581,8 @@ export async function moonrakerPush(payload: MoonrakerPushPayload): Promise<Moon
       filename,
       uploadPath,
       timeoutMs,
-      cfsSlotId
+      cfsSlotId,
+      onProgress
     )
   } catch (e) {
     return {

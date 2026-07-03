@@ -1718,6 +1718,60 @@
   color: var(--txt0);
 }
 
+/* [P2-K2-PUSH]/Cycle 358-359 -- live Moonraker upload-progress meter.
+   Rendered only while a Send is in-flight. The <progress> element is the
+   determinate sighted feedback; the label reads the same rounded percent. */
+.k2-send-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.k2-send-progress__meter {
+  flex: 1 1 auto;
+  block-size: var(--sp-2);
+  inline-size: 100%;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--bg3);
+  overflow: hidden;
+}
+.k2-send-progress__meter::-webkit-progress-bar {
+  background: var(--bg3);
+  border-radius: var(--radius);
+}
+.k2-send-progress__meter::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--radius);
+}
+.k2-send-progress__meter::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--radius);
+}
+.k2-send-progress__label {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--txt1);
+}
+
+/* [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- live carvera-cli upload-phase chip.
+   carvera-cli exposes lifecycle phases (connecting / transferring /
+   verifying), not a percent, so the sighted feedback is a small phase pill. */
+.carvera-send-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.carvera-send-progress__phase {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
 /* CAM stale-mesh banner: warns when the source mesh is newer than
    output/cam.nc so the operator re-posts before sending to a machine.
    Uses the existing warn semantic palette. */

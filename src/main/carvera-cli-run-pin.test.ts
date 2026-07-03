@@ -893,14 +893,18 @@ describe('[ID-0256] (I) three-machine path realism', () => {
 // -----------------------------------------------------------------------------
 
 describe('[ID-0256] (J) source-text whitelist', () => {
-  it('source file has <= 130 lines (current: 120)', () => {
+  it('source file has <= 180 lines (current: 170)', () => {
+    // Cap raised from 130 -> 180 for the [P2-CARVERA-PUSH-MOCK]/Cycle 360
+    // phase-progress path (the `onProgress` payload field + JSDoc, the
+    // `detectCarveraSendPhase` import, and the line-callback spawn branch).
     const lineCount = SOURCE_TEXT.split('\n').length
-    expect(lineCount).toBeLessThanOrEqual(130)
+    expect(lineCount).toBeLessThanOrEqual(180)
     expect(lineCount).toBeGreaterThanOrEqual(110)
   })
 
-  it('source file is <= 4 KB on disk', () => {
-    expect(Buffer.byteLength(SOURCE_TEXT, 'utf8')).toBeLessThanOrEqual(4096)
+  it('source file is <= 7 KB on disk', () => {
+    // Cap raised from 4 KB -> 7 KB for the Cycle 360 phase-progress path.
+    expect(Buffer.byteLength(SOURCE_TEXT, 'utf8')).toBeLessThanOrEqual(7168)
   })
 
   it('declares the documented runtime exports verbatim', () => {
@@ -913,8 +917,10 @@ describe('[ID-0256] (J) source-text whitelist', () => {
   })
 
   it('imports spawnBounded from ./subprocess-bounded', () => {
+    // Cycle 360 also imports `spawnBoundedWithLineCallback` from the same
+    // module for the phase-progress line stream; match either shape.
     expect(SOURCE_TEXT).toMatch(
-      /import \{ spawnBounded \} from ['"]\.\/subprocess-bounded['"]/
+      /import \{ spawnBounded(, spawnBoundedWithLineCallback)? \} from ['"]\.\/subprocess-bounded['"]/
     )
   })
 

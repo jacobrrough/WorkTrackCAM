@@ -4,7 +4,11 @@
  */
 import { statSync } from 'node:fs'
 import type { AppSettings } from '../shared/project-schema'
-import { spawnBounded } from './subprocess-bounded'
+import {
+  detectCarveraSendPhase,
+  type CarveraSendPhase
+} from '../shared/carvera-send-progress-phase'
+import { spawnBounded, spawnBoundedWithLineCallback } from './subprocess-bounded'
 
 export type CarveraConnectionMode = 'auto' | 'wifi' | 'usb'
 
@@ -21,6 +25,24 @@ export type CarveraUploadPayload = {
   overwrite?: boolean
   /** Total spawn timeout in ms (default 120_000) */
   timeoutMs?: number
+  /**
+   * [P2-CARVERA-PUSH-MOCK]/Cycle 360 upload-phase callback. When supplied,
+   * each stdout line emitted by the carvera-cli child process is matched
+   * against `detectCarveraSendPhase(...)` and the callback fires WITH the
+   * resolved phase whenever the phase changes (no duplicate emissions for
+   * the same phase). The callback fires from the Electron main process
+   * (this module never runs in the renderer). For renderer-side display,
+   * the IPC handler in `src/main/ipc-fabrication.ts` injects an
+   * `onProgress` shim that forwards each phase change over the
+   * `carvera:upload:progress` channel to the invoking sender's
+   * WebContents.
+   *
+   * Safety Rule 2: additive / optional. Absent callback => byte-identical
+   * pre-Cycle-360 behaviour (single-shot `spawnBounded`, no line stream).
+   * Callback errors are swallowed (try/catch wraps each invocation) so a
+   * misbehaving renderer cannot corrupt the upload itself.
+   */
+  onProgress?: (phase: CarveraSendPhase) => void
 }
 
 export type CarveraUploadResult =
@@ -93,9 +115,36 @@ export async function carveraUpload(
   const spawnTimeout = payload.timeoutMs ?? 120_000
 
   try {
-    const { code, stdout, stderr } = await spawnBounded(command, args, {
-      timeoutMs: spawnTimeout > 0 ? spawnTimeout : null
-    })
+    // [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- when the caller supplied an
+    // onProgress callback, spawn through the line-callback variant so we
+    // can stream phase events as carvera-cli emits stdout lines. Phase
+    // changes are de-duplicated locally so a noisy CLI that repeats the
+    // same line N times only fires the callback ONCE per phase entry.
+    // Errors raised by the renderer-supplied callback are swallowed so a
+    // misbehaving subscriber cannot abort the upload.
+    const onProgress = payload.onProgress
+    const { code, stdout, stderr } =
+      onProgress != null
+        ? await (() => {
+            let lastPhase: CarveraSendPhase | null = null
+            return spawnBoundedWithLineCallback(command, args, {
+              timeoutMs: spawnTimeout > 0 ? spawnTimeout : null,
+              onStdoutLine: (line) => {
+                const phase = detectCarveraSendPhase(line)
+                if (phase != null && phase !== lastPhase) {
+                  lastPhase = phase
+                  try {
+                    onProgress(phase)
+                  } catch {
+                    /* swallow renderer-side errors */
+                  }
+                }
+              }
+            })
+          })()
+        : await spawnBounded(command, args, {
+            timeoutMs: spawnTimeout > 0 ? spawnTimeout : null
+          })
     if (code !== 0) {
       const detail = [stderr, stdout].filter(Boolean).join('\n').trim().slice(0, 4000)
       return {

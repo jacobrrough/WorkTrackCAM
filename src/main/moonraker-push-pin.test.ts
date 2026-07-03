@@ -169,17 +169,24 @@ describe('moonraker-push PIN B -- SOURCE-text purity', () => {
     // warning paths driven by `checkGcodeHeaderHealth.fields.has*`.
     // 2026-06-08: +338 B for the normalizeMoonrakerUrl import + scheme-default
     // at the `new URL(...)` boundary (the bare-IP "printer URL invalid" fix).
-    expect(SOURCE_BYTES).toBe(25772)
+    // [P2-K2-PUSH]/Cycle 358: +the chunked-upload progress path
+    // (MOONRAKER_UPLOAD_CHUNK_BYTES const, the `onProgress` callback on
+    // `makeRequest` opts + the payload type, the back-pressure-aware
+    // `writeNext` loop, and the threading through `uploadFileMultipart` +
+    // `moonrakerPush`). Byte-identical upload payload; only the write
+    // cadence + the progress callback are new.
+    expect(SOURCE_BYTES).toBe(29529)
   })
-  it('B2: SOURCE UTF-16 length (.length) is exactly 25460', () => {
-    // Updated post-CFS-v1 + the 2026-06-08 moonraker-url fix. See B1 for context.
-    expect(SOURCE_TEXT.length).toBe(25460)
+  it('B2: SOURCE UTF-16 length (.length) is exactly 29205', () => {
+    // Updated post-CFS-v1 + the 2026-06-08 moonraker-url fix +
+    // [P2-K2-PUSH]/Cycle 358 chunked upload. See B1 for context.
+    expect(SOURCE_TEXT.length).toBe(29205)
   })
   it('B3: SOURCE_LINES split-by-LF length matches the on-disk line count (post CFS-v1 + PLR/probe advisory additions)', () => {
     // Updated post-CFS-v1 / PLR / adaptive-probing: file now carries
     // the K2 CFS slot URL helper + the two new advisory warnings.
     // Reflect the new shape so any FUTURE drift is still pinned.
-    expect(SOURCE_LINES).toHaveLength(684)
+    expect(SOURCE_LINES).toHaveLength(762)
     expect(SOURCE_LINES[SOURCE_LINES.length - 1]).toBe('')
   })
   it('B4: SOURCE has zero CRLF sequences (LF-only line endings)', () => {
@@ -713,16 +720,19 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K4: SOURCE_TEXT references moonraker.readthedocs.io (canonical Moonraker docs URL)', () => {
     expect(SOURCE_TEXT.includes('moonraker.readthedocs.io')).toBe(true)
   })
-  it('K5: SOURCE_BYTES is exactly 25772 (regression net for any silent byte drift)', () => {
-    // Updated post-CFS-v1 + the 2026-06-08 moonraker-url fix. See B1 docstring.
-    expect(SOURCE_BYTES).toBe(25772)
+  it('K5: SOURCE_BYTES is exactly 29529 (regression net for any silent byte drift)', () => {
+    // Updated post-CFS-v1 + the 2026-06-08 moonraker-url fix +
+    // [P2-K2-PUSH]/Cycle 358 chunked upload. See B1 docstring.
+    expect(SOURCE_BYTES).toBe(29529)
   })
-  it('K6: SOURCE has 156 non-ASCII chars total (147 box-drawing + 8 em-dash + 1 arrow)', () => {
+  it('K6: SOURCE has 162 non-ASCII chars total (147 box-drawing + 14 em-dash + 1 arrow)', () => {
+    // +6 em-dashes from the [P2-K2-PUSH]/Cycle 358 chunked-upload JSDoc /
+    // inline comments (prose em-dashes, matching the file's existing style).
     let count = 0
     for (let i = 0; i < SOURCE_TEXT.length; i += 1) {
       if (SOURCE_TEXT.charCodeAt(i) > 127) count += 1
     }
-    expect(count).toBe(156)
+    expect(count).toBe(162)
   })
   it('K7: SOURCE has exactly 147 box-drawing U+2500 chars (header banners)', () => {
     let count = 0
@@ -731,12 +741,13 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
     }
     expect(count).toBe(147)
   })
-  it('K8: SOURCE has exactly 8 U+2014 em-dashes', () => {
+  it('K8: SOURCE has exactly 14 U+2014 em-dashes', () => {
+    // +6 from the [P2-K2-PUSH]/Cycle 358 chunked-upload comments.
     let count = 0
     for (let i = 0; i < SOURCE_TEXT.length; i += 1) {
       if (SOURCE_TEXT.charCodeAt(i) === 0x2014) count += 1
     }
-    expect(count).toBe(8)
+    expect(count).toBe(14)
   })
   it('K9: SOURCE has exactly 1 U+2192 right-arrow (used in error-detail copy)', () => {
     let count = 0
@@ -769,9 +780,10 @@ describe('moonraker-push PIN K -- on-disk source provenance + sentinel', () => {
   it('K12: SOURCE provenance sentinel -- exact (lines, bytes, utf16Length) tuple', () => {
     // Triple sentinel: any silent rewrite that preserves byte-count but shifts
     // line-count or utf16-length will fail at least one of these.
-    // Updated post-CFS-v1. See B1 docstring for the additions.
-    expect(SOURCE_LINES.length).toBe(684)
-    expect(SOURCE_BYTES).toBe(25772)
-    expect(SOURCE_TEXT.length).toBe(25460)
+    // Updated post-CFS-v1 + [P2-K2-PUSH]/Cycle 358 chunked upload.
+    // See B1 docstring for the additions.
+    expect(SOURCE_LINES.length).toBe(762)
+    expect(SOURCE_BYTES).toBe(29529)
+    expect(SOURCE_TEXT.length).toBe(29205)
   })
 })

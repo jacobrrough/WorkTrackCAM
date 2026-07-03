@@ -1,10 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { MachineProfile } from '../../shared/machine-schema'
 import {
   K2_PLUS_QUALITY_PRESET_IDS,
   K2_PLUS_SLICE_PRESETS,
   type K2PlusQualityPresetId
 } from '../../shared/k2-plus-slice-presets'
+import {
+  formatK2SendBracketAnnouncement,
+  formatK2SendThresholdAnnouncement,
+  k2SendBracketsCrossed,
+  k2SendThresholdsCrossed
+} from '../../shared/k2-send-progress-thresholds'
+import {
+  formatCarveraSendPhaseAnnouncement,
+  type CarveraSendPhase
+} from '../../shared/carvera-send-progress-phase'
 import type { AppSettings, ProjectFile } from '../../shared/project-schema'
 import type { ToolLibraryFile } from '../../shared/tool-schema'
 import { buildCamSimulationPreview } from '../../shared/cam-simulation-preview'
@@ -183,6 +193,16 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
       : 0
 
   const [k2SendBusy, setK2SendBusy] = useState(false)
+  // [P2-K2-PUSH]/Cycle 358-359 -- live Moonraker upload progress. `k2Percent`
+  // (null when idle) drives the visible <progress> meter + "N% uploaded"
+  // label; `k2SendStatus` feeds the polite screen-reader live region. The
+  // threshold (25/50/75) + bracket (0/100) Sets live in refs so a milestone
+  // crossing does not force a re-render on every 64 KiB tick -- only an
+  // actual announcement update (which changes `k2SendStatus`) re-renders.
+  const [k2Percent, setK2Percent] = useState<number | null>(null)
+  const [k2SendStatus, setK2SendStatus] = useState('')
+  const k2AnnouncedThresholdsRef = useRef<Set<number>>(new Set())
+  const k2AnnouncedBracketsRef = useRef<Set<number>>(new Set())
   const [filaments, setFilaments] = useState<FilamentRecord[]>([])
   const [activeFilamentId, setActiveFilamentId] = useState<string | undefined>(undefined)
 
@@ -197,6 +217,33 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   async function sendToK2Plus(): Promise<void> {
     if (!canSendToK2 || k2SendBusy) return
     setK2SendBusy(true)
+    // Reset the progress meter + milestone Sets at the top of each Send so a
+    // prior attempt's state never bleeds into the new upload.
+    setK2Percent(0)
+    setK2SendStatus('Uploading to K2 Plus…')
+    k2AnnouncedThresholdsRef.current = new Set()
+    k2AnnouncedBracketsRef.current = new Set()
+    // [P2-K2-PUSH]/Cycle 358-359 -- subscribe to the main-process upload
+    // progress feed BEFORE the push begins so no early ticks are missed.
+    // Each tick updates the visible meter and, on a newly-crossed bracket
+    // (0/100) or threshold (25/50/75), announces the most informative
+    // message via the polite live region (100-bracket > highest threshold
+    // > 0-bracket, matching the k2-send-progress-thresholds module contract).
+    const unsub = window.fab.onMoonrakerPushProgress(({ percent }) => {
+      const clamped = Math.max(0, Math.min(100, percent))
+      setK2Percent(clamped)
+      const newBrackets = k2SendBracketsCrossed(clamped, k2AnnouncedBracketsRef.current)
+      const newThresholds = k2SendThresholdsCrossed(clamped, k2AnnouncedThresholdsRef.current)
+      for (const b of newBrackets) k2AnnouncedBracketsRef.current.add(b)
+      for (const t of newThresholds) k2AnnouncedThresholdsRef.current.add(t)
+      if (newBrackets.includes(100)) {
+        setK2SendStatus(formatK2SendBracketAnnouncement(100))
+      } else if (newThresholds.length > 0) {
+        setK2SendStatus(formatK2SendThresholdAnnouncement(newThresholds[newThresholds.length - 1]!))
+      } else if (newBrackets.includes(0)) {
+        setK2SendStatus(formatK2SendBracketAnnouncement(0))
+      }
+    })
     try {
       // Wave 3m — the gated K2 push surface action (gcode-send-gate.ts):
       // ADVISORY-ONLY export-safety pre-flight on the EXACT on-disk program
@@ -214,7 +261,9 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
         onStatus: (msg) => p.onStatus?.(msg)
       })
     } finally {
+      unsub()
       setK2SendBusy(false)
+      setK2Percent(null)
     }
   }
 
@@ -334,6 +383,38 @@ export function SliceManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
               {k2SendBusy ? 'Uploading…' : 'Send to K2 Plus'}
             </button>
           ) : null}
+          {/*
+           * [P2-K2-PUSH]/Cycle 358-359 -- live upload-progress meter. The
+           * <progress> element is the sighted feedback (determinate 0..100);
+           * the paired "N% uploaded" label reads the same value. The polite
+           * live region below is the screen-reader feedback, driven by the
+           * k2-send-progress-thresholds module (start + 25/50/75 + brackets).
+           * The meter only renders while a Send is in-flight (`k2Percent`
+           * non-null), so idle render-pins are unaffected.
+           */}
+          {k2Percent !== null ? (
+            <div className="k2-send-progress" data-testid="k2-send-progress">
+              <progress
+                className="k2-send-progress__meter"
+                data-testid="k2-send-progress-meter"
+                max={100}
+                value={k2Percent}
+                aria-label="K2 Plus upload progress"
+              />
+              <span className="k2-send-progress__label" data-testid="k2-send-progress-label">
+                {`${Math.round(k2Percent)}% uploaded`}
+              </span>
+            </div>
+          ) : null}
+          <p
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="k2-send-to-printer-status"
+          >
+            {k2SendStatus}
+          </p>
         </section>
       ) : null}
       {p.sliceOut.trim().length > 0 ? (
@@ -369,6 +450,13 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
   const carveraDevice = p.carveraDevice ?? localCarveraDevice
   const setCarveraDevice = p.onCarveraDeviceChange ?? setLocalCarveraDevice
   const [carveraBusy, setCarveraBusy] = useState(false)
+  // [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- live carvera-cli upload phase.
+  // `carveraPhase` (null when idle) drives the visible phase chip;
+  // `carveraSendStatus` feeds the polite screen-reader live region. Unlike
+  // the K2 byte-percent feed, carvera-cli exposes lifecycle PHASES
+  // (connecting -> transferring -> verifying) parsed from its stdout.
+  const [carveraPhase, setCarveraPhase] = useState<CarveraSendPhase | null>(null)
+  const [carveraSendStatus, setCarveraSendStatus] = useState('')
 
   // Detect if the active machine is a Carvera (show zeroing/setup panel)
   const activeCnc = p.activeMachine?.kind === 'cnc' ? p.activeMachine : undefined
@@ -412,6 +500,16 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
       ? activeCnc
       : p.machines.find((m) => m.kind === 'cnc' && /carvera/i.test(`${m.id} ${m.name}`))
     setCarveraBusy(true)
+    setCarveraPhase(null)
+    setCarveraSendStatus('Uploading to Carvera…')
+    // [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- subscribe to the main-process
+    // phase feed BEFORE the upload begins so no early phase change is
+    // missed. Each phase change updates the visible chip and announces the
+    // phase via the polite live region using the shared formatter.
+    const unsub = window.fab.onCarveraUploadProgress(({ phase }) => {
+      setCarveraPhase(phase)
+      setCarveraSendStatus(formatCarveraSendPhaseAnnouncement(phase))
+    })
     try {
       await runCarveraUploadSurface({
         gcodePath,
@@ -426,7 +524,9 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
     } catch (e) {
       p.onStatus?.(e instanceof Error ? e.message : String(e))
     } finally {
+      unsub()
       setCarveraBusy(false)
+      setCarveraPhase(null)
     }
   }
 
@@ -694,6 +794,35 @@ export function CamManufacturePanel(p: ManufactureAuxPanelsProps): ReactNode {
             {carveraBusy ? 'Uploading…' : 'Upload to Carvera'}
           </button>
         ) : null}
+        {/*
+         * [P2-CARVERA-PUSH-MOCK]/Cycle 360 -- live upload-phase chip +
+         * screen-reader live region. carvera-cli has no native percent, so
+         * the sighted feedback is the current lifecycle PHASE (connecting /
+         * transferring / verifying); the polite live region announces the
+         * same phase via the shared formatter. The chip only renders while a
+         * phase is active (`carveraPhase` non-null) so idle render-pins are
+         * unaffected.
+         */}
+        {carveraPhase !== null ? (
+          <div className="carvera-send-progress" data-testid="carvera-send-progress">
+            <span
+              className="carvera-send-progress__phase"
+              data-testid="carvera-send-progress-phase"
+              data-phase={carveraPhase}
+            >
+              {`Carvera: ${carveraPhase}…`}
+            </span>
+          </div>
+        ) : null}
+        <p
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="carvera-send-status"
+        >
+          {carveraSendStatus}
+        </p>
       </div>
       {isCarvera ? (
         <CarveraSetupPanel

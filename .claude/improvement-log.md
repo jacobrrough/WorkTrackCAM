@@ -19488,3 +19488,23 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Honest limitations:** arc-equivalence tolerance 0.02 mm (same circle, not bit-identical to the old polyline); each circle is 2 exact semicircles (TROCHOID_ARC_SUBDIVISIONS=2, <=180deg controller-safety rule).
 
 **Phase 6 status:** both CAM EMISSION frontier items done (helical entry + native arcs), each gcode-safety SAFE. REMAINING Phase-6 items are NOT autonomous-appropriate: OCL true-waterline is an ENV/bundling step (pip install into the 3.11 sidecar venv - an operator action, may fail on-platform); true gouge detection is a large standalone SDF/BVH effort. The operator's real-hardware first cut remains the final gate for any CAM change.
+## Cycle 287 - Branch-graveyard cleanup + rescue of the stranded upload-progress feature (2026-07-03)
+
+**Focus:** user - "double check all the branches, make sure we're not missing anything in main, then get rid of the extra branches" + "dive into the remaining changes and make sure we're not missing real work" + rescue the one real thing found.
+
+**Cleanup:** 64 branches -> 8, 24 worktrees -> 4. Deleted only provably-safe refs: 40 merged/ephemeral branch refs (recorded to a recovery file, restorable by SHA), 5 non-agent dirty worktrees (audited superseded/trivial), and 11 agent worktrees that were LOCKED by dead PIDs (33124/25452 - verified not running before clearing the stale locks). KEPT: main, current (PR #21), the 3 other open PRs (#20/#13/#12), the main-repo checkout, the still-running background task, and session/k2-plus-pipeline (feature source, now retired below).
+
+**Audit (4 Opus agents, read-only):** 30 candidates classified vs HEAD. 29 SUPERSEDED/TRIVIAL (Carvera ATC/rotary/4-axis, Laguna vacuum->G-code, schema fields, CAD-first, inline-rename - all already in HEAD; sweet-jepsen/quizzical/stabilization = retired ShopApp/EnvironmentSplash surfaces; ~10 worktrees = stale regenerated snapshots). Exactly 1 genuinely MISSING: the live upload-progress feature.
+
+**Rescue (implementer + adversarial verifier, additive extraction NOT merge):** brought the stranded live upload-progress feature from session/k2-plus-pipeline onto HEAD - K2 Moonraker 64KiB chunked upload with onProgress, Carvera stdout phase detection (detectCarveraSendPhase), two new IPC channels (moonraker:push:progress / carvera:upload:progress) + typed preload subscriptions, a real progress meter + percent + screen-reader live region (25/50/75% announce thresholds) replacing the static "Uploading..." label. Two pure new shared modules (k2-send-progress-thresholds, carvera-send-progress-phase) brought whole with their 316-test contract.
+
+**Safety of the rescue:**
+- NO HEAD REGRESSION (make-or-break): the branch's moonraker-push.ts predated CFS/header-health and would have deleted them. Verifier confirmed in code that HEAD's normalizeMoonrakerUrl (scheme-less host), buildUploadUrlForK2Cfs (CFS multi-color slot), and checkGcodeHeaderHealth/warnings are ALL preserved - onProgress added as a NEW param after cfsSlotId, not a replacement.
+- BYTE-IDENTICAL UPLOAD: the chunk loop slices bodyBuf.subarray in order; a test uploads a 200KiB fixture BOTH ways (whole vs chunked) through a capturing mock-Moonraker and asserts the bodies are equal (a throwing onProgress still yields a byte-identical upload). This is the critical correctness guard - a single altered byte would corrupt the G-code sent to the K2.
+- NO retired surface reintroduced (MoonrakerPreviewBanner/freecad-addon/ShopApp/control-center/cp-layout/EnvironmentSplash absent from all changed source; the one grep hit is a historical code COMMENT, not code).
+
+**gcode-safety:** NOT triggered - moonraker-push.ts + carvera-cli-run.ts are the upload TRANSPORT of an already-generated G-code file; the uploaded bytes are proven byte-identical and no engines/cam, posts, machines, or post-process changed. G-code content unchanged.
+
+**Gates:** tsc clean; node 18,865 -> 19,192 pass (+327, the rescued feature + its brought 316-test shared-module contract); DOM 148 -> 149. 17 files (8 new + 9 additively modified).
+
+**Result:** main is confirmed to be missing nothing of value; the one genuinely-stranded feature is now captured on PR #21; the branch graveyard is cleaned. session/k2-plus-pipeline retired (its unique contribution extracted).
