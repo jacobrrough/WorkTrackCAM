@@ -63,6 +63,7 @@ import { useDesignSessionOptional } from './DesignSessionContext'
 import type {
   AssemblyComponent,
   AssemblyInterferenceReport,
+  AssemblyJointLimits,
   AssemblySummaryReport,
 } from '../../shared/assembly-schema'
 import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
@@ -79,16 +80,27 @@ import {
   MOTION_LOOP_DURATION_MS,
   advancePlaybackT,
   clamp01,
-  firstDrivenJointKind,
+  firstDrivenJointRange,
   formatPoseSummary,
   interpolatePosesAtT,
   parseMotionPoses,
   playbackDisabledHint,
   playbackReadout,
-  type DrivenJointKind,
+  type DrivenJointRange,
   type MotionPose,
   type MotionPoseTransform,
 } from './assembly-motion-playback'
+import {
+  formatJointLimitsSummary,
+  hasAuthoredLimits,
+  jointKindHasLimits,
+  jointLimitsToDraft,
+  limitFieldsForJointKind,
+  limitUnitSuffix,
+  parseJointLimitsDraft,
+  type AssemblyJointLimitsKey,
+  type JointLimitsDraft,
+} from './assembly-joint-limits'
 
 /**
  * One row in the assembly's parts list.
@@ -162,6 +174,18 @@ export type AssemblyPart = {
    * additive; defaults to "not grounded" when omitted.
    */
   readonly grounded?: boolean
+  /**
+   * Authored hard limits for this instance's joint DOF, mirroring the durable
+   * `AssemblyComponent.jointLimits` (revolute: scalarMinDeg/scalarMaxDeg;
+   * slider: scalarMinMm/scalarMaxMm; cylindrical: slide+spin; etc — see
+   * `assembly-joint-limits.ts`). Authored by the per-row Limits editor and
+   * threaded into both the `assembly:solve` input (the solver clamps joints
+   * to these) and the `assembly:simulate` input (the motion study sweeps this
+   * range). Optional + additive: absent = unlimited; the EMPTY object `{}` is
+   * the explicit "cleared" state the persist seam uses to REPLACE prior
+   * on-disk limits (`persistParts` preserves omitted fields).
+   */
+  readonly jointLimits?: AssemblyJointLimits
 }
 
 /**
@@ -179,6 +203,17 @@ export type SolvedComponentTransform = {
     readonly ryDeg: number
     readonly rzDeg: number
   }
+  /**
+   * OPTIONAL row-edit rider (Limits editor): authored joint limits applied
+   * alongside the pose by {@link applySolvedTransforms}. `undefined` (every
+   * real `assembly:solve` result) leaves the row's limits untouched; an
+   * object replaces them; `null` clears-to-unlimited (the row gets the
+   * EXPLICIT empty `{}` so a re-persist overwrites prior on-disk limits).
+   * Riding the solved-transforms seam keeps row edits on the ONE host
+   * round-trip the host already wires (setState → onAssemblyPartsChange
+   * persist) without a new prop through the hands-off host.
+   */
+  readonly jointLimits?: AssemblyJointLimits | null
 }
 
 /**
@@ -323,6 +358,12 @@ export interface AssemblyViewProps {
   readonly initialMotionPoses?: readonly MotionPose[] | null
   /** Render-pin escape hatch: seeds the playback scrub position (0..1). */
   readonly initialPlaybackT?: number
+  /**
+   * Render-pin escape hatch: opens the per-row joint-limits editor for the
+   * given part id in a static render (mirrors `initialSelectedPartId`). The
+   * draft seeds from that row's current `jointLimits`.
+   */
+  readonly initialLimitsOpenPartId?: string | null
 }
 
 /**
@@ -393,14 +434,20 @@ export function applySolvedTransforms(
   solved: ReadonlyArray<SolvedComponentTransform>
 ): readonly AssemblyPart[] {
   if (solved.length === 0) return parts
-  const byId = new Map(solved.map((s) => [s.id, s.transform]))
+  const byId = new Map(solved.map((s) => [s.id, s]))
   return parts.map((part) => {
-    const t = byId.get(part.id)
-    if (!t) return part
+    const patch = byId.get(part.id)
+    if (!patch) return part
+    const t = patch.transform
     const base: AssemblyPart = {
       ...part,
       transform: { position: [t.x, t.y, t.z], rotation: [t.rxDeg, t.ryDeg, t.rzDeg] },
-      transformSummary: undefined
+      transformSummary: undefined,
+      // Limits rider: `undefined` (a plain solve) leaves the row's authored
+      // limits untouched; an object replaces them; `null` clears them to the
+      // EXPLICIT empty `{}` so the persist seam replaces prior on-disk limits
+      // instead of silently preserving them (assembly-part-bridge → persistParts).
+      ...(patch.jointLimits !== undefined ? { jointLimits: patch.jointLimits ?? {} } : {})
     }
     return { ...base, transformSummary: formatTransformSummary(base) }
   })
@@ -628,6 +675,7 @@ export function AssemblyView({
   projectDir,
   initialMotionPoses = null,
   initialPlaybackT = 0,
+  initialLimitsOpenPartId = null,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
   const [error, setError] = useState<string | null>(null)
@@ -935,7 +983,14 @@ export function AssemblyView({
           rxDeg: part.transform?.rotation?.[0] ?? 0,
           ryDeg: part.transform?.rotation?.[1] ?? 0,
           rzDeg: part.transform?.rotation?.[2] ?? 0,
-        }
+        },
+        // LIMITS→SOLVER threading (pinned): carry the row's joint kind + its
+        // authored jointLimits into the solve input so the solver's limit
+        // clamps (assembly-solver-core `clampHandlesToLimits`) bind the REAL
+        // authored range — without the joint kind the limits never map onto a
+        // free variable, and without the limits the clamps have no bounds.
+        ...(part.joint !== undefined ? { joint: part.joint } : {}),
+        ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {})
       })),
       // #9 — feed the hydrated durable constraints so the solver positions the
       // parts. Empty by default (legacy single-pass FK path runs); non-empty
@@ -1093,8 +1148,10 @@ export function AssemblyView({
         : null,
     [motionPoses, playbackHint, playbackT]
   )
-  const drivenJointKind = useMemo<DrivenJointKind | null>(
-    () => firstDrivenJointKind(parts),
+  // Kind + REAL sweep range (authored limits, IPC-default fallback) of the
+  // first driven row — phrases the playback read-out over the authored range.
+  const drivenJointRange = useMemo<DrivenJointRange | null>(
+    () => firstDrivenJointRange(parts),
     [parts]
   )
   const handleMotionStudy = useCallback((): void => {
@@ -1138,6 +1195,10 @@ export function AssemblyView({
         // `revolute` / `slider` components across their limit range — without
         // it every sample solves to the same pose and playback is frozen.
         ...(part.joint !== undefined ? { joint: part.joint } : {}),
+        // LIMIT COUPLING (closed): thread the authored jointLimits so
+        // `assembly:simulate` sweeps the REAL authored range instead of its
+        // documented defaults (revolute −180..180°, slider 0..100 mm).
+        ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {}),
       })),
       mateConstraints,
     }
@@ -1161,6 +1222,99 @@ export function AssemblyView({
         setError(`Motion study threw: ${e instanceof Error ? e.message : String(e)}`)
       })
   }, [parts, motionStudying, mateConstraints, toast])
+
+  // ── Joint-limits editor (per-row "Limits" section) ───────────────────────
+  // Authoring UI over the durable `AssemblyComponent.jointLimits`. One editor
+  // open at a time; the draft holds raw input strings (pure parse/validate in
+  // assembly-joint-limits.ts). Apply/Clear push a row patch through the SAME
+  // host seam a solve uses (`onSolvedTransforms` → host applySolvedTransforms
+  // → one setState → onAssemblyPartsChange persist), so authored limits ride
+  // the existing round-trip into assembly.json — no new host prop needed.
+  const [limitsOpenPartId, setLimitsOpenPartId] = useState<string | null>(initialLimitsOpenPartId)
+  const [limitsDraft, setLimitsDraft] = useState<JointLimitsDraft>(() => {
+    const seed = initialLimitsOpenPartId !== null
+      ? parts.find((candidate) => candidate.id === initialLimitsOpenPartId)
+      : undefined
+    return seed !== undefined ? jointLimitsToDraft(seed.joint, seed.jointLimits) : {}
+  })
+  const [limitsError, setLimitsError] = useState<string | null>(null)
+
+  const toggleLimitsEditor = useCallback(
+    (part: AssemblyPart): void => {
+      setLimitsError(null)
+      if (limitsOpenPartId === part.id) {
+        setLimitsOpenPartId(null)
+        return
+      }
+      setLimitsDraft(jointLimitsToDraft(part.joint, part.jointLimits))
+      setLimitsOpenPartId(part.id)
+    },
+    [limitsOpenPartId]
+  )
+
+  const setLimitsCell = useCallback((key: AssemblyJointLimitsKey, value: string): void => {
+    setLimitsDraft((prev) => ({ ...prev, [key]: value }))
+  }, [])
+
+  /**
+   * Push a row-level limits patch through the solved-transforms host seam:
+   * the row's CURRENT pose rides along unchanged, the `jointLimits` rider
+   * carries the edit (`null` = explicit clear-to-unlimited). One host state
+   * update; the host's persist effect then folds the row to assembly.json.
+   * Authored limits change the sweep a motion study covered, so any open
+   * playback overlay exits (stale poses must not animate a fresh range).
+   */
+  const pushLimitsPatch = useCallback(
+    (part: AssemblyPart, limits: AssemblyJointLimits | undefined): void => {
+      if (!onSolvedTransforms) return
+      onSolvedTransforms([
+        {
+          id: part.id,
+          transform: {
+            x: part.transform?.position?.[0] ?? 0,
+            y: part.transform?.position?.[1] ?? 0,
+            z: part.transform?.position?.[2] ?? 0,
+            rxDeg: part.transform?.rotation?.[0] ?? 0,
+            ryDeg: part.transform?.rotation?.[1] ?? 0,
+            rzDeg: part.transform?.rotation?.[2] ?? 0,
+          },
+          jointLimits: limits ?? null,
+        },
+      ])
+      exitPlayback()
+    },
+    [onSolvedTransforms, exitPlayback]
+  )
+
+  const handleLimitsApply = useCallback(
+    (part: AssemblyPart): void => {
+      const parsed = parseJointLimitsDraft(part.joint, limitsDraft)
+      if (!parsed.ok) {
+        setLimitsError(parsed.error)
+        return
+      }
+      setLimitsError(null)
+      pushLimitsPatch(part, parsed.limits)
+      setLimitsOpenPartId(null)
+      toast(
+        'ok',
+        parsed.limits !== undefined
+          ? `Limits set for ${part.name}: ${formatJointLimitsSummary(part.joint, parsed.limits)}`
+          : `Limits cleared for ${part.name} — joint moves unlimited.`
+      )
+    },
+    [limitsDraft, pushLimitsPatch, toast]
+  )
+
+  const handleLimitsClear = useCallback(
+    (part: AssemblyPart): void => {
+      setLimitsError(null)
+      pushLimitsPatch(part, undefined)
+      setLimitsOpenPartId(null)
+      toast('ok', `Limits cleared for ${part.name} — joint moves unlimited.`)
+    },
+    [pushLimitsPatch, toast]
+  )
 
   // ── Summary — read-only assembly roll-up (no file write). Surfaces the
   // headline counts as a toast. Folds errors into the banner; never throws.
@@ -1412,7 +1566,12 @@ export function AssemblyView({
               className="design-assembly__playback-readout"
               data-testid="design-assembly-playback-readout"
             >
-              {playbackReadout(motionPoses.length, playbackT, drivenJointKind)}
+              {playbackReadout(
+                motionPoses.length,
+                playbackT,
+                drivenJointRange?.kind ?? null,
+                drivenJointRange ?? undefined
+              )}
             </span>
           ) : (
             <span
@@ -1457,6 +1616,11 @@ export function AssemblyView({
               const isSelected = part.id === selectedPartId
               const isClashing = clashIds.has(part.id)
               const rowId = rowTestId(part.id)
+              // Joint-limits editor: only joint kinds with limitable DOF get
+              // the affordance (rigid / no-joint rows have nothing to bound).
+              const limitable = jointKindHasLimits(part.joint)
+              const limitsOpen = limitable && limitsOpenPartId === part.id
+              const limitFields = limitable ? limitFieldsForJointKind(part.joint) : []
               // Playback overlay: while the motion-study bar is open the pose
               // at the playhead OVERRIDES the displayed placement (view-layer
               // only — `parts` is untouched, so closing the bar restores this
@@ -1514,6 +1678,18 @@ export function AssemblyView({
                       </span>
                     )}
                   </button>
+                  {limitable && (
+                    <button
+                      type="button"
+                      className="design-assembly__row-limits-toggle"
+                      data-testid={`${rowId}-limits-toggle`}
+                      aria-expanded={limitsOpen}
+                      onClick={() => toggleLimitsEditor(part)}
+                      title={`Joint limits: ${formatJointLimitsSummary(part.joint, part.jointLimits)}`}
+                    >
+                      Limits
+                    </button>
+                  )}
                   {onRemovePart && (
                     <button
                       type="button"
@@ -1524,6 +1700,90 @@ export function AssemblyView({
                     >
                       &times;
                     </button>
+                  )}
+                  {limitable && hasAuthoredLimits(part.joint, part.jointLimits) && (
+                    <span
+                      className="design-assembly__row-limits-summary"
+                      data-testid={`${rowId}-limits-summary`}
+                      title="Authored joint limits (solver clamps + motion-study sweep range)"
+                    >
+                      {formatJointLimitsSummary(part.joint, part.jointLimits)}
+                    </span>
+                  )}
+                  {limitsOpen && (
+                    <div
+                      className="design-assembly__limits"
+                      data-testid={`${rowId}-limits`}
+                      role="group"
+                      aria-label={`Joint limits for ${part.name}`}
+                    >
+                      {limitsError !== null && (
+                        <div
+                          className="design-assembly__limits-error"
+                          role="alert"
+                          data-testid={`${rowId}-limits-error`}
+                        >
+                          {limitsError}
+                        </div>
+                      )}
+                      {limitFields.map((field) => (
+                        <div className="design-assembly__limits-field" key={field.minKey}>
+                          <span className="design-assembly__limits-label">{field.label}</span>
+                          <input
+                            type="number"
+                            className="design-assembly__limits-input"
+                            data-testid={`${rowId}-limits-${field.minKey}`}
+                            aria-label={`${part.name} ${field.label} min (${limitUnitSuffix(field.unit)})`}
+                            placeholder="min"
+                            value={limitsDraft[field.minKey] ?? ''}
+                            onChange={(e) => setLimitsCell(field.minKey, e.target.value)}
+                          />
+                          <span className="design-assembly__limits-sep" aria-hidden="true">
+                            ..
+                          </span>
+                          <input
+                            type="number"
+                            className="design-assembly__limits-input"
+                            data-testid={`${rowId}-limits-${field.maxKey}`}
+                            aria-label={`${part.name} ${field.label} max (${limitUnitSuffix(field.unit)})`}
+                            placeholder="max"
+                            value={limitsDraft[field.maxKey] ?? ''}
+                            onChange={(e) => setLimitsCell(field.maxKey, e.target.value)}
+                          />
+                          <span className="design-assembly__limits-unit">
+                            {limitUnitSuffix(field.unit)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="design-assembly__limits-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary design-assembly__limits-apply"
+                          data-testid={`${rowId}-limits-apply`}
+                          onClick={() => handleLimitsApply(part)}
+                          disabled={!onSolvedTransforms}
+                          aria-disabled={!onSolvedTransforms}
+                          title={
+                            onSolvedTransforms
+                              ? 'Apply these joint limits (persists with the assembly)'
+                              : 'Host has not wired part updates — limits cannot be applied here.'
+                          }
+                        >
+                          Apply
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost design-assembly__limits-clear"
+                          data-testid={`${rowId}-limits-clear`}
+                          onClick={() => handleLimitsClear(part)}
+                          disabled={!onSolvedTransforms}
+                          aria-disabled={!onSolvedTransforms}
+                          title="Clear every bound — the joint moves unlimited"
+                        >
+                          Clear (unlimited)
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </li>
               )

@@ -112,6 +112,45 @@ export class MoveItemCommand<T> implements UndoableCommand {
   }
 }
 
+/**
+ * ReplayCommand — a command whose forward and inverse sides are THUNKS that
+ * replay a mutation through an external validated commit chain (e.g. the
+ * design session's `commitKernelFeatures` fold + persist + debounced-rebuild
+ * path) and report whether the chain actually committed. Built for mutations
+ * that are EXECUTED FIRST by their caller (which learns the outcome) and then
+ * RECORDED via {@link UndoManager.record} — never re-executed on push.
+ *
+ * Coalescing: {@link mergeNewer} adopts the newer command's forward end while
+ * keeping THIS command's inverse end, so a rapid burst of edits (e.g. a
+ * dialog spinner re-applying the same timeline index) undoes back to the
+ * state before the FIRST edit and redoes forward to the LATEST — mirroring
+ * the PropertyEditCommand merge in {@link UndoManager.execute}.
+ */
+export class ReplayCommand implements UndoableCommand {
+  coalesceKey?: string
+  private forwardFn: () => boolean
+  private readonly inverseFn: () => boolean
+  private readonly label: string
+  constructor(
+    forward: () => boolean,
+    inverse: () => boolean,
+    label: string,
+    coalesceKey?: string,
+  ) {
+    this.forwardFn = forward
+    this.inverseFn = inverse
+    this.label = label
+    this.coalesceKey = coalesceKey
+  }
+  execute(): void { this.forwardFn() }
+  undo(): void { this.inverseFn() }
+  describe(): string { return this.label }
+  /** Run the forward mutation NOW and report whether it committed. */
+  runForward(): boolean { return this.forwardFn() }
+  /** Coalesce: keep this command's inverse (first "before"), adopt the newer forward (latest "after"). */
+  mergeNewer(newer: ReplayCommand): void { this.forwardFn = newer.forwardFn }
+}
+
 // ── History entry ────────────────────────────────────────────────────────────
 
 export interface HistoryEntry {
@@ -180,6 +219,40 @@ export class UndoManager {
     }
 
     // New action invalidates redo history
+    this.redoStack = []
+    this.emit()
+  }
+
+  /**
+   * Push an ALREADY-EXECUTED command onto the undo stack WITHOUT re-executing
+   * it — for callers that must run the mutation first to learn whether it
+   * actually committed (a rejected / no-op gesture is never recorded).
+   * Applies the same time-window coalescing contract as {@link execute}, but
+   * for {@link ReplayCommand} pairs: the resident entry keeps its inverse
+   * (the FIRST before-state) and adopts the newer forward (the LATEST
+   * after-state). Like any new action, recording invalidates redo history.
+   */
+  record(command: UndoableCommand): void {
+    if (command.coalesceKey && this.undoStack.length > 0) {
+      const top = this.undoStack[this.undoStack.length - 1]
+      if (
+        top.command.coalesceKey === command.coalesceKey &&
+        Date.now() - top.timestamp < this.coalesceWindowMs &&
+        top.command instanceof ReplayCommand &&
+        command instanceof ReplayCommand
+      ) {
+        top.command.mergeNewer(command)
+        top.timestamp = Date.now()
+        this.redoStack = []
+        this.emit()
+        return
+      }
+    }
+
+    this.undoStack.push({ command, timestamp: Date.now() })
+    while (this.undoStack.length > this.maxHistory) {
+      this.undoStack.shift()
+    }
     this.redoStack = []
     this.emit()
   }

@@ -89,6 +89,22 @@ export interface FaceSelection {
 }
 
 /**
+ * MULTI-EDGE (viewport edge picking, wave 4) · one accumulated edge pick.
+ * Unlike the multi-FACE payload (which only tracks ids), every entry keeps its
+ * OWN stable id + signature — the Fillet / Chamfer dialogs need each edge's
+ * `"e:<hex>"` handle to emit a multi-id `pickedEdgeIds`, so dropping metadata
+ * for the extra edges would silently un-target them.
+ */
+export interface EdgePickEntry {
+  /** Polyline ordinal (the `EdgeSelection.faceId` of a single pick). */
+  readonly edgeId: number
+  /** STABLE `"e:<hex>"` handle, when the pick carried one. */
+  readonly occtHash?: string
+  /** Tier-2 geometry-invariant signature, when the pick carried one. */
+  readonly signature?: CadEdgeSignature
+}
+
+/**
  * A picked edge between two faces. `occtHash` (when present) is the STABLE
  * `"e:<hex>"` handle the Fillet / Chamfer dialogs emit as `pickedEdgeIds`.
  */
@@ -98,6 +114,17 @@ export interface EdgeSelection {
   readonly occtHash?: string
   /** Tier-2 · OPTIONAL geometry-invariant edge signature (see {@link FaceSelection.signature}). */
   readonly signature?: CadEdgeSignature
+  /**
+   * MULTI-EDGE (wave 4) · OPTIONAL multi-edge payload, mirroring
+   * {@link FaceSelection.faceIds}: present only with 2+ entries (deduped by
+   * `edgeId`, always containing the PRIMARY — `faceId` / `occtHash` /
+   * `signature` above mirror the primary's entry). ABSENT on a plain single
+   * pick, so every pre-multi consumer keeps reading the primary exactly as
+   * before. Each entry carries its OWN metadata (see {@link EdgePickEntry}).
+   * `isSameEntity` / `toggleSelection` compare the PRIMARY `faceId` only —
+   * {@link toggleEdgeInSelection} is the set-aware transition.
+   */
+  readonly edges?: readonly EdgePickEntry[]
 }
 
 /** A picked vertex (corner). `occtHash` carries the stable handle when present. */
@@ -328,6 +355,117 @@ export function toggleFaceInSelection(
     return makeMultiFaceSelection(remaining)
   }
   return makeMultiFaceSelection([...ids, next.faceId], next)
+}
+
+// ── VIEWPORT EDGE PICKING — multi-edge selection (wave 4) ──────────────────
+
+/**
+ * Every selected edge ORDINAL for a `Selection | null`, in stable order —
+ * the multi-edge mirror of {@link selectedFaceIds}:
+ *   - `null` / face / vertex selections → `[]`,
+ *   - a single edge pick → `[faceId]`,
+ *   - a multi-edge pick → one id per entry, verbatim order.
+ * The ONE accessor the viewport highlight overlay + status chip use, so
+ * "how many edges are selected" has a single source of truth. Pure.
+ */
+export function selectedEdgeIds(selection: Selection | null): readonly number[] {
+  if (selection === null || selection.kind !== 'edge') return []
+  if (selection.edges !== undefined) return selection.edges.map((entry) => entry.edgeId)
+  return [selection.faceId]
+}
+
+/**
+ * Every selected edge ENTRY (ordinal + stable id + signature) for a
+ * `Selection | null`. A single pick normalizes to a one-entry list built from
+ * the primary fields, so the Fillet / Chamfer dialogs iterate ONE shape for
+ * both single and multi picks. Pure — never fabricates metadata.
+ */
+export function selectedEdgeEntries(selection: Selection | null): readonly EdgePickEntry[] {
+  if (selection === null || selection.kind !== 'edge') return []
+  if (selection.edges !== undefined) return selection.edges
+  const base: EdgePickEntry = { edgeId: selection.faceId }
+  const withHash =
+    selection.occtHash !== undefined ? { ...base, occtHash: selection.occtHash } : base
+  return [
+    selection.signature !== undefined ? { ...withHash, signature: selection.signature } : withHash
+  ]
+}
+
+/**
+ * Keep well-formed entries only (finite-integer `edgeId`), first-occurrence
+ * order, deduped by `edgeId`. Internal — the multi-edge constructors funnel
+ * through this so a malformed ordinal can never enter an `edges` payload.
+ */
+function sanitizeEdgeEntries(entries: readonly EdgePickEntry[]): EdgePickEntry[] {
+  const seen = new Set<number>()
+  const out: EdgePickEntry[] = []
+  for (const entry of entries) {
+    const id = entry?.edgeId
+    if (typeof id !== 'number' || !Number.isFinite(id) || !Number.isInteger(id)) continue
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(entry)
+  }
+  return out
+}
+
+/** Build a single `EdgeSelection` from one entry (no stray keys). */
+function edgeSelectionFromEntry(entry: EdgePickEntry): EdgeSelection {
+  return makeEdgeSelection(entry.edgeId, entry.occtHash, entry.signature)
+}
+
+/**
+ * Build an edge selection covering `entries` — the multi-edge mirror of
+ * {@link makeMultiFaceSelection}. Normalization contract:
+ *   - empty (after dropping malformed / duplicate ordinals) → `null`,
+ *   - exactly ONE entry → a plain single `EdgeSelection` (NO `edges` key),
+ *   - two or more → primary fields from the primary ENTRY + the full `edges`
+ *     payload.
+ * `primaryEdgeId` (when provided AND still a member) selects which entry
+ * donates the primary `faceId` / metadata — the operator's most recent
+ * explicit pick; otherwise the first entry is primary.
+ */
+export function makeMultiEdgeSelection(
+  entries: readonly EdgePickEntry[],
+  primaryEdgeId?: number
+): EdgeSelection | null {
+  const clean = sanitizeEdgeEntries(entries)
+  if (clean.length === 0) return null
+  const primary =
+    primaryEdgeId !== undefined
+      ? clean.find((entry) => entry.edgeId === primaryEdgeId) ?? clean[0]
+      : clean[0]
+  const base = edgeSelectionFromEntry(primary)
+  if (clean.length === 1) return base
+  return { ...base, edges: clean }
+}
+
+/**
+ * Ctrl/Cmd-click transition for EDGES — mirrors {@link toggleFaceInSelection}:
+ *   - nothing / face / vertex selected → the clicked edge (plain single pick),
+ *   - clicked edge already selected → remove it (→ `null` when it was the
+ *     last). When the removed edge WAS the primary, the first survivor is
+ *     re-seated as primary WITH its own metadata (every entry keeps its
+ *     stable id — see {@link EdgePickEntry}),
+ *   - otherwise → add it; the clicked edge becomes the new PRIMARY so the
+ *     feature dialogs track the latest explicit pick.
+ */
+export function toggleEdgeInSelection(
+  prev: Selection | null,
+  next: EdgeSelection
+): Selection | null {
+  if (prev === null || prev.kind !== 'edge') return next
+  const entries = selectedEdgeEntries(prev)
+  if (entries.some((entry) => entry.edgeId === next.faceId)) {
+    const remaining = entries.filter((entry) => entry.edgeId !== next.faceId)
+    if (prev.faceId !== next.faceId) {
+      // The primary survives the removal — keep it primary.
+      return makeMultiEdgeSelection(remaining, prev.faceId)
+    }
+    return makeMultiEdgeSelection(remaining)
+  }
+  const nextEntry = selectedEdgeEntries(next)[0]
+  return makeMultiEdgeSelection([...entries, nextEntry], next.faceId)
 }
 
 // ── Command-surface bridge (pure) ──────────────────────────────────

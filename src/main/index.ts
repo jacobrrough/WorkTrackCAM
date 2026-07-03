@@ -7,6 +7,7 @@ import { registerFabricationIpc } from './ipc-fabrication'
 import { registerMachineIpc } from './ipc-machine'
 import { registerModelingIpc } from './ipc-modeling'
 import { registerRecoveryIpc } from './ipc-recovery'
+import { registerDesignScriptIpc } from './ipc-design-script'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
 import {
   checkPythonDeps,
@@ -136,6 +137,11 @@ app.whenReady().then(async () => {
   // session's snapshot store (userData/recovery/). Registered next to the
   // other IPC namespaces so the ordering invariant above keeps holding.
   registerRecoveryIpc(ipcCtx)
+  // CADQUERY SCRIPT PERSISTENCE: designScript:save/load (atomic write to
+  // <projectDir>/design/script.cq.py) + the write-ahead crash snapshots
+  // (designScript:recovery*). Registered next to the other IPC namespaces
+  // so the ordering invariant above keeps holding.
+  registerDesignScriptIpc(ipcCtx)
 
   createWindow()
 

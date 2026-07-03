@@ -28,11 +28,10 @@ import {
 } from './FeatureDialogKit'
 import {
   parsePositiveMm,
-  resolvePickedSelectionId,
+  resolvePickedEdgeIds,
   type EdgeDirection,
   type FeatureDialogBaseProps
 } from './feature-dialog-types'
-import { pickLostMessage } from '../../../shared/kernel-pick-file'
 import type { KernelPostSolidOp } from '../../../shared/part-features-schema'
 
 type ChamferMode = 'all' | 'select'
@@ -51,21 +50,45 @@ export interface ChamferDialogProps extends FeatureDialogBaseProps {
 }
 
 /**
+ * Normalize the picked-edge-id argument (a single id, an id array, or null)
+ * into a clean, deduped, non-empty `string[]` — or `null`. Mirrors
+ * {@link buildFilletOp}'s helper so both dialogs accept a single id (pre-multi
+ * callers + tests) OR an array (wave-4 multi-edge accumulation).
+ */
+function normalizePickedEdgeIds(
+  pickedEdgeIds: string | readonly string[] | null | undefined
+): string[] | null {
+  if (pickedEdgeIds === null || pickedEdgeIds === undefined) return null
+  const raw = typeof pickedEdgeIds === 'string' ? [pickedEdgeIds] : pickedEdgeIds
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of raw) {
+    if (typeof id === 'string' && id.length > 0 && !seen.has(id)) {
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  return out.length > 0 ? out : null
+}
+
+/**
  * Build the emitted `KernelPostSolidOp` for the dialog state (pure, testable).
  * Mirrors {@link buildFilletOp}: `'select'` mode layers `pickedEdgeIds` onto
- * `chamfer_select` when `pickedEdgeId` is a non-empty stable `"e:<hex>"` id,
- * with the axis bucket as the documented fallback; an empty / null id omits the
- * field (the schema rejects an empty array).
+ * `chamfer_select` when the arg resolves to one or more non-empty stable
+ * `"e:<hex>"` ids, with the axis bucket as the documented fallback. MULTI-EDGE
+ * (wave 4): the arg accepts a single id OR an array (Ctrl/Cmd-accumulated
+ * picks); an empty / null id omits the field (the schema rejects an empty array).
  */
 export function buildChamferOp(
   lengthMm: number,
   mode: ChamferMode,
   edgeDirection: EdgeDirection,
-  pickedEdgeId?: string | null
+  pickedEdgeIds?: string | readonly string[] | null
 ): KernelPostSolidOp {
   if (mode === 'all') return { kind: 'chamfer_all', lengthMm }
-  return pickedEdgeId
-    ? { kind: 'chamfer_select', lengthMm, edgeDirection, pickedEdgeIds: [pickedEdgeId] }
+  const ids = normalizePickedEdgeIds(pickedEdgeIds)
+  return ids
+    ? { kind: 'chamfer_select', lengthMm, edgeDirection, pickedEdgeIds: ids }
     : { kind: 'chamfer_select', lengthMm, edgeDirection }
 }
 
@@ -85,35 +108,34 @@ export function ChamferDialog({
   const length = parsePositiveMm(lengthRaw)
   const canApply = length !== null && disabled !== true
 
-  // FG-5b + Tier-2: route the live edge pick through the tiered resolver (see
-  // FilletDialog) so a moved/resized pick recovers to its current id (Tier 2)
-  // and an honest loss falls back to the axis bucket.
-  const pickRes = resolvePickedSelectionId(
-    selectionInfo.selection,
-    'edge',
-    selectionInfo.currentPickIndex
-  )
-  const pickedEdgeId = pickRes.id
+  // FG-5b + Tier-2 + wave-4 MULTI-EDGE: resolve EVERY accumulated edge pick
+  // through the tiered resolver (see FilletDialog). Moved/resized picks recover
+  // to their current id (Tier 2); honest losses drop from the set (counted).
+  const pickRes = resolvePickedEdgeIds(selectionInfo.selection, selectionInfo.currentPickIndex)
+  const pickedEdgeIds = pickRes.ids
+  const pickedCount = pickedEdgeIds.length
 
   const handleApply = (): void => {
     if (length === null) return
     onApply({
       target: 'kernelOp',
-      op: buildChamferOp(length, mode, edgeDirection, mode === 'select' ? pickedEdgeId : null)
+      op: buildChamferOp(length, mode, edgeDirection, mode === 'select' ? pickedEdgeIds : null)
     })
   }
 
+  const edgeWord = pickedCount === 1 ? 'edge' : 'edges'
+  const lostSuffix = pickRes.lostCount > 0 ? ` (${pickRes.lostCount} earlier pick${pickRes.lostCount === 1 ? '' : 's'} could not be re-matched after an edit and were dropped)` : ''
   const selectionNote =
     selectionInfo.selection === null
       ? undefined
-      : pickedEdgeId !== null
+      : pickedCount > 0
         ? mode === 'select'
-          ? pickRes.tier === 2
-            ? 'Chamfering the picked edge — it moved/resized upstream and was re-identified by its geometry signature (falls back to the axis bucket if it can’t be matched).'
-            : 'Chamfering the picked edge — the kernel resolves it at build (falls back to the axis bucket if it no longer matches).'
-          : 'Switch Edges to “By axis bucket” to chamfer the picked edge by id; “All edges” bevels everything.'
-        : pickRes.reason !== undefined
-          ? pickLostMessage(pickRes.reason)
+          ? pickRes.tier2Count > 0
+            ? `Chamfering ${pickedCount} picked ${edgeWord} — ${pickRes.tier2Count} moved/resized upstream and ${pickRes.tier2Count === 1 ? 'was' : 'were'} re-identified by geometry signature (falls back to the axis bucket if one can’t be matched).${lostSuffix}`
+            : `Chamfering ${pickedCount} picked ${edgeWord} — the kernel resolves ${pickedCount === 1 ? 'it' : 'them'} at build (falls back to the axis bucket if one no longer matches).${lostSuffix}`
+          : `Switch Edges to “By axis bucket” to chamfer the picked ${edgeWord} by id; “All edges” bevels everything.`
+        : pickRes.lostCount > 0
+          ? `The picked ${pickRes.lostCount === 1 ? 'edge' : 'edges'} could not be re-matched after an edit, so the axis bucket below applies.`
           : selectionInfo.selection.kind === 'edge'
             ? 'This edge has no stable id yet (re-run the build to refresh), so the axis bucket below applies.'
             : 'Pick an edge to chamfer it by id; this selection drives the axis bucket below instead.'

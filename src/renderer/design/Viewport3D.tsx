@@ -221,6 +221,16 @@ type Props = {
    */
   highlightedEdgeId?: number | null
   /**
+   * MULTI-EDGE (wave 4) · ALL currently-selected edge ordinals. When non-empty,
+   * EVERY matching edge line renders highlighted (bright accent); takes
+   * precedence over the single `highlightedEdgeId` (a single pick yields a
+   * one-entry array, so the visual is identical to the classic single-edge
+   * path). The mirror of {@link highlightedFaceIds} for the fillet/chamfer
+   * multi-edge accumulation flow. No-ops when the geometry has no
+   * `pickableEdges` stash.
+   */
+  highlightedEdgeIds?: readonly number[] | null
+  /**
    * WINDOW/BOX SELECT (Phase 2) · ALL currently-selected face ids. When
    * non-empty, the highlight overlay covers EVERY face in the set (union
    * built by `trianglesForFaces`); takes precedence over the single
@@ -553,7 +563,11 @@ const PickableEdgeLine = memo(function PickableEdgeLine({
 }: {
   edge: PickableEdge
   highlighted: boolean
-  onPick: (edge: PickableEdge, pointMm: { x: number; y: number; z: number }) => void
+  onPick: (
+    edge: PickableEdge,
+    pointMm: { x: number; y: number; z: number },
+    modifiers: SelectionPickModifiers
+  ) => void
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -579,8 +593,14 @@ const PickableEdgeLine = memo(function PickableEdgeLine({
       onClick={(e) => {
         e.stopPropagation()
         // Wave 3n — the raycast point rides along so the parent can report
-        // the pick location (StatusBar last-pick read-out).
-        onPick(edge, { x: e.point.x, y: e.point.y, z: e.point.z })
+        // the pick location (StatusBar last-pick read-out). Wave 4 — the
+        // Ctrl/Cmd modifier rides along so the parent can TOGGLE this edge's
+        // membership in a multi-edge fillet/chamfer set (mirrors the face path).
+        onPick(
+          edge,
+          { x: e.point.x, y: e.point.y, z: e.point.z },
+          { toggle: e.ctrlKey || e.metaKey }
+        )
       }}
     >
       <lineBasicMaterial
@@ -605,16 +625,37 @@ const PickableEdges = memo(function PickableEdges({
   geometry,
   active,
   highlightedEdgeId,
+  highlightedEdgeIds,
   onPickEdge,
   clipPlane
 }: {
   geometry: THREE.BufferGeometry
   active: boolean
   highlightedEdgeId?: number | null
-  onPickEdge: (edge: PickableEdge, pointMm: { x: number; y: number; z: number }) => void
+  /**
+   * MULTI-EDGE (wave 4) · every selected edge ordinal. When non-empty, EVERY
+   * matching edge line renders highlighted (bright accent); takes precedence
+   * over the single `highlightedEdgeId`. A single pick yields a one-entry set,
+   * so the visual is identical to the classic single-edge path.
+   */
+  highlightedEdgeIds?: readonly number[] | null
+  onPickEdge: (
+    edge: PickableEdge,
+    pointMm: { x: number; y: number; z: number },
+    modifiers: SelectionPickModifiers
+  ) => void
   clipPlane?: THREE.Plane | null
 }) {
   const edges = useMemo(() => readGeometryPickableEdges(geometry), [geometry])
+  // Build the highlight set ONCE per render (not per edge): the multi-edge set
+  // when provided + non-empty, else the single ordinal, else empty.
+  const highlightSet = useMemo(() => {
+    if (highlightedEdgeIds && highlightedEdgeIds.length > 0) return new Set(highlightedEdgeIds)
+    if (highlightedEdgeId != null && Number.isFinite(highlightedEdgeId)) {
+      return new Set<number>([highlightedEdgeId])
+    }
+    return new Set<number>()
+  }, [highlightedEdgeId, highlightedEdgeIds])
   if (!active || !edges) return null
   return (
     <group data-testid="viewport-3d-pickable-edges">
@@ -622,7 +663,7 @@ const PickableEdges = memo(function PickableEdges({
         <PickableEdgeLine
           key={edge.occtId}
           edge={edge}
-          highlighted={highlightedEdgeId === edge.edgeId}
+          highlighted={highlightSet.has(edge.edgeId)}
           onPick={onPickEdge}
           clipPlane={clipPlane}
         />
@@ -663,6 +704,7 @@ const Solid = memo(function Solid({
   highlightedFaceId,
   highlightedFaceIds,
   highlightedEdgeId,
+  highlightedEdgeIds,
   clipPlane
 }: {
   geometry: THREE.BufferGeometry
@@ -681,6 +723,7 @@ const Solid = memo(function Solid({
   highlightedFaceId?: number | null
   highlightedFaceIds?: readonly number[] | null
   highlightedEdgeId?: number | null
+  highlightedEdgeIds?: readonly number[] | null
   clipPlane?: THREE.Plane | null
 }) {
   const clippingPlanes = clipPlane ? [clipPlane] : undefined
@@ -754,9 +797,16 @@ const Solid = memo(function Solid({
    * mirroring the face pick, which already captures its signature.
    */
   const handleEdgePick = useCallback(
-    (edge: PickableEdge, pointMm: { x: number; y: number; z: number }): void => {
+    (
+      edge: PickableEdge,
+      pointMm: { x: number; y: number; z: number },
+      modifiers: SelectionPickModifiers
+    ): void => {
       if (!onSelect) return
-      onSelect(makeEdgeSelection(edge.edgeId, edge.occtId, edge.signature))
+      // Wave 4 — the Ctrl/Cmd modifier rides along so the parent can toggle
+      // this edge's membership in a multi-edge fillet/chamfer set (mirrors the
+      // face path); a plain click replaces, as before.
+      onSelect(makeEdgeSelection(edge.edgeId, edge.occtId, edge.signature), modifiers)
       // Wave 3n — report the pick location only when the pick registered.
       onPickPoint?.(pointMm)
     },
@@ -877,6 +927,7 @@ const Solid = memo(function Solid({
         geometry={geometry}
         active={edgePickActive}
         highlightedEdgeId={highlightedEdgeId}
+        highlightedEdgeIds={highlightedEdgeIds}
         onPickEdge={handleEdgePick}
         clipPlane={clipPlane}
       />
@@ -1337,6 +1388,7 @@ export function Viewport3D({
   highlightedFaceId = null,
   highlightedFaceIds = null,
   highlightedEdgeId = null,
+  highlightedEdgeIds = null,
   onBoxSelectFaces,
   onContextMenuRequest,
   actionsRef
@@ -1649,6 +1701,7 @@ export function Viewport3D({
               highlightedFaceId={highlightedFaceId}
               highlightedFaceIds={highlightedFaceIds}
               highlightedEdgeId={highlightedEdgeId}
+              highlightedEdgeIds={highlightedEdgeIds}
               clipPlane={clipPlane}
             />
           </Bounds>

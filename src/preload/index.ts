@@ -20,6 +20,11 @@ import type {
   DesignRecoveryWriteResult
 } from '../shared/design-recovery'
 import type {
+  DesignScriptLoadResult,
+  DesignScriptRecoveryReadResult,
+  DesignScriptSaveResult
+} from '../shared/design-script-persistence'
+import type {
   AssemblyFile,
   AssemblyInterferenceReport,
   AssemblySummaryReport
@@ -370,6 +375,34 @@ export type Api = {
   designRecoveryRead: (projectDir: string) => Promise<DesignRecoveryReadResult>
   /** Delete a project's recovery snapshot (clean save / discard). Idempotent. */
   designRecoveryDelete: (projectDir: string) => Promise<void>
+  /**
+   * CADQUERY SCRIPT PERSISTENCE - save the Design editor's CadQuery script
+   * to `<projectDir>/design/script.cq.py` (atomic temp-then-rename write,
+   * path-validated inside the project dir). A successful save also deletes
+   * the script's write-ahead crash snapshot main-side. Delegates to
+   * `designScript:save`. SAFETY: script text only - never G-code.
+   */
+  designScriptSave: (projectDir: string, scriptText: string) => Promise<DesignScriptSaveResult>
+  /**
+   * Load `<projectDir>/design/script.cq.py` (+ its mtime) so the editor can
+   * seed from disk on project open. Delegates to `designScript:load`.
+   * SAFETY: read-only.
+   */
+  designScriptLoad: (projectDir: string) => Promise<DesignScriptLoadResult>
+  /**
+   * Write-ahead script crash snapshot to userData/recovery/ (validated
+   * against `designScriptRecoverySnapshotSchema` before writing).
+   * Delegates to `designScript:recoveryWrite`.
+   */
+  designScriptRecoveryWrite: (snapshotJson: string) => Promise<DesignRecoveryWriteResult>
+  /**
+   * Read + schema-validate the script crash snapshot for a project, plus
+   * the persisted script's mtime for the newer-than offer decision.
+   * Delegates to `designScript:recoveryRead`. SAFETY: read-only.
+   */
+  designScriptRecoveryRead: (projectDir: string) => Promise<DesignScriptRecoveryReadResult>
+  /** Delete a project's script crash snapshot (explicit Discard). Idempotent. */
+  designScriptRecoveryDelete: (projectDir: string) => Promise<void>
   designReadKernelManifest: (projectDir: string) => Promise<KernelManifest | null>
   designReadKernelStlBase64: (projectDir: string) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>
   /** Pick tessellation persisted by the kernel build (task_f76b39b3): pre-placement
@@ -1064,6 +1097,11 @@ const api: Api = {
   designRecoveryWrite: (snapshotJson) => ipcRenderer.invoke('recovery:designWrite', snapshotJson),
   designRecoveryRead: (projectDir) => ipcRenderer.invoke('recovery:designRead', projectDir),
   designRecoveryDelete: (projectDir) => ipcRenderer.invoke('recovery:designDelete', projectDir),
+  designScriptSave: (projectDir, scriptText) => ipcRenderer.invoke('designScript:save', projectDir, scriptText),
+  designScriptLoad: (projectDir) => ipcRenderer.invoke('designScript:load', projectDir),
+  designScriptRecoveryWrite: (snapshotJson) => ipcRenderer.invoke('designScript:recoveryWrite', snapshotJson),
+  designScriptRecoveryRead: (projectDir) => ipcRenderer.invoke('designScript:recoveryRead', projectDir),
+  designScriptRecoveryDelete: (projectDir) => ipcRenderer.invoke('designScript:recoveryDelete', projectDir),
   designReadKernelManifest: (projectDir) => ipcRenderer.invoke('design:readKernelManifest', projectDir),
   designReadKernelStlBase64: (projectDir) => ipcRenderer.invoke('design:readKernelStlBase64', projectDir),
   designReadKernelPickJson: (projectDir) => ipcRenderer.invoke('design:readKernelPickJson', projectDir),

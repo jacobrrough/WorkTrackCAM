@@ -47,7 +47,24 @@ import {
   resolveActiveSheetId as resolveDrawingActiveSheetId,
   setActiveSheet as setDrawingActiveSheet
 } from '../../shared/drawing-sheet-ops'
-import { applyTimelineAction, type TimelineState } from './feature-timeline-actions'
+import {
+  applyTimelineAction,
+  invertAppendKernelOp,
+  invertRemoveKernelOpAt,
+  invertMoveKernelOp,
+  invertReorderKernelOps,
+  invertUpdateKernelOpAt,
+  invertSetKernelOpSuppressedAt,
+  invertSetKernelRollbackMarker,
+  type TimelineCommitFold,
+  type TimelineState
+} from './feature-timeline-actions'
+import { UndoManager, ReplayCommand } from '../src/undo-manager'
+import {
+  isTypableKeyboardTarget,
+  matchesRedo,
+  matchesUndo
+} from '../../shared/app-keyboard-shortcuts'
 import { linearPatternSketch, mirrorDesignAcrossYAxis } from './design-ops'
 import { derivePartFeatures } from './derive-features'
 import { meshToStlBase64 } from './export-stl'
@@ -238,6 +255,25 @@ export type DesignSessionValue = {
   /** Set (index >= 0) or clear (`null`) the design-level roll-back marker. */
   setKernelRollbackMarker: (index: number | null) => Promise<void>
   updateFeatureSuppressed: (featureId: string, suppressed: boolean) => void
+  // ── FEATURE-TIMELINE UNDO/REDO (Phase-3 parity) ──────────────────────────
+  // A timeline-scoped undo stack, SEPARATE from the sketch surface's own
+  // `SketchHistory` (own linear stack + own Ctrl+Z handler, mounted only in
+  // sketch mode). Routing rule (documented on the keydown effect below): while
+  // the sketch surface is mounted it owns Ctrl+Z / Ctrl+Y; otherwise (3D
+  // viewport / feature-timeline focus) these fire the TIMELINE stack. Every
+  // timeline mutation (append / remove / move / reorder / update / suppress /
+  // roll-back) is recorded as an undoable command whose inverse replays through
+  // the SAME `commitKernelFeatures` chain (persist + debounced rebuild), so
+  // undo/redo never raw-poke React state or disk. Optional so hand-built test
+  // session values stay valid (additive change).
+  /** Undo the most recent timeline mutation (no-op when the stack is empty). */
+  timelineUndo?: () => void
+  /** Redo the most recently undone timeline mutation. */
+  timelineRedo?: () => void
+  /** Whether there is a timeline mutation to undo. */
+  canTimelineUndo?: boolean
+  /** Whether there is a timeline mutation to redo. */
+  canTimelineRedo?: boolean
   solveReport: string
   /**
    * The Drawings sheet state hydrated from `<projectDir>/drawing/drawing.json`
@@ -453,6 +489,19 @@ export function DesignSessionProvider({
   const designRef = useRef(design)
   designRef.current = design
   const featuresWriteChainRef = useRef<Promise<void>>(Promise.resolve())
+  // FEATURE-TIMELINE UNDO/REDO — one timeline-scoped UndoManager per provider
+  // (default 50-entry stack, 1000 ms coalescing — same as the sketch numeric
+  // edits). `timelineUndoVersion` mirrors the manager's monotonic version into
+  // React state so `canTimelineUndo/Redo` re-render on every stack change; the
+  // subscription is wired once in an effect below.
+  const timelineUndoRef = useRef<UndoManager | null>(null)
+  if (timelineUndoRef.current === null) timelineUndoRef.current = new UndoManager()
+  const [timelineUndoVersion, setTimelineUndoVersion] = useState(0)
+  useEffect(() => {
+    const mgr = timelineUndoRef.current
+    if (!mgr) return
+    return mgr.on('change', () => setTimelineUndoVersion(mgr.version))
+  }, [])
 
   useEffect(() => {
     if (!projectDir) {
@@ -1450,14 +1499,14 @@ export function DesignSessionProvider({
    * still drives the render — the ref is only the synchronous fold base.
    */
   const commitKernelFeatures = useCallback(
-    (compute: (base: PartFeaturesFile) => KernelFeaturesMutation): void => {
-      if (!projectDir) return
+    (compute: (base: PartFeaturesFile) => KernelFeaturesMutation): boolean => {
+      if (!projectDir) return false
       const base = featuresRef.current ?? derivePartFeatures(designRef.current, null)
       const outcome = compute(base)
-      if (outcome === null) return
+      if (outcome === null) return false
       if ('reject' in outcome) {
         onStatusRef.current?.(outcome.reject)
-        return
+        return false
       }
       const { next, status } = outcome
       // Fold lands synchronously so a same-tick second gesture sees it.
@@ -1473,67 +1522,178 @@ export function DesignSessionProvider({
             onStatusRef.current?.(e instanceof Error ? e.message : String(e))
           }
         })
+      return true
     },
     [fab, projectDir]
   )
 
-  const appendKernelOp = useCallback(
-    async (op: KernelPostSolidOp) => {
-      commitKernelFeatures((base) => ({
-        next: { ...base, kernelOps: [...(base.kernelOps ?? []), op] },
-        status: 'Kernel op saved — rebuilding model…'
-      }))
+  // ── FEATURE-TIMELINE UNDO/REDO — record + replay through the SAME chain ──────
+  //
+  // A `TimelineCommitFold` (from feature-timeline-actions) has EXACTLY the
+  // `KernelFeaturesMutation` shape, so an inverse fold commits through the same
+  // `commitKernelFeatures` serialized read-modify-write as every forward gesture
+  // — persistence + the debounced kernel rebuild stay consistent (no raw state
+  // poke; the race-test pins on the commit chain hold).
+  //
+  // `undoableCommit` runs the forward mutation FIRST (via commitKernelFeatures,
+  // which reports whether it actually committed), then — only on a real change —
+  // RECORDS an already-executed `ReplayCommand` onto the timeline stack. The
+  // command's inverse replays `inverse` (built from the captured pre-mutation
+  // state); its forward replays `forward` (deterministic given the post-undo
+  // state, which equals the original pre-mutation base). A rejected / no-op
+  // gesture is never recorded. `coalesceKey` merges a rapid burst (e.g. a dialog
+  // spinner re-applying the same index) into one undo step — the `record`
+  // contract keeps the FIRST inverse and adopts the LATEST forward.
+  const undoableCommit = useCallback(
+    (
+      forward: (base: PartFeaturesFile) => KernelFeaturesMutation,
+      buildInverse: (preState: PartFeaturesFile) => TimelineCommitFold,
+      label: string,
+      coalesceKey?: string
+    ): boolean => {
+      // Capture the PRE-mutation base (the exact one commitKernelFeatures folds
+      // onto) so the inverse restores the state that existed a moment ago.
+      const preState = featuresRef.current ?? derivePartFeatures(designRef.current, null)
+      const committed = commitKernelFeatures(forward)
+      if (!committed) return false
+      const mgr = timelineUndoRef.current
+      if (mgr) {
+        const inverse = buildInverse(preState)
+        const cmd = new ReplayCommand(
+          () => commitKernelFeatures(forward),
+          () => commitKernelFeatures(inverse),
+          label,
+          coalesceKey
+        )
+        mgr.record(cmd)
+      }
+      return true
     },
     [commitKernelFeatures]
+  )
+
+  const timelineUndo = useCallback((): void => {
+    timelineUndoRef.current?.undo()
+  }, [])
+  const timelineRedo = useCallback((): void => {
+    timelineUndoRef.current?.redo()
+  }, [])
+
+  // Ctrl+Z / Ctrl+Y (and Cmd/Ctrl+Shift+Z) → the TIMELINE stack — but ONLY when
+  // the sketch surface is NOT mounted. The sketch surface owns its own linear
+  // `SketchHistory` and binds its OWN window keydown handler (mounted only in
+  // sketch mode); routing both to one keystroke would double-undo. The mounted-
+  // surface DOM probe (`.sketch-surface`) is the focus/mode gate: while the 2D
+  // sketcher is on screen it owns undo; otherwise (3D viewport / feature-timeline
+  // focus) the timeline stack owns it. Typable targets are skipped identically
+  // (`isTypableKeyboardTarget`) so typing a value in a dialog spinner is never
+  // hijacked. Linear per-scope stacks with this one routing rule — no
+  // cross-scope time-travel (a defensible V1; documented on the session value).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (isTypableKeyboardTarget(e.target)) return
+      // Sketch mode owns Ctrl+Z while its surface is mounted.
+      if (typeof document !== 'undefined' && document.querySelector('.sketch-surface')) return
+      if (matchesUndo(e)) {
+        e.preventDefault()
+        timelineUndoRef.current?.undo()
+      } else if (matchesRedo(e)) {
+        e.preventDefault()
+        timelineUndoRef.current?.redo()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  const appendKernelOp = useCallback(
+    async (op: KernelPostSolidOp) => {
+      undoableCommit(
+        (base) => ({
+          next: { ...base, kernelOps: [...(base.kernelOps ?? []), op] },
+          status: 'Kernel op saved — rebuilding model…'
+        }),
+        // Inverse: remove the op that landed at the (pre-append) end index.
+        (preState) => invertAppendKernelOp((preState.kernelOps ?? []).length),
+        'Add kernel op'
+      )
+    },
+    [undoableCommit]
   )
 
   const removeKernelOpAt = useCallback(
     async (index: number) => {
-      commitKernelFeatures((base) => {
-        const ops = [...(base.kernelOps ?? [])]
-        if (index < 0 || index >= ops.length) return null
-        ops.splice(index, 1)
-        return {
-          next: { ...base, kernelOps: ops.length ? ops : undefined },
-          status: 'Kernel op removed — rebuilding model…'
-        }
-      })
+      undoableCommit(
+        (base) => {
+          const ops = [...(base.kernelOps ?? [])]
+          if (index < 0 || index >= ops.length) return null
+          ops.splice(index, 1)
+          return {
+            next: { ...base, kernelOps: ops.length ? ops : undefined },
+            status: 'Kernel op removed — rebuilding model…'
+          }
+        },
+        // Inverse: re-insert the captured op AT its original index — suppressed
+        // flag + every parameter byte-identical to what was deleted.
+        (preState) => {
+          const removed = (preState.kernelOps ?? [])[index]
+          return removed === undefined
+            ? () => null
+            : invertRemoveKernelOpAt(index, removed)
+        },
+        'Delete kernel op'
+      )
     },
-    [commitKernelFeatures]
+    [undoableCommit]
   )
 
   const moveKernelOp = useCallback(
     async (index: number, delta: -1 | 1) => {
-      commitKernelFeatures((base) => {
-        const ops = [...(base.kernelOps ?? [])]
-        const j = index + delta
-        if (index < 0 || index >= ops.length || j < 0 || j >= ops.length) return null
-        const a = ops[index]!
-        const b = ops[j]!
-        const order = canSwapKernelOpOrder(a, b, delta)
-        if (!order.ok) return { reject: order.reason }
-        ops[index] = b
-        ops[j] = a
-        return { next: { ...base, kernelOps: ops }, status: 'Kernel op order updated — rebuilding model…' }
-      })
+      undoableCommit(
+        (base) => {
+          const ops = [...(base.kernelOps ?? [])]
+          const j = index + delta
+          if (index < 0 || index >= ops.length || j < 0 || j >= ops.length) return null
+          const a = ops[index]!
+          const b = ops[j]!
+          const order = canSwapKernelOpOrder(a, b, delta)
+          if (!order.ok) return { reject: order.reason }
+          ops[index] = b
+          ops[j] = a
+          return { next: { ...base, kernelOps: ops }, status: 'Kernel op order updated — rebuilding model…' }
+        },
+        // Inverse: swap the same index pair back (a ±1 swap is its own inverse);
+        // skips the order-rule re-check since it restores a state that existed.
+        () => invertMoveKernelOp(index, delta),
+        'Move kernel op'
+      )
     },
-    [commitKernelFeatures]
+    [undoableCommit]
   )
 
   const setKernelOpSuppressedAt = useCallback(
     async (index: number, suppressed: boolean) => {
-      commitKernelFeatures((base) => {
-        const ops = [...(base.kernelOps ?? [])]
-        if (index < 0 || index >= ops.length) return null
-        const cur = ops[index]!
-        ops[index] = { ...cur, suppressed: suppressed ? true : undefined }
-        return {
-          next: { ...base, kernelOps: ops },
-          status: suppressed ? 'Kernel op suppressed (skipped in build).' : 'Kernel op active again.'
-        }
-      })
+      undoableCommit(
+        (base) => {
+          const ops = [...(base.kernelOps ?? [])]
+          if (index < 0 || index >= ops.length) return null
+          const cur = ops[index]!
+          ops[index] = { ...cur, suppressed: suppressed ? true : undefined }
+          return {
+            next: { ...base, kernelOps: ops },
+            status: suppressed ? 'Kernel op suppressed (skipped in build).' : 'Kernel op active again.'
+          }
+        },
+        // Inverse: restore the captured previous flag (clearing drops the key).
+        (preState) =>
+          invertSetKernelOpSuppressedAt(
+            index,
+            (preState.kernelOps ?? [])[index]?.suppressed === true
+          ),
+        'Suppress kernel op'
+      )
     },
-    [commitKernelFeatures]
+    [undoableCommit]
   )
 
   /**
@@ -1560,14 +1720,21 @@ export function DesignSessionProvider({
 
   const reorderKernelOps = useCallback(
     async (from: number, to: number) => {
-      commitKernelFeatures((base) => {
-        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
-        const result = applyTimelineAction(state, { type: 'reorder', from, to })
-        if (!result.changed) return { reject: result.reason }
-        return { next: foldTimelineState(base, result.state), status: result.status }
-      })
+      undoableCommit(
+        (base) => {
+          const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+          const result = applyTimelineAction(state, { type: 'reorder', from, to })
+          if (!result.changed) return { reject: result.reason }
+          return { next: foldTimelineState(base, result.state), status: result.status }
+        },
+        // Inverse: restore the pre-drag op order AND the pre-drag roll-back marker
+        // (the forward reorder can re-clamp the marker; the capture puts it back).
+        (preState) =>
+          invertReorderKernelOps(preState.kernelOps ?? [], preState.rolledBackTo),
+        'Reorder kernel ops'
+      )
     },
-    [commitKernelFeatures, foldTimelineState]
+    [undoableCommit, foldTimelineState]
   )
 
   /**
@@ -1582,34 +1749,53 @@ export function DesignSessionProvider({
    */
   const updateKernelOpAt = useCallback(
     async (index: number, op: KernelPostSolidOp) => {
-      commitKernelFeatures((base) => {
-        const parsed = kernelPostSolidOpSchema.safeParse(op)
-        if (!parsed.success) {
-          const first = parsed.error.issues[0]?.message ?? 'invalid op'
-          return { reject: `Edited op failed validation (${first}) — nothing was changed.` }
-        }
-        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
-        const result = applyTimelineAction(state, { type: 'update', index, op: parsed.data })
-        if (!result.changed) return { reject: result.reason }
-        return { next: foldTimelineState(base, result.state), status: 'Kernel op updated — rebuilding model…' }
-      })
+      undoableCommit(
+        (base) => {
+          const parsed = kernelPostSolidOpSchema.safeParse(op)
+          if (!parsed.success) {
+            const first = parsed.error.issues[0]?.message ?? 'invalid op'
+            return { reject: `Edited op failed validation (${first}) — nothing was changed.` }
+          }
+          const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+          const result = applyTimelineAction(state, { type: 'update', index, op: parsed.data })
+          if (!result.changed) return { reject: result.reason }
+          return { next: foldTimelineState(base, result.state), status: 'Kernel op updated — rebuilding model…' }
+        },
+        // Inverse: put the captured previous op back at `index` (it existed a
+        // moment ago, so it needs no re-validation — only the range check).
+        (preState) => {
+          const previous = (preState.kernelOps ?? [])[index]
+          return previous === undefined
+            ? () => null
+            : invertUpdateKernelOpAt(index, previous)
+        },
+        'Edit kernel op',
+        // Coalesce a dialog spinner's rapid same-index re-applies into one step
+        // (1000 ms window; mirrors the sketch numeric-edit coalescing).
+        `update-kernel-op:${index}`
+      )
     },
-    [commitKernelFeatures, foldTimelineState]
+    [undoableCommit, foldTimelineState]
   )
 
   const setKernelRollbackMarker = useCallback(
     async (index: number | null) => {
-      commitKernelFeatures((base) => {
-        const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
-        const result = applyTimelineAction(
-          state,
-          index === null ? { type: 'clearRollback' } : { type: 'setRollback', index }
-        )
-        if (!result.changed) return { reject: result.reason }
-        return { next: foldTimelineState(base, result.state), status: result.status }
-      })
+      undoableCommit(
+        (base) => {
+          const state: TimelineState = { kernelOps: base.kernelOps ?? [], rolledBackTo: base.rolledBackTo }
+          const result = applyTimelineAction(
+            state,
+            index === null ? { type: 'clearRollback' } : { type: 'setRollback', index }
+          )
+          if (!result.changed) return { reject: result.reason }
+          return { next: foldTimelineState(base, result.state), status: result.status }
+        },
+        // Inverse: restore the captured previous marker (undefined/-1 → build all).
+        (preState) => invertSetKernelRollbackMarker(preState.rolledBackTo),
+        'Move roll-back marker'
+      )
     },
-    [commitKernelFeatures, foldTimelineState]
+    [undoableCommit, foldTimelineState]
   )
 
   const updateFeatureSuppressed = useCallback(
@@ -1664,6 +1850,12 @@ export function DesignSessionProvider({
       setKernelOpSuppressedAt,
       setKernelRollbackMarker,
       updateFeatureSuppressed,
+      timelineUndo,
+      timelineRedo,
+      // Derived from the manager's live version (mirrored into timelineUndoVersion
+      // so this memo recomputes whenever the stack changes).
+      canTimelineUndo: timelineUndoRef.current?.canUndo ?? false,
+      canTimelineRedo: timelineUndoRef.current?.canRedo ?? false,
       solveReport,
       recoveryOffer,
       restoreRecoveredDesign,
@@ -1716,6 +1908,9 @@ export function DesignSessionProvider({
       setKernelOpSuppressedAt,
       setKernelRollbackMarker,
       updateFeatureSuppressed,
+      timelineUndo,
+      timelineRedo,
+      timelineUndoVersion,
       drawing,
       onDrawingChange,
       drawingWorkspace,

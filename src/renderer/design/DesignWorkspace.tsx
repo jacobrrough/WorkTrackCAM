@@ -132,9 +132,11 @@ import type { CadExportResponse } from '../../main/ipc-cad'
 import {
   addFacesToSelection,
   clearSelection,
+  selectedEdgeIds,
   selectedFaceIds,
   setSelection,
   selectionToSurface,
+  toggleEdgeInSelection,
   toggleFaceInSelection,
   type Selection,
   type SelectionKind,
@@ -1051,6 +1053,16 @@ export function DesignWorkspace({
             })
             if (tessResponse.ok) {
               setSelectionTessellation(tessResponse.result)
+              // FG-5 wave 4 — honest hint when the sidecar's edge-point budget
+              // dropped one or more edge polylines (pathological part). The
+              // overlay + edge picking still work for the shown edges; we just
+              // never silently pretend every edge is selectable.
+              if (tessResponse.result.edgesTruncated === true) {
+                toast(
+                  'warn',
+                  'Some edges are not shown — the edge overlay was simplified for this part. Picking works on the visible edges.'
+                )
+              }
             } else {
               setSelectionTessellation(null)
               // eslint-disable-next-line no-console
@@ -1378,11 +1390,16 @@ export function DesignWorkspace({
    */
   const handleViewportSelect = useCallback(
     (next: Selection, modifiers?: SelectionPickModifiers): void => {
-      setSelectionState((prev) =>
-        modifiers?.toggle === true && next.kind === 'face'
-          ? toggleFaceInSelection(prev, next)
-          : setSelection(prev, next)
-      )
+      setSelectionState((prev) => {
+        // Ctrl/Cmd-click toggles the clicked entity's membership in a multi
+        // set — faces (box-select parity) OR edges (multi-edge fillet/chamfer,
+        // wave 4). A plain click REPLACES (classic V1 — no accidental deselects).
+        if (modifiers?.toggle === true) {
+          if (next.kind === 'face') return toggleFaceInSelection(prev, next)
+          if (next.kind === 'edge') return toggleEdgeInSelection(prev, next)
+        }
+        return setSelection(prev, next)
+      })
     },
     []
   )
@@ -2365,6 +2382,14 @@ export function DesignWorkspace({
               highlightedEdgeId={
                 pickableGeometryActive && selection?.kind === 'edge'
                   ? selection.faceId
+                  : null
+              }
+              // MULTI-EDGE (wave 4) — every edge in the accumulated set gets the
+              // highlight (a single pick yields a one-entry array, so the visual
+              // matches the classic single-edge path). Mirrors highlightedFaceIds.
+              highlightedEdgeIds={
+                pickableGeometryActive && selection?.kind === 'edge'
+                  ? selectedEdgeIds(selection)
                   : null
               }
             />

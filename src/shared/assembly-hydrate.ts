@@ -35,7 +35,8 @@ import {
   assemblyFileSchema,
   type AssemblyComponent,
   type AssemblyFile,
-  type AssemblyGeometrySource
+  type AssemblyGeometrySource,
+  type AssemblyJointLimits
 } from './assembly-schema'
 import type { AssemblyMateConstraint } from './assembly-mate-schema'
 
@@ -70,6 +71,13 @@ import type { AssemblyMateConstraint } from './assembly-mate-schema'
  *                     `AssemblyComponent.grounded`). Threaded for the same gate (a
  *                     grounded part has no free DOF). Optional + additive; the
  *                     schema defaults it to `false` so existing assemblies still load.
+ *   - `jointLimits` — optional persisted hard limits for the joint's DOF (mirrors
+ *                     `AssemblyComponent.jointLimits`; authored by the AssemblyView
+ *                     Limits editor). Semantics mirror joint/grounded: an OMITTED
+ *                     field leaves any prior persisted limits intact, while a view
+ *                     that CARRIES limits replaces them — including the EMPTY object
+ *                     `{}`, which is the explicit "cleared to unlimited" write.
+ *                     Optional + additive: legacy views/rows round-trip unchanged.
  */
 export type AssemblyPartView = {
   readonly id: string
@@ -82,6 +90,7 @@ export type AssemblyPartView = {
   readonly partPath?: string
   readonly joint?: AssemblyComponent['joint']
   readonly grounded?: boolean
+  readonly jointLimits?: AssemblyJointLimits
 }
 
 /** Hydrate output: the renderer-shaped parts + mate constraints from a loaded file. */
@@ -202,6 +211,10 @@ export function persistParts(
         transform,
         ...(part.joint !== undefined ? { joint: part.joint } : {}),
         ...(part.grounded !== undefined ? { grounded: part.grounded } : {}),
+        // Limits mirror joint/grounded, with one extra rule: a view carrying the
+        // EMPTY object `{}` is an explicit clear-to-unlimited and REPLACES the
+        // prior limits (an omitted field still preserves them).
+        ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {}),
         ...(part.geometry != null
           ? { geometrySource: part.geometry }
           : prior.geometrySource != null
@@ -225,6 +238,7 @@ export function persistParts(
     // joint round-trips exactly as before.
     if (part.joint !== undefined) raw.joint = part.joint
     if (part.grounded !== undefined) raw.grounded = part.grounded
+    if (part.jointLimits !== undefined) raw.jointLimits = part.jointLimits
     return assemblyComponentSchemaParse(raw)
   })
 
@@ -280,6 +294,7 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
       partPath?: string
       joint?: AssemblyComponent['joint']
       grounded?: boolean
+      jointLimits?: AssemblyJointLimits
     } = {
       id: c.id,
       name: c.name,
@@ -294,6 +309,12 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
     // so a legacy row with neither field hydrates to the exact same shape as before.
     if (c.joint !== undefined) view.joint = c.joint
     if (c.grounded === true) view.grounded = true
+    // Authored joint limits ride back only when at least one bound is set — an
+    // absent or empty (`{}` = cleared) persisted object hydrates to the same
+    // "unlimited" view shape, so legacy rows gain no spurious key.
+    if (c.jointLimits !== undefined && Object.keys(c.jointLimits).length > 0) {
+      view.jointLimits = c.jointLimits
+    }
     return view
   })
 

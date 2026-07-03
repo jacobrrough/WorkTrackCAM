@@ -32,13 +32,16 @@ const SHELL = read('ShellDialog.tsx')
 const TYPES = read('feature-dialog-types.ts')
 
 describe('Tier-2 picked-edge consumers route through the resolver', () => {
-  it('Fillet/Chamfer resolve the EDGE pick through resolvePickedSelectionId against currentPickIndex', () => {
+  it('Fillet/Chamfer resolve EVERY accumulated EDGE pick through resolvePickedEdgeIds against currentPickIndex (wave-4 multi-edge)', () => {
     for (const src of [FILLET, CHAMFER]) {
-      expect(src).toContain('resolvePickedSelectionId(')
-      expect(src).toContain("'edge'")
+      // The multi-edge resolver iterates the accumulated set and routes EACH
+      // entry through the tiered resolvePickedId (verified in feature-dialog-types).
+      expect(src).toContain('resolvePickedEdgeIds(')
       expect(src).toContain('selectionInfo.currentPickIndex')
       // The raw single-tier extractor must NOT be the path the dialog emits from.
       expect(src).not.toContain('pickedOcctIdFor(')
+      // And it must emit the resolved ARRAY (not a single id) to the op builder.
+      expect(src).toContain('pickedEdgeIds')
     }
   })
 
@@ -49,18 +52,26 @@ describe('Tier-2 picked-edge consumers route through the resolver', () => {
     expect(SHELL).not.toContain('pickedOcctIdFor(')
   })
 
-  it('all three dialogs surface the HONEST pick-lost copy via pickLostMessage', () => {
-    for (const src of [FILLET, CHAMFER, SHELL]) {
-      expect(src).toContain('pickLostMessage(')
-      // The honest-off branch reads the resolver loss reason.
-      expect(src).toContain('pickRes.reason')
+  it('Fillet/Chamfer surface the HONEST pick-lost copy (dropped after an edit) via lostCount', () => {
+    for (const src of [FILLET, CHAMFER]) {
+      // The honest-off branch reads the multi-edge resolver's lost count.
+      expect(src).toContain('pickRes.lostCount')
     }
   })
 
-  it('the dialogs distinguish a Tier-2 recovery (pickRes.tier === 2) in their read-out', () => {
-    for (const src of [FILLET, CHAMFER, SHELL]) {
-      expect(src).toContain('pickRes.tier === 2')
+  it('Shell surfaces the HONEST pick-lost copy via pickLostMessage / pickRes.reason', () => {
+    expect(SHELL).toContain('pickLostMessage(')
+    expect(SHELL).toContain('pickRes.reason')
+  })
+
+  it('Fillet/Chamfer distinguish a Tier-2 recovery (pickRes.tier2Count) in their read-out', () => {
+    for (const src of [FILLET, CHAMFER]) {
+      expect(src).toContain('pickRes.tier2Count')
     }
+  })
+
+  it('Shell distinguishes a Tier-2 recovery (pickRes.tier === 2) in its read-out', () => {
+    expect(SHELL).toContain('pickRes.tier === 2')
   })
 })
 

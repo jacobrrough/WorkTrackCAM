@@ -5,6 +5,7 @@ import {
   AddItemCommand,
   DeleteItemCommand,
   MoveItemCommand,
+  ReplayCommand,
 } from './undo-manager'
 import type { UndoableCommand } from './undo-manager'
 
@@ -477,6 +478,139 @@ describe('UndoManager + concrete commands integration', () => {
 
     mgr.undo()
     expect(lc.items).toEqual(['pocket', 'contour', 'drill'])
+  })
+})
+
+// ── ReplayCommand + UndoManager.record (feature-timeline undo substrate) ─────
+
+describe('ReplayCommand', () => {
+  it('runForward executes the forward thunk and reports its boolean', () => {
+    let applied = false
+    const cmd = new ReplayCommand(
+      () => { applied = true; return true },
+      () => { applied = false; return true },
+      'Add op',
+    )
+    expect(cmd.runForward()).toBe(true)
+    expect(applied).toBe(true)
+  })
+
+  it('undo() runs the inverse thunk; execute() runs the forward thunk', () => {
+    const log: string[] = []
+    const cmd = new ReplayCommand(
+      () => { log.push('fwd'); return true },
+      () => { log.push('inv'); return true },
+      'Move op',
+    )
+    cmd.execute()
+    cmd.undo()
+    cmd.execute()
+    expect(log).toEqual(['fwd', 'inv', 'fwd'])
+  })
+
+  it('describe() returns the label', () => {
+    const cmd = new ReplayCommand(() => true, () => true, 'Reorder kernel ops')
+    expect(cmd.describe()).toBe('Reorder kernel ops')
+  })
+
+  it('mergeNewer keeps THIS inverse but adopts the newer forward', () => {
+    let state = 0
+    const first = new ReplayCommand(
+      () => { state = 1; return true },
+      () => { state = 0; return true }, // inverse restores to 0 (the ORIGINAL before)
+      'edit',
+      'k',
+    )
+    const second = new ReplayCommand(
+      () => { state = 2; return true },
+      () => { state = 1; return true }, // second's inverse (discarded on merge)
+      'edit',
+      'k',
+    )
+    first.mergeNewer(second)
+    first.execute() // adopts second's forward → state 2
+    expect(state).toBe(2)
+    first.undo() // keeps first's inverse → restores to 0 (before the FIRST edit)
+    expect(state).toBe(0)
+  })
+})
+
+describe('UndoManager.record (already-executed commands)', () => {
+  it('pushes without re-executing the forward', () => {
+    const mgr = new UndoManager()
+    const fwd = vi.fn(() => true)
+    const cmd = new ReplayCommand(fwd, () => true, 'op')
+    // Caller executed the mutation already; record must NOT call forward again.
+    mgr.record(cmd)
+    expect(fwd).not.toHaveBeenCalled()
+    expect(mgr.canUndo).toBe(true)
+  })
+
+  it('undo runs the inverse; redo runs the forward', () => {
+    const mgr = new UndoManager()
+    const log: string[] = []
+    const cmd = new ReplayCommand(
+      () => { log.push('fwd'); return true },
+      () => { log.push('inv'); return true },
+      'op',
+    )
+    mgr.record(cmd) // already applied by caller
+    mgr.undo()
+    expect(log).toEqual(['inv'])
+    mgr.redo()
+    expect(log).toEqual(['inv', 'fwd'])
+  })
+
+  it('recording a new command clears the redo stack', () => {
+    const mgr = new UndoManager()
+    mgr.record(new ReplayCommand(() => true, () => true, 'a'))
+    mgr.undo()
+    expect(mgr.canRedo).toBe(true)
+    mgr.record(new ReplayCommand(() => true, () => true, 'b'))
+    expect(mgr.canRedo).toBe(false)
+  })
+
+  it('coalesces same-key ReplayCommands within the window: keep FIRST inverse, adopt LATEST forward', () => {
+    const mgr = new UndoManager({ coalesceWindowMs: 5000 })
+    let v = 0
+    // Simulate a dialog spinner: three rapid edits to the same index.
+    const first = new ReplayCommand(() => { v = 10; return true }, () => { v = 0; return true }, 'edit', 'idx:2')
+    const second = new ReplayCommand(() => { v = 20; return true }, () => { v = 10; return true }, 'edit', 'idx:2')
+    const third = new ReplayCommand(() => { v = 30; return true }, () => { v = 20; return true }, 'edit', 'idx:2')
+    v = 10; mgr.record(first)
+    v = 20; mgr.record(second)
+    v = 30; mgr.record(third)
+    // All three coalesced into ONE undo step.
+    expect(mgr.history).toHaveLength(1)
+    // Undo goes all the way back to the state before the FIRST edit.
+    mgr.undo()
+    expect(v).toBe(0)
+    // Redo re-applies the LATEST forward.
+    mgr.redo()
+    expect(v).toBe(30)
+  })
+
+  it('does NOT coalesce ReplayCommands with different keys', () => {
+    const mgr = new UndoManager({ coalesceWindowMs: 5000 })
+    mgr.record(new ReplayCommand(() => true, () => true, 'a', 'idx:1'))
+    mgr.record(new ReplayCommand(() => true, () => true, 'b', 'idx:2'))
+    expect(mgr.history).toHaveLength(2)
+  })
+
+  it('does NOT coalesce outside the time window', () => {
+    const mgr = new UndoManager({ coalesceWindowMs: 100 })
+    mgr.record(new ReplayCommand(() => true, () => true, 'a', 'k'))
+    const top = mgr.history[mgr.history.length - 1]
+    ;(top as { timestamp: number }).timestamp = Date.now() - 500
+    mgr.record(new ReplayCommand(() => true, () => true, 'b', 'k'))
+    expect(mgr.history).toHaveLength(2)
+  })
+
+  it('does NOT coalesce ReplayCommands without a coalesceKey', () => {
+    const mgr = new UndoManager({ coalesceWindowMs: 5000 })
+    mgr.record(new ReplayCommand(() => true, () => true, 'a'))
+    mgr.record(new ReplayCommand(() => true, () => true, 'b'))
+    expect(mgr.history).toHaveLength(2)
   })
 })
 

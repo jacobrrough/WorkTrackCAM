@@ -35,7 +35,11 @@
  * disagree about a reorder / suppress / rollback.
  */
 
-import type { KernelPostSolidOp, PartFeatureItem } from '../../shared/part-features-schema'
+import type {
+  KernelPostSolidOp,
+  PartFeatureItem,
+  PartFeaturesFile
+} from '../../shared/part-features-schema'
 import {
   resolveTimeline,
   validateTimelineOrder,
@@ -330,6 +334,178 @@ function withSuppressed(op: KernelPostSolidOp, suppressed: boolean): KernelPostS
  */
 export function effectiveOpsForState(state: TimelineState): KernelPostSolidOp[] {
   return resolveTimeline(state.kernelOps, { rollbackTo: state.rolledBackTo })
+}
+
+// ── FEATURE-TIMELINE UNDO/REDO — pure inverse folds (Phase 3 parity) ─────────
+//
+// Every kernel-timeline mutation in `DesignSessionContext` (append / remove /
+// move / reorder / update / suppress / roll-back) is wrapped in an undoable
+// command. The FORWARD side stays exactly the session's existing validated
+// fold (running through `commitKernelFeatures`, the serialized
+// read-modify-write); the INVERSE side is built here — pure, framework-free,
+// unit-testable in the node vitest env — and is ALSO committed through the
+// same `commitKernelFeatures` chain. Undo/redo never raw-poke React state or
+// disk, so persistence and the debounced kernel rebuild stay consistent with
+// every other timeline gesture.
+//
+// Inverse folds deliberately do NOT re-run the finishing-op order validation:
+// they restore a state that ALREADY existed (it was on screen and on disk a
+// moment ago), and re-validating can wrongly block the restore — e.g. a
+// legacy file loaded with a finishing op FIRST can legally move a create op
+// above it (a non-finishing op moving up is allowed), but the reverse swap
+// would be rejected by `canSwapKernelOpOrder` / `validateTimelineOrder`.
+// Range checks still apply: a fold that no longer addresses a row returns
+// `null` (silent no-op) rather than corrupting the timeline.
+
+/**
+ * Fold shape consumed by the session's `commitKernelFeatures`:
+ * `{ next, status }` commits + persists, `{ reject }` surfaces the reason and
+ * skips the write, `null` is a silent no-op.
+ */
+export type TimelineCommitFold = (
+  base: PartFeaturesFile
+) => { next: PartFeaturesFile; status: string } | { reject: string } | null
+
+/**
+ * Inverse of an append: remove the op that landed at `index` (captured as the
+ * pre-append list length). Mirrors the session's remove fold, including the
+ * "empty list drops the key" normalization.
+ */
+export function invertAppendKernelOp(index: number): TimelineCommitFold {
+  return (base) => {
+    const ops = [...(base.kernelOps ?? [])]
+    if (index < 0 || index >= ops.length) return null
+    ops.splice(index, 1)
+    return {
+      next: { ...base, kernelOps: ops.length ? ops : undefined },
+      status: 'Undo: kernel op removed — rebuilding model…'
+    }
+  }
+}
+
+/**
+ * Inverse of a remove: re-insert the captured op snapshot AT its original
+ * index — `suppressed` flag and every parameter byte-identical to what was
+ * deleted (the snapshot is the pre-splice element, not a rebuild).
+ */
+export function invertRemoveKernelOpAt(
+  index: number,
+  removed: KernelPostSolidOp
+): TimelineCommitFold {
+  return (base) => {
+    const ops = [...(base.kernelOps ?? [])]
+    if (index < 0 || index > ops.length) return null
+    ops.splice(index, 0, removed)
+    return {
+      next: { ...base, kernelOps: ops },
+      status: 'Undo: kernel op restored — rebuilding model…'
+    }
+  }
+}
+
+/**
+ * Inverse of a ±1 move: swap the SAME index pair back (a swap is its own
+ * inverse). Skips the order-rule re-check — see the module note above.
+ */
+export function invertMoveKernelOp(index: number, delta: -1 | 1): TimelineCommitFold {
+  return (base) => {
+    const ops = [...(base.kernelOps ?? [])]
+    const j = index + delta
+    if (index < 0 || index >= ops.length || j < 0 || j >= ops.length) return null
+    const a = ops[index]!
+    ops[index] = ops[j]!
+    ops[j] = a
+    return {
+      next: { ...base, kernelOps: ops },
+      status: 'Undo: kernel op order restored — rebuilding model…'
+    }
+  }
+}
+
+/**
+ * Inverse of a drag reorder: restore the captured pre-drag op order AND the
+ * pre-drag roll-back marker (the forward reorder re-clamps the marker via
+ * `normalizeState`, which can collapse it — the capture puts it back).
+ */
+export function invertReorderKernelOps(
+  previousOps: ReadonlyArray<KernelPostSolidOp>,
+  previousRolledBackTo: number | undefined
+): TimelineCommitFold {
+  return (base) => {
+    const next: PartFeaturesFile = { ...base, kernelOps: [...previousOps] }
+    if (previousRolledBackTo === undefined) {
+      delete (next as { rolledBackTo?: number }).rolledBackTo
+    } else {
+      next.rolledBackTo = previousRolledBackTo
+    }
+    return {
+      next,
+      status: 'Undo: kernel op order restored — rebuilding model…'
+    }
+  }
+}
+
+/**
+ * Inverse of an in-place edit: put the captured previous op back at `index`.
+ * The previous op existed on the timeline a moment ago, so it needs no
+ * re-validation — only the range check.
+ */
+export function invertUpdateKernelOpAt(
+  index: number,
+  previousOp: KernelPostSolidOp
+): TimelineCommitFold {
+  return (base) => {
+    const ops = [...(base.kernelOps ?? [])]
+    if (index < 0 || index >= ops.length) return null
+    ops[index] = previousOp
+    return {
+      next: { ...base, kernelOps: ops },
+      status: 'Undo: kernel op edit reverted — rebuilding model…'
+    }
+  }
+}
+
+/**
+ * Inverse of a suppress toggle: restore the captured previous flag. Clearing
+ * DROPS the key entirely (via `withSuppressed`) so a never-suppressed op
+ * round-trips byte-identical.
+ */
+export function invertSetKernelOpSuppressedAt(
+  index: number,
+  previousSuppressed: boolean
+): TimelineCommitFold {
+  return (base) => {
+    const ops = [...(base.kernelOps ?? [])]
+    if (index < 0 || index >= ops.length) return null
+    ops[index] = withSuppressed(ops[index]!, previousSuppressed)
+    return {
+      next: { ...base, kernelOps: ops },
+      status: previousSuppressed
+        ? 'Undo: kernel op suppressed again.'
+        : 'Undo: kernel op active again.'
+    }
+  }
+}
+
+/**
+ * Inverse of a roll-back bar move: restore the captured previous marker.
+ * `undefined` / `-1` restore to the canonical "build all" (key dropped).
+ */
+export function invertSetKernelRollbackMarker(
+  previousRolledBackTo: number | undefined
+): TimelineCommitFold {
+  return (base) => {
+    const next: PartFeaturesFile = { ...base }
+    if (previousRolledBackTo === undefined || previousRolledBackTo === -1) {
+      delete (next as { rolledBackTo?: number }).rolledBackTo
+    } else {
+      next.rolledBackTo = previousRolledBackTo
+    }
+    return {
+      next,
+      status: 'Undo: roll-back marker restored — rebuilding model…'
+    }
+  }
 }
 
 // ── Feature-BROWSER (`items[]`) edit ops — pure, by stable id ────────────────

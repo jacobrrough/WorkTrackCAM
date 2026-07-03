@@ -23,7 +23,7 @@ import { DatumPlaneDialog } from '../DatumPlaneDialog'
 import { DatumAxisDialog } from '../DatumAxisDialog'
 import { DatumPointDialog } from '../DatumPointDialog'
 import type { FeatureDialogSelectionInfo } from '../feature-dialog-types'
-import { makeEdgeSelection, makeFaceSelection } from '../../selection-state'
+import { makeEdgeSelection, makeFaceSelection, makeMultiEdgeSelection } from '../../selection-state'
 
 const NO_SELECTION: FeatureDialogSelectionInfo = { selection: null, label: null }
 /** A face pick WITHOUT a stable occtHash (legacy / id-only). */
@@ -40,6 +40,14 @@ const FACE_SELECTION_STABLE: FeatureDialogSelectionInfo = {
 const EDGE_SELECTION_STABLE: FeatureDialogSelectionInfo = {
   selection: makeEdgeSelection(7, 'e:rail7'),
   label: 'Edge 7'
+}
+/** Wave-4: TWO accumulated edge picks, each with a stable id — a multi-edge fillet/chamfer. */
+const MULTI_EDGE_SELECTION_STABLE: FeatureDialogSelectionInfo = {
+  selection: makeMultiEdgeSelection([
+    { edgeId: 7, occtHash: 'e:rail7' },
+    { edgeId: 8, occtHash: 'e:rail8' }
+  ]),
+  label: '2 edges'
 }
 const noop = (): void => undefined
 
@@ -204,8 +212,20 @@ describe('FG-5b — FilletDialog render contract', () => {
         onApply: noop
       })
     )
-    expect(html).toContain('Filleting the picked edge')
+    // Wave-4 multi-edge copy: a single stable pick reads "Filleting 1 picked edge".
+    expect(html).toContain('Filleting 1 picked edge')
     expect(html).not.toContain('not supported by the kernel yet')
+  })
+
+  it('wave-4: TWO accumulated stable edge picks read "Filleting 2 picked edges"', () => {
+    const html = render(
+      createElement(FilletDialog, {
+        params: { radiusMm: 2, mode: 'select', edgeDirection: '+Z' },
+        selectionInfo: MULTI_EDGE_SELECTION_STABLE,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('Filleting 2 picked edges')
   })
 })
 
@@ -246,7 +266,19 @@ describe('FG-5b — ChamferDialog render contract', () => {
         onApply: noop
       })
     )
-    expect(html).toContain('Chamfering the picked edge')
+    // Wave-4 multi-edge copy: a single stable pick reads "Chamfering 1 picked edge".
+    expect(html).toContain('Chamfering 1 picked edge')
+  })
+
+  it('wave-4: TWO accumulated stable edge picks read "Chamfering 2 picked edges"', () => {
+    const html = render(
+      createElement(ChamferDialog, {
+        params: { lengthMm: 1, mode: 'select', edgeDirection: '-X' },
+        selectionInfo: MULTI_EDGE_SELECTION_STABLE,
+        onApply: noop
+      })
+    )
+    expect(html).toContain('Chamfering 2 picked edges')
   })
 })
 

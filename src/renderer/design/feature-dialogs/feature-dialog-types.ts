@@ -49,7 +49,7 @@ import {
   type PickLostReason,
   type StoredPick,
 } from '../../../shared/kernel-pick-file'
-import type { Selection } from '../selection-state'
+import { selectedEdgeEntries, type Selection } from '../selection-state'
 
 /**
  * The features that have a property dialog in this folder. Mirrors the catalog
@@ -327,4 +327,72 @@ export function resolvePickedSelectionId(
   const res = resolvePickedId(stored, currentPickIndex)
   if (res.ok) return { id: res.id, tier: res.tier }
   return { id: null, reason: res.reason }
+}
+
+/**
+ * MULTI-EDGE (wave 4) · The resolution a Fillet / Chamfer dialog acts on when
+ * the operator has ACCUMULATED several edges (Ctrl/Cmd-click). The kernel's
+ * `fillet_select` / `chamfer_select` `pickedEdgeIds` is an array (schema:
+ * `min(1).max(256)`), so multiple picked edges drive ONE op.
+ *
+ *   - `ids`        — every resolved current-build stable id, in selection order,
+ *                    deduped. Empty when nothing resolved (→ the caller falls
+ *                    back to the axis bucket, exactly like the single path).
+ *   - `tier2Count` — how many ids were recovered via the geometry-invariant
+ *                    signature (the pick MOVED / UNIFORMLY RESIZED upstream).
+ *   - `lostCount`  — how many accumulated edges were honestly LOST after an
+ *                    edit (had a stable id at pick time but no longer resolve).
+ *                    Surfaced in the read-out so the operator knows some picks
+ *                    dropped rather than silently filleting fewer edges.
+ */
+export interface PickedEdgeIdsResolution {
+  readonly ids: readonly string[]
+  readonly tier2Count: number
+  readonly lostCount: number
+}
+
+/**
+ * MULTI-EDGE (wave 4) · Resolve EVERY accumulated edge pick to its current-build
+ * stable id through the same tiered path as {@link resolvePickedSelectionId}.
+ * Iterates {@link selectedEdgeEntries} — which normalizes a single pick to a
+ * one-entry list — so the single-edge case is exactly the one-id subset of this
+ * (a Fillet/Chamfer dialog can read this one helper for both). Non-edge / null
+ * selections yield an empty result (axis bucket). Pure; exported for the test.
+ */
+export function resolvePickedEdgeIds(
+  selection: Selection | null,
+  currentPickIndex?: CurrentPickIndex
+): PickedEdgeIdsResolution {
+  if (selection === null || selection.kind !== 'edge') {
+    return { ids: [], tier2Count: 0, lostCount: 0 }
+  }
+  const entries = selectedEdgeEntries(selection)
+  const seen = new Set<string>()
+  const ids: string[] = []
+  let tier2Count = 0
+  let lostCount = 0
+  for (const entry of entries) {
+    const liveId = typeof entry.occtHash === 'string' && entry.occtHash.length > 0 ? entry.occtHash : null
+    if (liveId === null) continue // no stable id at pick time → axis bucket for this one
+    if (!currentPickIndex) {
+      // Tier-1-only: emit the live id as-is (host hasn't wired the index).
+      if (!seen.has(liveId)) {
+        seen.add(liveId)
+        ids.push(liveId)
+      }
+      continue
+    }
+    const stored: StoredPick = { kind: 'edge', id: liveId, signature: entry.signature }
+    const res = resolvePickedId(stored, currentPickIndex)
+    if (res.ok) {
+      if (res.tier === 2) tier2Count += 1
+      if (!seen.has(res.id)) {
+        seen.add(res.id)
+        ids.push(res.id)
+      }
+    } else {
+      lostCount += 1
+    }
+  }
+  return { ids, tier2Count, lostCount }
 }

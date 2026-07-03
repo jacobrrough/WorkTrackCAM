@@ -34,13 +34,18 @@ import {
   isSameEntity,
   makeEdgeSelection,
   makeFaceSelection,
+  makeMultiEdgeSelection,
   makeMultiFaceSelection,
   makeVertexSelection,
+  selectedEdgeEntries,
+  selectedEdgeIds,
   selectedFaceIds,
   selectionToSurface,
   setSelection,
+  toggleEdgeInSelection,
   toggleFaceInSelection,
   toggleSelection,
+  type EdgePickEntry,
   type Selection,
 } from './selection-state'
 
@@ -364,5 +369,111 @@ describe('multi-face selection — command-surface honesty', () => {
     const single = makeFaceSelection(9)
     // A plain click over a multi-face selection collapses to the new pick.
     expect(setSelection(multi, single)).toBe(single)
+  })
+})
+
+// ── MULTI-EDGE selection (viewport edge picking, wave 4) ────────────────────
+
+describe('makeMultiEdgeSelection — edge set constructor', () => {
+  const entry = (edgeId: number, occtHash?: string): EdgePickEntry =>
+    occtHash !== undefined ? { edgeId, occtHash } : { edgeId }
+
+  it('returns null when every ordinal is malformed', () => {
+    expect(makeMultiEdgeSelection([])).toBeNull()
+    expect(makeMultiEdgeSelection([{ edgeId: Number.NaN }])).toBeNull()
+    expect(makeMultiEdgeSelection([{ edgeId: 1.5 }])).toBeNull()
+  })
+
+  it('one entry normalizes to a PLAIN single EdgeSelection (no `edges` key)', () => {
+    const sel = makeMultiEdgeSelection([entry(4, 'e:abc')])
+    expect(sel).toEqual({ kind: 'edge', faceId: 4, occtHash: 'e:abc' })
+    expect(sel && 'edges' in sel).toBe(false)
+  })
+
+  it('two+ entries carry the `edges` payload + the primary fields', () => {
+    const sel = makeMultiEdgeSelection([entry(4, 'e:a'), entry(7, 'e:b')])
+    expect(sel?.kind).toBe('edge')
+    expect(sel?.faceId).toBe(4) // first entry is primary by default
+    expect(sel?.occtHash).toBe('e:a')
+    expect(sel?.edges).toEqual([{ edgeId: 4, occtHash: 'e:a' }, { edgeId: 7, occtHash: 'e:b' }])
+  })
+
+  it('dedupes by edgeId, first occurrence wins', () => {
+    const sel = makeMultiEdgeSelection([entry(4, 'e:a'), entry(4, 'e:dup'), entry(7, 'e:b')])
+    expect(selectedEdgeIds(sel)).toEqual([4, 7])
+    // The FIRST 4 keeps its metadata (no clobber from the duplicate).
+    expect(selectedEdgeEntries(sel)[0]).toEqual({ edgeId: 4, occtHash: 'e:a' })
+  })
+
+  it('primaryEdgeId selects which entry donates the primary fields', () => {
+    const sel = makeMultiEdgeSelection([entry(4, 'e:a'), entry(7, 'e:b')], 7)
+    expect(sel?.faceId).toBe(7)
+    expect(sel?.occtHash).toBe('e:b')
+  })
+})
+
+describe('selectedEdgeIds / selectedEdgeEntries — accessors', () => {
+  it('null / face / vertex selections have no edges', () => {
+    expect(selectedEdgeIds(null)).toEqual([])
+    expect(selectedEdgeIds(makeFaceSelection(2))).toEqual([])
+    expect(selectedEdgeIds(makeVertexSelection(3))).toEqual([])
+    expect(selectedEdgeEntries(makeFaceSelection(2))).toEqual([])
+  })
+
+  it('a single edge pick yields a one-id / one-entry list built from the primary', () => {
+    const sel = makeEdgeSelection(5, 'e:x')
+    expect(selectedEdgeIds(sel)).toEqual([5])
+    expect(selectedEdgeEntries(sel)).toEqual([{ edgeId: 5, occtHash: 'e:x' }])
+  })
+
+  it('a multi pick yields one id / one entry per member in order', () => {
+    const sel = makeMultiEdgeSelection([{ edgeId: 1, occtHash: 'e:1' }, { edgeId: 9, occtHash: 'e:9' }])
+    expect(selectedEdgeIds(sel)).toEqual([1, 9])
+    expect(selectedEdgeEntries(sel).map((e) => e.edgeId)).toEqual([1, 9])
+  })
+})
+
+describe('toggleEdgeInSelection — Ctrl/Cmd-click membership (mirror of faces)', () => {
+  it('nothing / face / vertex selected → the clicked edge (plain single pick)', () => {
+    const next = makeEdgeSelection(3, 'e:3')
+    expect(toggleEdgeInSelection(null, next)).toEqual(next)
+    expect(toggleEdgeInSelection(makeFaceSelection(2), next)).toEqual(next)
+    expect(toggleEdgeInSelection(makeVertexSelection(1), next)).toEqual(next)
+  })
+
+  it('ADDS a new edge → it becomes the PRIMARY, previous rides along', () => {
+    const prev = makeEdgeSelection(3, 'e:3')
+    const result = toggleEdgeInSelection(prev, makeEdgeSelection(8, 'e:8'))
+    expect(result?.kind).toBe('edge')
+    expect(selectedEdgeIds(result)).toEqual([3, 8])
+    // The clicked edge is the new primary (latest explicit pick).
+    expect((result as { faceId: number }).faceId).toBe(8)
+    expect((result as { occtHash?: string }).occtHash).toBe('e:8')
+  })
+
+  it('REMOVES an already-selected edge; the last removal clears to null', () => {
+    const two = makeMultiEdgeSelection([{ edgeId: 3, occtHash: 'e:3' }, { edgeId: 8, occtHash: 'e:8' }])!
+    // Toggle 8 off → back to a single-edge selection of 3.
+    const afterRemove8 = toggleEdgeInSelection(two, makeEdgeSelection(8, 'e:8'))
+    expect(selectedEdgeIds(afterRemove8)).toEqual([3])
+    // Toggle the last one off → null.
+    expect(toggleEdgeInSelection(makeEdgeSelection(3, 'e:3'), makeEdgeSelection(3, 'e:3'))).toBeNull()
+  })
+
+  it('removing the PRIMARY re-seats a survivor as primary, keeping ITS metadata', () => {
+    const two = makeMultiEdgeSelection([{ edgeId: 3, occtHash: 'e:3' }, { edgeId: 8, occtHash: 'e:8' }], 3)!
+    // Primary is 3; toggling 3 off leaves 8 as the survivor primary WITH e:8.
+    const result = toggleEdgeInSelection(two, makeEdgeSelection(3, 'e:3'))
+    expect(selectedEdgeIds(result)).toEqual([8])
+    expect((result as { occtHash?: string }).occtHash).toBe('e:8')
+  })
+
+  it('accumulation flow: three Ctrl-clicks build a 3-edge set', () => {
+    let sel: Selection | null = null
+    sel = toggleEdgeInSelection(sel, makeEdgeSelection(1, 'e:1'))
+    sel = toggleEdgeInSelection(sel, makeEdgeSelection(2, 'e:2'))
+    sel = toggleEdgeInSelection(sel, makeEdgeSelection(3, 'e:3'))
+    expect(selectedEdgeIds(sel)).toEqual([1, 2, 3])
+    expect(selectionToSurface(sel)).toEqual({ hasSelection: true, selectionKind: 'edge' })
   })
 })

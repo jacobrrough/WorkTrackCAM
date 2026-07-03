@@ -99,11 +99,16 @@ describe('Viewport3D — last-pick point only (honest scope)', () => {
   })
 
   it('the edge pick forwards its intersection point through the pick handler', () => {
-    expect(VIEWPORT).toContain('onPick(edge, { x: e.point.x, y: e.point.y, z: e.point.z })')
+    // Wave 4: the pick call gained a third { toggle } modifier argument (multi-
+    // edge fillet/chamfer accumulation) — the world point STILL rides in slot 2.
+    expect(VIEWPORT).toMatch(
+      /onPick\(\s*edge,\s*\{ x: e\.point\.x, y: e\.point\.y, z: e\.point\.z \},\s*\{ toggle: e\.ctrlKey \|\| e\.metaKey \}\s*\)/
+    )
     // Tier-2: the edge selection now ALSO carries `edge.signature` (the geometry-
     // invariant signature) so a picked fillet/chamfer can be recovered after a
-    // move/resize — but the point-forwarding still rides alongside the pick.
-    expect(VIEWPORT).toMatch(/onSelect\(makeEdgeSelection\(edge\.edgeId, edge\.occtId, edge\.signature\)\)[\s\S]{0,200}?onPickPoint\?\.\(pointMm\)/)
+    // move/resize — but the point-forwarding still rides alongside the pick
+    // (Wave 4: with the modifiers forwarded so the parent can toggle membership).
+    expect(VIEWPORT).toMatch(/onSelect\(makeEdgeSelection\(edge\.edgeId, edge\.occtId, edge\.signature\), modifiers\)[\s\S]{0,200}?onPickPoint\?\.\(pointMm\)/)
   })
 
   it('adds NO per-frame hover raycast (deliberately rejected as too heavy)', () => {

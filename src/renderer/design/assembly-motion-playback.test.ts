@@ -16,6 +16,7 @@ import {
   advancePlaybackT,
   clamp01,
   firstDrivenJointKind,
+  firstDrivenJointRange,
   formatPoseSummary,
   interpolatePosesAtT,
   jointScalarLabel,
@@ -202,8 +203,8 @@ describe('firstDrivenJointKind + jointScalarLabel + playbackReadout', () => {
   })
 
   it('phrases the revolute read-out across the default −180..180° range', () => {
-    // LIMIT COUPLING pin: the renderer sends no jointLimits, so the IPC's
-    // documented defaults apply — this formatter must mirror them.
+    // Default fallback: a row with no authored jointLimits sweeps the IPC's
+    // documented default range, which this formatter mirrors.
     expect(jointScalarLabel('revolute', 0)).toBe('-180.0°')
     expect(jointScalarLabel('revolute', 0.5)).toBe('0.0°')
     expect(jointScalarLabel('revolute', 1)).toBe('180.0°')
@@ -215,7 +216,11 @@ describe('firstDrivenJointKind + jointScalarLabel + playbackReadout', () => {
     expect(jointScalarLabel('slider', 1)).toBe('100.0 mm')
   })
 
-  it('honours explicit limits when a future cycle threads them through', () => {
+  it('honours authored limits threaded through from the Limits editor', () => {
+    // LIMIT COUPLING (closed): the AssemblyView now threads each row's authored
+    // jointLimits into the assembly:simulate input AND passes the first driven
+    // row's real range here, so the read-out sweeps the AUTHORED range — not
+    // the −180..180 / 0..100 defaults.
     expect(jointScalarLabel('revolute', 0.5, { min: 0, max: 90 })).toBe('45.0°')
     expect(jointScalarLabel('slider', 0.5, { min: 10, max: 20 })).toBe('15.0 mm')
   })
@@ -228,6 +233,46 @@ describe('firstDrivenJointKind + jointScalarLabel + playbackReadout', () => {
     expect(playbackReadout(3, 0, 'slider')).toBe('pose 1/3 · 0.0 mm')
     expect(playbackReadout(3, 1, 'revolute')).toBe('pose 3/3 · 180.0°')
     expect(playbackReadout(12, 0.5, null)).toBe('pose 7/12 · t = 50%')
+  })
+
+  it('composes the read-out over the AUTHORED range when limits are passed', () => {
+    // The AssemblyView passes firstDrivenJointRange(parts) here, so the scrub
+    // label reflects the range the motion study actually swept.
+    expect(playbackReadout(3, 1, 'revolute', { min: 0, max: 90 })).toBe('pose 3/3 · 90.0°')
+    expect(playbackReadout(5, 0, 'slider', { min: 10, max: 60 })).toBe('pose 1/5 · 10.0 mm')
+  })
+})
+
+describe('firstDrivenJointRange — couples authored limits into the read-out', () => {
+  it('returns the first revolute row range, authored bounds winning per side', () => {
+    expect(
+      firstDrivenJointRange([
+        { joint: 'rigid' },
+        { joint: 'revolute', jointLimits: { scalarMinDeg: -45, scalarMaxDeg: 90 } },
+      ])
+    ).toEqual({ kind: 'revolute', min: -45, max: 90 })
+  })
+
+  it('returns the first slider row range, authored bounds winning per side', () => {
+    expect(
+      firstDrivenJointRange([{ joint: 'slider', jointLimits: { scalarMinMm: 5, scalarMaxMm: 55 } }])
+    ).toEqual({ kind: 'slider', min: 5, max: 55 })
+  })
+
+  it('falls back per missing side to the IPC defaults (revolute −180..180)', () => {
+    // Only the max is authored → the min side falls back to the −180 default,
+    // mirroring assembly:simulate's per-side resolution exactly.
+    expect(firstDrivenJointRange([{ joint: 'revolute', jointLimits: { scalarMaxDeg: 60 } }])).toEqual(
+      { kind: 'revolute', min: -180, max: 60 }
+    )
+  })
+
+  it('falls back to slider defaults 0..100 when no limits are authored', () => {
+    expect(firstDrivenJointRange([{ joint: 'slider' }])).toEqual({ kind: 'slider', min: 0, max: 100 })
+  })
+
+  it('is null when nothing driven (only non-swept joint kinds present)', () => {
+    expect(firstDrivenJointRange([{ joint: 'ball' }, { joint: 'planar' }, {}])).toBeNull()
   })
 })
 

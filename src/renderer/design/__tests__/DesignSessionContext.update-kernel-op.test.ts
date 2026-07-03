@@ -39,14 +39,20 @@ describe('updateKernelOpAt — session wiring', () => {
     )
   })
 
-  it('is implemented as a serialized commit (no bespoke save path)', () => {
+  it('is implemented as an UNDOABLE serialized commit (no bespoke save path)', () => {
     expect(SESSION_SRC).toContain('const updateKernelOpAt = useCallback(')
-    // Routes through the single serialized commit helper…
+    // Routes through `undoableCommit` — the recorder that runs the forward
+    // mutation through the single serialized `commitKernelFeatures` chain AND
+    // records the inverse onto the timeline undo stack (Phase-3 parity). The
+    // forward compute is still the `(base) => { … }` fold shape.
     const impl = SESSION_SRC.slice(
       SESSION_SRC.indexOf('const updateKernelOpAt = useCallback('),
       SESSION_SRC.indexOf('const setKernelRollbackMarker = useCallback(')
     )
-    expect(impl).toContain('commitKernelFeatures((base) => {')
+    expect(impl).toContain('undoableCommit(')
+    expect(impl).toContain('(base) => {')
+    // The re-edit records an inverse (put the captured previous op back).
+    expect(impl).toContain('invertUpdateKernelOpAt(index, previous)')
     // …and never calls featuresSave directly (the race-test pin also asserts
     // the global count stays 1, inside commitKernelFeatures).
     expect(impl).not.toContain('featuresSave')

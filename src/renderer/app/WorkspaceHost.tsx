@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactElement } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
 import { STARTER_SCRIPT, type DesignViewMode } from '../design/DesignWorkspace'
 import { DesignSessionProvider } from '../design/DesignSessionContext'
+import { formatRecoverySavedAt } from '../design/DesignRecoveryBanner'
+import {
+  runScriptProjectOpen,
+  runScriptSave,
+  type DesignScriptRecoverySnapshot
+} from '../../shared/design-script-persistence'
 import { DesignWorkspaceHost } from './DesignWorkspaceHost'
 import { EmptyState } from '../src/EmptyState'
 import { useToast } from '../contexts/ToastContext'
@@ -74,6 +80,51 @@ function routeToViewMode(active: WorkspaceId): DesignViewMode {
  * encountered an unexpected error."). Total over every {@link WorkspaceId} so
  * a new route cannot silently fall through to a generic string.
  */
+// ── Script crash-snapshot banner styles ─────────────────────────────────────
+// Self-contained inline styles mirroring DesignRecoveryBanner (no shared-CSS
+// edits). Offset BELOW the sketch recovery banner (top: 56) so both offers can
+// show at once without overlap.
+const scriptBannerStyle: CSSProperties = {
+  position: 'fixed',
+  top: 108,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  zIndex: 60,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '10px 14px',
+  borderRadius: 8,
+  border: '1px solid var(--accent, #4f8cff)',
+  background: 'var(--panel-bg, #1e2126)',
+  color: 'var(--text, #e6e8eb)',
+  boxShadow: '0 6px 24px rgba(0, 0, 0, 0.45)',
+  fontSize: 13,
+  maxWidth: 560
+}
+
+const scriptBannerButtonBase: CSSProperties = {
+  fontSize: 12,
+  padding: '5px 12px',
+  borderRadius: 6,
+  cursor: 'pointer'
+}
+
+const scriptRestoreButtonStyle: CSSProperties = {
+  ...scriptBannerButtonBase,
+  border: '1px solid var(--accent, #4f8cff)',
+  background: 'var(--accent, #4f8cff)',
+  color: '#fff',
+  fontWeight: 600
+}
+
+const scriptDiscardButtonStyle: CSSProperties = {
+  ...scriptBannerButtonBase,
+  border: '1px solid var(--border, #3a3f46)',
+  background: 'transparent',
+  color: 'var(--text-dim, #9aa0a8)'
+}
+
 function workspaceLabel(active: WorkspaceId): string {
   switch (active) {
     case 'design':
@@ -133,6 +184,19 @@ export function WorkspaceHost({
   // AppProviders, so the slot survives the route switch that unmounts Design.
   const { setPendingCamImport } = useCamHandoff()
   const [designScript, setDesignScript] = useState<string>(STARTER_SCRIPT)
+
+  // SCRIPT DISK PERSISTENCE — mirror of `designScript` readable from effects
+  // WITHOUT depending them on the churning state value (the Cycle-249 rule:
+  // never key a state-replacing load effect on values that change per edit).
+  const designScriptRef = useRef<string>(STARTER_SCRIPT)
+  useEffect(() => {
+    designScriptRef.current = designScript
+  }, [designScript])
+  // One disk load per opened project dir (guards re-runs on unrelated renders).
+  const scriptProjectRef = useRef<string | null>(null)
+  // Pending write-ahead crash snapshot offer (Restore / Discard banner).
+  const [scriptRecoveryOffer, setScriptRecoveryOffer] =
+    useState<DesignScriptRecoverySnapshot | null>(null)
 
   // CAD foundation (#9 reload surface) — the assembly's parts + durable mate
   // constraints hydrated from `<projectDir>/assembly.json` when the `assemble`
@@ -199,6 +263,89 @@ export function WorkspaceHost({
     // load-bearing deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, projectDir])
+
+  // SCRIPT DISK PERSISTENCE — seed the editor from `design/script.cq.py` when
+  // a project opens, and surface any write-ahead crash snapshot as a
+  // Restore/Discard OFFER. The pure `runScriptProjectOpen` seam owns both
+  // decisions:
+  //   - the buffer is REPLACED only while still on the untouched
+  //     STARTER_SCRIPT (a manual in-session edit is never clobbered by an
+  //     older disk copy without the user acting — Cycle-249);
+  //   - the snapshot is only OFFERED (banner below), never auto-applied.
+  // Runs once per opened project dir (scriptProjectRef); reads the current
+  // buffer through designScriptRef so the effect deps stay [projectDir] only.
+  useEffect(() => {
+    if (projectDir === null) return
+    if (scriptProjectRef.current === projectDir) return
+    scriptProjectRef.current = projectDir
+    let cancelled = false
+    void (async () => {
+      const decision = await runScriptProjectOpen({
+        projectDir,
+        currentBuffer: designScriptRef.current,
+        pristineBuffer: STARTER_SCRIPT,
+        loadScript: (dir) => window.fab.designScriptLoad(dir),
+        readRecovery: (dir) => window.fab.designScriptRecoveryRead(dir)
+      })
+      if (cancelled) return
+      if (decision.seedScript !== null) {
+        setDesignScript(decision.seedScript)
+        designScriptRef.current = decision.seedScript
+        setHydrateToken((t) => t + 1)
+      }
+      if (decision.recoveryOffer !== null) setScriptRecoveryOffer(decision.recoveryOffer)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [projectDir])
+
+  // SCRIPT DISK PERSISTENCE — the Save gesture. Updates the session state
+  // (as before) and persists to `<projectDir>/design/script.cq.py` through
+  // the pure `runScriptSave` seam (write-ahead snapshot → atomic project
+  // write; a successful save deletes the snapshot main-side). The outcome
+  // folds to an HONEST toast — the old "saved to session" message implied a
+  // durability that never existed. SAFETY: script text only; no G-code.
+  const handleDesignScriptSave = useCallback(
+    (script: string): void => {
+      setDesignScript(script)
+      designScriptRef.current = script
+      void (async () => {
+        const outcome = await runScriptSave({
+          projectDir,
+          script,
+          saveScript: (dir, s) => window.fab.designScriptSave(dir, s),
+          writeRecovery: (json) => window.fab.designScriptRecoveryWrite(json)
+        })
+        // A clean save just deleted the on-disk snapshot; drop any stale offer.
+        if (outcome.persisted) setScriptRecoveryOffer(null)
+        pushToast(outcome.toast.kind, outcome.toast.message)
+      })()
+    },
+    [projectDir, pushToast]
+  )
+
+  // EXPLICIT user action — the only code path that applies a script snapshot
+  // to the editor (never an effect; Cycle-249 contract). The snapshot file
+  // stays on disk until a clean save deletes it (mirrors
+  // restoreRecoveredDesign), so a crash before that save can offer again.
+  const handleScriptRecoveryRestore = useCallback((): void => {
+    const offer = scriptRecoveryOffer
+    if (offer === null) return
+    setDesignScript(offer.script)
+    designScriptRef.current = offer.script
+    setHydrateToken((t) => t + 1)
+    setScriptRecoveryOffer(null)
+    pushToast('ok', 'Recovered CadQuery script restored — Save to keep it.')
+  }, [scriptRecoveryOffer, pushToast])
+
+  const handleScriptRecoveryDiscard = useCallback((): void => {
+    const offer = scriptRecoveryOffer
+    setScriptRecoveryOffer(null)
+    if (offer !== null) {
+      void window.fab.designScriptRecoveryDelete(offer.projectDir).catch(() => {})
+    }
+  }, [scriptRecoveryOffer])
 
   // Serialize assembly-mate persistence. `runPersistMate` is a load→fold→save
   // over `assembly.json`, and `handleMateAdded` fires it fire-and-forget from
@@ -319,6 +466,39 @@ export function WorkspaceHost({
     case 'assemble':
     case 'drawings':
       return (
+        <>
+        {/* SCRIPT DISK PERSISTENCE — non-blocking restore offer for the
+            write-ahead script crash snapshot. Restore/Discard are explicit
+            user actions (never an effect — Cycle-249). */}
+        {scriptRecoveryOffer !== null && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="design-script-recovery-banner"
+            style={scriptBannerStyle}
+          >
+            <span>
+              <strong>Unsaved CadQuery script recovered</strong> (autosaved{' '}
+              {formatRecoverySavedAt(scriptRecoveryOffer.savedAtMs)}). Restore it?
+            </span>
+            <button
+              type="button"
+              data-testid="design-script-recovery-restore"
+              style={scriptRestoreButtonStyle}
+              onClick={handleScriptRecoveryRestore}
+            >
+              Restore
+            </button>
+            <button
+              type="button"
+              data-testid="design-script-recovery-discard"
+              style={scriptDiscardButtonStyle}
+              onClick={handleScriptRecoveryDiscard}
+            >
+              Discard
+            </button>
+          </div>
+        )}
         <DesignSessionProvider projectDir={projectDir} onStatus={handleDesignStatus}>
           <DesignWorkspaceHost
             // Remount with the freshly-hydrated assembly seed when the route /
@@ -329,15 +509,13 @@ export function WorkspaceHost({
             initialAssemblyParts={assemblyParts}
             initialAssemblyMates={assemblyMates}
             onAssemblyPartsChange={handleAssemblyPartsChange}
-            onSave={(script) => {
-              setDesignScript(script)
-              pushToast('ok', 'Design script saved to session.')
-            }}
+            onSave={handleDesignScriptSave}
             onSendToCam={handleSendToCam}
             onMateAdded={handleMateAdded}
             onToast={pushToast}
           />
         </DesignSessionProvider>
+        </>
       )
     case 'manufacture':
       return <ManufactureHost />

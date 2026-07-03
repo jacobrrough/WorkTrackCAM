@@ -110,6 +110,7 @@ export function partToView(part: AssemblyPart): AssemblyPartView {
     partPath?: string
     joint?: AssemblyPart['joint']
     grounded?: boolean
+    jointLimits?: AssemblyPart['jointLimits']
   } = {
     id: part.id,
     name: part.name
@@ -122,6 +123,10 @@ export function partToView(part: AssemblyPart): AssemblyPartView {
   // persistParts preserves any prior persisted value / schema default.
   if (part.joint !== undefined) view.joint = part.joint
   if (part.grounded !== undefined) view.grounded = part.grounded
+  // Authored joint limits ride the same seam. NOTE: a row carrying the EMPTY
+  // object `{}` is forwarded as-is — that is the explicit "cleared to unlimited"
+  // write the shared persistParts uses to REPLACE prior on-disk limits.
+  if (part.jointLimits !== undefined) view.jointLimits = part.jointLimits
   if (part.transform) {
     view.transform = {
       position: part.transform.position
@@ -178,6 +183,7 @@ export function viewToPart(view: AssemblyPartView): AssemblyPart {
     transformSummary?: string
     joint?: AssemblyPart['joint']
     grounded?: boolean
+    jointLimits?: AssemblyPart['jointLimits']
   } = {
     id: view.id,
     name: view.name,
@@ -191,6 +197,9 @@ export function viewToPart(view: AssemblyPartView): AssemblyPart {
   // free-floating without spurious keys.
   if (view.joint !== undefined) part.joint = view.joint
   if (view.grounded !== undefined) part.grounded = view.grounded
+  // Authored joint limits ride back so the Limits editor (and the solve /
+  // motion-study threading) see the persisted bounds immediately after reload.
+  if (view.jointLimits !== undefined) part.jointLimits = view.jointLimits
   if (view.transform) {
     part.transform = {
       position: view.transform.position,

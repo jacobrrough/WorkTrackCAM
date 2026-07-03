@@ -210,15 +210,62 @@ export function firstDrivenJointKind(
   return null
 }
 
+/** The scalar limits of a row's authored `jointLimits` the sweep read-out needs. */
+export type DrivenRowLimits = {
+  readonly scalarMinDeg?: number
+  readonly scalarMaxDeg?: number
+  readonly scalarMinMm?: number
+  readonly scalarMaxMm?: number
+}
+
+/** The first driven joint's kind + the REAL sweep range the study covers. */
+export type DrivenJointRange = {
+  readonly kind: DrivenJointKind
+  readonly min: number
+  readonly max: number
+}
+
+/**
+ * Kind + sweep range of the FIRST row `assembly:simulate` actually drives, or
+ * `null` when nothing is driven. Mirrors the IPC's per-side resolution exactly
+ * (src/main/ipc-modeling.ts `assembly:simulate`): an authored bound wins,
+ * a missing side falls back to the documented default — revolute −180°..180°,
+ * slider 0..100 mm. This is what couples the AUTHORED limits (AssemblyView's
+ * Limits editor) into the playback read-out, so the scrub label reflects the
+ * range the study really swept.
+ */
+export function firstDrivenJointRange(
+  rows: ReadonlyArray<{ readonly joint?: string; readonly jointLimits?: DrivenRowLimits }>
+): DrivenJointRange | null {
+  for (const row of rows) {
+    if (row.joint === 'revolute') {
+      return {
+        kind: 'revolute',
+        min: row.jointLimits?.scalarMinDeg ?? -180,
+        max: row.jointLimits?.scalarMaxDeg ?? 180
+      }
+    }
+    if (row.joint === 'slider') {
+      return {
+        kind: 'slider',
+        min: row.jointLimits?.scalarMinMm ?? 0,
+        max: row.jointLimits?.scalarMaxMm ?? 100
+      }
+    }
+  }
+  return null
+}
+
 /**
  * Joint-scalar read-out at playhead `t`, phrased in the joint's units.
  *
- * LIMIT COUPLING (deliberate + pinned): the renderer's motion-study input
- * carries no `jointLimits`, so `assembly:simulate` falls back to its
- * documented defaults — revolute −180°..180°, slider 0..100 mm (see
- * src/main/ipc-modeling.ts `assembly:simulate`). The optional `limits`
- * parameter exists so a future cycle that threads real limits through can
- * reuse this formatter unchanged.
+ * LIMIT COUPLING (closed — was a pinned gap): the AssemblyView now threads each
+ * row's authored `jointLimits` into the `assembly:simulate` input, and passes
+ * the first driven row's real range here via {@link firstDrivenJointRange} /
+ * {@link playbackReadout}, so the read-out sweeps the AUTHORED range. Rows with
+ * no authored limits fall back to the IPC's documented defaults — revolute
+ * −180°..180°, slider 0..100 mm (see src/main/ipc-modeling.ts
+ * `assembly:simulate`) — which the parameter defaults below mirror.
  */
 export function jointScalarLabel(
   kind: DrivenJointKind | null,
@@ -239,15 +286,21 @@ export function jointScalarLabel(
   return `t = ${Math.round(tt * 100)}%`
 }
 
-/** One-line playback read-out: `pose k/N · <joint scalar>` (1-based nearest sample). */
+/**
+ * One-line playback read-out: `pose k/N · <joint scalar>` (1-based nearest
+ * sample). `limits` carries the driven joint's REAL sweep range (authored
+ * limits with IPC-default fallback — see {@link firstDrivenJointRange});
+ * omitted ⇒ the formatter's own defaults apply (backward compatible).
+ */
 export function playbackReadout(
   poseCount: number,
   t: number,
-  jointKind: DrivenJointKind | null
+  jointKind: DrivenJointKind | null,
+  limits?: { readonly min: number; readonly max: number }
 ): string {
   const idx = sampleIndexAtT(poseCount, t) + 1
   const total = Math.max(1, Math.floor(poseCount))
-  return `pose ${idx}/${total} · ${jointScalarLabel(jointKind, t)}`
+  return `pose ${idx}/${total} · ${jointScalarLabel(jointKind, t, limits)}`
 }
 
 /**

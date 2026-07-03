@@ -220,6 +220,50 @@ describe('assembly-part-bridge — viewToPart', () => {
     expect(plain).not.toHaveProperty('joint')
     expect(plain).not.toHaveProperty('grounded')
   })
+
+  it('row → component → hydrate → row preserves authored jointLimits', () => {
+    // The Limits editor writes AssemblyComponent.jointLimits; the solver clamps
+    // + motion sweep read them back. Threading limits through the bridge keeps a
+    // reloaded assembly bounded without an operator re-set.
+    const hinge = part({
+      id: 'hinge',
+      name: 'Hinge',
+      handle: 'script:h',
+      joint: 'revolute',
+      jointLimits: { scalarMinDeg: -90, scalarMaxDeg: 90 }
+    })
+    const file = parseAssemblyFile({
+      version: 2,
+      name: 'RT-limits',
+      components: partsToComponents([hinge]),
+      mateConstraints: []
+    })
+    const back = hydrateAssembly(file).parts.find((p) => p.id === 'hinge')!
+    expect(back.jointLimits).toEqual({ scalarMinDeg: -90, scalarMaxDeg: 90 })
+  })
+
+  it('partToView carries jointLimits, including the explicit empty-object clear', () => {
+    expect(partToView(part({ jointLimits: { scalarMinDeg: -45, scalarMaxDeg: 45 } })).jointLimits)
+      .toEqual({ scalarMinDeg: -45, scalarMaxDeg: 45 })
+    // The EMPTY object is the "cleared to unlimited" write — it must be
+    // forwarded (not dropped) so persistParts REPLACES prior on-disk limits
+    // instead of silently preserving them.
+    expect(partToView(part({ jointLimits: {} })).jointLimits).toEqual({})
+    // A row with no jointLimits forwards nothing (persistParts preserves prior).
+    expect(partToView(part({ jointLimits: undefined }))).not.toHaveProperty('jointLimits')
+  })
+
+  it('viewToPart carries jointLimits back so the editor sees persisted bounds', () => {
+    const back = viewToPart({
+      id: 'p1',
+      name: 'Bracket',
+      partPath: 'design/bracket.json',
+      transform: { position: [0, 0, 0] },
+      joint: 'slider',
+      jointLimits: { scalarMinMm: 0, scalarMaxMm: 50 }
+    })
+    expect(back.jointLimits).toEqual({ scalarMinMm: 0, scalarMaxMm: 50 })
+  })
 })
 
 // ── (G) partHasLiveGeometry — honesty guard ──────────────────────────────────

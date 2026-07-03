@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { KernelPostSolidOp, PartFeatureItem } from '../../shared/part-features-schema'
+import type {
+  KernelPostSolidOp,
+  PartFeatureItem,
+  PartFeaturesFile
+} from '../../shared/part-features-schema'
 import {
   applyTimelineAction,
   deleteFeature,
   effectiveOpsForState,
+  invertAppendKernelOp,
+  invertMoveKernelOp,
+  invertRemoveKernelOpAt,
+  invertReorderKernelOps,
+  invertSetKernelOpSuppressedAt,
+  invertSetKernelRollbackMarker,
+  invertUpdateKernelOpAt,
   moveFeatureDown,
   moveFeatureUp,
   toggleSuppress,
@@ -488,5 +499,205 @@ describe('deleteFeature (by id)', () => {
   it('an unknown id is a no-op (same reference)', () => {
     const items = [sketch(), extrude()]
     expect(deleteFeature(items, 'nope')).toBe(items)
+  })
+})
+
+// ── FEATURE-TIMELINE UNDO/REDO — inverse-fold round-trips ────────────────────
+//
+// These prove each pure inverse fold restores the EXACT pre-mutation
+// `PartFeaturesFile` produced by the session's forward gesture. The forward
+// shapes here mirror `DesignSessionContext`'s editors (append/remove/move/
+// reorder/update/suppress/rollback); applying the matching inverse to the
+// forward result must reproduce the original base byte-for-byte (JSON-equal).
+
+/** A features base with an ordered kernel timeline. */
+const baseFile = (
+  ops: KernelPostSolidOp[],
+  rolledBackTo?: number
+): PartFeaturesFile =>
+  rolledBackTo === undefined
+    ? ({ version: 1, kernelOps: ops } as unknown as PartFeaturesFile)
+    : ({ version: 1, kernelOps: ops, rolledBackTo } as unknown as PartFeaturesFile)
+
+const applyFold = (
+  fold: ReturnType<typeof invertAppendKernelOp>,
+  base: PartFeaturesFile
+): PartFeaturesFile => {
+  const r = fold(base)
+  expect(r).not.toBeNull()
+  // Range-checked folds return { next, status } on success.
+  return (r as { next: PartFeaturesFile }).next
+}
+
+describe('invertAppendKernelOp — round-trip', () => {
+  it('undo of an append removes the op that landed at the end', () => {
+    const before = baseFile([unionBox()])
+    // Forward: append a fillet (lands at index 1).
+    const after = baseFile([unionBox(), filletAll(3)])
+    // Inverse captured the PRE-append length (1) → remove index 1.
+    const restored = applyFold(invertAppendKernelOp(before.kernelOps!.length), after)
+    // Empty-key normalization: a 1-op list, not `undefined`.
+    expect(restored.kernelOps).toEqual([unionBox()])
+  })
+
+  it('undo of the FIRST append drops the kernelOps key (empty list → undefined)', () => {
+    const after = baseFile([filletAll(3)])
+    const restored = applyFold(invertAppendKernelOp(0), after)
+    expect(restored.kernelOps).toBeUndefined()
+  })
+
+  it('is a silent no-op (null) when the index is out of range', () => {
+    const after = baseFile([unionBox()])
+    expect(invertAppendKernelOp(5)(after)).toBeNull()
+  })
+})
+
+describe('invertRemoveKernelOpAt — round-trip (index + suppressed intact)', () => {
+  it('restores the removed op AT its original index', () => {
+    const removed = { ...patternRect(), suppressed: true as const }
+    const before = baseFile([unionBox(), removed, filletAll()])
+    // Forward: remove index 1.
+    const after = baseFile([unionBox(), filletAll()])
+    const restored = applyFold(invertRemoveKernelOpAt(1, removed), after)
+    expect(restored.kernelOps).toEqual(before.kernelOps)
+    // Suppressed flag survived byte-for-byte.
+    expect(restored.kernelOps![1]).toMatchObject({ kind: 'pattern_rectangular', suppressed: true })
+  })
+
+  it('re-inserting at the tail index is allowed (index === length)', () => {
+    const removed = filletAll(2)
+    const after = baseFile([unionBox()])
+    const restored = applyFold(invertRemoveKernelOpAt(1, removed), after)
+    expect(restored.kernelOps).toEqual([unionBox(), filletAll(2)])
+  })
+})
+
+describe('invertMoveKernelOp — round-trip (swap is its own inverse)', () => {
+  it('undo of a down-move swaps the pair back', () => {
+    const before = baseFile([unionBox(), patternRect()])
+    // Forward move(index 0, +1) → [pattern, union].
+    const after = baseFile([patternRect(), unionBox()])
+    const restored = applyFold(invertMoveKernelOp(0, 1), after)
+    expect(restored.kernelOps).toEqual(before.kernelOps)
+  })
+
+  it('undo of an up-move restores order even when the forward rule would block it', () => {
+    // A finishing op FIRST is legal in a loaded file. Moving a create op UP over
+    // it is allowed forward, but the reverse swap would be rejected by the order
+    // rule — the inverse skips that re-check and restores anyway.
+    const before = baseFile([filletAll(), unionBox()])
+    // Forward move(index 1, -1) → [union, fillet].
+    const after = baseFile([unionBox(), filletAll()])
+    const restored = applyFold(invertMoveKernelOp(1, -1), after)
+    expect(restored.kernelOps).toEqual(before.kernelOps)
+  })
+
+  it('is null when the swap index is out of range', () => {
+    const after = baseFile([unionBox()])
+    expect(invertMoveKernelOp(0, 1)(after)).toBeNull()
+  })
+})
+
+describe('invertReorderKernelOps — round-trip (order + marker restored)', () => {
+  it('restores the pre-drag order and the pre-drag roll-back marker', () => {
+    const before = baseFile([unionBox(), patternRect(), subtractBox()], 1)
+    // Forward reorder(0 → 2): [pattern, subtract, union]. Marker survives (still
+    // a non-last row), but the inverse restores it explicitly regardless.
+    const fwd = applyTimelineAction(
+      { kernelOps: before.kernelOps!, rolledBackTo: before.rolledBackTo },
+      { type: 'reorder', from: 0, to: 2 }
+    )
+    expect(fwd.changed).toBe(true)
+    const after = baseFile(
+      (fwd.changed ? fwd.state.kernelOps : []) as KernelPostSolidOp[],
+      fwd.changed ? fwd.state.rolledBackTo : undefined
+    )
+    const restored = applyFold(
+      invertReorderKernelOps(before.kernelOps!, before.rolledBackTo),
+      after
+    )
+    expect(restored.kernelOps).toEqual(before.kernelOps)
+    expect(restored.rolledBackTo).toBe(1)
+  })
+
+  it('a previous marker of undefined restores to "build all" (key dropped)', () => {
+    const before = baseFile([unionBox(), patternRect()])
+    const after = baseFile([patternRect(), unionBox()], 0)
+    const restored = applyFold(invertReorderKernelOps(before.kernelOps!, undefined), after)
+    expect('rolledBackTo' in restored).toBe(false)
+  })
+})
+
+describe('invertUpdateKernelOpAt — round-trip', () => {
+  it('puts the captured previous op back at index', () => {
+    const previous = filletAll(2)
+    const before = baseFile([unionBox(), previous])
+    // Forward update(index 1) → fillet radius 7.
+    const after = baseFile([unionBox(), filletAll(7)])
+    const restored = applyFold(invertUpdateKernelOpAt(1, previous), after)
+    expect(restored.kernelOps).toEqual(before.kernelOps)
+  })
+
+  it('restores a previous op that carried suppressed:true', () => {
+    const previous = { ...filletAll(2), suppressed: true as const }
+    const after = baseFile([unionBox(), filletAll(7)])
+    const restored = applyFold(invertUpdateKernelOpAt(1, previous), after)
+    expect(restored.kernelOps![1]).toMatchObject({ radiusMm: 2, suppressed: true })
+  })
+
+  it('is null when the index is out of range', () => {
+    const after = baseFile([unionBox()])
+    expect(invertUpdateKernelOpAt(9, filletAll(1))(after)).toBeNull()
+  })
+})
+
+describe('invertSetKernelOpSuppressedAt — round-trip', () => {
+  it('undo of a suppress restores the op to active (key dropped)', () => {
+    // Forward suppressed index 1 → true.
+    const after = baseFile([unionBox(), { ...filletAll(), suppressed: true }])
+    // Inverse captured previousSuppressed = false.
+    const restored = applyFold(invertSetKernelOpSuppressedAt(1, false), after)
+    expect('suppressed' in restored.kernelOps![1]!).toBe(false)
+  })
+
+  it('undo of an un-suppress restores suppressed:true', () => {
+    // Forward un-suppressed index 1 (dropped the key).
+    const after = baseFile([unionBox(), filletAll()])
+    const restored = applyFold(invertSetKernelOpSuppressedAt(1, true), after)
+    expect(restored.kernelOps![1]).toMatchObject({ suppressed: true })
+  })
+})
+
+describe('invertSetKernelRollbackMarker — round-trip', () => {
+  it('restores a captured previous marker index', () => {
+    const after = baseFile([unionBox(), patternRect(), subtractBox()], 0)
+    const restored = applyFold(invertSetKernelRollbackMarker(1), after) as PartFeaturesFile
+    expect(restored.rolledBackTo).toBe(1)
+  })
+
+  it('a previous undefined marker restores "build all" (key dropped)', () => {
+    const after = baseFile([unionBox(), patternRect()], 0)
+    const restored = invertSetKernelRollbackMarker(undefined)(after) as { next: PartFeaturesFile }
+    expect('rolledBackTo' in restored.next).toBe(false)
+  })
+
+  it('a previous marker of -1 also restores "build all"', () => {
+    const after = baseFile([unionBox(), patternRect()], 0)
+    const restored = invertSetKernelRollbackMarker(-1)(after) as { next: PartFeaturesFile }
+    expect('rolledBackTo' in restored.next).toBe(false)
+  })
+})
+
+describe('append → undo → redo full cycle (fold composition)', () => {
+  it('append then undo restores the original; redo re-appends', () => {
+    const original = baseFile([unionBox()])
+    // Forward append.
+    const afterAppend = baseFile([unionBox(), filletAll(3)])
+    // Undo.
+    const afterUndo = applyFold(invertAppendKernelOp(original.kernelOps!.length), afterAppend)
+    expect(afterUndo.kernelOps).toEqual(original.kernelOps)
+    // Redo = re-run the forward (append fillet again).
+    const afterRedo = baseFile([...(afterUndo.kernelOps ?? []), filletAll(3)])
+    expect(afterRedo.kernelOps).toEqual(afterAppend.kernelOps)
   })
 })

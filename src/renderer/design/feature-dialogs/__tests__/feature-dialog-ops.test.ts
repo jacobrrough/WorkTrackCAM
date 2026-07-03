@@ -26,11 +26,13 @@ import {
   parseFiniteMm,
   parsePositiveMm,
   pickedOcctIdFor,
+  resolvePickedEdgeIds,
   resolvePickedSelectionId
 } from '../feature-dialog-types'
 import {
   makeEdgeSelection,
   makeFaceSelection,
+  makeMultiEdgeSelection,
   makeVertexSelection
 } from '../../selection-state'
 import { buildPickIndex } from '../../../../shared/kernel-pick-file'
@@ -367,5 +369,134 @@ describe('Tier-2 resolvePickedSelectionId — dialog resolver gate', () => {
     // occtHash present (so there IS a picked id) but no signature captured.
     const res = resolvePickedSelectionId(makeEdgeSelection(7, 'e:old'), 'edge', idx)
     expect(res).toEqual({ id: null, reason: 'no-tier1-no-signature' })
+  })
+})
+
+// ── MULTI-EDGE (wave 4) · buildFilletOp / buildChamferOp accept an ARRAY ──────
+
+describe('MULTI-EDGE op builders — pickedEdgeIds array', () => {
+  it('buildFilletOp carries MULTIPLE picked ids on fillet_select', () => {
+    const op = buildFilletOp(2, 'select', '+Z', ['e:a', 'e:b', 'e:c'])
+    expect(op).toEqual({
+      kind: 'fillet_select',
+      radiusMm: 2,
+      edgeDirection: '+Z',
+      pickedEdgeIds: ['e:a', 'e:b', 'e:c']
+    })
+    expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+  })
+
+  it('buildChamferOp carries MULTIPLE picked ids on chamfer_select', () => {
+    const op = buildChamferOp(1, 'select', '-Y', ['e:1', 'e:2'])
+    expect(op).toEqual({
+      kind: 'chamfer_select',
+      lengthMm: 1,
+      edgeDirection: '-Y',
+      pickedEdgeIds: ['e:1', 'e:2']
+    })
+    expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+  })
+
+  it('a single-id string still normalizes to a one-element pickedEdgeIds (back-compat)', () => {
+    const op = buildFilletOp(2, 'select', '+Z', 'e:solo')
+    expect(op).toMatchObject({ pickedEdgeIds: ['e:solo'] })
+  })
+
+  it('dedupes + drops empty ids in the array; an all-empty array omits the field', () => {
+    const op = buildFilletOp(2, 'select', '+Z', ['e:a', '', 'e:a', 'e:b'])
+    expect(op).toMatchObject({ pickedEdgeIds: ['e:a', 'e:b'] })
+    const emptied = buildChamferOp(1, 'select', '+Z', ['', ''])
+    expect(emptied).not.toHaveProperty('pickedEdgeIds')
+    expect(() => kernelPostSolidOpSchema.parse(emptied)).not.toThrow()
+  })
+})
+
+// ── MULTI-EDGE (wave 4) · resolvePickedEdgeIds — resolves the accumulated set ──
+
+/** Current-build index carrying an arbitrary set of edges (id → signature). */
+function edgeIndexWith(edges: ReadonlyArray<{ id: string; sig?: CadEdgeSignature }>) {
+  const edgeMap: CadTessellateWithIdsResult['edgeMap'] = {}
+  for (const e of edges) {
+    edgeMap[e.id] = { kind: 'edge', occtId: e.id, occtHash: 0, length: 1, signature: e.sig }
+  }
+  const tess: CadTessellateWithIdsResult = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2],
+    faceIds: [0],
+    triangleCount: 1,
+    bbox: { min: [0, 0, 0], max: [1, 1, 0] },
+    faceMap: { '0': { kind: 'face', occtHash: 0, occtId: 'f:x', area: 1, signature: FACE_SIG } },
+    edgeMap,
+    edges: []
+  }
+  return buildPickIndex(tess)
+}
+
+describe('resolvePickedEdgeIds — multi-edge tiered resolution', () => {
+  it('a non-edge / null selection → empty result (axis bucket)', () => {
+    expect(resolvePickedEdgeIds(null)).toEqual({ ids: [], tier2Count: 0, lostCount: 0 })
+    expect(resolvePickedEdgeIds(makeFaceSelection(4, 'f:x'))).toEqual({
+      ids: [],
+      tier2Count: 0,
+      lostCount: 0
+    })
+  })
+
+  it('NO current index → Tier-1-only: emits every live id unchanged, deduped', () => {
+    const sel = makeMultiEdgeSelection([
+      { edgeId: 1, occtHash: 'e:a' },
+      { edgeId: 2, occtHash: 'e:b' }
+    ])
+    expect(resolvePickedEdgeIds(sel)).toEqual({ ids: ['e:a', 'e:b'], tier2Count: 0, lostCount: 0 })
+  })
+
+  it('a single edge pick resolves as the one-id subset of the multi path', () => {
+    const idx = edgeIndexWith([{ id: 'e:a', sig: EDGE_SIG }])
+    expect(resolvePickedEdgeIds(makeEdgeSelection(1, 'e:a', EDGE_SIG), idx)).toEqual({
+      ids: ['e:a'],
+      tier2Count: 0,
+      lostCount: 0
+    })
+  })
+
+  it('TIER 1 for all: every accumulated id is present in the current build', () => {
+    const idx = edgeIndexWith([
+      { id: 'e:a', sig: EDGE_SIG },
+      { id: 'e:b', sig: EDGE_SIG }
+    ])
+    const sel = makeMultiEdgeSelection([
+      { edgeId: 1, occtHash: 'e:a', signature: EDGE_SIG },
+      { edgeId: 2, occtHash: 'e:b', signature: EDGE_SIG }
+    ])
+    expect(resolvePickedEdgeIds(sel, idx)).toEqual({ ids: ['e:a', 'e:b'], tier2Count: 0, lostCount: 0 })
+  })
+
+  it('MIXED tiers: one exact hit, one moved/resized (Tier 2), one honestly lost', () => {
+    // Build exposes e:a (exact) + e:moved (recovers the old e:b by signature).
+    // e:c has no match at all → lost.
+    const movedSig: CadEdgeSignature = { ...EDGE_SIG, midpointOctant: 9 }
+    const idx = edgeIndexWith([
+      { id: 'e:a', sig: EDGE_SIG },
+      { id: 'e:moved', sig: movedSig }
+    ])
+    const sel = makeMultiEdgeSelection([
+      { edgeId: 1, occtHash: 'e:a', signature: EDGE_SIG }, // Tier 1
+      { edgeId: 2, occtHash: 'e:b', signature: movedSig }, // Tier 2 → e:moved
+      { edgeId: 3, occtHash: 'e:c', signature: { ...EDGE_SIG, kind: 'circle' } } // lost
+    ])
+    const res = resolvePickedEdgeIds(sel, idx)
+    expect(res.ids).toEqual(['e:a', 'e:moved'])
+    expect(res.tier2Count).toBe(1)
+    expect(res.lostCount).toBe(1)
+  })
+
+  it('an entry with NO stable id at pick time is skipped (not counted as lost)', () => {
+    const idx = edgeIndexWith([{ id: 'e:a', sig: EDGE_SIG }])
+    // Second entry never had an occtHash → it just never contributes an id.
+    const sel = makeMultiEdgeSelection([
+      { edgeId: 1, occtHash: 'e:a', signature: EDGE_SIG },
+      { edgeId: 2 }
+    ])
+    expect(resolvePickedEdgeIds(sel, idx)).toEqual({ ids: ['e:a'], tier2Count: 0, lostCount: 0 })
   })
 })

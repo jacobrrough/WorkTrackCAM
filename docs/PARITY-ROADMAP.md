@@ -44,9 +44,11 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   (lost even on route switch); now 2s-debounced + 30s-floor snapshots to userData/recovery/
   (atomic, hashed name, Zod-gated), with a strictly-gated restore BANNER (newer-than +
   content-differs; never auto-applied — Cycle-249 lesson pinned). *(done 2026-07-01, wave 2)*
-- [ ] **CadQuery script buffer disk persistence (S-M)** — wave-2 finding: the editor buffer's
-  "Save" only sets WorkspaceHost React state and NEVER reaches disk. Needs its own save path +
-  recovery coverage.
+- ✅ **CadQuery script buffer disk persistence (S-M)** — Save now writes `design/script.cq.py`
+  (atomic, path-contained, 2MB cap) via new `designScript:*` IPC; project-open seeds from disk
+  (pristine-buffer gate — Cycle-249 safe); crash recovery snapshots + Restore/Discard offer reuse
+  the wave-2 recovery pattern. *(done 2026-07-02, wave 4; dirty-state Save affordance + Ctrl+S
+  handed off — needs `savedScript` prop in DesignWorkspace)*
 
 ### Phase 2 — Selection & viewport depth
 - ✅ **Window/box select (L)** — Shift+left-drag rectangle (capture-phase, OrbitControls untouched),
@@ -57,8 +59,11 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   sagitta-bound sampling at face tolerance, 20k-point cap with honest `edgesTruncated`) ride
   tessellate_with_ids AND execute_script; protocol guards + typed bridge; validated on real
   geometry in the 3.11 venv. *(done 2026-07-01, wave 3)*
-- [ ] **Edge picking in viewport (renderer half, M-L)** — render the emitted edge polylines,
-  raycast-pick them, pre-fill fillet/chamfer `pickedEdgeIds` from viewport clicks.
+- ✅ **Edge picking in viewport (renderer half, M-L)** — edge polylines render as raycastable
+  LineSegments (edge mode only, never steal face clicks); click → stable edge id; Ctrl/Cmd
+  accumulates a multi-edge set; Fillet/Chamfer consume ALL accumulated edges via the tiered
+  `resolvePickedEdgeIds` (Tier-2 signature recovery + honest lost-count); `edgesTruncated`
+  surfaces a toast. *(done 2026-07-02, wave 4)*
 - ✅ **Right-click context menu in viewport (M)** — selection-aware (face → sketch-on-face/shell/
   press-pull, edge → fillet/chamfer, camera section always), items derive from the SHARED command
   registry (`deriveViewportContextMenuItems` + `runCommand`), 5px drag threshold preserves
@@ -73,8 +78,11 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   sketch dims. Design-intent capture.
 - [ ] **Hole wizard (M)** — counterbore/countersink/tap designation on hole_from_profile; kernel
   geometry in build_part.py.
-- [ ] **Feature-timeline undo/redo (M)** — route append/remove/move/suppress through the existing
-  undo-manager command classes.
+- ✅ **Feature-timeline undo/redo (M)** — timeline-scoped UndoManager in DesignSessionProvider;
+  all 7 timeline editors route through `undoableCommit` (inverse folds replay through the SAME
+  validated commitKernelFeatures chain — never a raw state poke; single-write race pins hold);
+  per-index update coalescing; Ctrl+Z routing yields to the sketch surface when mounted.
+  *(done 2026-07-02, wave 4)*
 - [ ] **Project model edges into sketch (L)** — face/edge extraction → plane projection → snappable
   reference geometry. ~25% faster complex sketches.
 - [ ] **Multi-format design export (M)** — STEP/3MF/OBJ export beyond STL (sidecar exporters exist).
@@ -89,7 +97,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   node-safe summary placeholder, not a Three.js scene. Needed for motion playback + interference
   to be seen, not just read.
 - [ ] **Mate list/edit/delete panel (M)** — persisted mateConstraints are invisible today.
-- [ ] **Joint limits authoring UI (S)** — schema + solver clamps done; needs min/max fields.
+- ✅ **Joint limits authoring UI (S)** — per-DOF min/max editor on limitable joint rows
+  (validated, clear-to-unlimited), persisted through the solve seam; authored limits now thread
+  into BOTH assembly:solve clamps and assembly:simulate sweeps (the "LIMIT COUPLING" gap closed —
+  motion playback sweeps the real authored range). *(done 2026-07-02, wave 4)*
 - [ ] **Copy/mirror component + visibility toggles (M)**.
 - [ ] **External STEP part import as component (L)** — vendor hardware in assemblies.
 - [ ] **Free-body SE(3) rotation (L)** — deferred from Cycle 276; destabilization risk documented.
