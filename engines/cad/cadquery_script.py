@@ -17,8 +17,11 @@ Three method bodies live here:
     post-write size check).
   * :func:`export_by_handle` — exports the body behind a handle (from a
     prior :func:`execute_script` or :func:`import_step_file`) to STEP /
-    STL / DXF on disk. STL goes through the existing degenerate-filter
-    binary writer; STEP / DXF use ``cq.exporters.export``.
+    STL / DXF / 3MF / AMF / BREP on disk. STL goes through the existing
+    degenerate-filter binary writer; every other format uses
+    ``cq.exporters.export`` with the matching ``ExportTypes`` member (the
+    highest-fidelity source per format — STEP / BREP write the B-rep solid,
+    3MF / AMF write a tessellated mesh at ``toleranceMm``).
   * :func:`list_operations` — static ``ast`` parse for the read-only
     FeatureTree (no script execution; safe to run on every keystroke).
 
@@ -2144,6 +2147,36 @@ def _coerce_to_workplane(body: Any) -> Any:
 
 
 # ── Script-driven export ─────────────────────────────────────────────────
+#
+# Multi-format export surface (Phase-3). The whitelist is the SINGLE source of
+# truth mirrored by ``ALLOWED_EXPORT_FORMATS`` in ``cad_handlers.py`` and
+# ``CAD_EXPORT_FORMATS`` in ``src/main/ipc-cad.ts`` — a paired-pin test keeps the
+# three in lock-step. Every member is proven REAL against the bundled CadQuery
+# build (``cq.exporters.ExportTypes`` exposes STEP / STL / DXF / THREEMF / AMF /
+# BREP); nothing speculative is offered.
+#
+# ``stl`` is handled by the degenerate-filtering binary writer BEFORE this table
+# is consulted, so it maps to no ExportTypes member here.
+EXPORT_FORMATS: Tuple[str, ...] = ("step", "stl", "dxf", "3mf", "amf", "brep")
+
+# Formats whose on-disk artifact is a TESSELLATED MESH (so the surface-deviation
+# ``tolerance_mm`` is meaningful and forwarded to ``cq.exporters.export``). STL
+# is meshed too but never routes through the ExportTypes table (it uses the
+# binary writer), so it is deliberately absent here.
+_MESH_EXPORT_FORMATS: frozenset = frozenset({"3mf", "amf"})
+
+# Wire format token → ``cq.exporters.ExportTypes`` member NAME. Resolved lazily
+# via ``getattr`` at export time so importing this module never touches CadQuery
+# (Tier-1 param-validation tests run in a CadQuery-free interpreter). ``stl`` is
+# absent on purpose (binary-writer path). ``3mf`` maps to ``THREEMF`` (a Python
+# identifier cannot start with a digit).
+_EXPORT_TYPE_MEMBERS: Dict[str, str] = {
+    "step": "STEP",
+    "dxf": "DXF",
+    "3mf": "THREEMF",
+    "amf": "AMF",
+    "brep": "BREP",
+}
 
 
 def export_by_handle(
@@ -2153,13 +2186,21 @@ def export_by_handle(
     *,
     tolerance_mm: float = 0.1,
 ) -> Dict[str, Any]:
-    """Export the body behind ``handle`` to STEP / STL / DXF on disk.
+    """Export the body behind ``handle`` to STEP / STL / DXF / 3MF / AMF / BREP.
 
     ``handle`` must already be in the shared ``_HANDLES`` table (populated by
     a prior ``cad.execute_script`` or ``cad.import_step`` call inside the same
     sidecar lifetime). Stateless re-execution from the script is intentionally
     NOT done here — keeping the export path side-effect-free means a
     parametric-edit cycle does not duplicate solid construction work.
+
+    Fidelity per format (highest-fidelity source chosen automatically):
+      * ``step`` / ``brep`` — write the **B-rep solid** straight from the
+        CadQuery handle (exact curved surfaces, no tessellation loss).
+      * ``stl``             — binary mesh via the degenerate-filtering writer.
+      * ``3mf`` / ``amf``   — tessellated mesh at ``tolerance_mm`` (these are
+        mesh container formats; there is no B-rep source to preserve).
+      * ``dxf``             — 2D projection via ``cq.exporters.export``.
 
     Returns ``{"outPath": str, "bytesWritten": int}``.
 
@@ -2177,10 +2218,10 @@ def export_by_handle(
             "bad_params",
             "outPath must be a non-empty path without null bytes",
         )
-    if fmt not in ("step", "stl", "dxf"):
+    if fmt not in EXPORT_FORMATS:
         raise _CadHandlerError(
             "bad_params",
-            f"format must be one of step/stl/dxf, got {fmt!r}",
+            f"format must be one of {sorted(EXPORT_FORMATS)}, got {fmt!r}",
         )
     if not handle:
         raise _CadHandlerError(
@@ -2224,12 +2265,38 @@ def export_by_handle(
             detail=str(exc),
         ) from exc
 
-    # STEP / DXF: CadQuery's own exporter. Wrap any failure into export_error.
+    # STEP / DXF / 3MF / AMF / BREP: CadQuery's own exporter, routed through the
+    # matching ``ExportTypes`` member. STEP / BREP write the B-rep solid (exact
+    # surfaces); 3MF / AMF write a tessellated mesh at ``tolerance_mm``; DXF is a
+    # 2D projection. We pass the ExportTypes enum member (not a bare string) so a
+    # CadQuery version that tightens the ``exportType`` contract keeps working.
+    export_type = _EXPORT_TYPE_MEMBERS.get(fmt)
+    if export_type is None:
+        # Unreachable: fmt is whitelisted above. Defensive so a future
+        # EXPORT_FORMATS addition without a matching member fails loudly.
+        raise _CadHandlerError(
+            "bad_params",
+            f"no CadQuery ExportTypes member wired for format {fmt!r}",
+        )
     try:
-        if fmt == "step":
-            cq.exporters.export(doc.workplane, str(out))
-        else:  # dxf
-            cq.exporters.export(doc.workplane, str(out), exportType="DXF")
+        et = getattr(cq.exporters.ExportTypes, export_type)
+    except Exception as exc:  # noqa: BLE001 - binding without this member
+        raise _CadHandlerError(
+            "export_error",
+            f"this CadQuery build does not support {fmt!r} export",
+            detail=str(exc),
+        ) from exc
+    try:
+        # 3MF / AMF are mesh formats: pass the deviation tolerance so the
+        # exported mesh matches the STL path's fidelity. STEP / BREP / DXF ignore
+        # ``tolerance`` (they carry the exact B-rep / 2D linework), so we only
+        # forward it for the mesh formats to avoid tripping a stricter signature.
+        if fmt in _MESH_EXPORT_FORMATS:
+            cq.exporters.export(
+                doc.workplane, str(out), exportType=et, tolerance=float(tolerance_mm)
+            )
+        else:
+            cq.exporters.export(doc.workplane, str(out), exportType=et)
     except Exception as exc:  # noqa: BLE001 - CadQuery raises arbitrary types
         raise _CadHandlerError(
             "export_error",
@@ -2436,6 +2503,7 @@ def _short_unparse(node: ast.AST) -> str:
 
 __all__ = [
     "BANNED_TOKENS",
+    "EXPORT_FORMATS",
     "execute_script",
     "export_by_handle",
     "list_operations",

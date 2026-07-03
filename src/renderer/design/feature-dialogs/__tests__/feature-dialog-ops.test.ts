@@ -16,7 +16,13 @@ import { kernelPostSolidOpSchema } from '../../../../shared/part-features-schema
 import { buildFilletOp } from '../FilletDialog'
 import { buildChamferOp } from '../ChamferDialog'
 import { buildShellOp } from '../ShellDialog'
-import { buildHoleOp } from '../HoleDialog'
+import {
+  buildHoleOp,
+  HOLE_DEFAULT_CBORE_DEPTH_MM,
+  HOLE_DEFAULT_CBORE_DIAMETER_MM,
+  HOLE_DEFAULT_CSINK_ANGLE_DEG,
+  HOLE_DEFAULT_CSINK_DIAMETER_MM
+} from '../HoleDialog'
 import { buildDatumPlaneOp } from '../DatumPlaneDialog'
 import { buildDatumAxisOp } from '../DatumAxisDialog'
 import { buildDatumPointOp } from '../DatumPointDialog'
@@ -146,8 +152,10 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
   })
 
   describe('buildHoleOp', () => {
-    it('builds a through-all hole WITHOUT a depthMm field', () => {
-      const op = buildHoleOp(0, 'through_all', 10, 0)
+    const SIMPLE = { holeType: 'simple' } as const
+
+    it('builds a through-all simple hole WITHOUT a depthMm or holeType field', () => {
+      const op = buildHoleOp(0, 'through_all', 10, 0, SIMPLE)
       expect(op).toEqual({
         kind: 'hole_from_profile',
         profileIndex: 0,
@@ -155,13 +163,18 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
         zStartMm: 0
       })
       // The schema's refine only requires depthMm for depth mode; through-all
-      // must NOT carry it (keeps the persisted op canonical).
+      // must NOT carry it (keeps the persisted op canonical). A simple hole also
+      // omits holeType (optional, not defaulted) so it stays byte-identical to a
+      // legacy hole — the kernel treats an absent holeType as simple.
       expect(op).not.toHaveProperty('depthMm')
+      expect(op).not.toHaveProperty('holeType')
       expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+      // Parsing leaves holeType absent (no default injected).
+      expect(kernelPostSolidOpSchema.parse(op)).not.toHaveProperty('holeType')
     })
 
-    it('builds a depth hole WITH a positive depthMm field', () => {
-      const op = buildHoleOp(3, 'depth', 12, 1)
+    it('builds a depth simple hole WITH a positive depthMm field', () => {
+      const op = buildHoleOp(3, 'depth', 12, 1, SIMPLE)
       expect(op).toEqual({
         kind: 'hole_from_profile',
         profileIndex: 3,
@@ -170,6 +183,90 @@ describe('FG-5b op builders emit schema-valid kernel ops', () => {
         zStartMm: 1
       })
       expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('builds a counterbore hole with recess diameter + depth', () => {
+      const op = buildHoleOp(0, 'through_all', 0, 0, {
+        holeType: 'counterbore',
+        cboreDiameterMm: 12,
+        cboreDepthMm: 4
+      })
+      expect(op).toEqual({
+        kind: 'hole_from_profile',
+        profileIndex: 0,
+        mode: 'through_all',
+        zStartMm: 0,
+        holeType: 'counterbore',
+        cboreDiameterMm: 12,
+        cboreDepthMm: 4
+      })
+      // No countersink fields leak onto a counterbore op.
+      expect(op).not.toHaveProperty('csinkDiameterMm')
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('builds a countersink hole with mouth diameter + included angle', () => {
+      const op = buildHoleOp(2, 'depth', 6, 0, {
+        holeType: 'countersink',
+        csinkDiameterMm: 10,
+        csinkAngleDeg: 82
+      })
+      expect(op).toEqual({
+        kind: 'hole_from_profile',
+        profileIndex: 2,
+        mode: 'depth',
+        depthMm: 6,
+        zStartMm: 0,
+        holeType: 'countersink',
+        csinkDiameterMm: 10,
+        csinkAngleDeg: 82
+      })
+      expect(op).not.toHaveProperty('cboreDiameterMm')
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    })
+
+    it('records a tap designation as metadata on any hole type (trimmed)', () => {
+      const simpleTap = buildHoleOp(0, 'through_all', 0, 0, {
+        holeType: 'simple',
+        tapDesignation: '  M5x0.8  '
+      })
+      expect(simpleTap).toMatchObject({ tapDesignation: 'M5x0.8' })
+      expect(() => kernelPostSolidOpSchema.parse(simpleTap)).not.toThrow()
+
+      const cboreTap = buildHoleOp(0, 'through_all', 0, 0, {
+        holeType: 'counterbore',
+        cboreDiameterMm: 12,
+        cboreDepthMm: 4,
+        tapDesignation: '1/4-20'
+      })
+      expect(cboreTap).toMatchObject({ tapDesignation: '1/4-20' })
+      expect(() => kernelPostSolidOpSchema.parse(cboreTap)).not.toThrow()
+    })
+
+    it('omits an empty / whitespace-only tap designation', () => {
+      const op = buildHoleOp(0, 'through_all', 0, 0, {
+        holeType: 'simple',
+        tapDesignation: '   '
+      })
+      expect(op).not.toHaveProperty('tapDesignation')
+    })
+
+    it('falls back to defaults when cbore/csink numbers are omitted', () => {
+      const cbore = buildHoleOp(0, 'through_all', 0, 0, { holeType: 'counterbore' })
+      expect(cbore).toMatchObject({
+        holeType: 'counterbore',
+        cboreDiameterMm: HOLE_DEFAULT_CBORE_DIAMETER_MM,
+        cboreDepthMm: HOLE_DEFAULT_CBORE_DEPTH_MM
+      })
+      expect(() => kernelPostSolidOpSchema.parse(cbore)).not.toThrow()
+
+      const csink = buildHoleOp(0, 'through_all', 0, 0, { holeType: 'countersink' })
+      expect(csink).toMatchObject({
+        holeType: 'countersink',
+        csinkDiameterMm: HOLE_DEFAULT_CSINK_DIAMETER_MM,
+        csinkAngleDeg: HOLE_DEFAULT_CSINK_ANGLE_DEG
+      })
+      expect(() => kernelPostSolidOpSchema.parse(csink)).not.toThrow()
     })
   })
 

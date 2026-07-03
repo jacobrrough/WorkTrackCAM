@@ -236,7 +236,38 @@ const splitKeepHalfspaceSchema = z.object({
   ...suppressKernel
 })
 
-/** Hole operation from profile reference (typically circle), cut by depth or through-all. */
+/**
+ * Hole-wizard type (Fusion parity). `simple` is the legacy straight bore and the
+ * DEFAULT, so every existing `part/features.json` hole (which carries no
+ * `holeType`) parses as `simple` and builds byte-for-byte as before (Safety
+ * Rule 2). `counterbore` / `countersink` add a coaxial recess at the hole's
+ * ENTRY face (the top of the bore), materialized by `build_part.py`.
+ */
+const holeTypeSchema = z.enum(['simple', 'counterbore', 'countersink'])
+
+/**
+ * Hole operation from profile reference (typically circle), cut by depth or
+ * through-all.
+ *
+ * HOLE WIZARD (Phase-3): `holeType` upgrades the bore to a Fusion-style hole.
+ *   - `simple` (default): legacy straight bore — no extra fields.
+ *   - `counterbore`: a larger flat-bottom recess at the entry face. Requires
+ *     `cboreDiameterMm` (> the hole diameter — checked here AND in Python) and
+ *     `cboreDepthMm` (> 0, and less than the material so the recess has a floor).
+ *   - `countersink`: a coaxial cone at the entry face. Requires `csinkDiameterMm`
+ *     (> the hole diameter) and `csinkAngleDeg` (the included angle; 82/90/100/120
+ *     are typical but any finite angle in (0, 180) is accepted).
+ *
+ * `tapDesignation` is METADATA ONLY (e.g. `'M5x0.8'`) — recorded for drawings /
+ * CAM reference. It does NOT model a thread; a real modeled thread stays the
+ * `thread_wizard` op's job (the dialog copy states this).
+ *
+ * The hole diameter is derived at build from the referenced circle profile's
+ * radius, so the `> hole diameter` cross-checks live in Python (which has the
+ * profile). The schema still refuses obviously-broken configs (missing / non-
+ * positive cbore/csink dimensions, out-of-range angle) so a bad op can't be
+ * persisted. All new fields are `.optional()` (Safety Rule 2).
+ */
 const holeFromProfileSchema = z
   .object({
     kind: z.literal('hole_from_profile'),
@@ -244,11 +275,49 @@ const holeFromProfileSchema = z
     mode: z.enum(['depth', 'through_all']),
     depthMm: mmPos.optional(),
     zStartMm: mm.default(0),
+    /**
+     * Fusion-style hole type. `.optional()` (NOT defaulted) so a legacy hole with
+     * no `holeType` parses unchanged AND stays absent on disk — the kernel treats
+     * an absent `holeType` as `simple` (`build_part.py` `op.get("holeType",
+     * "simple")`). Keeping it optional (rather than defaulted) also lets the
+     * op-builder emit a MINIMAL simple op with no `holeType` key at all, so old
+     * and new simple holes are byte-identical (Safety Rule 2).
+     */
+    holeType: holeTypeSchema.optional(),
+    /** Counterbore recess diameter (mm). Required + validated for `counterbore`. */
+    cboreDiameterMm: mmPos.optional(),
+    /** Counterbore recess depth (mm) below the entry face. Required for `counterbore`. */
+    cboreDepthMm: mmPos.optional(),
+    /** Countersink mouth diameter (mm). Required + validated for `countersink`. */
+    csinkDiameterMm: mmPos.optional(),
+    /** Countersink included angle (deg), e.g. 82/90/100/120. Required for `countersink`. */
+    csinkAngleDeg: z.number().finite().gt(0).lt(180).optional(),
+    /** Tap designation METADATA ONLY (e.g. `'M5x0.8'`); records intent, does not model a thread. */
+    tapDesignation: z.string().min(1).max(64).optional(),
     ...suppressKernel
   })
   .refine((o) => o.mode !== 'depth' || (o.depthMm !== undefined && o.depthMm > 0), {
     message: 'hole_from_profile depth mode requires positive depthMm'
   })
+  .refine(
+    (o) =>
+      o.holeType !== 'counterbore' ||
+      (o.cboreDiameterMm !== undefined &&
+        o.cboreDiameterMm > 0 &&
+        o.cboreDepthMm !== undefined &&
+        o.cboreDepthMm > 0),
+    { message: 'hole_from_profile counterbore requires positive cboreDiameterMm and cboreDepthMm' }
+  )
+  .refine(
+    (o) =>
+      o.holeType !== 'countersink' ||
+      (o.csinkDiameterMm !== undefined &&
+        o.csinkDiameterMm > 0 &&
+        o.csinkAngleDeg !== undefined &&
+        o.csinkAngleDeg > 0 &&
+        o.csinkAngleDeg < 180),
+    { message: 'hole_from_profile countersink requires positive csinkDiameterMm and csinkAngleDeg in (0,180)' }
+  )
 
 /**
  * Simplified cosmetic thread: subtract repeated shallow rings along +Z around a cylinder axis.

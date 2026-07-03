@@ -18,7 +18,11 @@ import {
 import type { SelectionSurface } from '../design/selection-state'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
-import { withSketchFacePlane, type DesignFileV2 } from '../../shared/design-schema'
+import {
+  deriveUserParameterViews,
+  withSketchFacePlane,
+  type DesignFileV2
+} from '../../shared/design-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import { deriveDrawingBom } from '../../shared/drawing-bom'
 import type { DrawingSheetTab } from '../design/DrawingView'
@@ -93,6 +97,7 @@ export function DesignWorkspaceHost({
   onToast,
   initialViewMode,
   onMateAdded,
+  onMateConstraintsChange,
   initialAssemblyParts,
   initialAssemblyMates,
   onAssemblyPartsChange
@@ -117,6 +122,13 @@ export function DesignWorkspaceHost({
    * follow-up.
    */
   readonly onMateAdded?: (mate: SolvedMate) => void
+  /**
+   * Phase-4 (Mate list/edit/delete) — forwarded to DesignWorkspace's Mates panel.
+   * Fires when the operator deletes / edits-scalar / suppresses a persisted mate;
+   * the WorkspaceHost persists the new list to `assembly.json`. Optional
+   * pass-through (SSR pins omit it → the Mates panel renders read-only).
+   */
+  readonly onMateConstraintsChange?: (next: readonly AssemblyMateConstraint[]) => void
   /**
    * CAD foundation (#9) — assembly parts hydrated from `assembly.json` by the
    * WorkspaceHost, forwarded to DesignWorkspace so a SAVED assembly shows its
@@ -389,6 +401,7 @@ export function DesignWorkspaceHost({
       onToast={onToast}
       initialViewMode={initialViewMode}
       onMateAdded={onMateAdded}
+      onMateConstraintsChange={onMateConstraintsChange}
       initialAssemblyParts={initialAssemblyParts}
       initialAssemblyMates={initialAssemblyMates}
       onAssemblyPartsChange={onAssemblyPartsChange}
@@ -418,6 +431,14 @@ export function DesignWorkspaceHost({
       onUpdateKernelOp={(index, op) => {
         void session.updateKernelOpAt(index, op)
       }}
+      // Wave 5 — named user parameters: views derived from the live session
+      // design; edits route through the session's validated ops (undoable via
+      // the sketch edit stack).
+      userParameters={deriveUserParameterViews(session.design)}
+      onUserParameterAdd={session.addUserParameter}
+      onUserParameterEdit={session.editUserParameter}
+      onUserParameterRename={session.renameUserParameter}
+      onUserParameterDelete={session.deleteUserParameter}
       onAppendKernelOp={(op) => {
         void session.appendKernelOp(op)
       }}

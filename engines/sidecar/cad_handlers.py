@@ -277,7 +277,15 @@ def tessellate(params: dict[str, Any]) -> dict[str, Any]:
 # vocabulary documented at the top of the module.
 
 
-ALLOWED_EXPORT_FORMATS = ("step", "stl", "dxf")
+# Multi-format export whitelist (Phase-3). Kept in lock-step with
+# ``EXPORT_FORMATS`` in ``engines/cad/cadquery_script.py`` (the numeric core) and
+# ``CAD_EXPORT_FORMATS`` in ``src/main/ipc-cad.ts`` (the IPC boundary). Every
+# member is proven REAL against the bundled CadQuery build — nothing speculative.
+#   * step / brep — B-rep solid (exact surfaces).
+#   * stl         — binary mesh (degenerate-filtered writer, Safety Rule 1).
+#   * 3mf / amf   — tessellated mesh container at ``toleranceMm``.
+#   * dxf         — 2D projection.
+ALLOWED_EXPORT_FORMATS = ("step", "stl", "dxf", "3mf", "amf", "brep")
 
 
 def _optional_build_parameters(params: dict[str, Any]) -> dict[str, Any] | None:
@@ -305,7 +313,8 @@ def execute_script(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def export(params: dict[str, Any]) -> dict[str, Any]:
-    """Export the body referenced by ``handle`` to STEP / STL / DXF.
+    """Export the body referenced by ``handle`` to any format in
+    :data:`ALLOWED_EXPORT_FORMATS` (STEP / STL / DXF / 3MF / AMF / BREP).
 
     The handle must come from a prior ``cad.execute_script`` or
     ``cad.import_step`` call inside the same sidecar process — the

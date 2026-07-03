@@ -482,6 +482,169 @@ describe('part-features-schema', () => {
     ).toThrow()
   })
 
+  // ── HOLE WIZARD (Phase-3): holeType + counterbore / countersink + tap metadata ──
+  describe('hole_from_profile — hole wizard (Fusion parity)', () => {
+    const parseHole = (op: unknown): unknown =>
+      partFeaturesFileSchema.parse({ version: 1, items: [], kernelOps: [op] }).kernelOps?.[0]
+
+    it('legacy hole (no holeType) parses and stays absent (kernel treats as simple)', () => {
+      const op = parseHole({
+        kind: 'hole_from_profile',
+        profileIndex: 0,
+        mode: 'through_all',
+        zStartMm: 0
+      }) as { holeType?: string }
+      // Safety Rule 2: an old saved hole with NO holeType key still parses AND
+      // stays absent on disk — the kernel treats an absent holeType as a straight
+      // (simple) bore, so old + new simple holes are byte-identical.
+      expect(op.holeType).toBeUndefined()
+    })
+
+    it('accepts an explicit simple hole', () => {
+      expect(() =>
+        parseHole({
+          kind: 'hole_from_profile',
+          profileIndex: 0,
+          mode: 'through_all',
+          zStartMm: 0,
+          holeType: 'simple'
+        })
+      ).not.toThrow()
+    })
+
+    it('accepts a counterbore with diameter + depth', () => {
+      const op = parseHole({
+        kind: 'hole_from_profile',
+        profileIndex: 1,
+        mode: 'through_all',
+        zStartMm: 0,
+        holeType: 'counterbore',
+        cboreDiameterMm: 12,
+        cboreDepthMm: 4
+      }) as { holeType?: string; cboreDiameterMm?: number; cboreDepthMm?: number }
+      expect(op.holeType).toBe('counterbore')
+      expect(op.cboreDiameterMm).toBe(12)
+      expect(op.cboreDepthMm).toBe(4)
+    })
+
+    it('rejects a counterbore missing its required fields', () => {
+      for (const missing of [
+        { cboreDepthMm: 4 }, // no diameter
+        { cboreDiameterMm: 12 }, // no depth
+        {} // neither
+      ]) {
+        expect(() =>
+          parseHole({
+            kind: 'hole_from_profile',
+            profileIndex: 0,
+            mode: 'through_all',
+            zStartMm: 0,
+            holeType: 'counterbore',
+            ...missing
+          })
+        ).toThrow()
+      }
+    })
+
+    it('rejects non-positive counterbore dimensions', () => {
+      expect(() =>
+        parseHole({
+          kind: 'hole_from_profile',
+          profileIndex: 0,
+          mode: 'through_all',
+          zStartMm: 0,
+          holeType: 'counterbore',
+          cboreDiameterMm: 0,
+          cboreDepthMm: 4
+        })
+      ).toThrow()
+    })
+
+    it('accepts a countersink with diameter + included angle (82/90/100/120)', () => {
+      for (const angle of [82, 90, 100, 120]) {
+        const op = parseHole({
+          kind: 'hole_from_profile',
+          profileIndex: 0,
+          mode: 'depth',
+          depthMm: 8,
+          zStartMm: 0,
+          holeType: 'countersink',
+          csinkDiameterMm: 10,
+          csinkAngleDeg: angle
+        }) as { holeType?: string; csinkAngleDeg?: number }
+        expect(op.holeType).toBe('countersink')
+        expect(op.csinkAngleDeg).toBe(angle)
+      }
+    })
+
+    it('rejects a countersink missing its required fields', () => {
+      for (const missing of [{ csinkAngleDeg: 90 }, { csinkDiameterMm: 10 }, {}]) {
+        expect(() =>
+          parseHole({
+            kind: 'hole_from_profile',
+            profileIndex: 0,
+            mode: 'through_all',
+            zStartMm: 0,
+            holeType: 'countersink',
+            ...missing
+          })
+        ).toThrow()
+      }
+    })
+
+    it('rejects a countersink angle outside (0, 180)', () => {
+      for (const angle of [0, -10, 180, 200]) {
+        expect(() =>
+          parseHole({
+            kind: 'hole_from_profile',
+            profileIndex: 0,
+            mode: 'through_all',
+            zStartMm: 0,
+            holeType: 'countersink',
+            csinkDiameterMm: 10,
+            csinkAngleDeg: angle
+          })
+        ).toThrow()
+      }
+    })
+
+    it('records a tap designation (metadata) on any hole type', () => {
+      const op = parseHole({
+        kind: 'hole_from_profile',
+        profileIndex: 0,
+        mode: 'through_all',
+        zStartMm: 0,
+        holeType: 'simple',
+        tapDesignation: 'M5x0.8'
+      }) as { tapDesignation?: string }
+      expect(op.tapDesignation).toBe('M5x0.8')
+    })
+
+    it('rejects an empty tap designation string', () => {
+      expect(() =>
+        parseHole({
+          kind: 'hole_from_profile',
+          profileIndex: 0,
+          mode: 'through_all',
+          zStartMm: 0,
+          tapDesignation: ''
+        })
+      ).toThrow()
+    })
+
+    it('rejects an unknown hole type', () => {
+      expect(() =>
+        parseHole({
+          kind: 'hole_from_profile',
+          profileIndex: 0,
+          mode: 'through_all',
+          zStartMm: 0,
+          holeType: 'spotface'
+        })
+      ).toThrow()
+    })
+  })
+
   it('parses thread_cosmetic', () => {
     const parsed = partFeaturesFileSchema.parse({
       version: 1,

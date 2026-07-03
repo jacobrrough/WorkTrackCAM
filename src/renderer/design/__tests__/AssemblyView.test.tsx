@@ -879,3 +879,191 @@ describe('AssemblyView — BOM table', () => {
     }
   })
 })
+
+// ── (H) Phase-4 durable Mate constraints panel (list / edit / delete / suppress)
+//
+// The REACHABLE mate surface: one row per persisted `mateConstraints` entry with
+// kind label · resolved part names · scalar (distance mm / angle deg) · suppress /
+// dangling flags · Edit / Suppress / Delete actions (gated on onMateConstraintsChange)
+// · shared EmptyState when empty · an inline scalar editor (initialEditingMateId).
+// These are render-pins (renderToStaticMarkup) — the persist round-trip itself is
+// proven in assembly-mate-persist.test.ts + workspace-host-handoff.test.ts.
+
+describe('AssemblyView — Phase-4 Mate constraints panel', () => {
+  const twoParts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+  const distanceMate = {
+    id: 'md',
+    kind: 'distance' as const,
+    part1Id: 'p1',
+    feature1: { x: 0, y: 0, z: 0 },
+    part2Id: 'p2',
+    feature2: { x: 0, y: 0, z: 0 },
+    value: 12,
+  }
+  const angleMate = {
+    id: 'ma',
+    kind: 'angle' as const,
+    part1Id: 'p1',
+    feature1: { axis: 'x' as const },
+    part2Id: 'p2',
+    feature2: { axis: 'x' as const },
+    value: 90,
+  }
+  const coincidentMate = {
+    id: 'mc',
+    kind: 'coincident' as const,
+    part1Id: 'p1',
+    feature1: { x: 0, y: 0, z: 0 },
+    part2Id: 'p2',
+    feature2: { x: 0, y: 0, z: 0 },
+  }
+
+  it('renders the panel + shared EmptyState when no mateConstraints exist', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts: twoParts }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraints"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraints-empty"')
+    expect(html).toContain('No mates yet')
+    // Empty-state hint points the operator at the authoring panel.
+    expect(html).toContain('Define mate')
+    // Count reads 0.
+    expect(html).toContain('0 mates')
+  })
+
+  it('lists a row per mate with kind label, resolved part names, and the count', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [coincidentMate, distanceMate],
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraints-list"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-mc"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md"')
+    // Kind labels use the SOLVER vocabulary (Coincident/Distance), resolved names.
+    expect(html).toContain('Coincident')
+    expect(html).toContain('Bracket')
+    expect(html).toContain('Plate')
+    expect(html).toContain('2 mates')
+    // Empty state is gone once populated.
+    expect(html).not.toContain('design-assembly-mate-constraints-empty')
+  })
+
+  it('shows the key scalar for distance (mm) and angle (deg) rows', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [distanceMate, angleMate],
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-scalar"')
+    expect(html).toContain('12 mm')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-ma-scalar"')
+    expect(html).toContain('90°')
+  })
+
+  it('omits the scalar span for a non-scalar kind (coincident)', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [coincidentMate],
+      }),
+    )
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-mc-scalar"')
+  })
+
+  it('is READ-ONLY (no row actions) when onMateConstraintsChange is absent', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [distanceMate],
+      }),
+    )
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-md-remove"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-md-edit"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-md-suppress"')
+  })
+
+  it('exposes Delete + Suppress on every row and Edit only on scalar rows when wired', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [coincidentMate, distanceMate],
+        onMateConstraintsChange: vi.fn(),
+      }),
+    )
+    // Delete + Suppress on both rows.
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-mc-remove"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-mc-suppress"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-remove"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-suppress"')
+    // Edit ONLY on the scalar (distance) row — coincident has no editable value.
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-edit"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-mc-edit"')
+  })
+
+  it('flags a suppressed mate (chip + data attr) and toggles the button label to Enable', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [{ ...distanceMate, suppress: true }],
+        onMateConstraintsChange: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-suppressed-flag"')
+    expect(html).toContain('data-suppressed="true"')
+    // Suppressed row's toggle offers re-enable.
+    expect(html).toContain('>Enable<')
+  })
+
+  it('flags a dangling mate (part removed) as deletable but withholds Edit/Suppress', () => {
+    // 'p2' is NOT in the parts list → the mate dangles.
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: [samplePart({ id: 'p1', name: 'Bracket' })],
+        mateConstraints: [distanceMate],
+        onMateConstraintsChange: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-dangling-flag"')
+    expect(html).toContain('data-dangling="true"')
+    // Delete stays available; Edit/Suppress are withheld for a dangling row.
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-remove"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-md-edit"')
+    expect(html).not.toContain('data-testid="design-assembly-mate-constraint-md-suppress"')
+  })
+
+  it('opens the inline scalar editor when initialEditingMateId seeds it', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [distanceMate],
+        onMateConstraintsChange: vi.fn(),
+        initialEditingMateId: 'md',
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-editor"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-editor-input"')
+    expect(html).toContain('data-testid="design-assembly-mate-constraint-md-editor-apply"')
+    // The input seeds from the mate's current value.
+    expect(html).toMatch(/design-assembly-mate-constraint-md-editor-input"[^>]*value="12"/)
+    // The distance editor labels its unit.
+    expect(html).toContain('Distance (mm)')
+  })
+
+  it('does not render the inline editor when the id does not match a mate', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts: twoParts,
+        mateConstraints: [distanceMate],
+        onMateConstraintsChange: vi.fn(),
+        initialEditingMateId: 'nope',
+      }),
+    )
+    expect(html).not.toContain('design-assembly-mate-constraint-md-editor"')
+  })
+})

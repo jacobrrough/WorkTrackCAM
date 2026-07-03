@@ -19,7 +19,8 @@ import {
   runSendToCam,
   runPersistMate,
   runHydrateAssembly,
-  runPersistAssemblyParts
+  runPersistAssemblyParts,
+  runPersistMateConstraints
 } from './workspace-host-handoff'
 import type { AssemblyPart } from '../design/AssemblyView'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
@@ -453,6 +454,31 @@ export function WorkspaceHost({
     [projectDir, pushToast]
   )
 
+  // Phase-4 — persist a Mates-panel edit (delete / scalar / suppress). The
+  // AssemblyView already applied the pure fold and handed back the FULL desired
+  // list; we mirror it into `assemblyMates` (the in-session solver input) and
+  // persist through the SAME matePersistChainRef so a mate-list edit can never
+  // stale-base a concurrent parts / mate-add save. `runPersistMateConstraints`
+  // reloads the REAL assembly.json and swaps only `mateConstraints`, preserving
+  // `components`. SAFETY: assembly-data write only; no G-code.
+  const handleMateConstraintsChange = useCallback(
+    (next: readonly AssemblyMateConstraint[]): void => {
+      setAssemblyMates(next)
+      matePersistChainRef.current = matePersistChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          const outcome = await runPersistMateConstraints({
+            mateConstraints: next,
+            projectDir,
+            loadAssembly: (dir) => fab().assemblyLoad(dir),
+            saveAssembly: (dir, json) => fab().assemblySave(dir, json)
+          })
+          if (!outcome.ok) pushToast('err', `Mates not saved: ${outcome.reason}`)
+        })
+    },
+    [projectDir, pushToast]
+  )
+
   // Render the active route's workspace. Wrapped below in a
   // WorkspaceErrorBoundary so an uncaught render/lifecycle error in ONE
   // workspace shows a recoverable in-pane fallback (Try again / Reload app)
@@ -512,6 +538,7 @@ export function WorkspaceHost({
             onSave={handleDesignScriptSave}
             onSendToCam={handleSendToCam}
             onMateAdded={handleMateAdded}
+            onMateConstraintsChange={handleMateConstraintsChange}
             onToast={pushToast}
           />
         </DesignSessionProvider>

@@ -435,8 +435,16 @@ export type CadExportDrawingPayload = {
  */
 export const CAD_SCRIPT_MAX_BYTES = 100 * 1024 // 100 KB
 
-/** Whitelist of export formats. Mirrors `CadExportFormat` -- kept in sync via the test. */
-export const CAD_EXPORT_FORMATS: readonly CadExportFormat[] = ['step', 'stl', 'dxf'] as const
+/**
+ * Whitelist of export formats. Mirrors `CadExportFormat` -- kept in sync via the
+ * test. Phase-3 multi-format export: 'step' / 'stl' / 'dxf' (original) plus '3mf'
+ * / 'amf' / 'brep' — all proven REAL against the bundled CadQuery build. This is
+ * the SECURITY whitelist: `validateExportPayload` rejects any `format` not in
+ * this set (Security Rule 4 — no format injection / arbitrary-exporter dispatch),
+ * and the save-dialog filter set is derived from it so a chosen extension always
+ * maps to a real exporter.
+ */
+export const CAD_EXPORT_FORMATS: readonly CadExportFormat[] = ['step', 'stl', 'dxf', '3mf', 'amf', 'brep'] as const
 
 // ── Pure validators (exported for ipc-cad.test.ts) ──────────────────────────
 

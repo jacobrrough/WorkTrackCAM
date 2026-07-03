@@ -33,6 +33,7 @@
  */
 
 import type { AssemblyFile } from '../../shared/assembly-schema'
+import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import {
   persistMate,
   type SolvedCardinalAxis,
@@ -477,4 +478,69 @@ export async function runPersistAssemblyParts(
     }
   }
   return { ok: true, componentCount: folded.components.length }
+}
+
+// ── (5) Assembly mate-LIST persistence (delete / edit-scalar / suppress) ───────
+//
+// The Mates panel's per-row DELETE / EDIT / SUPPRESS actions all reduce to the
+// same durable operation: REPLACE the on-disk assembly's `mateConstraints` with a
+// new list the renderer already computed (via the pure folds in
+// `assembly-mate-persist`: removeMateConstraint / setMateConstraintScalar /
+// setMateSuppress), then re-save. This ONE runner covers all three — it mirrors
+// `runPersistAssemblyParts` (load → replace one field → save), preserving
+// `components` untouched, and it serializes through the SAME host promise chain as
+// the mate-ADD path so a list edit can never stale-base a concurrent parts / mate
+// save. SAFETY: assembly-data write only; no G-code. Additive (Safety Rule 2): the
+// save payload round-trips through `assemblyFileSchema` in `assembly:save`.
+
+/** Injected dependencies for {@link runPersistMateConstraints}. */
+export interface PersistMateConstraintsDeps {
+  /** The FULL desired mate list (renderer already applied the delete/edit/suppress fold). */
+  readonly mateConstraints: readonly AssemblyMateConstraint[]
+  /** Open project directory, or `null` when none is open. */
+  readonly projectDir: string | null
+  /** Load `<projectDir>/assembly.json` (`fab().assemblyLoad`). */
+  readonly loadAssembly: (projectDir: string) => Promise<AssemblyFile>
+  /** Persist the updated assembly JSON (`fab().assemblySave`). */
+  readonly saveAssembly: (projectDir: string, json: string) => Promise<void>
+}
+
+/** Discriminated result of {@link runPersistMateConstraints}. */
+export type PersistMateConstraintsOutcome =
+  | { readonly ok: true; readonly mateCount: number }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Replace the on-disk assembly's `mateConstraints` with the renderer's current
+ * list and re-save. Loads the CURRENT assembly first so `components` (+ every
+ * field the mate list does not model) is PRESERVED — only `mateConstraints` is
+ * swapped. No project open ⇒ a clean no-op success (in-memory only); a load / save
+ * failure folds to a reason the host can toast.
+ */
+export async function runPersistMateConstraints(
+  deps: PersistMateConstraintsDeps
+): Promise<PersistMateConstraintsOutcome> {
+  const { mateConstraints, projectDir, loadAssembly, saveAssembly } = deps
+  if (!projectDir) {
+    return { ok: true, mateCount: 0 }
+  }
+  let assembly: AssemblyFile
+  try {
+    assembly = await loadAssembly(projectDir)
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Could not load assembly.json (${e instanceof Error ? e.message : String(e)}).`
+    }
+  }
+  const next: AssemblyFile = { ...assembly, mateConstraints: [...mateConstraints] }
+  try {
+    await saveAssembly(projectDir, JSON.stringify(next))
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Could not save assembly.json (${e instanceof Error ? e.message : String(e)}).`
+    }
+  }
+  return { ok: true, mateCount: next.mateConstraints.length }
 }

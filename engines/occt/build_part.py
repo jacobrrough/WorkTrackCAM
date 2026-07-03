@@ -599,6 +599,24 @@ def _op_split_keep_halfspace(cq, wp, op, index, warnings, extras):
     return result
 
 
+def _hole_circle_geom(prof):
+    """Return ``(cx, cy, hole_radius)`` for a CIRCLE hole profile, else ``None``.
+
+    Counterbore / countersink recesses are coaxial with a ROUND hole, so they
+    need the profile's center + radius. A non-circle (``loop``) hole has no well
+    defined single diameter, so the caller honestly skips the recess (the base
+    bore still happens). Reuses the same finite-mm coercion as the base builder.
+    """
+    if not isinstance(prof, dict) or prof.get("type") != "circle":
+        return None
+    cx = _require_finite_mm(prof.get("cx"), "hole_from_profile.profile.cx")
+    cy = _require_finite_mm(prof.get("cy"), "hole_from_profile.profile.cy")
+    r = _require_finite_mm(prof.get("r"), "hole_from_profile.profile.r")
+    if r <= 0:
+        return None
+    return cx, cy, r
+
+
 def _op_hole_from_profile(cq, wp, op, index, warnings, extras):
     profiles = _OP_CONTEXT.get("profiles") or []
     pidx = op.get("profileIndex")
@@ -640,7 +658,132 @@ def _op_hole_from_profile(cq, wp, op, index, warnings, extras):
     tool_wp = cq.Workplane("XY").workplane(offset=cut_z0)
     tool_wp = _add_profile_to_workplane(tool_wp, prof)
     tool = tool_wp.extrude(depth)
-    return work.cut(tool)
+    result = work.cut(tool)
+
+    # -- Hole wizard: coaxial counterbore / countersink recess at the ENTRY face --
+    # The entry face is the TOP of the bore in canonical space (post-solid ops run
+    # pre-placement; the profile sits on XY and extrudes toward +Z, so bb.zmax is
+    # the mouth). Both recesses are cut coaxially with the round hole. A recess is
+    # ADDITIVE to the straight bore; if anything is out of range we honestly WARN
+    # and keep the straight bore (the kernel is sacred -- never crash).
+    hole_type = op.get("holeType", "simple")
+    if hole_type in (None, "simple"):
+        return result
+    if hole_type not in ("counterbore", "countersink"):
+        warnings.append(
+            f"op[{index}] hole_from_profile unknown holeType {hole_type!r} (straight bore kept)"
+        )
+        return result
+
+    geom = _hole_circle_geom(prof)
+    if geom is None:
+        warnings.append(
+            f"op[{index}] hole_from_profile {hole_type} needs a circle profile "
+            f"(non-circular hole -- straight bore kept)"
+        )
+        return result
+    cx, cy, hole_r = geom
+    entry_z = bb.zmax  # mouth of the bore in canonical space
+
+    if hole_type == "counterbore":
+        cb_dia = op.get("cboreDiameterMm")
+        cb_depth = op.get("cboreDepthMm")
+        if cb_dia is None or cb_depth is None:
+            warnings.append(
+                f"op[{index}] hole_from_profile counterbore requires cboreDiameterMm "
+                f"and cboreDepthMm (straight bore kept)"
+            )
+            return result
+        cb_dia = _require_finite_mm(cb_dia, "hole_from_profile.cboreDiameterMm")
+        cb_depth = _require_finite_mm(cb_depth, "hole_from_profile.cboreDepthMm")
+        cb_r = cb_dia / 2.0
+        if cb_r <= hole_r:
+            warnings.append(
+                f"op[{index}] hole_from_profile counterbore diameter {cb_dia} must exceed "
+                f"the hole diameter {2 * hole_r} (straight bore kept)"
+            )
+            return result
+        if cb_depth <= 0:
+            warnings.append(
+                f"op[{index}] hole_from_profile counterbore depth must be > 0 (straight bore kept)"
+            )
+            return result
+        # Flat-bottom recess: cylinder from (entry - depth) up through the top
+        # face (+ a small over-cut so the mouth is clean), coaxial with the hole.
+        over = 1.0
+        cb_tool = (
+            cq.Workplane("XY")
+            .workplane(offset=entry_z - cb_depth)
+            .moveTo(cx, cy)
+            .circle(cb_r)
+            .extrude(cb_depth + over)
+        )
+        try:
+            recessed = result.cut(cb_tool)
+            recessed.findSolid()
+            extras["holeCounterbore"] = {"diameterMm": cb_dia, "depthMm": cb_depth}
+            return recessed
+        except Exception as exc:  # noqa: BLE001 - recess is additive; keep the bore
+            warnings.append(
+                f"op[{index}] hole_from_profile counterbore cut failed: {exc} (straight bore kept)"
+            )
+            return result
+
+    # countersink
+    cs_dia = op.get("csinkDiameterMm")
+    cs_angle = op.get("csinkAngleDeg")
+    if cs_dia is None or cs_angle is None:
+        warnings.append(
+            f"op[{index}] hole_from_profile countersink requires csinkDiameterMm "
+            f"and csinkAngleDeg (straight bore kept)"
+        )
+        return result
+    cs_dia = _require_finite_mm(cs_dia, "hole_from_profile.csinkDiameterMm")
+    cs_angle = _require_finite_mm(cs_angle, "hole_from_profile.csinkAngleDeg")
+    cs_r = cs_dia / 2.0
+    if cs_r <= hole_r:
+        warnings.append(
+            f"op[{index}] hole_from_profile countersink diameter {cs_dia} must exceed "
+            f"the hole diameter {2 * hole_r} (straight bore kept)"
+        )
+        return result
+    if not (0.0 < cs_angle < 180.0):
+        warnings.append(
+            f"op[{index}] hole_from_profile countersink angle {cs_angle} must be in (0, 180) "
+            f"(straight bore kept)"
+        )
+        return result
+    # Cone recess: mouth radius cs_r at the entry face, narrowing DOWN to the hole
+    # radius over cone_depth = (cs_r - hole_r) / tan(includedAngle / 2).
+    half = math.radians(cs_angle / 2.0)
+    tan_half = math.tan(half)
+    if tan_half <= 1e-9:
+        warnings.append(
+            f"op[{index}] hole_from_profile countersink angle {cs_angle} degenerate "
+            f"(straight bore kept)"
+        )
+        return result
+    cone_depth = (cs_r - hole_r) / tan_half
+    try:
+        from cadquery import Solid, Vector  # noqa: PLC0415
+
+        cone = Solid.makeCone(
+            hole_r,
+            cs_r,
+            cone_depth,
+            Vector(cx, cy, entry_z - cone_depth),
+            Vector(0.0, 0.0, 1.0),
+        )
+        cone_wp = cq.Workplane(obj=cone)
+        recessed = result.cut(cone_wp)
+        recessed.findSolid()
+        extras["holeCountersink"] = {"angleDeg": cs_angle, "diameterMm": cs_dia}
+        return recessed
+    except Exception as exc:  # noqa: BLE001 - recess is additive; keep the bore
+        warnings.append(
+            f"op[{index}] hole_from_profile countersink cut failed: {exc} (straight bore kept)"
+        )
+        return result
 
 
 def _op_boolean_combine_profile(cq, wp, op, index, warnings, extras):
@@ -1385,6 +1528,13 @@ def build_part(payload: Dict[str, Any], output_dir: str, base: str) -> Dict[str,
         result["splitKeepHalfspace"] = extras["splitKeepHalfspace"]
     if "loftGuideRailsKernelMode" in extras:
         result["loftGuideRailsKernelMode"] = extras["loftGuideRailsKernelMode"]
+    # Hole-wizard recess markers (counterbore / countersink) -- surfaced so the
+    # TS reader / drawings / CAM can reference the recess dimensions. Additive +
+    # optional: absent for a simple straight bore.
+    if "holeCounterbore" in extras:
+        result["holeCounterbore"] = extras["holeCounterbore"]
+    if "holeCountersink" in extras:
+        result["holeCountersink"] = extras["holeCountersink"]
     # Construct datums (reference geometry markers) — surfaced so the TS reader
     # / a future browser can list them. Never affects geometry (Safety Rule 1).
     if extras.get("datums"):

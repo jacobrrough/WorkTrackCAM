@@ -73,6 +73,27 @@ import {
 import { EmptyState } from '../src/EmptyState'
 import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 
+/**
+ * USER PARAMETER (design-side) view row — wire-isolated from the schema's
+ * `UserParameter` so FeatureTree stays presentational (the same isolation the
+ * `FeatureTreeParameter` type gives the CadQuery-script params section, which is
+ * a SEPARATE mechanism — those drive `cad.execute_script`; these drive the
+ * design file's named parameters + expressions feeding sketch dimensions).
+ */
+export interface FeatureTreeUserParameter {
+  /** Identifier the expression engine references (`thickness`, `d1`). */
+  readonly name: string
+  /** Expression string, e.g. `6`, `d1*2`, `width/2 + 5`. */
+  readonly expression: string
+  /**
+   * Last successful numeric evaluation, or `null` when the current expression
+   * fails (the panel then shows {@link errorMessage} instead of a value).
+   */
+  readonly resolvedValue: number | null
+  /** Human-readable evaluation error (unknown ref, cycle, /0, …); absent when OK. */
+  readonly errorMessage?: string
+}
+
 export interface FeatureTreeOperation {
   /** 1-based script line number where this operation was emitted. */
   readonly line: number
@@ -265,6 +286,25 @@ export interface FeatureTreeProps {
    * PLACE via the session's `updateKernelOpAt`. When omitted, the per-row
    * edit button renders disabled (read-only timeline).
    */
+  /**
+   * USER PARAMETERS (design-side named params + expressions — Phase-3 parity).
+   * When present (even empty with an add affordance), the "Parameters" section
+   * renders below the CadQuery-script params. Each row shows the name, the
+   * editable expression, and either the live resolved value or the evaluation
+   * error. The parent (DesignSessionContext via the host) owns the array +
+   * persists edits; FeatureTree is presentational and reports every gesture
+   * through the callbacks below. Omit ALL of these to suppress the section
+   * entirely (existing hosts render unchanged).
+   */
+  readonly userParameters?: ReadonlyArray<FeatureTreeUserParameter>
+  /** Add a new user parameter (name + expression). Returns nothing; the parent validates + toasts. */
+  readonly onUserParameterAdd?: (name: string, expression: string) => void
+  /** Set an existing user parameter's expression. */
+  readonly onUserParameterEdit?: (name: string, expression: string) => void
+  /** Rename a user parameter (cascades references in the parent). */
+  readonly onUserParameterRename?: (from: string, to: string) => void
+  /** Delete a user parameter (parent blocks + toasts when still referenced). */
+  readonly onUserParameterDelete?: (name: string) => void
   readonly onKernelEdit?: (index: number) => void
 }
 
@@ -802,6 +842,255 @@ function KernelTimeline({
   )
 }
 
+/**
+ * USER PARAMETERS panel — the design-side "Parameters" section (Fusion's
+ * Parameters dialog). Lists named parameters, each with an inline-editable
+ * expression, a live resolved-value read-out (or the evaluation error), an
+ * inline rename, and a delete. A footer add-row appends a new parameter.
+ *
+ * Owns local draft `useState` (the expression buffer + the add-row fields +
+ * the rename buffer) so — like `EditableParameters` / `KernelTimeline` — it is a
+ * dedicated component the top-level `FeatureTree` only mounts when user
+ * parameters are wired, keeping the op-only render path hook-free for the
+ * legacy render-pin tests.
+ *
+ * The component NEVER mutates the array it is handed; every gesture is reported
+ * through the callbacks and the parent re-resolves + re-renders with the new
+ * `resolvedValue` / `errorMessage` per row.
+ */
+interface UserParametersPanelProps {
+  readonly userParameters: ReadonlyArray<FeatureTreeUserParameter>
+  readonly onAdd: ((name: string, expression: string) => void) | undefined
+  readonly onEdit: ((name: string, expression: string) => void) | undefined
+  readonly onRename: ((from: string, to: string) => void) | undefined
+  readonly onDelete: ((name: string) => void) | undefined
+}
+
+function UserParametersPanel({
+  userParameters,
+  onAdd,
+  onEdit,
+  onRename,
+  onDelete,
+}: UserParametersPanelProps): JSX.Element {
+  // Local expression drafts keyed by parameter name. A row shows its draft when
+  // one exists (mid-edit), else the committed expression. Committing (blur /
+  // Enter) fires onEdit and clears the draft so the prop value takes over again.
+  const [exprDraft, setExprDraft] = useState<Record<string, string>>({})
+  // The name currently being renamed (inline), plus its buffer.
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [renameBuffer, setRenameBuffer] = useState('')
+  // Add-row fields.
+  const [addName, setAddName] = useState('')
+  const [addExpr, setAddExpr] = useState('')
+
+  const readonly = onAdd == null && onEdit == null && onRename == null && onDelete == null
+
+  const commitExpr = (name: string): void => {
+    if (!Object.prototype.hasOwnProperty.call(exprDraft, name)) return
+    const next = exprDraft[name] ?? ''
+    setExprDraft((d) => {
+      const copy = { ...d }
+      delete copy[name]
+      return copy
+    })
+    const current = userParameters.find((p) => p.name === name)?.expression ?? ''
+    if (next !== current) onEdit?.(name, next)
+  }
+
+  const commitAdd = (): void => {
+    const name = addName.trim()
+    if (name.length === 0) return
+    onAdd?.(name, addExpr)
+    setAddName('')
+    setAddExpr('')
+  }
+
+  const commitRename = (from: string): void => {
+    const to = renameBuffer.trim()
+    setRenaming(null)
+    setRenameBuffer('')
+    if (to.length > 0 && to !== from) onRename?.(from, to)
+  }
+
+  return (
+    <section
+      className="cad-user-params"
+      data-testid="cad-user-params"
+      aria-label="User parameters"
+    >
+      <div className="cad-user-params__head">
+        <span className="cad-user-params__title">Parameters</span>
+      </div>
+      {userParameters.length === 0 ? (
+        <p className="cad-user-params__empty" data-testid="cad-user-params-empty">
+          No parameters yet. Add one below to drive dimensions by expression.
+        </p>
+      ) : (
+        <ul className="cad-user-params__list">
+          {userParameters.map((param) => {
+            const draft = Object.prototype.hasOwnProperty.call(exprDraft, param.name)
+              ? exprDraft[param.name]!
+              : param.expression
+            const hasError = param.errorMessage != null
+            const isRenaming = renaming === param.name
+            return (
+              <li
+                key={param.name}
+                className="cad-user-params__row"
+                data-testid="cad-user-param-row"
+                data-param-name={param.name}
+                data-param-error={hasError ? 'true' : 'false'}
+              >
+                {isRenaming ? (
+                  <input
+                    className="cad-user-params__name-input"
+                    data-testid="cad-user-param-rename-input"
+                    type="text"
+                    autoFocus
+                    value={renameBuffer}
+                    aria-label={`Rename ${param.name}`}
+                    onChange={(e) => setRenameBuffer(e.target.value)}
+                    onBlur={() => commitRename(param.name)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename(param.name)
+                      else if (e.key === 'Escape') {
+                        setRenaming(null)
+                        setRenameBuffer('')
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="cad-user-params__name"
+                    data-testid="cad-user-param-name"
+                    disabled={onRename == null}
+                    title={onRename == null ? param.name : `Rename ${param.name}`}
+                    onClick={() => {
+                      setRenaming(param.name)
+                      setRenameBuffer(param.name)
+                    }}
+                  >
+                    {param.name}
+                  </button>
+                )}
+                <span className="cad-user-params__equals" aria-hidden="true">
+                  =
+                </span>
+                <input
+                  className="cad-user-params__expr"
+                  data-testid="cad-user-param-expr"
+                  type="text"
+                  spellCheck={false}
+                  value={draft}
+                  disabled={onEdit == null}
+                  aria-label={`Expression for ${param.name}`}
+                  onChange={(e) =>
+                    setExprDraft((d) => ({ ...d, [param.name]: e.target.value }))
+                  }
+                  onBlur={() => commitExpr(param.name)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitExpr(param.name)
+                    else if (e.key === 'Escape') {
+                      setExprDraft((d) => {
+                        const copy = { ...d }
+                        delete copy[param.name]
+                        return copy
+                      })
+                    }
+                  }}
+                />
+                {hasError ? (
+                  <span
+                    className="cad-user-params__error"
+                    data-testid="cad-user-param-error"
+                    title={param.errorMessage}
+                    role="status"
+                  >
+                    {param.errorMessage}
+                  </span>
+                ) : (
+                  <span
+                    className="cad-user-params__value"
+                    data-testid="cad-user-param-value"
+                    title={`Resolved value: ${param.resolvedValue ?? ''}`}
+                  >
+                    {param.resolvedValue == null ? '—' : formatResolved(param.resolvedValue)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs cad-user-params__delete"
+                  data-testid="cad-user-param-delete"
+                  disabled={onDelete == null}
+                  aria-label={`Delete ${param.name}`}
+                  title="Delete this parameter"
+                  onClick={() => onDelete?.(param.name)}
+                >
+                  {'\u2715'}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {!readonly && onAdd != null && (
+        <div className="cad-user-params__add" data-testid="cad-user-param-add">
+          <input
+            className="cad-user-params__name-input"
+            data-testid="cad-user-param-add-name"
+            type="text"
+            placeholder="name"
+            value={addName}
+            aria-label="New parameter name"
+            onChange={(e) => setAddName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitAdd()
+            }}
+          />
+          <span className="cad-user-params__equals" aria-hidden="true">
+            =
+          </span>
+          <input
+            className="cad-user-params__expr"
+            data-testid="cad-user-param-add-expr"
+            type="text"
+            spellCheck={false}
+            placeholder="expression"
+            value={addExpr}
+            aria-label="New parameter expression"
+            onChange={(e) => setAddExpr(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitAdd()
+            }}
+          />
+          <button
+            type="button"
+            className="btn btn-primary btn-xs cad-user-params__add-btn"
+            data-testid="cad-user-param-add-btn"
+            disabled={addName.trim().length === 0}
+            onClick={commitAdd}
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * Format a resolved parameter value for the read-out: trim to at most 4 decimal
+ * places without trailing zeros, so `25` shows as `25` and `12.5` as `12.5`
+ * (never `25.0000`). Pure.
+ */
+function formatResolved(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const rounded = Math.round(value * 1e4) / 1e4
+  return String(rounded)
+}
+
 export function FeatureTree(props: FeatureTreeProps): JSX.Element {
   const {
     operations,
@@ -818,18 +1107,33 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
     onKernelClearRollback,
     onKernelDelete,
     onKernelEdit,
+    userParameters,
+    onUserParameterAdd,
+    onUserParameterEdit,
+    onUserParameterRename,
+    onUserParameterDelete,
   } = props
 
   const editable = onParamsChange != null
   const hasParameters = parameters != null && parameters.length > 0
   const hasKernelOps = kernelOps != null && kernelOps.length > 0
+  // The design-side User Parameters section shows whenever ANY of its wiring is
+  // present — including an EMPTY array, so the operator gets the add affordance
+  // on a fresh design. It is a distinct mechanism from the CadQuery-script
+  // `parameters` above (see FeatureTreeUserParameter).
+  const hasUserParams =
+    userParameters != null ||
+    onUserParameterAdd != null ||
+    onUserParameterEdit != null ||
+    onUserParameterRename != null ||
+    onUserParameterDelete != null
 
   // The empty-state pin: empty operations, no parameters, AND no kernel
   // timeline fall back to the canonical EmptyState. When parameters or a
   // kernel timeline are present we keep those sections visible even when the
   // sidecar operations list is empty (a built model whose script has been
   // cleared still has a timeline worth editing).
-  if (operations.length === 0 && !hasParameters && !hasKernelOps) {
+  if (operations.length === 0 && !hasParameters && !hasKernelOps && !hasUserParams) {
     return (
       <EmptyState
         testId="cad-feature-empty-state"
@@ -841,6 +1145,16 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
 
   return (
     <div className="cad-feature-tree-root" data-testid="cad-feature-tree-root">
+      {hasUserParams && (
+        <UserParametersPanel
+          userParameters={userParameters ?? []}
+          onAdd={onUserParameterAdd}
+          onEdit={onUserParameterEdit}
+          onRename={onUserParameterRename}
+          onDelete={onUserParameterDelete}
+        />
+      )}
+
       {hasParameters && parameters != null && (
         editable ? (
           <EditableParameters

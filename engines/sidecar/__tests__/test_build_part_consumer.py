@@ -33,6 +33,7 @@ Run the Tier-2 tests with the cadquery venv python:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -475,3 +476,245 @@ def test_centered_script_space_id_mismatches_build_part_and_falls_back() -> None
     warns = res.get("warnings") or []
     assert any("did not resolve" in w for w in warns)  # mismatch -> fallback warning
     assert abs(_vol_of_step(res["stepPath"]) - _vol_of_step(bucket["stepPath"])) < 1e-4
+
+
+# -- HOLE WIZARD (Phase-3): counterbore / countersink recesses --------------------
+#
+# The base rectangle is 20 x 12 (``_RECT``) centered at the origin, so a circle
+# profile at (0, 0) bores the middle. These tests add that circle at profile
+# index 1 and prove the recess volumes ANALYTICALLY (Safety Rule 5): the base
+# bore removes pi*r^2*thickness; the counterbore adds an annular flat-bottom
+# cylinder; the countersink adds a frustum minus the cylinder already bored in
+# that depth. Invalid configs keep the straight bore and surface an honest
+# warning -- the kernel is sacred and never crashes on a bad hole spec.
+
+# Hole geometry constants (canonical space; post-solid ops run pre-placement).
+_HOLE_R = 3.0            # bored hole radius (profile circle r)
+_THICKNESS = 8.0         # extrude depth == material thickness the bore passes through
+_HOLE_CIRCLE = {"type": "circle", "cx": 0.0, "cy": 0.0, "r": _HOLE_R}
+
+
+def _hole_payload(hole_op: Dict[str, Any]) -> Dict[str, Any]:
+    """A `_payload` whose profiles carry the base rectangle (index 0) AND a
+    center circle (index 1); `hole_op` references profileIndex 1."""
+    p = _payload([hole_op])
+    p["profiles"] = [
+        {"type": "loop", "points": _RECT},
+        dict(_HOLE_CIRCLE),
+    ]
+    return p
+
+
+@requires_cadquery
+def test_simple_hole_through_all_removes_the_bore_cylinder() -> None:
+    """Baseline: a `simple` (legacy) through-all hole removes exactly the bore
+    cylinder pi*r^2*thickness -- the reference every recess test measures against."""
+    res = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    removed = _BASE_VOL - _vol_of_step(res["stepPath"])
+    assert abs(removed - math.pi * _HOLE_R * _HOLE_R * _THICKNESS) < 1e-2
+    assert res.get("warnings") is None
+    # A simple hole carries NO recess markers.
+    assert "holeCounterbore" not in res
+    assert "holeCountersink" not in res
+
+
+@requires_cadquery
+def test_legacy_hole_without_holeType_parses_and_builds_as_simple() -> None:
+    """SAFETY RULE 2: a pre-wizard hole op (no `holeType` key at all) builds
+    byte-identically to an explicit `simple` hole -- old saved projects are
+    unchanged."""
+    legacy = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    explicit = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all", "holeType": "simple"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert Path(legacy["stlPath"]).read_bytes() == Path(explicit["stlPath"]).read_bytes()
+
+
+@requires_cadquery
+def test_counterbore_removes_analytic_annular_recess() -> None:
+    """HEADLINE (counterbore): a counterbore of diameter 12 (r=6), depth 4 on a
+    hole of diameter 6 (r=3) removes -- ON TOP of the straight bore -- exactly the
+    annular flat-bottom cylinder pi*(R^2 - r^2)*depth. Measured against the simple
+    bore so only the recess is compared."""
+    simple = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    cbore_r = 6.0
+    cbore_depth = 4.0
+    cbore = bp.build_part(
+        _hole_payload({
+            "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+            "holeType": "counterbore",
+            "cboreDiameterMm": 2 * cbore_r, "cboreDepthMm": cbore_depth,
+        }),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    v_simple = _vol_of_step(simple["stepPath"])
+    v_cbore = _vol_of_step(cbore["stepPath"])
+    extra_removed = v_simple - v_cbore
+    expected = math.pi * (cbore_r * cbore_r - _HOLE_R * _HOLE_R) * cbore_depth
+    assert abs(extra_removed - expected) < 1e-2
+    assert cbore.get("warnings") is None
+    assert cbore["holeCounterbore"] == {"diameterMm": 2 * cbore_r, "depthMm": cbore_depth}
+
+
+@requires_cadquery
+def test_countersink_removes_analytic_frustum_recess() -> None:
+    """HEADLINE (countersink): a countersink of diameter 10 (r=5), included angle
+    90 deg on a hole of diameter 6 (r=3) removes -- on top of the straight bore --
+    exactly (frustum - inner cylinder) over cone_depth = (R - r)/tan(45). This
+    spot-checks the cone half-angle via the analytic volume it must produce."""
+    simple = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    cs_r = 5.0
+    cs_angle = 90.0
+    csink = bp.build_part(
+        _hole_payload({
+            "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+            "holeType": "countersink",
+            "csinkDiameterMm": 2 * cs_r, "csinkAngleDeg": cs_angle,
+        }),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    v_simple = _vol_of_step(simple["stepPath"])
+    v_csink = _vol_of_step(csink["stepPath"])
+    extra_removed = v_simple - v_csink
+    cone_depth = (cs_r - _HOLE_R) / math.tan(math.radians(cs_angle / 2.0))
+    frustum = math.pi * cone_depth / 3.0 * (cs_r * cs_r + cs_r * _HOLE_R + _HOLE_R * _HOLE_R)
+    inner_cyl = math.pi * _HOLE_R * _HOLE_R * cone_depth
+    expected = frustum - inner_cyl
+    assert abs(extra_removed - expected) < 1e-2
+    assert csink.get("warnings") is None
+    assert csink["holeCountersink"] == {"angleDeg": cs_angle, "diameterMm": 2 * cs_r}
+
+
+@requires_cadquery
+def test_countersink_angle_widens_the_recess_monotonically() -> None:
+    """A shallower included angle (120 deg) cuts a wider, shallower cone than a
+    steeper one (60 deg) for the SAME mouth diameter -> larger removed volume.
+    A second, independent spot-check that the angle actually drives the cone."""
+    def csink_removed(angle: float) -> float:
+        simple = bp.build_part(
+            _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+            tempfile.mkdtemp(),
+            "kernel-part",
+        )
+        cs = bp.build_part(
+            _hole_payload({
+                "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+                "holeType": "countersink", "csinkDiameterMm": 10.0, "csinkAngleDeg": angle,
+            }),
+            tempfile.mkdtemp(),
+            "kernel-part",
+        )
+        return _vol_of_step(simple["stepPath"]) - _vol_of_step(cs["stepPath"])
+
+    # For a fixed mouth diameter, a LARGER included angle => shallower cone =>
+    # SMALLER removed volume. So 60 deg removes more than 120 deg.
+    assert csink_removed(60.0) > csink_removed(120.0)
+
+
+@requires_cadquery
+def test_counterbore_smaller_than_hole_keeps_straight_bore_with_warning() -> None:
+    """GUARD: a counterbore diameter that does NOT exceed the hole diameter is
+    honestly rejected -- the straight bore is kept (volume == simple hole) and a
+    warning is surfaced. The kernel never crashes on a bad recess spec."""
+    simple = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    bad = bp.build_part(
+        _hole_payload({
+            "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+            "holeType": "counterbore",
+            "cboreDiameterMm": 2 * _HOLE_R - 1.0,  # smaller than the hole
+            "cboreDepthMm": 4.0,
+        }),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert abs(_vol_of_step(bad["stepPath"]) - _vol_of_step(simple["stepPath"])) < 1e-6
+    assert any("must exceed the hole diameter" in w for w in (bad.get("warnings") or []))
+    assert "holeCounterbore" not in bad
+
+
+@requires_cadquery
+def test_countersink_smaller_than_hole_keeps_straight_bore_with_warning() -> None:
+    """GUARD (countersink): a csink diameter not exceeding the hole diameter keeps
+    the straight bore + warns."""
+    simple = bp.build_part(
+        _hole_payload({"kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all"}),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    bad = bp.build_part(
+        _hole_payload({
+            "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+            "holeType": "countersink",
+            "csinkDiameterMm": 2 * _HOLE_R,  # equal to hole diameter -> not greater
+            "csinkAngleDeg": 90.0,
+        }),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert abs(_vol_of_step(bad["stepPath"]) - _vol_of_step(simple["stepPath"])) < 1e-6
+    assert any("must exceed the hole diameter" in w for w in (bad.get("warnings") or []))
+    assert "holeCountersink" not in bad
+
+
+@requires_cadquery
+def test_counterbore_on_noncircular_hole_keeps_bore_with_warning() -> None:
+    """A counterbore needs a ROUND hole (coaxial recess). A loop-profile hole has
+    no single diameter, so the recess is skipped with an honest warning while the
+    straight (loop) bore still happens."""
+    p = _payload([{
+        "kind": "hole_from_profile", "profileIndex": 1, "mode": "through_all",
+        "holeType": "counterbore", "cboreDiameterMm": 12.0, "cboreDepthMm": 4.0,
+    }])
+    # A small square hole loop at the center (index 1).
+    p["profiles"] = [
+        {"type": "loop", "points": _RECT},
+        {"type": "loop", "points": [[-2, -2], [2, -2], [2, 2], [-2, 2]]},
+    ]
+    res = bp.build_part(p, tempfile.mkdtemp(), "kernel-part")
+    assert Path(res["stepPath"]).is_file()
+    # The bore still removed material (square hole), but no recess marker emitted.
+    assert _vol_of_step(res["stepPath"]) < _BASE_VOL
+    assert "holeCounterbore" not in res
+    assert any("needs a circle profile" in w for w in (res.get("warnings") or []))
+
+
+@requires_cadquery
+def test_counterbore_depth_mode_bore_still_recesses() -> None:
+    """A counterbore composes with a DEPTH-mode bore (not just through-all): the
+    recess is added at the entry (top) face and the build succeeds with a marker."""
+    res = bp.build_part(
+        _hole_payload({
+            "kind": "hole_from_profile", "profileIndex": 1, "mode": "depth",
+            "depthMm": 6.0, "zStartMm": 0.0,
+            "holeType": "counterbore", "cboreDiameterMm": 12.0, "cboreDepthMm": 3.0,
+        }),
+        tempfile.mkdtemp(),
+        "kernel-part",
+    )
+    assert Path(res["stepPath"]).is_file()
+    assert _vol_of_step(res["stepPath"]) < _BASE_VOL
+    assert res["holeCounterbore"] == {"diameterMm": 12.0, "depthMm": 3.0}

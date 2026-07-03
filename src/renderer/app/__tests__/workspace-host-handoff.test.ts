@@ -32,6 +32,7 @@ import {
   runHydrateAssembly,
   runPersistAssemblyParts,
   runPersistMate,
+  runPersistMateConstraints,
   runSendToCam,
   solvedMateToInput,
   type QueuedCamImport
@@ -893,6 +894,111 @@ describe('runPersistAssemblyParts — fold rows into components, preserve mates'
   it('surfaces a save failure as a reason (no throw)', async () => {
     const outcome = await runPersistAssemblyParts({
       parts: ROWS,
+      projectDir: 'C:/proj',
+      loadAssembly: async () => parseAssemblyFile({ version: 2, name: 'A', components: [], mateConstraints: [] }),
+      saveAssembly: async () => {
+        throw new Error('disk full')
+      }
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.reason).toContain('disk full')
+  })
+})
+
+// ── (5) runPersistMateConstraints — mate LIST edit persistence ────────────────
+//
+// The Mates-panel delete / edit-scalar / suppress round-trip. The renderer applies
+// the pure fold and hands the FULL desired list here; this runner reloads the REAL
+// assembly, swaps ONLY `mateConstraints` (preserving `components`), and re-saves.
+
+describe('runPersistMateConstraints — load → replace mateConstraints → save', () => {
+  const A_MATE = {
+    id: 'm1',
+    kind: 'coincident' as const,
+    part1Id: 'base',
+    feature1: { x: 0, y: 0, z: 0 },
+    part2Id: 'arm',
+    feature2: { x: 0, y: 0, z: 0 }
+  }
+
+  it('replaces the on-disk mate list while PRESERVING components', async () => {
+    // On disk: two components + one mate. The renderer deletes it → empty list.
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'A',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 } },
+        { id: 'arm', name: 'Arm', partPath: 'q', transform: { x: 0, y: 0, z: 0 } }
+      ],
+      mateConstraints: [A_MATE]
+    })
+    const loadAssembly = vi.fn(async () => loaded)
+    const saveAssembly = vi.fn(async (_dir: string, _json: string) => {})
+
+    const outcome = await runPersistMateConstraints({
+      mateConstraints: [], // deleted the only mate
+      projectDir: 'C:/proj',
+      loadAssembly,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.mateCount).toBe(0)
+    expect(saveAssembly).toHaveBeenCalledTimes(1)
+    const [, jsonArg] = saveAssembly.mock.calls[0]!
+    const reparsed = assemblyFileSchema.parse(JSON.parse(jsonArg as string))
+    expect(reparsed.mateConstraints).toHaveLength(0)
+    // components untouched by a mate-only edit.
+    expect(reparsed.components.map((c) => c.id)).toEqual(['base', 'arm'])
+  })
+
+  it('persists an edited scalar + a suppress flag together', async () => {
+    const loaded = parseAssemblyFile({
+      version: 2,
+      name: 'A',
+      components: [
+        { id: 'base', name: 'Base', partPath: 'p', transform: { x: 0, y: 0, z: 0 } },
+        { id: 'arm', name: 'Arm', partPath: 'q', transform: { x: 0, y: 0, z: 0 } }
+      ],
+      mateConstraints: []
+    })
+    const saveAssembly = vi.fn(async (_dir: string, _json: string) => {})
+    const outcome = await runPersistMateConstraints({
+      mateConstraints: [
+        { id: 'd', kind: 'distance', part1Id: 'base', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'arm', feature2: { x: 0, y: 0, z: 0 }, value: 42 },
+        { id: 'a', kind: 'angle', part1Id: 'base', feature1: { axis: 'x' }, part2Id: 'arm', feature2: { axis: 'x' }, value: 30, suppress: true }
+      ],
+      projectDir: 'C:/proj',
+      loadAssembly: async () => loaded,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    const [, jsonArg] = saveAssembly.mock.calls[0]!
+    const reparsed = assemblyFileSchema.parse(JSON.parse(jsonArg as string))
+    expect(reparsed.mateConstraints.find((c) => c.id === 'd')!.value).toBe(42)
+    expect(reparsed.mateConstraints.find((c) => c.id === 'a')!.suppress).toBe(true)
+  })
+
+  it('no open project → clean no-op success, NO load/save', async () => {
+    const loadAssembly = vi.fn(async () => twoPartAssembly())
+    const saveAssembly = vi.fn(async () => {})
+    const outcome = await runPersistMateConstraints({
+      mateConstraints: [A_MATE],
+      projectDir: null,
+      loadAssembly,
+      saveAssembly
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.mateCount).toBe(0)
+    expect(loadAssembly).not.toHaveBeenCalled()
+    expect(saveAssembly).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a save failure as a reason (no throw)', async () => {
+    const outcome = await runPersistMateConstraints({
+      mateConstraints: [],
       projectDir: 'C:/proj',
       loadAssembly: async () => parseAssemblyFile({ version: 2, name: 'A', components: [], mateConstraints: [] }),
       saveAssembly: async () => {

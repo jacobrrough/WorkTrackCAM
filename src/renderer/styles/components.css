@@ -727,6 +727,155 @@
   opacity: 0.8;
 }
 
+/* ── Phase-4 durable Mate constraints panel (AssemblyView) ────────────
+   The REACHABLE mate list: one row per persisted `mateConstraints` entry
+   with kind label · resolved part names · scalar (distance mm / angle deg)
+   · suppressed / dangling flags · Edit / Suppress / Delete row actions and
+   an inline scalar editor. Mirrors the parts-list / limits-editor idioms
+   above (same tokens; no inline styles — CLAUDE.md design-token rule). */
+.design-assembly__mate-constraints {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+.design-assembly__mate-constraints-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.design-assembly__mate-constraints-title {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--txt1);
+}
+.design-assembly__mate-constraints-count {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  font-variant-numeric: tabular-nums;
+}
+.design-assembly__mate-constraints-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.design-assembly__mate-constraint-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+.design-assembly__mate-constraint-row--suppressed {
+  opacity: 0.6;
+}
+.design-assembly__mate-constraint-row--dangling {
+  border-color: var(--err);
+}
+.design-assembly__mate-constraint-kind {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--accent);
+  min-width: 68px;
+}
+.design-assembly__mate-constraint-parts {
+  font-size: var(--text-sm);
+  color: var(--txt1);
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.design-assembly__mate-constraint-scalar {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.design-assembly__mate-constraint-flag {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.design-assembly__mate-constraint-flag--suppressed {
+  color: var(--txt2);
+}
+.design-assembly__mate-constraint-flag--dangling {
+  color: var(--err);
+}
+.design-assembly__mate-constraint-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+.design-assembly__mate-constraint-edit,
+.design-assembly__mate-constraint-suppress {
+  padding: 0 var(--sp-2);
+  font-size: var(--text-sm);
+}
+.design-assembly__mate-constraint-remove {
+  padding: 0 var(--sp-2);
+  font-size: var(--text-base);
+  line-height: 1;
+  color: var(--txt2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.design-assembly__mate-constraint-remove:hover {
+  color: var(--err);
+  border-color: var(--err);
+}
+.design-assembly__mate-constraint-editor {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: var(--sp-1);
+  padding: var(--sp-2);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg1);
+}
+.design-assembly__mate-constraint-editor-error {
+  flex-basis: 100%;
+  font-size: var(--text-sm);
+  color: var(--err);
+}
+.design-assembly__mate-constraint-editor-label {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+}
+.design-assembly__mate-constraint-editor-input {
+  width: 96px;
+  padding: 2px var(--sp-2);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--txt1);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.design-assembly__mate-constraints-note {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--txt2);
+  opacity: 0.85;
+}
+
 /* ── Msg helper ─────────────────────────────────────────────────── */
 .msg { font-size: 12px; color: var(--txt2); }
 .msg--compact { margin: 0; }

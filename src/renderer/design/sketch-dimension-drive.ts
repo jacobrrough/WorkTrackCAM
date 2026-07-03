@@ -41,6 +41,7 @@ import type {
   SketchDimension,
   SketchEntity
 } from '../../shared/design-schema'
+import { resolveUserParameters } from '../../shared/design-schema'
 import { circleThroughThreePoints } from '../../shared/sketch-profile'
 import { cloneDesign, solveSketchToTolerance } from './solver2d'
 
@@ -400,4 +401,39 @@ export function applyDimensionValue(
   const next = cloneDesign(design)
   next.parameters = { ...next.parameters, [parameterKey]: sanitized }
   return solveSketchToTolerance(next)
+}
+
+// ---------------------------------------------------------------------------
+// 4. resolveUserParametersAndSolve — USER-PARAMETER consumption seam.
+// ---------------------------------------------------------------------------
+
+/**
+ * The bridge that makes a USER PARAMETER edit move dependent sketch geometry.
+ *
+ * A driving dimension reads its value from `parameters[parameterKey]`. A user
+ * parameter (see `design-schema.ts`) resolves — in dependency order — into that
+ * SAME numeric dict under its own name. So a sketch dimension bound to a user
+ * parameter's name is driven by the parameter's expression: when the operator
+ * edits `thickness = 6` to `thickness = 8`, `resolveUserParameters` rewrites
+ * `parameters.thickness`, and this function then RE-SOLVES so any `distance` /
+ * `angle` / `radius` / `diameter` constraint reading `parameters.thickness`
+ * lands the geometry on the new value.
+ *
+ * Pipeline (pure; input never mutated):
+ *   1. `resolveUserParameters(design)` — topological evaluate → write each
+ *      resolved value into `parameters[name]` + cache `resolvedValue`.
+ *   2. `solveSketchToTolerance(...)` — the SAME bounded multi-round solve
+ *      {@link applyDimensionValue} uses, so a param edit lands its dependent
+ *      dimensions in one call (no "press Enter twice").
+ *
+ * When the sketch has no constraints, `solveSketchToTolerance` falls through to a
+ * single `solveSketch` pass (a no-op on an empty sketch), so a design with user
+ * parameters but no bound dimensions round-trips the resolved `parameters` cache
+ * without touching geometry. Numeric-only dimension entry is unaffected — it
+ * still flows through {@link applyDimensionValue}; user parameters are an
+ * ADDITIVE driver on top.
+ */
+export function resolveUserParametersAndSolve(design: DesignFileV2): DesignFileV2 {
+  const resolved = resolveUserParameters(design)
+  return solveSketchToTolerance(cloneDesign(resolved))
 }

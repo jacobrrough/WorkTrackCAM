@@ -458,16 +458,29 @@ export type CadExecuteScriptResult = {
 // ── cad.export ──────────────────────────────────────────────────────────────
 //
 // Exports the body referenced by `handle` (from cad.execute_script or
-// cad.import_step) to STEP / STL / DXF. The `outPath` is validated to be
-// absolute and under the project root before the sidecar writes anything --
-// mirroring the path-safety pattern in mesh-import-registry.
-export type CadExportFormat = 'step' | 'stl' | 'dxf'
+// cad.import_step) to STEP / STL / DXF / 3MF / AMF / BREP. The `outPath` is
+// validated (null-byte rejected) before the sidecar writes anything -- mirroring
+// the path-safety pattern in mesh-import-registry.
+//
+// Multi-format export (Phase-3): the six members below are ALL proven REAL
+// against the bundled CadQuery build (`cq.exporters.ExportTypes`), nothing
+// speculative. Highest-fidelity source is chosen per format:
+//   * 'step' / 'brep' — B-rep solid straight from the handle (exact surfaces).
+//   * 'stl'           — binary mesh (degenerate-filtered writer, Safety Rule 1).
+//   * '3mf' / 'amf'   — tessellated mesh container at `toleranceMm`.
+//   * 'dxf'           — 2D projection.
+//
+// ADDITIVE: 'step' | 'stl' | 'dxf' were the original members, so every existing
+// caller (Send-to-CAM ships `format: 'stl'`) is unchanged. Kept in lock-step with
+// `EXPORT_FORMATS` (engines/cad/cadquery_script.py) + `ALLOWED_EXPORT_FORMATS`
+// (engines/sidecar/cad_handlers.py) + `CAD_EXPORT_FORMATS` (src/main/ipc-cad.ts).
+export type CadExportFormat = 'step' | 'stl' | 'dxf' | '3mf' | 'amf' | 'brep'
 
 export type CadExportParams = {
   handle: string
   outPath: string
   format: CadExportFormat
-  /** Required for STL; default 0.1 mm. Ignored for STEP / DXF. */
+  /** Deviation tolerance in mm; used by mesh formats (stl / 3mf / amf). Default 0.1 mm. Ignored for step / dxf / brep. */
   toleranceMm?: number
 }
 

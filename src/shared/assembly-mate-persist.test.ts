@@ -26,13 +26,21 @@ import {
 } from './assembly-schema'
 import { solveMateConstraints } from './assembly-solver-core'
 import {
+  MATE_CONSTRAINT_KIND_LABELS,
   buildMateConstraintFromSolved,
+  danglingMateIds,
   dominantCardinalAxis,
+  formatMateScalar,
+  mateKindHasScalar,
   persistMate,
+  removeMateConstraint,
+  setMateConstraintScalar,
+  setMateSuppress,
   solvedKindToMateKind,
   withMateConstraint,
   type SolvedMateInput
 } from './assembly-mate-persist'
+import type { AssemblyMateConstraint } from './assembly-mate-schema'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -697,5 +705,182 @@ describe('withMateConstraint — idempotent re-persist', () => {
     expect(next).not.toBe(asm)
     expect(asm.mateConstraints).toEqual([]) // original untouched
     expect(next.mateConstraints).toHaveLength(1)
+  })
+})
+
+// ── (D) Phase-4 mate LIST edit folds (delete / edit-scalar / suppress) ────────
+//
+// The Mates-panel row actions each reduce to a pure, id-keyed rewrite of the
+// durable list. These prove the folds + their save→load→parse round-trip (the
+// exact IPC path), mirroring the authoring-fold suite above.
+
+/** A two-part assembly carrying a distance + an angle mate for the edit folds. */
+function assemblyWithScalarMates(): AssemblyFile {
+  const base = persistMate(twoPartAssembly(), {
+    id: 'm-dist',
+    draft: { kind: 'distance', part1Id: 'base', part2Id: 'arm', point1: [0, 0, 0], point2: [0, 0, 0], value: 8 }
+  })
+  if (!base.ok) throw new Error('fixture: distance persist failed')
+  const withAngle = persistMate(base.assembly, {
+    id: 'm-ang',
+    draft: { kind: 'angle', part1Id: 'base', part2Id: 'arm', axis1Cardinal: 'x', axis2Cardinal: 'x', angleDeg: 90 }
+  })
+  if (!withAngle.ok) throw new Error('fixture: angle persist failed')
+  return withAngle.assembly
+}
+
+describe('MATE_CONSTRAINT_KIND_LABELS + mateKindHasScalar', () => {
+  it('labels every durable kind (solver vocabulary, not the Model-B labels)', () => {
+    expect(MATE_CONSTRAINT_KIND_LABELS.coincident).toBe('Coincident')
+    expect(MATE_CONSTRAINT_KIND_LABELS.concentric).toBe('Concentric')
+    expect(MATE_CONSTRAINT_KIND_LABELS.distance).toBe('Distance')
+    expect(MATE_CONSTRAINT_KIND_LABELS.angle).toBe('Angle')
+    expect(MATE_CONSTRAINT_KIND_LABELS.flush).toBe('Flush')
+    expect(MATE_CONSTRAINT_KIND_LABELS.tangent).toBe('Tangent')
+  })
+
+  it('only distance / angle carry an editable scalar', () => {
+    expect(mateKindHasScalar('distance')).toBe(true)
+    expect(mateKindHasScalar('angle')).toBe(true)
+    expect(mateKindHasScalar('coincident')).toBe(false)
+    expect(mateKindHasScalar('concentric')).toBe(false)
+    expect(mateKindHasScalar('flush')).toBe(false)
+    expect(mateKindHasScalar('tangent')).toBe(false)
+  })
+})
+
+describe('formatMateScalar', () => {
+  const mk = (over: Partial<AssemblyMateConstraint>): AssemblyMateConstraint => ({
+    id: 'x', kind: 'distance', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 }, ...over
+  })
+  it('formats a distance in mm and an angle in degrees', () => {
+    expect(formatMateScalar(mk({ kind: 'distance', value: 12 }))).toBe('12 mm')
+    expect(formatMateScalar(mk({ kind: 'angle', value: 90 }))).toBe('90°')
+    expect(formatMateScalar(mk({ kind: 'distance', value: 12.5 }))).toBe('12.5 mm')
+  })
+  it('returns null for a kind with no scalar', () => {
+    expect(formatMateScalar(mk({ kind: 'coincident', value: undefined }))).toBeNull()
+    expect(formatMateScalar(mk({ kind: 'tangent', value: undefined }))).toBeNull()
+  })
+  it('reads "—" for a scalar kind whose value is missing (never prints undefined)', () => {
+    expect(formatMateScalar(mk({ kind: 'distance', value: undefined }))).toBe('— mm')
+    expect(formatMateScalar(mk({ kind: 'angle', value: undefined }))).toBe('—°')
+  })
+})
+
+describe('removeMateConstraint', () => {
+  it('drops the mate by id and survives the disk round-trip', () => {
+    const asm = assemblyWithScalarMates()
+    expect(asm.mateConstraints).toHaveLength(2)
+    const next = removeMateConstraint(asm, 'm-dist')
+    expect(next).not.toBe(asm) // new identity
+    expect(next.mateConstraints.map((c) => c.id)).toEqual(['m-ang'])
+    // the ONE round-trip contract: the reloaded file reflects the delete.
+    const reloaded = saveLoadRoundTrip(next)
+    expect(reloaded.mateConstraints.map((c) => c.id)).toEqual(['m-ang'])
+  })
+  it('is idempotent — deleting a missing id is a clean no-op', () => {
+    const asm = assemblyWithScalarMates()
+    const next = removeMateConstraint(asm, 'nope')
+    expect(next.mateConstraints).toHaveLength(2)
+  })
+  it('does not mutate the input list', () => {
+    const asm = assemblyWithScalarMates()
+    removeMateConstraint(asm, 'm-dist')
+    expect(asm.mateConstraints).toHaveLength(2)
+  })
+})
+
+describe('setMateConstraintScalar', () => {
+  it('edits a distance value, canonicalises -0, and round-trips', () => {
+    const asm = assemblyWithScalarMates()
+    const r = setMateConstraintScalar(asm, 'm-dist', 25)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.constraint).toMatchObject({ id: 'm-dist', kind: 'distance', value: 25 })
+    const reloaded = saveLoadRoundTrip(r.assembly)
+    expect(reloaded.mateConstraints.find((c) => c.id === 'm-dist')!.value).toBe(25)
+
+    const neg0 = setMateConstraintScalar(asm, 'm-dist', -0)
+    expect(neg0.ok).toBe(true)
+    if (!neg0.ok) return
+    expect(Object.is(neg0.constraint.value, -0)).toBe(false)
+    expect(neg0.constraint.value).toBe(0)
+  })
+  it('edits an angle value (negative allowed)', () => {
+    const r = setMateConstraintScalar(assemblyWithScalarMates(), 'm-ang', -45)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.constraint).toMatchObject({ kind: 'angle', value: -45 })
+  })
+  it('rejects a negative distance target (assembly unchanged)', () => {
+    const asm = assemblyWithScalarMates()
+    const r = setMateConstraintScalar(asm, 'm-dist', -5)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/zero or positive/i)
+    expect(r.assembly).toBe(asm) // unchanged reference
+  })
+  it('rejects a non-finite value', () => {
+    const r = setMateConstraintScalar(assemblyWithScalarMates(), 'm-dist', Number.NaN)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/finite number/i)
+  })
+  it('rejects editing a non-scalar kind', () => {
+    const withPoint = persistMate(twoPartAssembly(), POINT_MATE)
+    expect(withPoint.ok).toBe(true)
+    if (!withPoint.ok) return
+    const r = setMateConstraintScalar(withPoint.assembly, 'mate-point-1', 3)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/no editable value/i)
+  })
+  it('rejects a missing id', () => {
+    const r = setMateConstraintScalar(assemblyWithScalarMates(), 'ghost', 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/not found/i)
+  })
+})
+
+describe('setMateSuppress', () => {
+  it('sets the suppress flag and the reloaded solve EXCLUDES it', () => {
+    const asm = assemblyWithScalarMates()
+    const next = setMateSuppress(asm, 'm-dist', true)
+    expect(next.mateConstraints.find((c) => c.id === 'm-dist')!.suppress).toBe(true)
+    const reloaded = saveLoadRoundTrip(next)
+    expect(reloaded.mateConstraints.find((c) => c.id === 'm-dist')!.suppress).toBe(true)
+    // The solver drops `suppress !== true` — a suppressed mate is parked.
+    const solve = solveMateConstraints(reloaded.components, reloaded.mateConstraints)
+    expect(solve.report.perConstraintResiduals.some((r) => r.constraintId === 'm-dist')).toBe(false)
+  })
+  it('enabling DROPS the flag entirely (omitted === active), keeping JSON minimal', () => {
+    const asm = setMateSuppress(assemblyWithScalarMates(), 'm-ang', true)
+    const enabled = setMateSuppress(asm, 'm-ang', false)
+    const row = enabled.mateConstraints.find((c) => c.id === 'm-ang')!
+    expect(row).not.toHaveProperty('suppress')
+    // Round-trips clean (no residual suppress:false on disk).
+    const reloaded = saveLoadRoundTrip(enabled)
+    expect(reloaded.mateConstraints.find((c) => c.id === 'm-ang')!).not.toHaveProperty('suppress')
+  })
+  it('is a no-op for a missing id', () => {
+    const asm = assemblyWithScalarMates()
+    const next = setMateSuppress(asm, 'ghost', true)
+    expect(next.mateConstraints.every((c) => c.suppress === undefined)).toBe(true)
+  })
+})
+
+describe('danglingMateIds', () => {
+  const mates: AssemblyMateConstraint[] = [
+    { id: 'ok', kind: 'coincident', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } },
+    { id: 'gone1', kind: 'coincident', part1Id: 'a', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'zzz', feature2: { x: 0, y: 0, z: 0 } },
+    { id: 'gone2', kind: 'coincident', part1Id: 'yyy', feature1: { x: 0, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } }
+  ]
+  it('flags mates whose part ref is absent (deterministic source order)', () => {
+    expect(danglingMateIds(mates, new Set(['a', 'b']))).toEqual(['gone1', 'gone2'])
+  })
+  it('returns [] when every ref resolves', () => {
+    expect(danglingMateIds(mates, new Set(['a', 'b', 'zzz', 'yyy']))).toEqual([])
   })
 })

@@ -62,12 +62,23 @@ import { fab } from '../src/shop-types'
 import { useDesignSessionOptional } from './DesignSessionContext'
 import type {
   AssemblyComponent,
+  AssemblyFile,
   AssemblyInterferenceReport,
   AssemblyJointLimits,
   AssemblySummaryReport,
 } from '../../shared/assembly-schema'
+import { emptyAssembly } from '../../shared/assembly-schema'
 import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
+import {
+  MATE_CONSTRAINT_KIND_LABELS,
+  danglingMateIds,
+  formatMateScalar,
+  mateKindHasScalar,
+  removeMateConstraint,
+  setMateConstraintScalar,
+  setMateSuppress,
+} from '../../shared/assembly-mate-persist'
 import {
   bomForParts,
   bomRowSourceLabel,
@@ -339,6 +350,25 @@ export interface AssemblyViewProps {
    * badge exactly as before (every existing Phase-3 render pin holds).
    */
   readonly onSolvedTransforms?: (transforms: ReadonlyArray<SolvedComponentTransform>) => void
+  /**
+   * Phase-4 (Mate list/edit/delete) — fired whenever the operator edits the
+   * durable {@link mateConstraints} list from the Mates panel (row DELETE, an
+   * inline scalar EDIT, or a SUPPRESS toggle). Receives the FULL desired list
+   * (the row action already applied the pure fold from `assembly-mate-persist`).
+   * The host persists it through the SAME load→replace→save round-trip the
+   * authoring `onMateAdded` path uses, so the next solve reflects the change.
+   * Optional + additive: when omitted the Mates panel renders READ-ONLY (row
+   * actions are withheld) — a caller that only feeds `mateConstraints` for the
+   * solver still lists them, just without edit affordances, so every existing
+   * render-pin holds.
+   */
+  readonly onMateConstraintsChange?: (next: readonly AssemblyMateConstraint[]) => void
+  /**
+   * Render-pin escape hatch: seeds the id of the mate whose inline scalar
+   * editor is open, so a static render can assert the edit field without
+   * simulating an Edit click (mirrors `initialLimitsOpenPartId`).
+   */
+  readonly initialEditingMateId?: string | null
   /**
    * Open project directory. The SAVED-assembly IPC actions (Check
    * Interference / Export BOM / Summary) read `<projectDir>/assembly.json` in
@@ -672,6 +702,8 @@ export function AssemblyView({
   initialConvergenceReport = null,
   mateConstraints = [],
   onSolvedTransforms,
+  onMateConstraintsChange,
+  initialEditingMateId = null,
   projectDir,
   initialMotionPoses = null,
   initialPlaybackT = 0,
@@ -700,6 +732,117 @@ export function AssemblyView({
   // (rather than `undefined`) keeps the JSX branches simple — same posture
   // as the existing `parts` array.
   const mateList: readonly AssemblyMate[] = mates ?? []
+
+  // ── Phase-4: durable Model-C mate list (the REACHABLE Mates panel) ───────
+  // Distinct from the dead-by-design face-id `mates` surface above: this lists
+  // the durable `mateConstraints` (`assembly.json`, the solver's actual input)
+  // with per-row DELETE / EDIT-scalar / SUPPRESS actions, each routed through
+  // the pure folds in `assembly-mate-persist` + the host's
+  // `onMateConstraintsChange` persist seam. Read-only when that callback is
+  // absent (a solver-only feed still lists them). The `assembly` shim below is
+  // the minimal AssemblyFile the pure folds operate on — only `mateConstraints`
+  // matters (the folds preserve every other field), and the host re-loads the
+  // REAL file before saving, so this stub never reaches disk.
+  const [editingMateId, setEditingMateId] = useState<string | null>(initialEditingMateId)
+  const [mateScalarDraft, setMateScalarDraft] = useState<string>(() => {
+    // Seed from the render-pin-opened mate's value so a static render shows the
+    // pre-filled field (mirrors `limitsDraft` seeding from initialLimitsOpenPartId).
+    if (initialEditingMateId === null) return ''
+    const seed = mateConstraints.find((m) => m.id === initialEditingMateId)
+    return seed && typeof seed.value === 'number' && Number.isFinite(seed.value)
+      ? String(seed.value)
+      : ''
+  })
+  const [mateEditError, setMateEditError] = useState<string | null>(null)
+
+  // Ids of the current part rows — used to flag a mate whose part ref no longer
+  // resolves (dangling). Normally empty on the reachable route (mates are pruned
+  // at load + on part-removal), but a mate fed straight from an unpruned source
+  // renders flagged + deletable rather than silently mis-labelled.
+  const partIdSet = useMemo<ReadonlySet<string>>(
+    () => new Set(parts.map((p) => p.id)),
+    [parts]
+  )
+  const danglingIds = useMemo<ReadonlySet<string>>(
+    () => new Set(danglingMateIds(mateConstraints, partIdSet)),
+    [mateConstraints, partIdSet]
+  )
+
+  // A throwaway AssemblyFile the pure folds read/return. The renderer only cares
+  // about the folded `mateConstraints`; the host replaces the REAL on-disk file's
+  // list with it (load→replace→save), so `components`/`name` here are empty
+  // placeholders that never persist. Built from `emptyAssembly()` so the shim is a
+  // schema-valid AssemblyFile (mutable `mateConstraints` copy — the folds return a
+  // new array anyway).
+  const mateFoldShim = useCallback(
+    (list: readonly AssemblyMateConstraint[]): AssemblyFile => ({
+      ...emptyAssembly(),
+      mateConstraints: [...list],
+    }),
+    []
+  )
+
+  const handleMateConstraintDelete = useCallback(
+    (id: string): void => {
+      if (!onMateConstraintsChange) return
+      const next = removeMateConstraint(mateFoldShim(mateConstraints), id).mateConstraints
+      if (editingMateId === id) {
+        setEditingMateId(null)
+        setMateEditError(null)
+      }
+      onMateConstraintsChange(next)
+    },
+    [onMateConstraintsChange, mateConstraints, mateFoldShim, editingMateId]
+  )
+
+  const openMateScalarEditor = useCallback(
+    (mate: AssemblyMateConstraint): void => {
+      setMateEditError(null)
+      if (editingMateId === mate.id) {
+        setEditingMateId(null)
+        return
+      }
+      setMateScalarDraft(
+        typeof mate.value === 'number' && Number.isFinite(mate.value) ? String(mate.value) : ''
+      )
+      setEditingMateId(mate.id)
+    },
+    [editingMateId]
+  )
+
+  const handleMateScalarApply = useCallback(
+    (id: string): void => {
+      if (!onMateConstraintsChange) return
+      const raw = mateScalarDraft.trim()
+      const parsed = Number(raw)
+      if (raw.length === 0 || !Number.isFinite(parsed)) {
+        setMateEditError('Enter a finite number.')
+        return
+      }
+      const res = setMateConstraintScalar(mateFoldShim(mateConstraints), id, parsed)
+      if (!res.ok) {
+        setMateEditError(res.reason)
+        return
+      }
+      setMateEditError(null)
+      setEditingMateId(null)
+      onMateConstraintsChange(res.assembly.mateConstraints)
+    },
+    [onMateConstraintsChange, mateScalarDraft, mateConstraints, mateFoldShim]
+  )
+
+  const handleMateSuppressToggle = useCallback(
+    (mate: AssemblyMateConstraint): void => {
+      if (!onMateConstraintsChange) return
+      const next = setMateSuppress(
+        mateFoldShim(mateConstraints),
+        mate.id,
+        mate.suppress !== true
+      ).mateConstraints
+      onMateConstraintsChange(next)
+    },
+    [onMateConstraintsChange, mateConstraints, mateFoldShim]
+  )
 
   // Mapping of part id → display name so the mate rows can show
   // `Bracket → Plate` instead of opaque ids. Pre-compute via useMemo so
@@ -1874,6 +2017,207 @@ export function AssemblyView({
               )}
             </div>
           )}
+
+          {/*
+            Phase-4 Mate constraints panel — the REACHABLE durable mate list.
+            Lists `mateConstraints` (the solver's actual input, hydrated from
+            assembly.json) with per-row DELETE / EDIT-scalar / SUPPRESS actions.
+            Distinct from the dead-by-design face-id `mates` panel above (which
+            the live route never mounts): this one is what the operator sees
+            after authoring a mate in the AssemblyMatePanel. Row actions are
+            withheld (read-only list) unless the host wired `onMateConstraintsChange`.
+          */}
+          <div
+            className="design-assembly__mate-constraints"
+            data-testid="design-assembly-mate-constraints"
+            aria-label="Assembly mate constraints"
+          >
+            <div className="design-assembly__mate-constraints-header">
+              <span className="design-assembly__mate-constraints-title">Mates</span>
+              <span
+                className="design-assembly__mate-constraints-count"
+                data-testid="design-assembly-mate-constraints-count"
+              >
+                {`${mateConstraints.length} mate${mateConstraints.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            {mateConstraints.length === 0 ? (
+              <EmptyState
+                testId="design-assembly-mate-constraints-empty"
+                icon={'⇄'}
+                title="No mates yet"
+                body="Mates pin parts together so the solver can position them. Define one in the Define mate panel below — coincident, concentric, distance, angle, flush, or tangent."
+              />
+            ) : (
+              <ul
+                className="design-assembly__mate-constraints-list"
+                data-testid="design-assembly-mate-constraints-list"
+                role="list"
+              >
+                {mateConstraints.map((mate) => {
+                  const rowId = `design-assembly-mate-constraint-${mate.id}`
+                  const part1Label = partNameById[mate.part1Id] ?? mate.part1Id
+                  const part2Label = partNameById[mate.part2Id] ?? mate.part2Id
+                  const scalar = formatMateScalar(mate)
+                  const isDangling = danglingIds.has(mate.id)
+                  const isSuppressed = mate.suppress === true
+                  const isEditing = editingMateId === mate.id
+                  const editable = mateKindHasScalar(mate.kind)
+                  const rowClass = [
+                    'design-assembly__mate-constraint-row',
+                    isSuppressed ? 'design-assembly__mate-constraint-row--suppressed' : '',
+                    isDangling ? 'design-assembly__mate-constraint-row--dangling' : '',
+                  ]
+                    .filter((c) => c.length > 0)
+                    .join(' ')
+                  return (
+                    <li
+                      key={mate.id}
+                      className={rowClass}
+                      data-testid={rowId}
+                      data-suppressed={isSuppressed ? 'true' : undefined}
+                      data-dangling={isDangling ? 'true' : undefined}
+                      role="listitem"
+                    >
+                      <span
+                        className="design-assembly__mate-constraint-kind"
+                        data-testid={`${rowId}-kind`}
+                        title={`${MATE_CONSTRAINT_KIND_LABELS[mate.kind]} mate`}
+                      >
+                        {MATE_CONSTRAINT_KIND_LABELS[mate.kind]}
+                      </span>
+                      <span
+                        className="design-assembly__mate-constraint-parts"
+                        data-testid={`${rowId}-parts`}
+                      >
+                        {part1Label} ↔ {part2Label}
+                      </span>
+                      {scalar !== null && (
+                        <span
+                          className="design-assembly__mate-constraint-scalar"
+                          data-testid={`${rowId}-scalar`}
+                        >
+                          {scalar}
+                        </span>
+                      )}
+                      {isSuppressed && (
+                        <span
+                          className="design-assembly__mate-constraint-flag design-assembly__mate-constraint-flag--suppressed"
+                          data-testid={`${rowId}-suppressed-flag`}
+                          title="Suppressed — kept on the assembly but excluded from the solve."
+                        >
+                          suppressed
+                        </span>
+                      )}
+                      {isDangling && (
+                        <span
+                          className="design-assembly__mate-constraint-flag design-assembly__mate-constraint-flag--dangling"
+                          data-testid={`${rowId}-dangling-flag`}
+                          title="A referenced part is no longer in this assembly. This mate is excluded from the solve; delete it."
+                        >
+                          dangling
+                        </span>
+                      )}
+                      {onMateConstraintsChange && (
+                        <div className="design-assembly__mate-constraint-actions">
+                          {editable && !isDangling && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost design-assembly__mate-constraint-edit"
+                              data-testid={`${rowId}-edit`}
+                              aria-expanded={isEditing}
+                              onClick={() => openMateScalarEditor(mate)}
+                              title={`Edit the ${mate.kind === 'distance' ? 'distance (mm)' : 'angle (deg)'} target`}
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {!isDangling && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost design-assembly__mate-constraint-suppress"
+                              data-testid={`${rowId}-suppress`}
+                              aria-pressed={isSuppressed}
+                              onClick={() => handleMateSuppressToggle(mate)}
+                              title={
+                                isSuppressed
+                                  ? 'Re-enable this mate (include it in the solve).'
+                                  : 'Suppress this mate (park it — excluded from the solve).'
+                              }
+                            >
+                              {isSuppressed ? 'Enable' : 'Suppress'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="design-assembly__mate-constraint-remove"
+                            data-testid={`${rowId}-remove`}
+                            aria-label={`Delete ${MATE_CONSTRAINT_KIND_LABELS[mate.kind]} mate ${part1Label} to ${part2Label}`}
+                            onClick={() => handleMateConstraintDelete(mate.id)}
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      )}
+                      {isEditing && editable && onMateConstraintsChange && (
+                        <div
+                          className="design-assembly__mate-constraint-editor"
+                          data-testid={`${rowId}-editor`}
+                          role="group"
+                          aria-label={`Edit ${MATE_CONSTRAINT_KIND_LABELS[mate.kind]} target`}
+                        >
+                          {mateEditError !== null && (
+                            <div
+                              className="design-assembly__mate-constraint-editor-error"
+                              role="alert"
+                              data-testid={`${rowId}-editor-error`}
+                            >
+                              {mateEditError}
+                            </div>
+                          )}
+                          <label
+                            className="design-assembly__mate-constraint-editor-label"
+                            htmlFor={`${rowId}-editor-input`}
+                          >
+                            {mate.kind === 'distance' ? 'Distance (mm)' : 'Angle (deg)'}
+                          </label>
+                          <input
+                            id={`${rowId}-editor-input`}
+                            className="design-assembly__mate-constraint-editor-input"
+                            data-testid={`${rowId}-editor-input`}
+                            type="number"
+                            inputMode="decimal"
+                            min={mate.kind === 'distance' ? 0 : undefined}
+                            value={mateScalarDraft}
+                            onChange={(e) => setMateScalarDraft(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary design-assembly__mate-constraint-editor-apply"
+                            data-testid={`${rowId}-editor-apply`}
+                            onClick={() => handleMateScalarApply(mate.id)}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {/*
+              HONESTY: full 3-vector re-authoring (which faces/points/axes a mate
+              references) stays in the Define mate panel below — this list edits
+              only the numeric target of a distance / angle mate + delete / suppress.
+            */}
+            <p
+              className="design-assembly__mate-constraints-note"
+              data-testid="design-assembly-mate-constraints-note"
+            >
+              Edit changes a distance / angle target; re-author feature references in the Define mate panel.
+            </p>
+          </div>
 
           {/*
             Interference panel — bbox-level clash list. Sits under the parts +

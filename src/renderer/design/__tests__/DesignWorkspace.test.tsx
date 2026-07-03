@@ -50,12 +50,16 @@ import {
   DesignWorkspace,
   STARTER_SCRIPT,
   buildDesignOutputStlPath,
+  buildDesignExportDefaultPath,
+  DESIGN_EXPORT_CHOICES,
   performSendToCam,
   type SendToCamOutcome
 } from '../DesignWorkspace'
 import type {
   CadExecuteScriptMesh,
+  CadExportFormat,
 } from '../../../shared/sidecar-protocol'
+import { CAD_EXPORT_FORMATS } from '../../../main/ipc-cad'
 import type { CadExportResponse } from '../../../main/ipc-cad'
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
@@ -361,5 +365,114 @@ describe('DesignWorkspace — Send-to-CAM button render contract', () => {
       errSpy.mockRestore()
       warnSpy.mockRestore()
     }
+  })
+})
+
+// ── (E) Multi-format export (Phase-3) ──────────────────────────────────────
+//
+// The Design workspace gains a SEPARATE "Export as…" menu that ships any of the
+// six REAL formats to a save-dialog-chosen path via `cad.export`. Send-to-CAM
+// (STL) is untouched. These pins guard:
+//   1. `DESIGN_EXPORT_CHOICES` covers exactly the formats the IPC whitelist
+//      (`CAD_EXPORT_FORMATS`) allows — no menu row can request a format the
+//      sidecar would reject, and no allowed format is missing from the menu.
+//   2. `buildDesignExportDefaultPath` ALWAYS produces a filename whose extension
+//      matches the chosen format — Security Rule 4 (no `.stl` file carrying STEP
+//      text; the default suggested path never mislabels the content).
+//   3. The Export menu renders (toggle button present) alongside Send-to-CAM.
+
+describe('DESIGN_EXPORT_CHOICES — format-descriptor contract', () => {
+  it('covers exactly the IPC-whitelisted export formats (no more, no less)', () => {
+    const menuFormats = DESIGN_EXPORT_CHOICES.map((c) => c.format).sort()
+    const ipcFormats = [...CAD_EXPORT_FORMATS].sort()
+    expect(menuFormats).toEqual(ipcFormats)
+  })
+
+  it('exposes all six REAL formats (step / stl / dxf / 3mf / amf / brep)', () => {
+    const formats = new Set<CadExportFormat>(DESIGN_EXPORT_CHOICES.map((c) => c.format))
+    for (const f of ['step', 'stl', 'dxf', '3mf', 'amf', 'brep'] as const) {
+      expect(formats.has(f)).toBe(true)
+    }
+  })
+
+  it('every descriptor carries a non-empty label, ext, and hint', () => {
+    for (const c of DESIGN_EXPORT_CHOICES) {
+      expect(c.label.length).toBeGreaterThan(0)
+      expect(c.ext.length).toBeGreaterThan(0)
+      expect(c.hint.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('each descriptor ext lines up with a plausible filename extension for its format', () => {
+    // The ext must be the lower-cased format token for every choice except none
+    // (all six formats use their own token as the extension).
+    for (const c of DESIGN_EXPORT_CHOICES) {
+      expect(c.ext).toBe(c.format)
+    }
+  })
+})
+
+describe('buildDesignExportDefaultPath — extension always matches the format', () => {
+  it('produces a file whose extension is the chosen format (Security Rule 4)', () => {
+    for (const c of DESIGN_EXPORT_CHOICES) {
+      const out = buildDesignExportDefaultPath('/tmp/wt-cad/output.stl', c.ext)
+      expect(out.endsWith(`.${c.ext}`)).toBe(true)
+      // A STEP export must NEVER be suggested with a .stl name and vice-versa:
+      // the ONLY dotted suffix in the filename is the chosen ext.
+      const base = out.slice(Math.max(out.lastIndexOf('/'), out.lastIndexOf('\\')) + 1)
+      expect(base).toBe(`design-export.${c.ext}`)
+    }
+  })
+
+  it('keeps the parent directory of the source STL (POSIX)', () => {
+    const out = buildDesignExportDefaultPath('/var/wt-cad/output.stl', 'step')
+    expect(out).toBe('/var/wt-cad/design-export.step')
+  })
+
+  it('keeps the parent directory of the source STL (Windows)', () => {
+    const out = buildDesignExportDefaultPath('C:\\Temp\\wt\\output.stl', '3mf')
+    expect(out).toBe('C:\\Temp\\wt\\design-export.3mf')
+    expect(out.includes('/')).toBe(false)
+  })
+
+  it('handles a bare filename by emitting a relative path', () => {
+    const out = buildDesignExportDefaultPath('output.stl', 'brep')
+    expect(out).toBe('design-export.brep')
+  })
+})
+
+describe('DesignWorkspace — Export-as menu render contract', () => {
+  it('renders the Export-as toggle button', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        onSendToCam: vi.fn()
+      })
+    )
+    expect(html).toContain('data-testid="design-workspace-export-toggle"')
+    expect(html).toContain('Export as')
+  })
+
+  it('Export-as toggle is disabled until a body has been built', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT,
+        onSendToCam: vi.fn()
+      })
+    )
+    // No lastTessellation in state → firstMesh is null → the export toggle is
+    // disabled (you cannot export a model you have not built).
+    expect(html).toMatch(/data-testid="design-workspace-export-toggle"[^>]*disabled/)
+  })
+
+  it('renders the Export-as menu even when Send-to-CAM is omitted (independent affordance)', () => {
+    const html = renderToStaticMarkup(
+      createElement(DesignWorkspace, {
+        initialScript: STARTER_SCRIPT
+      })
+    )
+    // Export is not gated on onSendToCam — the two are separate flows.
+    expect(html).toContain('data-testid="design-workspace-export-toggle"')
+    expect(html).not.toContain('design-workspace-send-to-cam')
   })
 })

@@ -12,7 +12,14 @@ import {
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import type { DesignFileV2, SketchConstraint } from '../../shared/design-schema'
-import { emptyDesign } from '../../shared/design-schema'
+import {
+  emptyDesign,
+  addUserParameter as addUserParameterOp,
+  editUserParameterExpression as editUserParameterOp,
+  renameUserParameter as renameUserParameterOp,
+  deleteUserParameter as deleteUserParameterOp
+} from '../../shared/design-schema'
+import { resolveUserParametersAndSolve } from './sketch-dimension-drive'
 import { formatLoadRejection } from '../../shared/file-parse-errors'
 import {
   decideRecoveryOffer,
@@ -233,6 +240,24 @@ export type DesignSessionValue = {
   }) => void
   runSolve: () => void
   setParameter: (key: string, value: number) => void
+  // ── USER PARAMETERS (design-side named params + expressions, Phase-3) ─────
+  // Each mutation runs the pure reference-integrity op (design-schema.ts), then
+  // — on success — RESOLVES every user parameter into the numeric `parameters`
+  // cache and RE-SOLVES the sketch (`resolveUserParametersAndSolve`), and
+  // dispatches an `edit` so the change lands on the SKETCH undo stack (the
+  // docReducer `past` stack — user parameters live in the design file exactly
+  // like `parameters`/`entities`, so they belong on the sketch undo route, NOT
+  // the timeline `undoableCommit` stack; documented on the value below). A
+  // rejected op (invalid name, cycle-free duplicate, delete-while-referenced)
+  // surfaces its reason via `onStatus` and does NOT dispatch.
+  /** Add a user parameter `name = expression`. Rejections toast; no state change. */
+  addUserParameter: (name: string, expression: string) => void
+  /** Set an existing user parameter's expression + re-resolve dependents. */
+  editUserParameter: (name: string, expression: string) => void
+  /** Rename a user parameter, cascading references (expressions + dimension keys). */
+  renameUserParameter: (from: string, to: string) => void
+  /** Delete a user parameter (blocked + toasted when still referenced). */
+  deleteUserParameter: (name: string) => void
   mirrorX: () => void
   pattern40X: () => void
   undo: () => void
@@ -1467,6 +1492,52 @@ export function DesignSessionProvider({
     [design]
   )
 
+  // ── USER PARAMETERS — run the pure op, then resolve + re-solve + edit-dispatch.
+  // A single shared applier keeps the four gestures identical: run the schema
+  // op; on rejection toast the reason (no state change); on success feed the
+  // op's design through `resolveUserParametersAndSolve` (writes the resolved
+  // numeric cache + lands dependent dimensions) and dispatch an `edit` (sketch
+  // undo). Pure ops + a pure resolve = deterministic; Ctrl+Z in sketch mode
+  // reverts the whole parameter edit in one step.
+  const applyUserParameterOp = useCallback(
+    (result: { ok: true; design: DesignFileV2 } | { ok: false; reason: string }) => {
+      if (!result.ok) {
+        onStatusRef.current?.(result.reason)
+        return
+      }
+      dispatch({ type: 'edit', design: resolveUserParametersAndSolve(result.design) })
+    },
+    []
+  )
+
+  const addUserParameter = useCallback(
+    (name: string, expression: string) => {
+      applyUserParameterOp(addUserParameterOp(design, name, expression))
+    },
+    [design, applyUserParameterOp]
+  )
+
+  const editUserParameter = useCallback(
+    (name: string, expression: string) => {
+      applyUserParameterOp(editUserParameterOp(design, name, expression))
+    },
+    [design, applyUserParameterOp]
+  )
+
+  const renameUserParameter = useCallback(
+    (from: string, to: string) => {
+      applyUserParameterOp(renameUserParameterOp(design, from, to))
+    },
+    [design, applyUserParameterOp]
+  )
+
+  const deleteUserParameter = useCallback(
+    (name: string) => {
+      applyUserParameterOp(deleteUserParameterOp(design, name))
+    },
+    [design, applyUserParameterOp]
+  )
+
   const mirrorX = useCallback(() => {
     dispatch({ type: 'edit', design: mirrorDesignAcrossYAxis(design) })
   }, [design])
@@ -1838,6 +1909,10 @@ export function DesignSessionProvider({
       addConstraint,
       runSolve,
       setParameter,
+      addUserParameter,
+      editUserParameter,
+      renameUserParameter,
+      deleteUserParameter,
       mirrorX,
       pattern40X,
       undo,
@@ -1897,6 +1972,10 @@ export function DesignSessionProvider({
       addConstraint,
       runSolve,
       setParameter,
+      addUserParameter,
+      editUserParameter,
+      renameUserParameter,
+      deleteUserParameter,
       mirrorX,
       pattern40X,
       undo,

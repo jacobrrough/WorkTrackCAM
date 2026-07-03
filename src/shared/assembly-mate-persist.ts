@@ -416,3 +416,174 @@ export function persistMate(
     constraint: built.constraint
   }
 }
+
+// ── Mate list EDIT operations (delete / edit-scalar / suppress) ───────────────
+//
+// The authoring path above APPENDS a solved mate. These folds power the
+// AssemblyView Mates panel's per-row actions on the ALREADY-persisted list. Each
+// is a pure, id-keyed rewrite over `mateConstraints` returning a NEW array (never
+// mutating the input) so a React state update sees a fresh identity, mirroring
+// `withMateConstraint`. They operate on the durable Model-C list directly (no
+// Model-B round-trip) because a delete / a scalar tweak / a suppress toggle never
+// needs to re-derive feature vectors — the geometry is unchanged.
+
+/**
+ * Which mate kinds carry a numeric scalar the operator can edit inline:
+ *   - `distance` → target separation (mm), must be finite and ≥ 0;
+ *   - `angle`    → target angle (degrees), any finite value.
+ * Every other kind (`coincident` / `concentric` / `flush` / `tangent`) has no
+ * free scalar — its geometry is fully determined by the feature refs — so the
+ * Mates panel offers no inline edit for those (full re-authoring stays in the
+ * AssemblyMatePanel). Exported so the renderer and the tests agree on exactly
+ * which rows get the Edit affordance.
+ */
+export const SCALAR_MATE_KINDS: ReadonlySet<AssemblyMateKind> = new Set<AssemblyMateKind>([
+  'distance',
+  'angle'
+])
+
+/** Does this mate kind carry an editable numeric scalar (`distance` / `angle`)? */
+export function mateKindHasScalar(kind: AssemblyMateKind): boolean {
+  return SCALAR_MATE_KINDS.has(kind)
+}
+
+/**
+ * Human-readable label for a persisted Model-C mate kind, shown in the Mates
+ * panel row. Distinct from the AUTHORING panel's Model-B labels (`Point` / `Axis`
+ * / `Plane`): the durable list shows the SOLVER's vocabulary (`coincident` →
+ * "Coincident", etc.) so the row reflects what actually constrains the parts.
+ */
+export const MATE_CONSTRAINT_KIND_LABELS: Record<AssemblyMateKind, string> = {
+  coincident: 'Coincident',
+  concentric: 'Concentric',
+  distance: 'Distance',
+  angle: 'Angle',
+  flush: 'Flush',
+  tangent: 'Tangent'
+}
+
+/**
+ * Compact one-line label for a persisted mate's editable scalar, or `null` for a
+ * kind with none. `distance` → `"12 mm"`, `angle` → `"90°"`. Trailing-zero-free
+ * (`12.5 mm`, not `12.50 mm`) via `Number`'s default formatting. A scalar kind
+ * whose `value` is missing (a malformed / partially-authored mate) reads `"— mm"`
+ * / `"—°"` so the row stays honest rather than printing `undefined`.
+ */
+export function formatMateScalar(mate: AssemblyMateConstraint): string | null {
+  if (mate.kind === 'distance') {
+    return `${typeof mate.value === 'number' && Number.isFinite(mate.value) ? mate.value : '—'} mm`
+  }
+  if (mate.kind === 'angle') {
+    return `${typeof mate.value === 'number' && Number.isFinite(mate.value) ? mate.value : '—'}°`
+  }
+  return null
+}
+
+/**
+ * Remove the mate with `id` from an assembly's `mateConstraints`, returning a NEW
+ * {@link AssemblyFile} (input untouched). A no-op (same-value new array) when no
+ * mate matches — idempotent, so a double-delete never throws. This is the durable
+ * seam the Mates panel's row DELETE uses: one load → this fold → save round-trip,
+ * and the next solve reflects the shorter list.
+ */
+export function removeMateConstraint(assembly: AssemblyFile, id: string): AssemblyFile {
+  const existing = assembly.mateConstraints ?? []
+  const next = existing.filter((c) => c.id !== id)
+  return { ...assembly, mateConstraints: next }
+}
+
+/** Discriminated result of {@link setMateConstraintScalar}. */
+export type EditMateScalarResult =
+  | { readonly ok: true; readonly assembly: AssemblyFile; readonly constraint: AssemblyMateConstraint }
+  | { readonly ok: false; readonly reason: string; readonly assembly: AssemblyFile }
+
+/**
+ * Edit the numeric `value` of a scalar-bearing mate (`distance` mm / `angle` deg)
+ * in place, returning a NEW {@link AssemblyFile}. Validation mirrors the authoring
+ * fold's per-kind rules so an edited constraint is always schema-valid AND
+ * solver-meaningful:
+ *   - the mate must exist and be a scalar kind (`distance` / `angle`);
+ *   - `value` must be finite; `distance` additionally rejects a negative target.
+ *   - `-0` is canonicalised to `0` (matching `pointFeature`'s JSON convention).
+ * On a rejected edit the assembly is returned UNCHANGED alongside the reason.
+ */
+export function setMateConstraintScalar(
+  assembly: AssemblyFile,
+  id: string,
+  value: number
+): EditMateScalarResult {
+  const existing = assembly.mateConstraints ?? []
+  const idx = existing.findIndex((c) => c.id === id)
+  if (idx < 0) {
+    return { ok: false, reason: 'Mate not found.', assembly }
+  }
+  const target = existing[idx]!
+  if (!mateKindHasScalar(target.kind)) {
+    return {
+      ok: false,
+      reason: `The ${target.kind} mate has no editable value (only distance / angle do).`,
+      assembly
+    }
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return {
+      ok: false,
+      reason:
+        target.kind === 'distance'
+          ? 'Distance value must be a finite number (mm).'
+          : 'Angle value must be a finite number (degrees).',
+      assembly
+    }
+  }
+  if (target.kind === 'distance' && value < 0) {
+    return { ok: false, reason: 'Distance value must be zero or positive (mm).', assembly }
+  }
+  const constraint: AssemblyMateConstraint = { ...target, value: value === 0 ? 0 : value }
+  const next = existing.map((c, i) => (i === idx ? constraint : c))
+  return { ok: true, assembly: { ...assembly, mateConstraints: next }, constraint }
+}
+
+/**
+ * Set (or clear) the `suppress` flag of the mate with `id`, returning a NEW
+ * {@link AssemblyFile}. The schema's `suppress?: boolean` is already honoured by
+ * `solveMateConstraints` (it filters `suppress !== true`), so a suppressed mate is
+ * parked — kept on disk + visible in the list, but excluded from the solve —
+ * without any solver change. A no-op when no mate matches. Setting `false`
+ * canonically OMITS the flag (so an enabled mate never carries a redundant
+ * `suppress: false`, keeping the on-disk JSON minimal + matching a legacy mate
+ * that never had the key).
+ */
+export function setMateSuppress(
+  assembly: AssemblyFile,
+  id: string,
+  suppress: boolean
+): AssemblyFile {
+  const existing = assembly.mateConstraints ?? []
+  const next = existing.map((c) => {
+    if (c.id !== id) return c
+    if (suppress) return { ...c, suppress: true }
+    // Enable = drop the flag entirely (omitted === active).
+    const { suppress: _omit, ...rest } = c
+    return rest
+  })
+  return { ...assembly, mateConstraints: next }
+}
+
+/**
+ * Ids of mates whose `part1Id` and/or `part2Id` is NOT among `partIds` — a mate
+ * left dangling by a removed part. The reachable data flow prunes these at load
+ * (`hydrateAssembly`) and on part-removal, so this is normally empty; it exists so
+ * the Mates panel can flag (and still allow deleting) a mate that references a
+ * part no longer in the list — a belt-and-suspenders honesty check that never
+ * feeds the solver an unresolvable ref. Deterministic (source order).
+ */
+export function danglingMateIds(
+  mates: readonly AssemblyMateConstraint[],
+  partIds: ReadonlySet<string>
+): string[] {
+  const out: string[] = []
+  for (const m of mates) {
+    if (!partIds.has(m.part1Id) || !partIds.has(m.part2Id)) out.push(m.id)
+  }
+  return out
+}

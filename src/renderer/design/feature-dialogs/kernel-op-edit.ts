@@ -61,13 +61,23 @@ export function featureDialogSpecForOp(op: KernelPostSolidOp): FeatureDialogSpec
         params: { thicknessMm: op.thicknessMm, openDirection: op.openDirection }
       }
     case 'hole_from_profile':
+      // HOLE WIZARD: re-open the SAME dialog pre-filled with every field the op
+      // carries (holeType + cbore/csink + tap metadata). The dialog's op-builder
+      // re-emits only the fields the chosen type needs, so the round-trip is
+      // faithful — a simple hole stays simple, a counterbore keeps its recess.
       return {
         kind: 'hole',
         params: {
           profileIndex: op.profileIndex,
           mode: op.mode,
           depthMm: op.depthMm,
-          zStartMm: op.zStartMm
+          zStartMm: op.zStartMm,
+          holeType: op.holeType,
+          cboreDiameterMm: op.cboreDiameterMm,
+          cboreDepthMm: op.cboreDepthMm,
+          csinkDiameterMm: op.csinkDiameterMm,
+          csinkAngleDeg: op.csinkAngleDeg,
+          tapDesignation: op.tapDesignation
         }
       }
     case 'datum_plane':

@@ -148,9 +148,11 @@ describe('registerCadIpc', () => {
   })
 
   it('exports the canonical format whitelist', () => {
-    // Pin: the format whitelist drives the renderer's "Export" dropdown.
-    // If a format is added without UI work, the dropdown desyncs.
-    expect([...CAD_EXPORT_FORMATS].sort()).toEqual(['dxf', 'step', 'stl'])
+    // Pin: the format whitelist drives the renderer's "Export as…" menu.
+    // If a format is added without UI work, the menu desyncs. Phase-3
+    // multi-format export: step / stl / dxf (original) + 3mf / amf / brep,
+    // all proven REAL against the bundled CadQuery build.
+    expect([...CAD_EXPORT_FORMATS].sort()).toEqual(['3mf', 'amf', 'brep', 'dxf', 'step', 'stl'])
   })
 
   it('exposes a 100 KB script length cap', () => {
@@ -272,6 +274,31 @@ describe('validateExportPayload', () => {
     }) as CadExportResponse
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toBe('invalid_format')
+  })
+
+  it('rejects a format-injection attempt (Security Rule 4)', () => {
+    // A renderer bug or a malicious payload must never smuggle an
+    // arbitrary exporter/method token through as `format`. Only the six
+    // whitelisted tokens survive; everything else is invalid_format.
+    for (const bad of ['obj', 'STEP', 'stl; rm -rf', '../step', 'step\0', 'gltf', '']) {
+      const r = validateExportPayload({ handle: 'h1', outPath: '/a/b.x', format: bad }) as CadExportResponse
+      expect(r.ok, `format=${JSON.stringify(bad)} must be rejected`).toBe(false)
+      if (!r.ok) expect(r.error).toBe('invalid_format')
+    }
+  })
+
+  it('rejects a null-byte path-traversal attempt on any format', () => {
+    // Null-byte injection defeats every downstream path guard, so it is
+    // rejected at the boundary regardless of the (otherwise-valid) format.
+    for (const fmt of CAD_EXPORT_FORMATS) {
+      const r = validateExportPayload({
+        handle: 'h1',
+        outPath: `/a/evil\0.${fmt}`,
+        format: fmt,
+      }) as CadExportResponse
+      expect(r.ok, `null-byte path for format=${fmt} must be rejected`).toBe(false)
+      if (!r.ok) expect(r.error).toBe('invalid_path')
+    }
   })
 
   it('rejects non-positive toleranceMm', () => {

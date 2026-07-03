@@ -74,10 +74,15 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   hints name the blocker. *(done 2026-07-01, wave 3)*
 
 ### Phase 3 — Parametric depth
-- [ ] **User parameters + expressions (L)** — named params + `d1*2` evaluator feeding dialogs and
-  sketch dims. Design-intent capture.
-- [ ] **Hole wizard (M)** — counterbore/countersink/tap designation on hole_from_profile; kernel
-  geometry in build_part.py.
+- ✅ **User parameters + expressions (L)** — hand-rolled tokenizer/parser/evaluator (no eval;
+  errors-as-values; cycle detection naming the chain), additive `userParameters` on the design,
+  FeatureTree Parameters panel (add/rename-cascade/edit/delete-blocked-when-referenced), sketch
+  dims re-resolve + re-solve on param edit; last-good cache so a typo never zeroes geometry.
+  Threaded through host -> Properties pane. *(done 2026-07-02, wave 5)*
+- ✅ **Hole wizard (M)** — holeType simple/counterbore/countersink (+ tapDesignation metadata) on
+  hole_from_profile; real kernel recess geometry in build_part.py (guards: recess dia > hole dia,
+  warn + straight-bore fallback, never crash); dialog works in create AND wave-1 edit mode;
+  analytic-volume Python tests + byte-identical legacy STL pin. *(done 2026-07-02, wave 5)*
 - ✅ **Feature-timeline undo/redo (M)** — timeline-scoped UndoManager in DesignSessionProvider;
   all 7 timeline editors route through `undoableCommit` (inverse folds replay through the SAME
   validated commitKernelFeatures chain — never a raw state poke; single-write race pins hold);
@@ -85,7 +90,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   *(done 2026-07-02, wave 4)*
 - [ ] **Project model edges into sketch (L)** — face/edge extraction → plane projection → snappable
   reference geometry. ~25% faster complex sketches.
-- [ ] **Multi-format design export (M)** — STEP/3MF/OBJ export beyond STL (sidecar exporters exist).
+- ✅ **Multi-format design export (M)** — STEP/3MF (+ formats the exporter really has) beside STL;
+  STEP writes true B-rep (round-trip re-import proven: volume + bbox), 3MF structure-checked;
+  format whitelist + path validation (Rule 4); Send-to-CAM STL path untouched.
+  *(done 2026-07-02, wave 5)*
 
 ### Phase 4 — Assembly UX
 - ✅ **Motion-study playback (M)** — scrub slider + play/pause + joint-scalar readout; interpolated
@@ -96,7 +104,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - [ ] **Assembly 3D viewport (M-L)** — wave-2 finding: AssemblyView's viewport column is a
   node-safe summary placeholder, not a Three.js scene. Needed for motion playback + interference
   to be seen, not just read.
-- [ ] **Mate list/edit/delete panel (M)** — persisted mateConstraints are invisible today.
+- ✅ **Mate list/edit/delete panel (M)** — Mates section in AssemblyView: kind/parts/scalar rows,
+  DELETE + scalar EDIT + SUPPRESS (solver skips suppressed — proven via save->load->solve residuals),
+  dangling flags, shared EmptyState; persists through the same serialized mate chain authoring
+  uses. *(done 2026-07-02, wave 5)*
 - ✅ **Joint limits authoring UI (S)** — per-DOF min/max editor on limitable joint rows
   (validated, clear-to-unlimited), persisted through the solve seam; authored limits now thread
   into BOTH assembly:solve clamps and assembly:simulate sweeps (the "LIMIT COUPLING" gap closed —

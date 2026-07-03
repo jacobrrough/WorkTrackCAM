@@ -107,7 +107,8 @@ import type {
 import {
   FeatureTree,
   type FeatureTreeOperation,
-  type FeatureTreeParameter
+  type FeatureTreeParameter,
+  type FeatureTreeUserParameter
 } from './FeatureTree'
 import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 import {
@@ -122,6 +123,7 @@ import type {
   CadExecuteScriptMesh,
   CadExecuteScriptResult,
   CadDeclaredParameter,
+  CadExportFormat,
   CadFaceMapEntry,
   CadOperationSummary,
   CadParseError,
@@ -189,6 +191,53 @@ export function buildDesignOutputStlPath(sourceStlPath: string): string {
   // within the same millisecond (the worst case in tests).
   const rand = Math.random().toString(36).slice(2, 8)
   const filename = `design-output-${stamp}-${rand}.stl`
+  return dir.length > 0 ? `${dir}${sep}${filename}` : filename
+}
+
+/**
+ * Multi-format design export (Phase-3).
+ *
+ * The Design workspace can export the built body to any of the six formats the
+ * CadQuery sidecar proves REAL (`cq.exporters.ExportTypes`): STEP / STL / DXF /
+ * 3MF / AMF / BREP. `Send to CAM` is UNCHANGED — it always ships STL. This menu
+ * is the SEPARATE "Export as…" affordance that lets the operator write any
+ * format to a save-dialog-chosen location.
+ *
+ * Each descriptor carries the wire `format` token (matches `CadExportFormat`),
+ * the file extension, a friendly label, and a one-line hint. The order is the
+ * menu order — CAD interchange first (STEP), then the mesh + 2D formats.
+ */
+export type DesignExportChoice = {
+  readonly format: CadExportFormat
+  readonly ext: string
+  readonly label: string
+  readonly hint: string
+}
+
+export const DESIGN_EXPORT_CHOICES: readonly DesignExportChoice[] = [
+  { format: 'step', ext: 'step', label: 'STEP (.step)', hint: 'B-rep solid — exact surfaces, best for CAD interchange' },
+  { format: 'stl', ext: 'stl', label: 'STL (.stl)', hint: 'Binary mesh — universal 3D-print / CAM input' },
+  { format: '3mf', ext: '3mf', label: '3MF (.3mf)', hint: 'Modern mesh container (zip) — 3D-print interchange' },
+  { format: 'amf', ext: 'amf', label: 'AMF (.amf)', hint: 'Additive-manufacturing mesh format' },
+  { format: 'brep', ext: 'brep', label: 'BREP (.brep)', hint: 'Native OpenCascade B-rep' },
+  { format: 'dxf', ext: 'dxf', label: 'DXF (.dxf)', hint: '2D projection — plan-view linework' },
+] as const
+
+/**
+ * Derive the DEFAULT save path suggested to the operator when they pick a format
+ * from the Export menu. Mirrors {@link buildDesignOutputStlPath}'s
+ * directory-derivation logic (reuse the sidecar's temp dir as the default
+ * location, cross-platform separator handling) but swaps the extension for the
+ * chosen format and drops the random suffix — the operator names the file in the
+ * save dialog, so a stable `design-export.<ext>` stem is friendlier than a
+ * random one. Exported so the paired-pin test can assert the extension always
+ * matches the format (Security Rule 4 — no `.stl` file carrying STEP text).
+ */
+export function buildDesignExportDefaultPath(sourceStlPath: string, ext: string): string {
+  const sepIdx = Math.max(sourceStlPath.lastIndexOf('/'), sourceStlPath.lastIndexOf('\\'))
+  const dir = sepIdx >= 0 ? sourceStlPath.slice(0, sepIdx) : ''
+  const sep = sepIdx >= 0 ? sourceStlPath[sepIdx] : '/'
+  const filename = `design-export.${ext}`
   return dir.length > 0 ? `${dir}${sep}${filename}` : filename
 }
 
@@ -369,6 +418,15 @@ export interface DesignWorkspaceProps {
    */
   readonly onMateAdded?: (mate: SolvedMate) => void
   /**
+   * Phase-4 (Mate list/edit/delete) — fired when the operator edits the durable
+   * mate list from the AssemblyView Mates panel (row delete, scalar edit, or a
+   * suppress toggle). Receives the FULL desired `mateConstraints` list; the host
+   * (DesignWorkspaceHost) persists it through the same load→replace→save assembly
+   * round-trip the `onMateAdded` authoring path uses. Optional — when omitted the
+   * Mates panel renders read-only (no row actions), so every existing pin holds.
+   */
+  readonly onMateConstraintsChange?: (next: readonly AssemblyMateConstraint[]) => void
+  /**
    * The editable kernel-op timeline for the active part
    * (`part/features.json` `kernelOps[]`). Optional pass-through: a host that
    * owns the DesignSessionContext threads the live array + edit callbacks here
@@ -403,6 +461,16 @@ export interface DesignWorkspaceProps {
    * every existing pin holds.
    */
   readonly onUpdateKernelOp?: (index: number, op: KernelPostSolidOp) => void
+  /**
+   * Wave 5 — named user parameters (design-side, expression-driven). Threaded
+   * from the host's DesignSessionContext; when supplied the Properties pane's
+   * FeatureTree shows the editable Parameters section.
+   */
+  readonly userParameters?: ReadonlyArray<FeatureTreeUserParameter>
+  readonly onUserParameterAdd?: (name: string, expression: string) => void
+  readonly onUserParameterEdit?: (name: string, expression: string) => void
+  readonly onUserParameterRename?: (from: string, to: string) => void
+  readonly onUserParameterDelete?: (name: string) => void
   /**
    * FG-5b — append a kernel post-solid op to `part/features.json` `kernelOps[]`.
    * Threaded from the host's `DesignSessionContext.appendKernelOp`. When
@@ -687,6 +755,7 @@ export function DesignWorkspace({
   onAssemblyPartsChange,
   initialAssemblyHandle = null,
   onMateAdded,
+  onMateConstraintsChange,
   kernelOps,
   rolledBackTo,
   onKernelMove,
@@ -696,6 +765,11 @@ export function DesignWorkspace({
   onKernelClearRollback,
   onKernelDelete,
   onUpdateKernelOp,
+  userParameters,
+  onUserParameterAdd,
+  onUserParameterEdit,
+  onUserParameterRename,
+  onUserParameterDelete,
   onAppendKernelOp,
   kernelOpsDisabled = false,
   sketchActive = false,
@@ -1165,6 +1239,13 @@ export function DesignWorkspace({
   // disable the Send-to-CAM button and prevent duplicate exports if
   // the operator double-clicks.
   const [sending, setSending] = useState(false)
+  // ── Multi-format export (Phase-3) ─────────────────────────────────────────
+  // `exportMenuOpen` toggles the "Export as…" format menu; `exporting` guards
+  // the cad.export round-trip so a double-click can't fire two save dialogs.
+  // Separate from `sending` (Send-to-CAM) so the two affordances never fight
+  // over one busy flag.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   // ── UI-3 cockpit chrome state ─────────────────────────────────────────────
   // codeOpen drives the CadQuery slide-over drawer (default CLOSED so the Part
   // view reads as a no-code cockpit). Local UI state with no sidecar side-effects.
@@ -1245,6 +1326,55 @@ export function DesignWorkspace({
     }
   }, [firstMesh, onSendToCam, sending, toast])
 
+  // ── Export as… (multi-format, Phase-3) ────────────────────────────────────
+  // Mirrors the STL path's location logic (reuse the sidecar temp dir as the
+  // default) but opens a save dialog so the operator names the file, then
+  // routes through the SAME `cad.export` IPC with the chosen `format`. The
+  // save-dialog filter is derived from the format descriptor so the chosen
+  // extension always maps to a real exporter (Security Rule 4 — the sidecar
+  // additionally whitelists `format`, so a poisoned extension can never write a
+  // mismatched file). `Send to CAM` (STL) is untouched.
+  const handleExportAs = useCallback(
+    async (choice: DesignExportChoice): Promise<void> => {
+      setExportMenuOpen(false)
+      if (!firstMesh) {
+        toast('warn', 'Run the script first to produce a model.')
+        return
+      }
+      if (exporting) return
+      setExporting(true)
+      setError(null)
+      try {
+        const defaultPath = buildDesignExportDefaultPath(firstMesh.stlPath, choice.ext)
+        const chosen = await fab().dialogSaveFile(
+          [{ name: choice.label, extensions: [choice.ext] }],
+          defaultPath,
+        )
+        // Operator cancelled the save dialog — a silent no-op, not an error.
+        if (!chosen) return
+        const response = await fab().cad.export({
+          handle: firstMesh.handle,
+          outPath: chosen,
+          format: choice.format,
+        })
+        if (!response.ok) {
+          const detail = response.hint ? ` — ${response.hint}` : ''
+          setError(`Export failed: ${response.error}${detail}`)
+          toast('err', `Export failed: ${response.error}`)
+          return
+        }
+        toast('ok', `Exported ${choice.format.toUpperCase()} to ${response.result.outPath}`)
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        setError(`Export failed: ${message}`)
+        toast('err', `Export failed: ${message}`)
+      } finally {
+        setExporting(false)
+      }
+    },
+    [firstMesh, exporting, toast],
+  )
+
   // ── Save handler ──────────────────────────────────────────────────────────
   const handleSave = useCallback((): void => {
     if (!onSave) return
@@ -1313,6 +1443,23 @@ export function DesignWorkspace({
       prev.filter((m) => m.part1Id !== id && m.part2Id !== id),
     )
   }, [])
+
+  /**
+   * Phase-4 — apply a Mates-panel edit (delete / scalar / suppress). The
+   * AssemblyView already computed the FULL desired list via the pure folds in
+   * `assembly-mate-persist`; we mirror it into the local `assemblyMates` state
+   * (so the list + the solver input update immediately, in-session) AND forward
+   * to the host so it persists the change to `assembly.json`. Skipped when the
+   * host did not wire the callback (the splash preview / render-pin tests): the
+   * panel then renders read-only, so this handler is never passed down.
+   */
+  const handleMateConstraintsChange = useCallback(
+    (next: readonly AssemblyMateConstraint[]): void => {
+      setAssemblyMates(next)
+      onMateConstraintsChange?.(next)
+    },
+    [onMateConstraintsChange],
+  )
 
   /**
    * CAD foundation (#8) — persist the parts list whenever it changes so the
@@ -2068,6 +2215,9 @@ export function DesignWorkspace({
             onRemovePart={handleRemoveAssemblyPart}
             onAssemblyHandle={setAssemblyHandle}
             onSolvedTransforms={handleSolvedTransforms}
+            onMateConstraintsChange={
+              onMateConstraintsChange ? handleMateConstraintsChange : undefined
+            }
             onToast={onToast}
           />
           {/*
@@ -2691,6 +2841,11 @@ export function DesignWorkspace({
                     parameters={featureParameters}
                     paramOverrides={paramOverrides ?? undefined}
                     onParamsChange={handleParamsChange}
+                    userParameters={userParameters}
+                    onUserParameterAdd={onUserParameterAdd}
+                    onUserParameterEdit={onUserParameterEdit}
+                    onUserParameterRename={onUserParameterRename}
+                    onUserParameterDelete={onUserParameterDelete}
                   />
                 </div>
               )}
@@ -2787,6 +2942,49 @@ export function DesignWorkspace({
                   Save
                 </button>
               )}
+              {/* Multi-format export (Phase-3). A small menu of the six REAL
+                  formats the sidecar supports. Separate from Send-to-CAM (STL),
+                  which is unchanged. Disabled until a body is built. */}
+              <div className="design-workspace__export-menu">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  data-testid="design-workspace-export-toggle"
+                  disabled={!firstMesh || exporting}
+                  aria-busy={exporting}
+                  aria-haspopup="menu"
+                  aria-expanded={exportMenuOpen}
+                  onClick={() => {
+                    setExportMenuOpen((prev) => !prev)
+                  }}
+                >
+                  {exporting ? 'Exporting…' : 'Export as ▾'}
+                </button>
+                {exportMenuOpen && firstMesh && (
+                  <ul
+                    className="design-workspace__export-list"
+                    role="menu"
+                    data-testid="design-workspace-export-list"
+                  >
+                    {DESIGN_EXPORT_CHOICES.map((choice) => (
+                      <li key={choice.format} role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="design-workspace__export-item"
+                          data-testid={`design-workspace-export-${choice.format}`}
+                          title={choice.hint}
+                          onClick={() => {
+                            void handleExportAs(choice)
+                          }}
+                        >
+                          {choice.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               {onSendToCam && (
                 <button
                   type="button"

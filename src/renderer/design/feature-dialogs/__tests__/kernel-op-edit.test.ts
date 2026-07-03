@@ -108,7 +108,8 @@ const FIXTURES: Record<KernelPostSolidOp['kind'], KernelPostSolidOp> = {
     kind: 'hole_from_profile',
     profileIndex: 0,
     mode: 'through_all',
-    zStartMm: 0
+    zStartMm: 0,
+    holeType: 'simple'
   },
   thread_cosmetic: {
     kind: 'thread_cosmetic',
@@ -319,6 +320,53 @@ describe('featureDialogSpecForOp — pre-fill mappings', () => {
     expect(spec).toMatchObject({
       kind: 'thread_wizard',
       params: { majorRadiusMm: 8, pitchMm: 1.25, hand: 'right', class: '6g', starts: 1 }
+    })
+  })
+
+  it('hole_from_profile pre-fills the hole-wizard fields (simple)', () => {
+    expect(featureDialogSpecForOp(FIXTURES.hole_from_profile)).toMatchObject({
+      kind: 'hole',
+      params: { profileIndex: 0, mode: 'through_all', zStartMm: 0, holeType: 'simple' }
+    })
+  })
+
+  it('hole_from_profile round-trips a counterbore op through edit → build', () => {
+    const cbore: KernelPostSolidOp = {
+      kind: 'hole_from_profile',
+      profileIndex: 1,
+      mode: 'through_all',
+      zStartMm: 0,
+      holeType: 'counterbore',
+      cboreDiameterMm: 12,
+      cboreDepthMm: 4,
+      tapDesignation: 'M6x1.0'
+    }
+    const spec = featureDialogSpecForOp(cbore)
+    expect(spec).toMatchObject({
+      kind: 'hole',
+      params: {
+        holeType: 'counterbore',
+        cboreDiameterMm: 12,
+        cboreDepthMm: 4,
+        tapDesignation: 'M6x1.0'
+      }
+    })
+  })
+
+  it('hole_from_profile round-trips a countersink op through edit → build', () => {
+    const csink: KernelPostSolidOp = {
+      kind: 'hole_from_profile',
+      profileIndex: 0,
+      mode: 'depth',
+      depthMm: 6,
+      zStartMm: 0,
+      holeType: 'countersink',
+      csinkDiameterMm: 10,
+      csinkAngleDeg: 82
+    }
+    expect(featureDialogSpecForOp(csink)).toMatchObject({
+      kind: 'hole',
+      params: { holeType: 'countersink', csinkDiameterMm: 10, csinkAngleDeg: 82, depthMm: 6 }
     })
   })
 

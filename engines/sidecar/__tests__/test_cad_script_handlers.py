@@ -579,6 +579,131 @@ def test_export_invalid_handle_raises() -> None:
     assert exc_info.value.code == "invalid_handle"
 
 
+# ── Multi-format export (Phase-3): STEP / 3MF / AMF / BREP ────────────────
+#
+# The export surface now offers six REAL formats. These Tier-2 tests
+# (CadQuery required) prove each one writes a non-trivial file to disk, that
+# STEP re-imports to a valid solid with the expected bounding box (the
+# strongest round-trip proof), and that the 3MF artifact is a valid zip with
+# ``3D/3dmodel.model`` present (the cheap structural check). Every format token
+# is exercised, so a future regression that drops one from the routing table
+# fails here.
+#
+# The whitelist is asserted independently in
+# ``test_export_formats_whitelist_is_the_six_real_formats`` so the constant
+# stays in lock-step with the TypeScript side (``CAD_EXPORT_FORMATS``).
+
+
+def test_export_formats_whitelist_is_the_six_real_formats() -> None:
+    """EXPORT_FORMATS is the single source of truth for the wire whitelist.
+
+    No CadQuery required — this is a pure constant check. Mirrors the TS pin
+    ``CAD_EXPORT_FORMATS`` in ``src/main/ipc-cad.ts`` and the handler's
+    ``ALLOWED_EXPORT_FORMATS`` in ``engines/sidecar/cad_handlers.py``.
+    """
+    from engines.cad.cadquery_script import EXPORT_FORMATS
+
+    assert sorted(EXPORT_FORMATS) == ["3mf", "amf", "brep", "dxf", "step", "stl"]
+    # The handler's whitelist must match the core's exactly.
+    assert tuple(cad_handlers.ALLOWED_EXPORT_FORMATS) == tuple(EXPORT_FORMATS)
+
+
+@requires_cadquery
+def test_export_all_formats_write_nontrivial_files() -> None:
+    """Every whitelisted format writes a non-trivial file to disk.
+
+    A 15x10x5 box is small but every real format still produces well over a
+    few hundred bytes; anything at/near zero would signal a broken exporter.
+    """
+    from engines.cad.cadquery_script import EXPORT_FORMATS
+
+    exec_result = cad_handlers.execute_script({
+        "script": "import cadquery as cq\nresult = cq.Workplane('XY').box(15, 10, 5)\n",
+    })
+    handle = exec_result["meshes"][0]["handle"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for fmt in EXPORT_FORMATS:
+            out_path = os.path.join(tmp, f"out.{fmt}")
+            r = cad_handlers.export({
+                "handle": handle,
+                "outPath": out_path,
+                "format": fmt,
+                "toleranceMm": 0.1,
+            })
+            assert r["outPath"] == out_path, fmt
+            assert Path(out_path).exists(), fmt
+            # Every format for this simple box weighs well over 100 bytes.
+            assert r["bytesWritten"] > 100, (fmt, r["bytesWritten"])
+            assert Path(out_path).stat().st_size == r["bytesWritten"], fmt
+
+
+@requires_cadquery
+def test_export_step_round_trips_to_a_solid_with_expected_bbox() -> None:
+    """STEP export → cad.import_step of the produced file → valid solid.
+
+    The strongest round-trip proof: the re-imported body must be a real solid
+    with the SAME bounding box (and volume) as the source box. STEP carries the
+    B-rep, so this is exact (not a tessellation approximation).
+    """
+    from engines.cad.cadquery_import import import_step_file
+
+    exec_result = cad_handlers.execute_script({
+        "script": "import cadquery as cq\nresult = cq.Workplane('XY').box(15, 10, 5)\n",
+    })
+    handle = exec_result["meshes"][0]["handle"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        step_path = os.path.join(tmp, "roundtrip.step")
+        cad_handlers.export({
+            "handle": handle,
+            "outPath": step_path,
+            "format": "step",
+        })
+        # Re-import the produced STEP through the same path cad.import_step uses.
+        re_handle, doc = import_step_file(step_path)
+        assert re_handle != handle  # a fresh handle for the re-imported body
+        solid = doc.workplane.findSolid()
+        # 15 x 10 x 5 = 750 mm^3 (STEP is exact — no tessellation loss).
+        assert math.isclose(solid.Volume(), 750.0, rel_tol=1e-6)
+        # Centered box: bbox spans (-7.5..7.5, -5..5, -2.5..2.5).
+        for got, want in zip(doc.bbox_min, (-7.5, -5.0, -2.5)):
+            assert math.isclose(got, want, abs_tol=1e-6)
+        for got, want in zip(doc.bbox_max, (7.5, 5.0, 2.5)):
+            assert math.isclose(got, want, abs_tol=1e-6)
+
+
+@requires_cadquery
+def test_export_3mf_is_a_valid_zip_with_3dmodel_present() -> None:
+    """3MF export opens as a valid zip archive with ``3D/3dmodel.model``.
+
+    3MF is a zip container; a structurally-valid one MUST carry the model part
+    at the canonical path. Cheap check that proves the artifact is a real 3MF
+    and not an empty/garbage file.
+    """
+    import zipfile
+
+    exec_result = cad_handlers.execute_script({
+        "script": "import cadquery as cq\nresult = cq.Workplane('XY').box(15, 10, 5)\n",
+    })
+    handle = exec_result["meshes"][0]["handle"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "out.3mf")
+        cad_handlers.export({
+            "handle": handle,
+            "outPath": out_path,
+            "format": "3mf",
+            "toleranceMm": 0.1,
+        })
+        assert zipfile.is_zipfile(out_path)
+        with zipfile.ZipFile(out_path) as zf:
+            # No corrupt entries.
+            assert zf.testzip() is None
+            names = zf.namelist()
+            assert "3D/3dmodel.model" in names, names
+
+
 # ── Sidecar dispatch table includes the new methods ──────────────────────
 
 
