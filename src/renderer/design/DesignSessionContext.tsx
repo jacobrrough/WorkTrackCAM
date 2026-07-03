@@ -12,7 +12,14 @@ import {
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import type { DesignFileV2, SketchConstraint } from '../../shared/design-schema'
-import { emptyDesign } from '../../shared/design-schema'
+import {
+  addUserParameter as addUserParameterOp,
+  deleteUserParameter as deleteUserParameterOp,
+  editUserParameterExpression as editUserParameterOp,
+  emptyDesign,
+  renameUserParameter as renameUserParameterOp,
+  resolveUserParameters
+} from '../../shared/design-schema'
 import { formatLoadRejection } from '../../shared/file-parse-errors'
 import {
   kernelInspectStaleReason,
@@ -186,6 +193,18 @@ export type DesignSessionValue = {
   }) => void
   runSolve: () => void
   setParameter: (key: string, value: number) => void
+  /**
+   * Named user parameters (Phase-3). Each gesture applies the pure
+   * design-schema op, resolves the table (`expression-eval`), merges the
+   * resolved values into `parameters` (the driving map constraints read),
+   * re-solves the sketch, and commits as ONE `edit` dispatch (one sketch-undo
+   * step). An invalid gesture (bad / duplicate / unknown name) leaves the
+   * design untouched and surfaces a status hint instead.
+   */
+  addUserParameter: (name: string, expression: string) => void
+  editUserParameter: (name: string, expression: string) => void
+  renameUserParameter: (from: string, to: string) => void
+  deleteUserParameter: (name: string) => void
   mirrorX: () => void
   pattern40X: () => void
   undo: () => void
@@ -1175,6 +1194,73 @@ export function DesignSessionProvider({
     [design]
   )
 
+  // ── Named user parameters (Phase-3) ────────────────────────────────────────
+  // Fold helper shared by the four gestures below. `next === design` means the
+  // pure op rejected the gesture (invalid / duplicate / unknown name) — surface
+  // the hint, change nothing. Otherwise resolve the table, merge the resolved
+  // values into `parameters`, re-solve the sketch, and commit the whole thing
+  // as ONE `edit` dispatch so a single undo reverts the gesture completely.
+  const commitUserParameterFold = useCallback(
+    (next: DesignFileV2, invalidHint: string): void => {
+      if (next === design) {
+        onStatus?.(invalidHint)
+        return
+      }
+      const { values, errors } = resolveUserParameters(next)
+      const merged: DesignFileV2 = { ...next, parameters: { ...next.parameters, ...values } }
+      const solved = cloneDesign(merged)
+      solveSketch(solved, 140, 0.45)
+      dispatch({ type: 'edit', design: solved })
+      const errorCount = Object.keys(errors).length
+      if (errorCount > 0) {
+        onStatus?.(
+          `${errorCount} parameter${errorCount === 1 ? '' : 's'} did not resolve — see the Parameters panel.`
+        )
+      }
+    },
+    [design, onStatus]
+  )
+
+  const addUserParameter = useCallback(
+    (name: string, expression: string) => {
+      commitUserParameterFold(
+        addUserParameterOp(design, name, expression),
+        `Cannot add parameter '${name.trim()}': the name must be a unique identifier (letters, digits, _).`
+      )
+    },
+    [design, commitUserParameterFold]
+  )
+
+  const editUserParameter = useCallback(
+    (name: string, expression: string) => {
+      commitUserParameterFold(
+        editUserParameterOp(design, name, expression),
+        `Cannot edit parameter '${name}': no such parameter.`
+      )
+    },
+    [design, commitUserParameterFold]
+  )
+
+  const renameUserParameter = useCallback(
+    (from: string, to: string) => {
+      commitUserParameterFold(
+        renameUserParameterOp(design, from, to),
+        `Cannot rename '${from}' to '${to.trim()}': the new name must be a unique identifier.`
+      )
+    },
+    [design, commitUserParameterFold]
+  )
+
+  const deleteUserParameter = useCallback(
+    (name: string) => {
+      commitUserParameterFold(
+        deleteUserParameterOp(design, name),
+        `Cannot delete parameter '${name}': no such parameter.`
+      )
+    },
+    [design, commitUserParameterFold]
+  )
+
   const mirrorX = useCallback(() => {
     dispatch({ type: 'edit', design: mirrorDesignAcrossYAxis(design) })
   }, [design])
@@ -1382,6 +1468,10 @@ export function DesignSessionProvider({
       addConstraint,
       runSolve,
       setParameter,
+      addUserParameter,
+      editUserParameter,
+      renameUserParameter,
+      deleteUserParameter,
       mirrorX,
       pattern40X,
       undo,
@@ -1428,6 +1518,10 @@ export function DesignSessionProvider({
       addConstraint,
       runSolve,
       setParameter,
+      addUserParameter,
+      editUserParameter,
+      renameUserParameter,
+      deleteUserParameter,
       mirrorX,
       pattern40X,
       undo,

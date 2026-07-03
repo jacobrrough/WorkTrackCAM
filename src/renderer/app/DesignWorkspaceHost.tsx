@@ -17,7 +17,12 @@ import {
 import type { SelectionSurface } from '../design/selection-state'
 import type { CadExecuteScriptMesh } from '../../shared/sidecar-protocol'
 import { dxfToSketch } from '../../shared/dxf-to-sketch'
-import { withSketchFacePlane, type DesignFileV2 } from '../../shared/design-schema'
+import {
+  deriveUserParameterViews,
+  withSketchFacePlane,
+  type DesignFileV2,
+  type UserParameterView
+} from '../../shared/design-schema'
 import type { DxfParseResult } from '../../shared/dxf-parser'
 import { deriveDrawingBom } from '../../shared/drawing-bom'
 import type { DrawingSheetTab } from '../design/DrawingView'
@@ -375,6 +380,17 @@ export function DesignWorkspaceHost({
     return deriveDrawingBom({ kind: 'singlePart', name })
   }, [session.projectDir])
 
+  // ── Named user parameters (Phase-3) — derive the render-ready rows ─────────
+  // `deriveUserParameterViews` resolves the expression table (cross-references
+  // + cycle detection) into per-row value-or-error views. Recomputed only when
+  // the design changes; the FeatureTree's Parameters section renders these and
+  // reports add/edit/rename/delete gestures straight into the session methods
+  // below (each is one sketch-undo step that re-resolves + re-solves).
+  const userParameters = useMemo<readonly UserParameterView[]>(
+    () => deriveUserParameterViews(session.design),
+    [session.design]
+  )
+
   return (
     <DesignWorkspace
       initialScript={initialScript}
@@ -481,6 +497,14 @@ export function DesignWorkspaceHost({
       onDrawingDeleteSheet={session.onDrawingDeleteSheet}
       // Drawings BOM: rendered from the engine deriveDrawingBom seam.
       drawingBomLines={drawingBomLines}
+      // Phase-3 named user parameters — the derived rows + the session's four
+      // gesture methods (`FeatureTreeUserParameter` is structurally
+      // `UserParameterView`, so the rows pass straight through).
+      userParameters={userParameters}
+      onUserParameterAdd={session.addUserParameter}
+      onUserParameterEdit={session.editUserParameter}
+      onUserParameterRename={session.renameUserParameter}
+      onUserParameterDelete={session.deleteUserParameter}
     />
   )
 }

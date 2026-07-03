@@ -2444,6 +2444,104 @@
   gap: var(--sp-2);
 }
 
+/* ── Named user parameters (Phase-3 — the Fusion "User Parameters" table) ──
+ *
+ * Rendered by FeatureTree's UserParametersSection at the top of the feature
+ * column: one row per parameter (name · expression · resolved value / error ·
+ * delete) plus the always-visible add row. Token-driven like the sibling
+ * .cad-feature-params section — no hard-coded colors or sizes. */
+.cad-user-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.cad-user-params__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cad-user-params__title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--txt2);
+}
+.cad-user-params__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cad-user-params__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, auto) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg2);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+}
+.cad-user-params__row[data-param-error='true'] {
+  /* Error rows get a left accent stripe (mirrors the dirty-row affordance). */
+  box-shadow: inset 3px 0 0 0 var(--err);
+}
+.cad-user-params__name {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-user-params__expr {
+  color: var(--txt1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-user-params__value {
+  color: var(--txt0);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cad-user-params__error {
+  color: var(--err);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-user-params__input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg0);
+  color: var(--txt0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.cad-user-params__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.cad-user-params__add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.cad-user-params__delete,
+.cad-user-params__add-btn {
+  white-space: nowrap;
+}
+
 /* ── Kernel-op timeline (editable feature history) ────────────────────────
  *
  * The Fusion / SolidWorks "feature timeline": one row per persisted kernel

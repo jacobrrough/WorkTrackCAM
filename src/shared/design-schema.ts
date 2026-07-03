@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  isValidParameterName,
+  resolveParameters,
+  type ResolvedParameters
+} from './expression-eval'
 
 const vec2 = z.tuple([z.number(), z.number()])
 
@@ -323,6 +328,19 @@ export const sketchPlaneSchema = z.discriminatedUnion('kind', [
 
 export type SketchPlane = z.infer<typeof sketchPlaneSchema>
 
+/**
+ * Named user parameter (Phase-3 parametric modeling — the Fusion "User
+ * Parameters" table). `expression` is arithmetic over numbers and OTHER
+ * user-parameter names (see `expression-eval.ts`); the resolved numeric
+ * values merge into `parameters` (the driving map constraints read).
+ */
+export const userParameterSchema = z.object({
+  name: z.string(),
+  expression: z.string()
+})
+
+export type UserParameter = z.infer<typeof userParameterSchema>
+
 export const designFileSchemaV2 = z.object({
   version: z.literal(2),
   extrudeDepthMm: z.number().finite().positive().default(10),
@@ -338,6 +356,8 @@ export const designFileSchemaV2 = z.object({
     .default({ angleDeg: 360, axisX: 0 }),
   /** Driving values for constraints: `distance` uses mm; `angle` uses degrees (see ribbon + solver). */
   parameters: z.record(z.string(), z.number()).default({}),
+  /** Named user parameters with expressions (additive — legacy files parse to `[]`). */
+  userParameters: z.array(userParameterSchema).default([]),
   points: z.record(z.string(), sketchPointSchema).default({}),
   entities: z.array(sketchEntitySchema),
   constraints: z.array(constraintSchema).default([]),
@@ -387,6 +407,7 @@ export function emptyDesign(): DesignFileV2 {
     loftSeparationMm: 20,
     revolve: { angleDeg: 360, axisX: 0 },
     parameters: {},
+    userParameters: [],
     points: {},
     entities: [],
     constraints: [],
@@ -455,10 +476,103 @@ function migrateV1ToV2(v1: DesignFileV1): DesignFileV2 {
     loftSeparationMm: 20,
     revolve: { angleDeg: 360, axisX: 0 },
     parameters: {},
+    userParameters: [],
     points,
     entities,
     constraints: [],
     dimensions: [],
     sketchPlane: { kind: 'datum', datum: 'XY' }
   }
+}
+
+// ── Named user parameters (Phase-3) — pure ops over `design.userParameters` ──
+//
+// All ops are pure and total: an invalid gesture (bad name, duplicate, unknown
+// target) returns the design UNCHANGED — callers detect failure by reference
+// equality and surface their own message. Resolution errors (bad expression,
+// cycle) are NOT add/edit failures: the row is stored as typed and the error
+// surfaces per-row via {@link deriveUserParameterViews}, matching how CAD
+// parameter tables let you fix a broken expression in place.
+
+/** Row shape the Parameters panel renders (name = expression → value | error). */
+export interface UserParameterView {
+  readonly name: string
+  readonly expression: string
+  /** Resolved numeric value, or `null` when the row has an error. */
+  readonly resolvedValue: number | null
+  readonly errorMessage?: string
+}
+
+/** Append a user parameter. Unchanged when `name` is not a valid identifier or already exists. */
+export function addUserParameter(
+  design: DesignFileV2,
+  name: string,
+  expression: string
+): DesignFileV2 {
+  const trimmed = name.trim()
+  if (!isValidParameterName(trimmed)) return design
+  const existing = design.userParameters ?? []
+  if (existing.some((p) => p.name === trimmed)) return design
+  return { ...design, userParameters: [...existing, { name: trimmed, expression }] }
+}
+
+/** Replace the expression of the named parameter. Unchanged when the name is unknown. */
+export function editUserParameterExpression(
+  design: DesignFileV2,
+  name: string,
+  expression: string
+): DesignFileV2 {
+  const existing = design.userParameters ?? []
+  if (!existing.some((p) => p.name === name)) return design
+  return {
+    ...design,
+    userParameters: existing.map((p) => (p.name === name ? { ...p, expression } : p))
+  }
+}
+
+/**
+ * Rename a user parameter, rewriting references to it (identifier-boundary
+ * match) inside every OTHER parameter's expression so dependents keep
+ * resolving. Unchanged when `from` is unknown, `to` is invalid, or `to`
+ * collides with another parameter.
+ */
+export function renameUserParameter(design: DesignFileV2, from: string, to: string): DesignFileV2 {
+  const trimmed = to.trim()
+  if (trimmed === from) return design
+  if (!isValidParameterName(trimmed)) return design
+  const existing = design.userParameters ?? []
+  if (!existing.some((p) => p.name === from)) return design
+  if (existing.some((p) => p.name === trimmed)) return design
+  const refRe = new RegExp(`(?<![A-Za-z0-9_])${from}(?![A-Za-z0-9_])`, 'g')
+  return {
+    ...design,
+    userParameters: existing.map((p) => ({
+      name: p.name === from ? trimmed : p.name,
+      expression: p.expression.replace(refRe, trimmed)
+    }))
+  }
+}
+
+/** Remove the named parameter. Unchanged when the name is unknown. */
+export function deleteUserParameter(design: DesignFileV2, name: string): DesignFileV2 {
+  const existing = design.userParameters ?? []
+  if (!existing.some((p) => p.name === name)) return design
+  return { ...design, userParameters: existing.filter((p) => p.name !== name) }
+}
+
+/** Resolve the design's user parameters (values + per-row errors). */
+export function resolveUserParameters(design: DesignFileV2): ResolvedParameters {
+  return resolveParameters(design.userParameters ?? [])
+}
+
+/** Derive the render-ready Parameters-panel rows for the design, in stored order. */
+export function deriveUserParameterViews(design: DesignFileV2): UserParameterView[] {
+  const { values, errors } = resolveUserParameters(design)
+  return (design.userParameters ?? []).map((p) => {
+    const error = errors[p.name]
+    if (error !== undefined) {
+      return { name: p.name, expression: p.expression, resolvedValue: null, errorMessage: error }
+    }
+    return { name: p.name, expression: p.expression, resolvedValue: values[p.name] ?? null }
+  })
 }

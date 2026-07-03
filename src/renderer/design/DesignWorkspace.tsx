@@ -93,7 +93,8 @@ import type {
 import {
   FeatureTree,
   type FeatureTreeOperation,
-  type FeatureTreeParameter
+  type FeatureTreeParameter,
+  type FeatureTreeUserParameter
 } from './FeatureTree'
 import type { KernelPostSolidOp } from '../../shared/part-features-schema'
 import {
@@ -606,6 +607,25 @@ export interface DesignWorkspaceProps {
    * overlays only (Safety Rule 1).
    */
   readonly drawingBomLines?: readonly DrawingBomLine[]
+  /**
+   * Phase-3 named user parameters, threaded from the host's
+   * `deriveUserParameterViews(session.design)` into the OPS FeatureTree in the
+   * left browser (NOT the CadQuery-script params instance in the Properties
+   * pane — those are sidecar script defaults, a different table). The shape is
+   * structurally `UserParameterView`, so hosts pass the derived rows straight
+   * through. Optional + additive: when all five are omitted (the splash
+   * preview, every render-pin) the section does not render and the existing
+   * Feature-Tree contract holds unchanged.
+   */
+  readonly userParameters?: ReadonlyArray<FeatureTreeUserParameter>
+  /** Add a named parameter (`name = expression`). */
+  readonly onUserParameterAdd?: (name: string, expression: string) => void
+  /** Replace the named parameter's expression. */
+  readonly onUserParameterEdit?: (name: string, expression: string) => void
+  /** Rename a parameter (the session rewrites references in dependents). */
+  readonly onUserParameterRename?: (from: string, to: string) => void
+  /** Remove the named parameter. */
+  readonly onUserParameterDelete?: (name: string) => void
 }
 
 /** Debounce window for `cad.list_operations` (matches research finding). */
@@ -693,6 +713,11 @@ export function DesignWorkspace({
   onDrawingRenameSheet,
   onDrawingDeleteSheet,
   drawingBomLines,
+  userParameters,
+  onUserParameterAdd,
+  onUserParameterEdit,
+  onUserParameterRename,
+  onUserParameterDelete,
 }: DesignWorkspaceProps): JSX.Element {
   const [scriptText, setScriptText] = useState(initialScript)
   /**
@@ -1940,6 +1965,11 @@ export function DesignWorkspace({
             ) : (
               <FeatureTree
                 operations={featureRows}
+                userParameters={userParameters}
+                onUserParameterAdd={onUserParameterAdd}
+                onUserParameterEdit={onUserParameterEdit}
+                onUserParameterRename={onUserParameterRename}
+                onUserParameterDelete={onUserParameterDelete}
                 kernelOps={kernelOps}
                 rolledBackTo={rolledBackTo}
                 onKernelMove={onKernelMove}
