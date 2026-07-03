@@ -58,11 +58,12 @@ describe('app-keyboard-shortcuts', () => {
     expect(matchesOpenProject({ ctrlKey: true, shiftKey: false, altKey: false, key: 'p' } as KeyboardEvent)).toBe(false)
   })
 
-  it('matchesSaveProject — Ctrl+S and Cmd+S, rejects Shift+S', () => {
+  it('matchesSaveProject — Ctrl+S and Cmd+S, rejects Shift/Alt and bare S', () => {
     expect(matchesSaveProject({ ctrlKey: true, shiftKey: false, altKey: false, key: 's' } as KeyboardEvent)).toBe(true)
     expect(matchesSaveProject({ ctrlKey: true, shiftKey: false, altKey: false, key: 'S' } as KeyboardEvent)).toBe(true)
     expect(matchesSaveProject({ metaKey: true, shiftKey: false, altKey: false, key: 's' } as KeyboardEvent)).toBe(true)
     expect(matchesSaveProject({ ctrlKey: true, shiftKey: true, altKey: false, key: 's' } as KeyboardEvent)).toBe(false)
+    expect(matchesSaveProject({ ctrlKey: true, shiftKey: false, altKey: true, key: 's' } as KeyboardEvent)).toBe(false)
     expect(matchesSaveProject({ ctrlKey: false, shiftKey: false, altKey: false, key: 's' } as KeyboardEvent)).toBe(false)
   })
 
@@ -177,6 +178,19 @@ describe('app-keyboard-shortcuts', () => {
     for (const stale of ['Jobs', 'Tools', 'My Shop', 'Library', 'Settings']) {
       expect(actions).not.toContain(stale)
     }
+  })
+
+  it('design group documents the Ctrl+S Save CadQuery script shortcut', () => {
+    const design = APP_KEYBOARD_SHORTCUT_GROUPS.find((g) => g.id === 'design')
+    expect(design).toBeDefined()
+    const saveRow = design!.rows.find((r) => /save cadquery script/i.test(r.action))
+    expect(saveRow).toBeDefined()
+    expect(saveRow!.keysWin).toBe('Ctrl+S')
+    expect(saveRow!.keysMac).toBe('⌘S')
+    // The row must spell out that it also fires from the script editor (the one
+    // typable surface exempt from the ignore-while-typing gate).
+    expect(saveRow!.context).toMatch(/script editor/i)
+    expect(saveRow!.context).toMatch(/typing/i)
   })
 
   it('isTypableKeyboardTarget rejects non-elements', () => {

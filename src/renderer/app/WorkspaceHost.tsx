@@ -531,6 +531,7 @@ export function WorkspaceHost({
             // project changes (initialAssemblyParts/Mates are mount-only props).
             key={`design-${active}-${hydrateToken}`}
             initialScript={designScript}
+            savedScript={designScript}
             initialViewMode={routeToViewMode(active)}
             initialAssemblyParts={assemblyParts}
             initialAssemblyMates={assemblyMates}

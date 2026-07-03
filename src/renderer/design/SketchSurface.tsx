@@ -87,6 +87,10 @@ import {
   type SketchEditDialogKind
 } from './feature-dialogs/SketchEditDialogs'
 import { closedLoopEntityIds } from '../../shared/sketch-boolean-offset'
+import {
+  projectEdgesOntoSketch,
+  type ProjectableEdge
+} from './sketch-project-edges'
 
 /** Catalog id of the Text command — arming it opens the Text dialog on this surface. */
 export const SKETCH_TEXT_COMMAND_ID = 'sk_text'
@@ -298,6 +302,16 @@ export interface SketchSurfaceProps {
    * blanks when the operator leaves the Sketch stage. Optional + additive.
    */
   readonly onCursorWorld?: (xyMm: readonly [number, number] | null) => void
+  /**
+   * PROJECT MODEL EDGES (Fusion's Project / P) — the 3D model's edge polylines
+   * (the tessellation's stable `e:<hash>` edges, e.g. `firstMesh.edges` in
+   * DesignWorkspace) made available to project onto the active sketch plane as
+   * snappable CONSTRUCTION reference geometry. When present + non-empty the
+   * palette shows a "Project" button; absent/empty hides it (the splash preview
+   * + render-pin tests render without it). Static copies — no live associativity
+   * with the model (re-running Project refreshes them in place). Optional + additive.
+   */
+  readonly projectableEdges?: ReadonlyArray<ProjectableEdge>
 }
 
 /**
@@ -355,7 +369,8 @@ export function SketchSurface({
   planeLabel,
   onImportDxf,
   loadFontBuffer,
-  onCursorWorld
+  onCursorWorld,
+  projectableEdges
 }: SketchSurfaceProps): JSX.Element {
   // Sketch S1 — direct manipulation is the resting state (matches the MVP
   // variant + Fusion): the operator picks/moves/deletes by default and arms a
@@ -596,6 +611,40 @@ export function SketchSurface({
         ? 'Toggled construction on 1 vector.'
         : `Toggled construction on ${ids.size} vectors.`
     )
+  }
+
+  /**
+   * PROJECT MODEL EDGES into the sketch (Fusion's Project / P). Orthogonally
+   * projects each available model edge onto the ACTIVE sketch plane
+   * (`design.sketchPlane`) via the pure `projectEdgesOntoSketch` — emitting
+   * CONSTRUCTION polylines (dashed, snappable, dimensionable, EXCLUDED from
+   * profile/CAM derivation) with deterministic ids so re-projection replaces
+   * prior copies in place (idempotent). ONE history step through the same
+   * `applyDesignEdit` seam every other surface mutation uses; a count toast
+   * reports how many edges projected vs. were skipped (degenerate) / deduped.
+   * The edges are STATIC snapshots — no live link to the model (re-run to refresh).
+   */
+  function handleProjectEdges(): void {
+    const edges = projectableEdges ?? []
+    if (edges.length === 0) {
+      onSketchHint?.('No model edges to project — run the script to build a model first.')
+      return
+    }
+    const cur = liveDesignRef.current
+    const result = projectEdgesOntoSketch(cur, edges)
+    if (result.projected === 0) {
+      onSketchHint?.(
+        result.skipped > 0
+          ? `Projected 0 edges — all ${result.skipped} were perpendicular/degenerate on this plane.`
+          : 'Projected 0 edges.'
+      )
+      return
+    }
+    applyDesignEdit(result.design)
+    const parts = [`Projected ${result.projected} edge${result.projected === 1 ? '' : 's'}`]
+    if (result.skipped > 0) parts.push(`skipped ${result.skipped} degenerate`)
+    if (result.deduped > 0) parts.push(`deduped ${result.deduped}`)
+    onSketchHint?.(`${parts.join(', ')}.`)
   }
 
   // Surface-level keyboard seam: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z via the central
@@ -949,6 +998,23 @@ export function SketchSurface({
                 onClick={handleToggleConstruction}
               >
                 Construction
+              </button>
+            )}
+            {group === 'Modify' && projectableEdges && projectableEdges.length > 0 && (
+              /* PROJECT MODEL EDGES (Fusion's Project / P): copy the 3D model's
+                 edges onto the active sketch plane as snappable CONSTRUCTION
+                 reference geometry (dashed; never part of the solid or CAM).
+                 One undo step; a count toast reports projected/skipped. Static
+                 copies — re-run to refresh after the model changes. */
+              <button
+                type="button"
+                className="sketch-surface__tool sketch-surface__tool--project"
+                data-testid="sketch-surface-project"
+                disabled={projectableEdges.length === 0}
+                title="Project the model's edges onto the active sketch plane as dashed construction reference geometry (snappable + dimensionable; excluded from the solid and CAM). Re-run to refresh after the model changes — projections are static copies."
+                onClick={handleProjectEdges}
+              >
+                Project
               </button>
             )}
           </div>

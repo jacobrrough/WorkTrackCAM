@@ -623,6 +623,163 @@ def _safe_compound(hlr: Any, accessor: str) -> Optional[Any]:
         return None
 
 
+# -- Shared view-only HLR projection (2D drawing linework) ------------------
+#
+# ``hlr_section`` above pairs a section cut WITH the hidden-line pass. The 2D
+# drawing pipeline (``cadquery_drawing.project_to_drawing`` with ``includeHlr``)
+# wants ONLY the hidden-line pass for a view direction -- no plane, no cap. This
+# helper factors that projection out so the drawing SVG builder reuses the exact
+# same HLR machinery (``HLRBRep_Algo`` + ``HLRBRep_HLRToShape`` + the edge walk)
+# rather than duplicating it.
+#
+# Coordinate-space contract (the single hardest correctness constraint):
+# =====================================================================
+# The projector is built with ``gp_Ax2(gp_Pnt(), gp_Dir(*look))`` -- BYTE-
+# IDENTICAL to the coordinate system CadQuery's ``getSVG`` builds AND to the one
+# ``cadquery_drawing_geometry.extract_drawing_geometry`` (the snap-point source)
+# builds. It also walks the SAME accessor set the snap extractor walks
+# (``VCompound`` / ``OutLineVCompound`` visible, ``HCompound`` /
+# ``OutLineHCompound`` hidden). Therefore the 2D ``(x, y)`` coordinates this
+# helper returns are in the SAME projected SVG-mm space as the snap points --
+# a dimension anchored to a snap point lands exactly on this linework.
+
+
+def project_view_edges(
+    shape: Any,
+    view_dir: Any,
+    tolerance_mm: float = 0.1,
+) -> Dict[str, Any]:
+    """Run view-direction HLR on ``shape`` and return 2D projected linework.
+
+    Parameters
+    ----------
+    shape:
+        A wrapped OCCT ``TopoDS_Shape`` (e.g. ``workplane.findSolid().wrapped``).
+    view_dir:
+        3-vector view direction for the hidden-line projection (the operator
+        looks **along** this vector). Need not be unit length.
+    tolerance_mm:
+        Edge discretization deflection in mm (default 0.1).
+
+    Returns
+    -------
+    dict with::
+
+        {
+          "visible":   [[[x, y], ...], ...],  # solid linework, 2D projected
+          "hidden":    [[[x, y], ...], ...],  # dashed linework, 2D projected
+          "bbox2d":    {"min": [x, y], "max": [x, y]},
+          "truncated": bool,  # edge budget hit
+        }
+
+    The returned polylines drop the projected Z (HLR flattens it into the view
+    plane) so each point is a 2-tuple in SVG-mm space -- matching the snap
+    extractor's coordinate convention.
+
+    Raises ``_CadHandlerError`` with ``bad_params`` (bad view_dir / tolerance)
+    or ``ocp_hlr_not_available`` (missing bindings). OCCT mid-pipeline raises
+    surface as ``hlr_section_error`` for parity with ``hlr_section``.
+    """
+    look = _unit(_normalize_vec3(view_dir, "view_dir"), "view_dir")
+    tol = _require_finite(tolerance_mm, "tolerance_mm")
+    if tol <= 0:
+        raise _CadHandlerError("bad_params", "tolerance_mm must be positive")
+
+    ocp = _load_ocp()
+    try:
+        return _project_view(shape, look, tol, ocp)
+    except _CadHandlerError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - OCCT raises arbitrary types
+        raise _CadHandlerError(
+            "hlr_section_error",
+            f"hidden-line drawing projection failed: {exc}",
+            detail=str(exc),
+        ) from exc
+
+
+def _project_view(
+    shape: Any,
+    look: Tuple[float, float, float],
+    tol: float,
+    ocp: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Core view-only HLR pass (assumes validated inputs + loaded OCP).
+
+    Mirrors the HLR half of :func:`_compute` (no section cut / cap) and drops
+    the projected Z from every sampled point so the output is 2D SVG-mm.
+    """
+    algo = ocp["HLRBRep_Algo"]()
+    algo.Add(shape)
+    ax2 = ocp["gp_Ax2"](
+        ocp["gp_Pnt"](0.0, 0.0, 0.0),
+        ocp["gp_Dir"](look[0], look[1], look[2]),
+    )
+    algo.Projector(ocp["HLRAlgo_Projector"](ax2))
+    algo.Update()
+    algo.Hide()
+    hlr = ocp["HLRBRep_HLRToShape"](algo)
+
+    budget = _MAX_EDGE_COUNT
+    truncated = False
+
+    visible3d: List[List[List[float]]] = []
+    hidden3d: List[List[List[float]]] = []
+
+    # Same accessor set the snap extractor (cadquery_drawing_geometry) walks so
+    # the projected coordinates agree: sharp visible + smooth-surface silhouette
+    # for solid; occluded sharp + occluded silhouette for dashed.
+    for accessor in ("VCompound", "OutLineVCompound"):
+        compound = _safe_compound(hlr, accessor)
+        remaining = budget - len(visible3d)
+        if remaining <= 0:
+            truncated = True
+            break
+        polys, tr = _walk_edges_to_polylines(compound, ocp, tol, remaining)
+        visible3d.extend(polys)
+        truncated = truncated or tr
+
+    for accessor in ("HCompound", "OutLineHCompound"):
+        compound = _safe_compound(hlr, accessor)
+        remaining = budget - len(hidden3d)
+        if remaining <= 0:
+            truncated = True
+            break
+        polys, tr = _walk_edges_to_polylines(compound, ocp, tol, remaining)
+        hidden3d.extend(polys)
+        truncated = truncated or tr
+
+    # Drop the projected Z -> 2D SVG-mm polylines.
+    visible = [[[p[0], p[1]] for p in poly] for poly in visible3d]
+    hidden = [[[p[0], p[1]] for p in poly] for poly in hidden3d]
+
+    return {
+        "visible": visible,
+        "hidden": hidden,
+        "bbox2d": _bbox2d(visible, hidden),
+        "truncated": truncated,
+    }
+
+
+def _bbox2d(
+    visible: List[List[List[float]]],
+    hidden: List[List[List[float]]],
+) -> Dict[str, List[float]]:
+    """Tight 2D bbox over every visible + hidden point. Zero bbox when empty."""
+    xs_min = ys_min = math.inf
+    xs_max = ys_max = -math.inf
+    for group in (visible, hidden):
+        for poly in group:
+            for p in poly:
+                xs_min = min(xs_min, p[0])
+                ys_min = min(ys_min, p[1])
+                xs_max = max(xs_max, p[0])
+                ys_max = max(ys_max, p[1])
+    if xs_min is math.inf:
+        return {"min": [0.0, 0.0], "max": [0.0, 0.0]}
+    return {"min": [xs_min, ys_min], "max": [xs_max, ys_max]}
+
+
 # -- Test / diagnostics helpers ---------------------------------------------
 
 
@@ -636,4 +793,9 @@ def cache_size() -> int:
     return len(_CACHE)
 
 
-__all__ = ["hlr_section", "reset_cache", "cache_size"]
+__all__ = [
+    "hlr_section",
+    "project_view_edges",
+    "reset_cache",
+    "cache_size",
+]

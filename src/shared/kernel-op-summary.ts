@@ -33,10 +33,25 @@ export function kernelOpSummary(op: KernelPostSolidOp): string {
       return `${op.mode} profile#${op.profileIndex} depth=${op.extrudeDepthMm} z0=${op.zStartMm} ${op.extrudeDirection ?? '+Z'}`
     case 'split_keep_halfspace':
       return `split ${op.axis}@${op.offsetMm} keep ${op.keep}`
-    case 'hole_from_profile':
-      return op.mode === 'through_all'
-        ? `hole profile#${op.profileIndex} through-all z0=${op.zStartMm}`
-        : `hole profile#${op.profileIndex} depth=${op.depthMm} z0=${op.zStartMm}`
+    case 'hole_from_profile': {
+      // Fusion-style hole type prefix. Absent / `simple` reads as a plain
+      // "hole" (the legacy label); cbore / csink surface honestly so the
+      // timeline row distinguishes a recessed bore from a straight one.
+      const holePrefix =
+        op.holeType === 'counterbore'
+          ? 'cbore hole'
+          : op.holeType === 'countersink'
+            ? 'csink hole'
+            : 'hole'
+      // Tap designation is metadata only (no modeled thread) — appended when
+      // present so a tapped hole reads e.g. "hole profile#1 through-all … M5x0.8".
+      const tapSuffix = op.tapDesignation ? ` tap ${op.tapDesignation}` : ''
+      const body =
+        op.mode === 'through_all'
+          ? `${holePrefix} profile#${op.profileIndex} through-all z0=${op.zStartMm}`
+          : `${holePrefix} profile#${op.profileIndex} depth=${op.depthMm} z0=${op.zStartMm}`
+      return `${body}${tapSuffix}`
+    }
     case 'thread_cosmetic':
       return `thread cosmetic r=${op.majorRadiusMm} p=${op.pitchMm} L=${op.lengthMm} d=${op.depthMm} (≤256 rings)`
     case 'transform_translate':

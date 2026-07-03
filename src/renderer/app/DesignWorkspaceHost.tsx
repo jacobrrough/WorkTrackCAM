@@ -92,6 +92,7 @@ function projectBasename(dir: string): string {
  */
 export function DesignWorkspaceHost({
   initialScript,
+  savedScript,
   onSave,
   onSendToCam,
   onToast,
@@ -103,6 +104,13 @@ export function DesignWorkspaceHost({
   onAssemblyPartsChange
 }: {
   readonly initialScript: string
+  /**
+   * The last-persisted script body (on-disk truth). Threaded straight through to
+   * DesignWorkspace so its Save button's unsaved-changes dot mirrors the disk
+   * state. Optional pass-through (SSR pins omit it → the button uses its clean
+   * `''` baseline).
+   */
+  readonly savedScript?: string
   readonly onSave: (script: string) => void
   readonly onSendToCam: (payload: { readonly stlPath: string; readonly mesh: CadExecuteScriptMesh }) => void
   readonly onToast: (kind: 'ok' | 'err' | 'warn', message: string) => void
@@ -396,6 +404,7 @@ export function DesignWorkspaceHost({
       <DesignRecoveryBannerHost />
       <DesignWorkspace
       initialScript={initialScript}
+      savedScript={savedScript}
       onSave={handleSave}
       onSendToCam={onSendToCam}
       onToast={onToast}

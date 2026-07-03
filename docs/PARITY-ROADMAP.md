@@ -47,8 +47,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - ✅ **CadQuery script buffer disk persistence (S-M)** — Save now writes `design/script.cq.py`
   (atomic, path-contained, 2MB cap) via new `designScript:*` IPC; project-open seeds from disk
   (pristine-buffer gate — Cycle-249 safe); crash recovery snapshots + Restore/Discard offer reuse
-  the wave-2 recovery pattern. *(done 2026-07-02, wave 4; dirty-state Save affordance + Ctrl+S
-  handed off — needs `savedScript` prop in DesignWorkspace)*
+  the wave-2 recovery pattern. *(done 2026-07-02, wave 4)*
+- ✅ **Save polish (S)** — dirty-state Save button (disabled when saved, dot+title when dirty; the
+  double-toast removed), Ctrl+S/Cmd+S wired + documented in the shortcuts dialog, hole summaries
+  enriched (cbore/csink/tap in the timeline). *(done 2026-07-02, wave 6 — PHASE 1 COMPLETE)*
 
 ### Phase 2 — Selection & viewport depth
 - ✅ **Window/box select (L)** — Shift+left-drag rectangle (capture-phase, OrbitControls untouched),
@@ -88,8 +90,11 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   validated commitKernelFeatures chain — never a raw state poke; single-write race pins hold);
   per-index update coalescing; Ctrl+Z routing yields to the sketch surface when mounted.
   *(done 2026-07-02, wave 4)*
-- [ ] **Project model edges into sketch (L)** — face/edge extraction → plane projection → snappable
-  reference geometry. ~25% faster complex sketches.
+- ✅ **Project model edges into sketch (L)** — Fusion's Project (P): model edge polylines project
+  onto the active sketch plane (reusing the face-sketch placement math) as construction reference
+  geometry (snappable/dimensionable, never cut geometry); idempotent re-projection via
+  deterministic proj_<edgeId> ids; one undo step. Static copies (no live associativity — honest
+  limit; manual re-Project refreshes). *(done 2026-07-02, wave 6 — PHASE 3 COMPLETE)*
 - ✅ **Multi-format design export (M)** — STEP/3MF (+ formats the exporter really has) beside STL;
   STEP writes true B-rep (round-trip re-import proven: volume + bbox), 3MF structure-checked;
   format whitelist + path validation (Rule 4); Send-to-CAM STL path untouched.
@@ -101,9 +106,13 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   simulate input dropping the joint kind (poses were all identical). CAVEAT: AssemblyView has no
   live 3D mesh viewport yet — playback animates row placements/readouts; `playbackOverlay` is the
   ready transform source when a real assembly viewport lands. *(done 2026-07-01, wave 2)*
-- [ ] **Assembly 3D viewport (M-L)** — wave-2 finding: AssemblyView's viewport column is a
-  node-safe summary placeholder, not a Three.js scene. Needed for motion playback + interference
-  to be seen, not just read.
+- ✅ **Assembly 3D viewport (M-L)** — real R3F scene: per-part transforms, motion playback
+  ANIMATES the parts (consumes the wave-2 playbackOverlay contract), interference pairs tint err,
+  explode slider, grounded styling, row↔viewport highlight sync; node-env guard degrades to the
+  summary placeholder (all pins held). HONEST LIMIT: parts render as labeled nominal schematic
+  boxes, not real meshes. *(done 2026-07-02, wave 6)*
+- [ ] **Assembly viewport real meshes (M)** — thread per-part tessellations (or bboxes) into
+  AssemblyViewport3D; computePartRenderStates already accepts per-part half-extents.
 - ✅ **Mate list/edit/delete panel (M)** — Mates section in AssemblyView: kind/parts/scalar rows,
   DELETE + scalar EDIT + SUPPRESS (solver skips suppressed — proven via save->load->solve residuals),
   dangling flags, shared EmptyState; persists through the same serialized mate chain authoring
@@ -124,8 +133,11 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - ✅ **Centerlines + center marks (S-M)** — one-click center mark (center-kind snap priority),
   two-click centerline (chain dash, extended past anchors), associative re-anchor + dangling,
   lossless drawing.json round-trip. *(done 2026-07-01, wave 2)*
-- [ ] **HLR for orthographic export (M)** — cadquery_hlr.py pipeline exists; add includeHlr to
-  cad.project_drawing + UI toggle.
+- ✅ **HLR for orthographic projections (M)** — includeHlr on cad.project_drawing runs the true
+  HLRBRep pipeline (visible solid / hidden dashed layer); false path byte-identical (test-pinned);
+  DrawingView "Hidden lines" toggle + state-aware fidelity caveat. Orchestrator reconciled the
+  cad:projectDrawing IPC (single-view {handle,view,includeHlr} variant added beside the sheet
+  envelope) so the toggle is live end-to-end. *(done 2026-07-02, wave 6)*
 - [ ] **Real DXF export (L)** — dimensions/GD&T/notes as DXF entities (currently frame + mesh only).
   Highest shop ROI in this phase: DXF feeds lasers/other CAM.
 - [ ] **Hole table (M)** — topology scan for bored holes.

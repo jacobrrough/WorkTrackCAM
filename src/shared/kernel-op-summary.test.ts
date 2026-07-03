@@ -64,6 +64,16 @@ describe('kernelOpSummary', () => {
         zStartMm: 0
       })
     ).toContain('hole profile#1 through-all')
+    // Depth-mode simple hole keeps the legacy "hole … depth=" label.
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 2,
+        mode: 'depth',
+        depthMm: 6,
+        zStartMm: 0
+      })
+    ).toBe('hole profile#2 depth=6 z0=0')
     expect(
       kernelOpSummary({
         kind: 'thread_cosmetic',
@@ -246,5 +256,68 @@ describe('kernelOpSummary', () => {
     expect(
       kernelOpSummary({ kind: 'datum_point', xMm: 4, yMm: 5, zMm: 6 })
     ).toBe('datum point (4,5,6)')
+  })
+
+  it('enriches hole labels with hole type (cbore / csink) and tap designation', () => {
+    // Explicit `simple` reads exactly like a legacy hole (no prefix change) so
+    // an upgraded op with holeType='simple' stays byte-identical in the UI.
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 0,
+        mode: 'through_all',
+        zStartMm: 0,
+        holeType: 'simple'
+      })
+    ).toBe('hole profile#0 through-all z0=0')
+    // Counterbore → "cbore hole".
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 3,
+        mode: 'depth',
+        depthMm: 10,
+        zStartMm: 0,
+        holeType: 'counterbore',
+        cboreDiameterMm: 8,
+        cboreDepthMm: 3
+      })
+    ).toBe('cbore hole profile#3 depth=10 z0=0')
+    // Countersink → "csink hole".
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 4,
+        mode: 'through_all',
+        zStartMm: 0,
+        holeType: 'countersink',
+        csinkDiameterMm: 9,
+        csinkAngleDeg: 82
+      })
+    ).toBe('csink hole profile#4 through-all z0=0')
+    // Tap designation is appended (metadata only) — here on a simple hole.
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 1,
+        mode: 'through_all',
+        zStartMm: 0,
+        tapDesignation: 'M5x0.8'
+      })
+    ).toBe('hole profile#1 through-all z0=0 tap M5x0.8')
+    // Tap + counterbore compose: prefix AND suffix both present.
+    expect(
+      kernelOpSummary({
+        kind: 'hole_from_profile',
+        profileIndex: 2,
+        mode: 'depth',
+        depthMm: 12,
+        zStartMm: 1,
+        holeType: 'counterbore',
+        cboreDiameterMm: 8,
+        cboreDepthMm: 3,
+        tapDesignation: 'M6x1'
+      })
+    ).toBe('cbore hole profile#2 depth=12 z0=1 tap M6x1')
   })
 })

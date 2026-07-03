@@ -1239,7 +1239,29 @@ describe('validateProjectDrawingPayload', () => {
     expect('payload' in r).toBe(true)
     if ('payload' in r) {
       expect(r.payload.handle).toBe('part-1')
-      expect(r.payload.sheet).toEqual(sheet)
+      expect('sheet' in r.payload && r.payload.sheet).toEqual(sheet)
+    }
+  })
+
+  // Wave 6 (HLR) -- the single-view variant the sidecar actually implements.
+  it('accepts the single-view payload with optional includeHlr', () => {
+    const r = validateProjectDrawingPayload({ handle: 'part-1', view: 'front', includeHlr: true })
+    expect('payload' in r).toBe(true)
+    if ('payload' in r) {
+      expect(r.payload).toEqual({ handle: 'part-1', view: 'front', includeHlr: true })
+    }
+    const r2 = validateProjectDrawingPayload({ handle: 'part-1', view: 'iso' })
+    expect('payload' in r2).toBe(true)
+    if ('payload' in r2) {
+      expect(r2.payload).toEqual({ handle: 'part-1', view: 'iso' })
+    }
+  })
+
+  it('rejects a non-boolean includeHlr on the single-view payload', () => {
+    const r = validateProjectDrawingPayload({ handle: 'part-1', view: 'front', includeHlr: 'yes' })
+    expect('payload' in r).toBe(false)
+    if (!('payload' in r) && !r.ok) {
+      expect(r.error).toBe('invalid_payload')
     }
   })
 })
@@ -1581,15 +1603,56 @@ describe('cad:projectDrawing handler', () => {
     const r = (await handler({}, { handle: 'part-1', sheet })) as CadProjectDrawingResponse
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect(r.result.views).toHaveLength(1)
-      expect(r.result.views[0]?.placeholderId).toBe('top')
+      // Sheet-payload responses carry the views envelope (single-view
+      // {handle, view} payloads return { svg } instead -- see the Wave-6
+      // single-view variant tests).
+      expect('views' in r.result).toBe(true)
+      if ('views' in r.result) {
+        expect(r.result.views).toHaveLength(1)
+        expect(r.result.views[0]?.placeholderId).toBe('top')
+      }
     }
     const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [string, Record<string, unknown>]
     expect(methodArg).toBe('cad.project_drawing')
     expect(paramsArg).toEqual({ handle: 'part-1', sheet })
   })
 
-  it('folds malformed sidecar responses into sidecar_protocol_error', async () => {
+  it('single-view payload forwards includeHlr and returns { svg }', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ svg: '<svg>hlr</svg>' })
+    registerCadIpc(createMockContext())
+    {
+      const handler = handlers.get('cad:projectDrawing')!
+      const r = (await handler(
+        {},
+        { handle: 'part-1', view: 'front', includeHlr: true },
+      )) as CadProjectDrawingResponse
+      expect(r.ok).toBe(true)
+      if (r.ok) {
+        expect('svg' in r.result && r.result.svg).toBe('<svg>hlr</svg>')
+      }
+      const [methodArg, paramsArg] = bridgeCallMock.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ]
+      expect(methodArg).toBe('cad.project_drawing')
+      expect(paramsArg).toEqual({ handle: 'part-1', view: 'front', includeHlr: true })
+    }
+  })
+
+  it('single-view payload with no svg in the response folds to sidecar_protocol_error', async () => {
+    bridgeCallMock.mockResolvedValueOnce({ log: ['no svg'] })
+    registerCadIpc(createMockContext())
+    {
+      const handler = handlers.get('cad:projectDrawing')!
+      const r = (await handler({}, { handle: 'part-1', view: 'front' })) as CadProjectDrawingResponse
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error).toBe('sidecar_protocol_error')
+      }
+    }
+  })
+
+  it('folds malformed sidecar responses into sidecar_protocol_error (views envelope)', async () => {
     bridgeCallMock.mockResolvedValueOnce({ log: ['no views key'] })
     registerCadIpc(createMockContext())
     const handler = handlers.get('cad:projectDrawing')!

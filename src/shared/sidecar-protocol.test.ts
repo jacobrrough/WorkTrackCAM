@@ -3,6 +3,7 @@ import {
   isCadEdgeMapEntry,
   isCadEdgePolyline,
   isSidecarResponse,
+  type CadProjectDrawingParams,
   type CadTessellateWithIdsResult,
 } from './sidecar-protocol'
 
@@ -196,5 +197,37 @@ describe('isCadEdgeMapEntry', () => {
     expect(isCadEdgeMapEntry({ ...edgeMapEntry, occtHash: Number.NaN })).toBe(false)
     expect(isCadEdgeMapEntry({ ...edgeMapEntry, length: Infinity })).toBe(false)
     expect(isCadEdgeMapEntry({ ...edgeMapEntry, length: 'ten' })).toBe(false)
+  })
+})
+
+
+describe('CadProjectDrawingParams — includeHlr additive back-compat', () => {
+  it('compiles WITHOUT includeHlr (older renderer / back-compat)', () => {
+    // Compile-time pin: the pre-HLR payload shape must still satisfy the wire
+    // type. If includeHlr were made required, this assignment would fail to
+    // compile and break every existing caller.
+    const legacy: CadProjectDrawingParams = { handle: 'script:abc', view: 'front' }
+    expect(legacy.handle).toBe('script:abc')
+    expect(legacy.view).toBe('front')
+    // includeHlr is optional -> undefined when omitted.
+    expect(legacy.includeHlr).toBeUndefined()
+  })
+
+  it('compiles WITH includeHlr: true (HLR opt-in)', () => {
+    const hlr: CadProjectDrawingParams = {
+      handle: 'script:abc',
+      view: 'iso',
+      includeHlr: true,
+    }
+    expect(hlr.includeHlr).toBe(true)
+  })
+
+  it('compiles WITH includeHlr: false (explicit mesh-edge)', () => {
+    const plain: CadProjectDrawingParams = {
+      handle: 'script:abc',
+      view: 'top',
+      includeHlr: false,
+    }
+    expect(plain.includeHlr).toBe(false)
   })
 })

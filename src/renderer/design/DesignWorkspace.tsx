@@ -144,6 +144,10 @@ import {
   type SelectionKind,
   type SelectionSurface
 } from './selection-state'
+import {
+  isTypableKeyboardTarget,
+  matchesSaveProject
+} from '../../shared/app-keyboard-shortcuts'
 
 /**
  * Default lateral offset (mm) between successive assembly instances of the
@@ -324,6 +328,15 @@ export interface DesignWorkspaceProps {
    * (tests, the splash preview surface, etc.).
    */
   readonly onSave?: (script: string) => void
+  /**
+   * The last-persisted script body (as it exists on disk). When it equals the
+   * live `scriptText` the Save button renders clean + disabled; when they
+   * diverge the button enables and shows an unsaved-changes affordance (a
+   * leading dot). Optional — omitted callers (render pins, the splash preview)
+   * always see the button in its clean, enabled-once-typed baseline. The host
+   * threads its `designScript` here so the dot mirrors the on-disk truth.
+   */
+  readonly savedScript?: string
   /**
    * Called after a successful Send-to-CAM export. Receives the path of
    * the freshly exported STL (written via `cad.export`) and the mesh
@@ -746,6 +759,7 @@ function sketchToolHint(commandId: string): string {
 export function DesignWorkspace({
   initialScript = '',
   onSave,
+  savedScript = '',
   onSendToCam,
   onToast,
   initialSelection = null,
@@ -1376,11 +1390,17 @@ export function DesignWorkspace({
   )
 
   // ── Save handler ──────────────────────────────────────────────────────────
+  // Dirty when the editor buffer diverges from the last-persisted script. The
+  // Save button uses this to disable when clean AND to show the unsaved-changes
+  // affordance (leading dot + title) when dirty.
+  const scriptDirty = savedScript !== scriptText
   const handleSave = useCallback((): void => {
     if (!onSave) return
     onSave(scriptText)
-    toast('ok', 'Script saved.')
-  }, [onSave, scriptText, toast])
+    // NOTE: no local success toast here. The host's onSave (WorkspaceHost's
+    // handleDesignScriptSave) awaits the real disk write and fires the ONE
+    // honest outcome toast; a local optimistic toast here double-toasted.
+  }, [onSave, scriptText])
 
   // ── Seed starter script from the empty-state CTA ──────────────────────────
   const handleSeedStarter = useCallback((): void => {
@@ -1579,6 +1599,37 @@ export function DesignWorkspace({
   const viewportColRef = useRef<HTMLElement | null>(null)
   /** The mounted Viewport3D's camera actions (fit / standard views / projection). */
   const viewportActionsRef = useRef<Viewport3DActions | null>(null)
+
+  /**
+   * Ctrl+S / Cmd+S persists the Design script (the same path the Save button
+   * runs — the host's `onSave` awaits the real disk write and fires the one
+   * honest outcome toast). Bound at the document level so the gesture works
+   * from anywhere in the Design workspace, INCLUDING while focus is inside the
+   * CadQuery editor (Monaco leaves a bare Ctrl+S unbound, so the keydown
+   * reaches us). The gate is deliberate: fire when the target is NOT a typable
+   * control, OR when it IS but sits inside the script editor (`cad-editor-root`)
+   * — so a parameter/dimension text field's Ctrl+S is left alone while the
+   * editor's own Ctrl+S saves. `preventDefault` suppresses the browser's native
+   * save dialog. Bound only when `onSave` is wired (no save target otherwise).
+   * Documented as the Design-group Ctrl+S row in APP_KEYBOARD_SHORTCUT_GROUPS.
+   */
+  useEffect(() => {
+    if (!onSave) return undefined
+    const onKey = (e: KeyboardEvent): void => {
+      if (!matchesSaveProject(e)) return
+      const target = e.target
+      const inEditor =
+        target instanceof HTMLElement &&
+        target.closest('[data-testid="cad-editor-root"]') !== null
+      if (isTypableKeyboardTarget(target) && !inEditor) return
+      e.preventDefault()
+      handleSave()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onSave, handleSave])
 
   /**
    * ESC clears the active selection. Mounted as a document-level
@@ -2447,6 +2498,7 @@ export function DesignWorkspace({
                   design={sketchDesign}
                   onDesignChange={onSketchDesignChange}
                   onImportDxf={onSketchImportDxf}
+                  projectableEdges={firstMesh?.edges}
                   armedToolCommandId={armedSketchTool}
                   onSketchHint={(msg) => onToast?.('ok', msg)}
                   onCursorWorld={onSketchCursorWorld}
@@ -2938,8 +2990,10 @@ export function DesignWorkspace({
                   className="btn btn-ghost"
                   data-testid="design-workspace-save"
                   onClick={handleSave}
+                  disabled={!scriptDirty}
+                  title={scriptDirty ? 'Save script (unsaved changes)' : 'Script saved'}
                 >
-                  Save
+                  {scriptDirty ? '● Save' : 'Save'}
                 </button>
               )}
               {/* Multi-format export (Phase-3). A small menu of the six REAL

@@ -1106,3 +1106,173 @@ def test_detail_drawing_label_is_xml_escaped() -> None:
     # The echoed label field is escaped too (it is persisted / re-displayed).
     assert "<script>" not in r["label"]
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in r["label"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Wave 6 — includeHlr (true hidden-line-removal drawing projection)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The ``includeHlr`` param routes ``project_drawing`` through the dedicated OCP
+# HLR pipeline (``cadquery_hlr.project_view_edges``) instead of CadQuery's
+# built-in ``getSVG`` HLR. Two contracts these tests pin:
+#   1. FALSE-DEFAULT HONESTY: ``includeHlr`` absent / False is byte-identical to
+#      the pre-change output (the getSVG path is untouched).
+#   2. TRUE PATH: visible edges land in a ``class="hlr-visible"`` solid group and
+#      hidden edges in a SEPARATE ``class="hlr-hidden"`` dashed group; for a box
+#      with a through-hole the hidden group is non-empty and carries edges the
+#      visible group does NOT (the occluded hole circle).
+
+# A box with a through-hole: 30 x 20 x 10 mm block, 6 mm hole down through Z.
+# Projected FRONT (looking down +Y) the hole becomes a pair of hidden vertical
+# lines + occluded circle arcs — the canonical HLR exercise.
+_BOX_WITH_HOLE_SCRIPT = """
+import cadquery as cq
+result = cq.Workplane('XY').box(30, 20, 10).faces('>Z').workplane().hole(6)
+"""
+
+
+def _register_box_with_hole() -> str:
+    """Build the box-with-hole via execute_script and return its handle."""
+    exec_result = cad_handlers.execute_script({"script": _BOX_WITH_HOLE_SCRIPT})
+    return exec_result["meshes"][0]["handle"]
+
+
+def _paths_by_group_class(svg_text: str) -> "dict[str, list[str]]":
+    """Return {group_class: [path-d, ...]} for the hlr-visible / hlr-hidden groups.
+
+    Parses the SVG and walks each ``<g class="hlr-*">`` collecting its child
+    ``<path d>`` strings so tests can assert per-group population + disjointness.
+    """
+    root = ET.fromstring(svg_text)
+    out: "dict[str, list[str]]" = {}
+
+    def _walk(elem: "ET.Element") -> None:
+        for child in list(elem):
+            tag = child.tag.split("}", 1)[-1] if "}" in child.tag else child.tag
+            cls = child.attrib.get("class", "")
+            if tag == "g" and cls in ("hlr-visible", "hlr-hidden"):
+                ds: "list[str]" = []
+                for sub in child.iter():
+                    stag = sub.tag.split("}", 1)[-1] if "}" in sub.tag else sub.tag
+                    if stag == "path":
+                        ds.append(sub.attrib.get("d", ""))
+                out[cls] = ds
+            _walk(child)
+
+    _walk(root)
+    return out
+
+
+@requires_cadquery
+def test_project_drawing_include_hlr_false_is_byte_identical_to_default() -> None:
+    """``includeHlr`` absent / explicit-False produce byte-identical SVG.
+
+    The false-default path must be untouched by the HLR addition — this is the
+    back-compat guarantee for every existing drawing pin.
+    """
+    handle = _register_box_with_hole()
+    default = cad_handlers.project_drawing({"handle": handle, "view": "front"})
+    explicit_false = cad_handlers.project_drawing(
+        {"handle": handle, "view": "front", "includeHlr": False}
+    )
+    assert default["svg"] == explicit_false["svg"]
+    assert default["bytes"] == explicit_false["bytes"]
+    # And the false path is NOT the HLR builder's output (no hlr-* classes).
+    assert 'class="hlr-visible"' not in default["svg"]
+    assert 'class="hlr-hidden"' not in default["svg"]
+
+
+@requires_cadquery
+def test_project_drawing_include_hlr_front_hidden_group_nonempty_and_disjoint() -> None:
+    """FRONT view WITH HLR: hidden group is non-empty and holds edges the
+    visible group does NOT (the occluded through-hole).
+
+    This is the load-bearing HLR pin: a box with a through-hole MUST expose the
+    hole as hidden linework, distinct from the visible silhouette.
+    """
+    handle = _register_box_with_hole()
+    r = cad_handlers.project_drawing(
+        {"handle": handle, "view": "front", "includeHlr": True}
+    )
+    svg = r["svg"]
+    assert r["view"] == "front"
+    assert r["bytes"] > 0
+
+    # Distinct classed groups + dashed hidden styling.
+    assert 'class="hlr-visible"' in svg
+    assert 'class="hlr-hidden"' in svg
+    assert "stroke-dasharray" in svg
+
+    groups = _paths_by_group_class(svg)
+    visible = groups.get("hlr-visible", [])
+    hidden = groups.get("hlr-hidden", [])
+    assert len(visible) >= 4, f"expected >=4 visible edges, got {len(visible)}"
+    assert len(hidden) > 0, "hidden group must be non-empty for a through-hole"
+
+    # Disjointness: the hidden group contains at least one edge whose path-data
+    # does NOT appear in the visible group (the occluded hole geometry). Some
+    # back edges legitimately project onto front edges, so we require SOME
+    # hidden-only edge rather than total disjointness.
+    visible_set = set(v.strip() for v in visible)
+    hidden_only = [h for h in hidden if h.strip() not in visible_set]
+    assert len(hidden_only) > 0, (
+        "hidden group must carry edges absent from the visible group "
+        "(the occluded through-hole)"
+    )
+    # The hole projects as curved polylines (multi-L path data) — proof the
+    # occluded circle is captured as hidden linework.
+    curved_hidden = [h for h in hidden if h.count("L") >= 3]
+    assert len(curved_hidden) > 0, "expected occluded hole arcs in hidden group"
+
+
+@requires_cadquery
+def test_project_drawing_include_hlr_iso_sanity() -> None:
+    """ISO view WITH HLR: both groups render and the SVG differs from FRONT.
+
+    Proves the projection direction flows through the HLR path (not just the
+    getSVG path) and that iso yields its own richer linework.
+    """
+    handle = _register_box_with_hole()
+    iso = cad_handlers.project_drawing(
+        {"handle": handle, "view": "iso", "includeHlr": True}
+    )
+    front = cad_handlers.project_drawing(
+        {"handle": handle, "view": "front", "includeHlr": True}
+    )
+    assert iso["svg"] != front["svg"], "iso HLR must differ from front HLR"
+
+    groups = _paths_by_group_class(iso["svg"])
+    assert len(groups.get("hlr-visible", [])) > 0, "iso must have visible edges"
+    assert len(groups.get("hlr-hidden", [])) > 0, "iso must have hidden edges"
+
+
+@requires_cadquery
+def test_project_drawing_include_hlr_coords_match_snap_extraction() -> None:
+    """The HLR SVG path coordinates live in the SAME space as the snap points.
+
+    Snap-source consistency guard: ``extract_drawing_geometry`` (the dimension
+    snap-point source) and the HLR drawing SVG both run
+    ``gp_Ax2(gp_Pnt(), gp_Dir(*direction))``. A snap point at a projected vertex
+    must therefore coincide with a coordinate present in the HLR path data. We
+    check the bbox extents agree (a cheap, robust proxy for full coordinate
+    agreement that does not depend on floating-point path-string formatting).
+    """
+    from engines.cad.cadquery_drawing_geometry import extract_drawing_geometry
+
+    handle = _register_box_with_hole()
+    geom = extract_drawing_geometry(handle, "front")
+    vb = geom["viewBox"]  # {x, y, w, h} in projected SVG-mm
+
+    r = cad_handlers.project_drawing(
+        {"handle": handle, "view": "front", "includeHlr": True}
+    )
+    segs = _extract_svg_segments(r["svg"])
+    assert len(segs) > 0
+    xs = [c for s in segs for c in (s[0], s[2])]
+    ys = [c for s in segs for c in (s[1], s[3])]
+    # The HLR linework's raw path coords must span the same extent the snap
+    # geometry reports (both derive from the identical projection).
+    assert min(xs) == pytest.approx(vb["x"], abs=1e-3)
+    assert max(xs) == pytest.approx(vb["x"] + vb["w"], abs=1e-3)
+    assert min(ys) == pytest.approx(vb["y"], abs=1e-3)
+    assert max(ys) == pytest.approx(vb["y"] + vb["h"], abs=1e-3)

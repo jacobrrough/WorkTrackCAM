@@ -184,6 +184,19 @@ export interface DrawingViewProps {
    */
   readonly initialView?: DrawingViewAxis
   /**
+   * Wave 6 (HLR) — optional initial "Hidden lines" toggle state. Defaults to
+   * `false` (mesh-edge preview). When true, the component starts with the true
+   * hidden-line-removal projection ON, threading `includeHlr: true` into the
+   * `cad.projectDrawing` bridge. Render-pin tests thread this in to assert the
+   * toggle's ON styling without driving a click handler.
+   *
+   * Persistence note: the toggle lives in COMPONENT STATE only. There is no
+   * per-sheet settings home in `drawing-sheet-schema.ts` today, so the choice
+   * is not persisted across sheet switches / reloads (honest limitation — a
+   * schema+session change is out of scope for this wave).
+   */
+  readonly initialHlr?: boolean
+  /**
    * Optional handler fired when the operator clicks "Export PDF/SVG".
    * The host owns the file-picker UI (and the choice between PDF /
    * SVG); this component only signals intent. When omitted, the
@@ -421,6 +434,13 @@ type DrawingBridge = {
   readonly projectDrawing?: (payload: {
     readonly handle: string
     readonly view: DrawingViewAxis
+    /**
+     * Wave 6 (HLR) — request true hidden-line removal. Additive + optional;
+     * omitted / false keeps the byte-identical mesh-edge projection. The
+     * permissive `cad:*` IPC envelope forwards this straight to the sidecar's
+     * `cad.project_drawing` `includeHlr` param.
+     */
+    readonly includeHlr?: boolean
   }) => Promise<
     | { ok: true; result: { svg: string } }
     | { ok: false; error: string; hint?: string }
@@ -1115,6 +1135,7 @@ const TOOLBAR_ORDER: readonly DrawingViewAxis[] = [
 export function DrawingView({
   partHandle,
   initialView = 'front',
+  initialHlr = false,
   onExport,
   onToast,
   previewSvg,
@@ -1160,6 +1181,15 @@ export function DrawingView({
   const [svg, setSvg] = useState<string | null>(previewSvg ?? null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * Wave 6 (HLR) — "Hidden lines" toggle. When ON, the base projection is
+   * fetched with `includeHlr: true` so the sidecar returns true
+   * hidden-line-removal linework (visible solid + hidden dashed, distinct
+   * classes). Toggling flips this flag, which is in the projection effect's
+   * dep array, so the drawing re-projects on the same async/busy path. Held in
+   * component state only (see `initialHlr` for the persistence caveat).
+   */
+  const [hlrEnabled, setHlrEnabled] = useState<boolean>(initialHlr)
 
   /**
    * Whether this instance is in CONTROLLED (persisted) dimension mode. When the
@@ -2077,6 +2107,17 @@ export function DrawingView({
     })
   }, [activeView])
 
+  /**
+   * Wave 6 (HLR) — flip the "Hidden lines" toggle. `hlrEnabled` is in the
+   * projection effect's dep array, so this triggers a re-projection through the
+   * SAME async/busy path (the canvas shows "Projecting ... view..." and
+   * `aria-busy` flips) — HLR is slower than the mesh-edge projection, so the
+   * existing busy affordance covers the extra latency.
+   */
+  const toggleHlr = useCallback((): void => {
+    setHlrEnabled((prev) => !prev)
+  }, [])
+
   const updateSectionAxis = useCallback((axis: DrawingSectionAxis): void => {
     setSectionPlane((prev) => ({ ...prev, axis }))
   }, [])
@@ -2410,6 +2451,7 @@ export function DrawingView({
           const res = await bridge.projectDrawing!({
             handle: partHandle,
             view: activeView,
+            includeHlr: hlrEnabled,
           })
           if (cancelled) return
           if (!res.ok) {
@@ -2487,6 +2529,7 @@ export function DrawingView({
     partHandle,
     activeView,
     previewSvg,
+    hlrEnabled,
     sectionEnabled,
     sectionPlane,
     sectionLabel,
@@ -2978,6 +3021,27 @@ export function DrawingView({
               </button>
             )
           })}
+        </div>
+
+        <div
+          className="design-drawing__hlr-group"
+          role="group"
+          aria-label="Hidden-line removal"
+        >
+          <button
+            type="button"
+            className={
+              hlrEnabled
+                ? 'btn btn-primary design-drawing__hlr-toggle design-drawing__hlr-toggle--on'
+                : 'btn btn-secondary design-drawing__hlr-toggle'
+            }
+            data-testid="design-drawing-hlr-toggle"
+            aria-pressed={hlrEnabled}
+            onClick={toggleHlr}
+            title="Toggle true hidden-line removal: visible edges solid, hidden edges dashed"
+          >
+            {hlrEnabled ? 'Hidden lines: ON' : 'Hidden lines: OFF'}
+          </button>
         </div>
 
         {onExport && (
@@ -3855,8 +3919,9 @@ export function DrawingView({
           data-testid="design-drawing-projection-caveat"
           role="note"
         >
-          Projected views are mesh-edge previews, not certified hidden-line
-          removal (HLR). Verify critical dimensions against the model.
+          {hlrEnabled
+            ? 'True hidden-line removal is ON: visible edges are solid, hidden edges dashed. Verify critical dimensions against the model.'
+            : 'Projected views are mesh-edge previews. Enable "Hidden lines" above for true hidden-line removal. Verify critical dimensions against the model.'}
         </p>
         <label className="design-drawing__title-row">
           <span className="design-drawing__title-label">Name</span>

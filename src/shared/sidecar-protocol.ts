@@ -604,6 +604,16 @@ export type CadProjectDrawingParams = {
   handle: string
   /** View direction; see CadDrawingView for the standard names. */
   view: CadDrawingView
+  /**
+   * Wave 6 (HLR) — when true, project via the dedicated OCP hidden-line-removal
+   * pipeline: visible edges render solid (`class="hlr-visible"`), hidden edges
+   * render in a separate dashed group (`class="hlr-hidden"`, `stroke-dasharray`).
+   * Additive + optional; DEFAULT `false` keeps the output byte-identical to the
+   * pre-HLR projection (existing pins prove it). The projector matches
+   * `cad.extract_drawing_geometry` (the snap-point source) so dimensions stay
+   * anchored. Degrades to the standard getSVG path when OCP HLR is unavailable.
+   */
+  includeHlr?: boolean
 }
 
 export type CadProjectDrawingResult = {

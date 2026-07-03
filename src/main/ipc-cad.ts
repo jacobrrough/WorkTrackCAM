@@ -286,8 +286,11 @@ export type CadExportDrawingResult = {
   bytesWritten: number
 }
 
+/** Single-view projection result (the ``{handle, view}`` payload variant). */
+export type CadProjectDrawingSingleViewResult = { svg: string }
+
 export type CadProjectDrawingResponse =
-  | { ok: true; result: CadProjectDrawingResult }
+  | { ok: true; result: CadProjectDrawingResult | CadProjectDrawingSingleViewResult }
   | { ok: false; error: string; hint?: string }
 
 export type CadExportDrawingResponse =
@@ -401,12 +404,25 @@ export type CadExportAssemblyPayload = {
  * ``CadSolveSketchPayload`` / ``CadCreateAssemblyPayload``: the renderer's
  * Zod parser owns the schema; duplicating it here would drift.
  */
-export type CadProjectDrawingPayload = {
-  /** Source body handle (part from ``cad:execute`` or assembly from ``cad:createAssembly``). */
-  handle: string
-  /** Full ``DrawingSheet`` blob -- sidecar walks ``viewPlaceholders``. */
-  sheet: Record<string, unknown>
-}
+export type CadProjectDrawingPayload =
+  | {
+      /** Source body handle (part from ``cad:execute`` or assembly from ``cad:createAssembly``). */
+      handle: string
+      /** Full ``DrawingSheet`` blob -- sidecar walks ``viewPlaceholders``. */
+      sheet: Record<string, unknown>
+    }
+  | {
+      /**
+       * Wave 6 (HLR) -- the single-view contract the sidecar's
+       * ``cad.project_drawing`` handler ACTUALLY implements ({handle, view,
+       * includeHlr?} -> {svg}). DrawingView's base projection + the
+       * Hidden-lines toggle ride this variant; the ``sheet`` variant above is
+       * kept for the planned sheet-walking pipeline.
+       */
+      handle: string
+      view: string
+      includeHlr?: boolean
+    }
 
 /**
  * Payload for ``cad:exportDrawing``. Renders the projected linework from
@@ -966,9 +982,29 @@ export function validateProjectDrawingPayload(
       hint: 'cad:projectDrawing requires { handle, sheet }',
     }
   }
-  const p = raw as { handle?: unknown; sheet?: unknown }
+  const p = raw as { handle?: unknown; sheet?: unknown; view?: unknown; includeHlr?: unknown }
   if (typeof p.handle !== 'string' || p.handle.length === 0) {
     return { ok: false, error: 'missing_handle' }
+  }
+  // Single-view variant ({handle, view, includeHlr?}) -- the contract the
+  // sidecar actually implements. Envelope-only checks; the deep view whitelist
+  // lives sidecar-side (bad_params on unknown views).
+  if (typeof p.view === 'string' && p.view.length > 0) {
+    if (p.includeHlr !== undefined && typeof p.includeHlr !== 'boolean') {
+      return {
+        ok: false,
+        error: 'invalid_payload',
+        hint: 'includeHlr must be a boolean when present',
+      }
+    }
+    return {
+      ok: true,
+      payload: {
+        handle: p.handle,
+        view: p.view,
+        ...(p.includeHlr !== undefined ? { includeHlr: p.includeHlr } : {}),
+      },
+    }
   }
   if (!p.sheet || typeof p.sheet !== 'object' || Array.isArray(p.sheet)) {
     return {
@@ -3063,14 +3099,33 @@ export function registerCadIpc(_ctx: MainIpcWindowContext): void {
       // hang to the operator rather than waiting forever.
       const r = await callSidecar<Record<string, unknown>>(
         'cad.project_drawing',
-        {
-          handle: v.payload.handle,
-          sheet: v.payload.sheet,
-        },
+        'view' in v.payload
+          ? {
+              handle: v.payload.handle,
+              view: v.payload.view,
+              ...(v.payload.includeHlr !== undefined
+                ? { includeHlr: v.payload.includeHlr }
+                : {}),
+            }
+          : {
+              handle: v.payload.handle,
+              sheet: v.payload.sheet,
+            },
         pyCtx,
         90_000,
       )
       if (!r.ok) return { ok: false, error: r.error, hint: r.hint }
+      if ('view' in v.payload) {
+        // Single-view contract: the sidecar returns { svg } inline.
+        if (typeof r.result.svg !== 'string' || r.result.svg.length === 0) {
+          return {
+            ok: false,
+            error: 'sidecar_protocol_error',
+            hint: 'cad.project_drawing returned no svg for the single-view payload',
+          }
+        }
+        return { ok: true, result: { svg: r.result.svg } }
+      }
       const coerced = coerceProjectDrawingResult(r.result)
       if (!coerced) {
         return {

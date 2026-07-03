@@ -161,7 +161,9 @@ def _build_svg_opts(view: str) -> Dict[str, Any]:
 # ── Inline-SVG projection ───────────────────────────────────────────────
 
 
-def project_to_drawing(handle: str, view: str = "front") -> Dict[str, Any]:
+def project_to_drawing(
+    handle: str, view: str = "front", include_hlr: bool = False
+) -> Dict[str, Any]:
     """Project the body behind ``handle`` into a 2D SVG string.
 
     Wire result::
@@ -180,6 +182,26 @@ def project_to_drawing(handle: str, view: str = "front") -> Dict[str, Any]:
     """
     workplane = _resolve_handle(handle)
     opts = _build_svg_opts(view)
+
+    # When the operator asks for TRUE hidden-line removal we build the SVG
+    # from the dedicated OCP HLR pipeline (``cadquery_hlr.project_view_edges``)
+    # so visible edges land in a solid group and hidden edges in a SEPARATE
+    # dashed group carrying a distinct class the renderer can style / toggle.
+    # The projection uses the SAME ``gp_Ax2(gp_Pnt(), gp_Dir(*direction))``
+    # projector as ``extract_drawing_geometry`` (the snap-point source), so the
+    # emitted linework stays in the exact SVG-mm coordinate space the snap
+    # points live in -- dimensions never dangle. Falls back to the standard
+    # ``getSVG`` path (which itself separates hidden/visible) when the OCP HLR
+    # bindings are unavailable, preserving the graceful-degradation contract.
+    if include_hlr:
+        hlr_svg = _project_to_drawing_hlr(workplane, view, opts)
+        if hlr_svg is not None:
+            return {
+                "svg": hlr_svg,
+                "view": view,
+                "bytes": len(hlr_svg.encode("utf-8")),
+            }
+        # OCP HLR unavailable -> fall through to the standard getSVG path.
 
     try:
         import cadquery as cq  # noqa: PLC0415 - optional dependency
@@ -244,6 +266,177 @@ def _export_via_generic_path(workplane: Any, opts: Dict[str, Any]) -> str:
             Path(tmp_path).unlink()
         except OSError:
             pass  # best-effort cleanup; tmp dir will eventually be swept
+
+
+# ── True-HLR inline projection (includeHlr) ──────────────────────────────
+#
+# ``project_to_drawing(..., include_hlr=True)`` builds the SVG from the
+# dedicated OCP hidden-line-removal pipeline instead of CadQuery's built-in
+# ``getSVG`` HLR. Two reasons this exists as a distinct path:
+#
+#   1. STYLING / TOGGLE: ``getSVG`` emits hidden lines with a fixed inline grey
+#      colour and no stable class hook. This builder emits the visible edges in
+#      a ``class="hlr-visible"`` group (solid) and the hidden edges in a
+#      SEPARATE ``class="hlr-hidden"`` group (``stroke-dasharray``), so the
+#      renderer can style / show / hide each layer.
+#   2. SNAP CONSISTENCY: the projector is the SAME
+#      ``gp_Ax2(gp_Pnt(), gp_Dir(*direction))`` that
+#      ``cadquery_drawing_geometry.extract_drawing_geometry`` (the snap-point
+#      source) uses, and this builder writes the RAW projected ``(x, y)`` into
+#      the ``<path d>`` data under the SAME ``<g transform="scale(s,-s)
+#      translate(..)">`` wrapper convention ``getSVG`` uses. So the path
+#      coordinate NUMBERS match the snap coordinates -- a dimension anchored to
+#      a snap point lands exactly on this linework.
+#
+# The transform math (``unitScale`` / ``xTranslate`` / ``yTranslate``) mirrors
+# CadQuery's ``getSVG`` exactly (fit-to-canvas at ``bb_scale = 0.75``) so an
+# HLR drawing frames identically to the non-HLR one for the same view.
+
+
+# ``bb_scale`` from CadQuery's ``getSVG``: the projected bbox is fit to 75 % of
+# the canvas so there is a margin around the linework. Kept in lock-step so the
+# HLR and non-HLR projections frame identically.
+_HLR_BB_SCALE = 0.75
+
+
+def _hlr_path_data(polyline: list) -> str:
+    """Render one projected 2D polyline as SVG ``<path d>`` data.
+
+    Mirrors CadQuery's ``makeSVGedge``: ``M`` to the first point then ``L`` to
+    each subsequent point, writing the RAW projected coordinate numbers (the
+    ``<g transform>`` wrapper handles visual placement). A trailing space after
+    each command matches the ``getSVG`` template so downstream string handling
+    (e.g. detail-view re-hosting) sees the same shape.
+    """
+    if not polyline:
+        return ""
+    head = polyline[0]
+    parts = [f"M{head[0]},{head[1]} "]
+    for pt in polyline[1:]:
+        parts.append(f"L{pt[0]},{pt[1]} ")
+    return "".join(parts)
+
+
+def _build_hlr_svg(
+    visible: list,
+    hidden: list,
+    bbox2d: Dict[str, list],
+    opts: Dict[str, Any],
+) -> str:
+    """Compose the inline HLR SVG from projected visible + hidden linework.
+
+    ``visible`` / ``hidden`` are lists of 2D ``[[x, y], ...]`` polylines from
+    ``cadquery_hlr.project_view_edges``; ``bbox2d`` is that call's 2D bbox.
+    ``opts`` is the standard ``_build_svg_opts`` dict (canvas size, margins,
+    colours, strokeWidth). Returns a self-contained SVG string.
+
+    The transform math is byte-for-byte the same fit-to-canvas logic
+    ``getSVG`` uses, so an HLR drawing sits in the same place a non-HLR one
+    would for the same view -- and the raw path coordinates stay in the snap
+    coordinate space (see the module note above).
+    """
+    width = float(opts["width"])
+    height = float(opts["height"])
+    margin_left = float(opts.get("marginLeft", 10))
+    margin_top = float(opts.get("marginTop", 10))
+    stroke_width = float(opts.get("strokeWidth", 0.25))
+    stroke_color = ",".join(str(int(c)) for c in opts.get("strokeColor", (0, 0, 0)))
+    hidden_color = ",".join(
+        str(int(c)) for c in opts.get("hiddenColor", (160, 160, 160))
+    )
+
+    bmin = bbox2d.get("min", [0.0, 0.0])
+    bmax = bbox2d.get("max", [0.0, 0.0])
+    xlen = max(bmax[0] - bmin[0], 1e-9)
+    ylen = max(bmax[1] - bmin[1], 1e-9)
+
+    # Fit-to-canvas at 75 % (getSVG's ``bb_scale``). Guard a degenerate zero
+    # extent so a single-edge / point projection still yields a finite scale.
+    unit_scale = min(
+        width / xlen * _HLR_BB_SCALE, height / ylen * _HLR_BB_SCALE
+    )
+    if not math.isfinite(unit_scale) or unit_scale <= 0:
+        unit_scale = 1.0
+
+    x_translate = (0.0 - bmin[0]) + margin_left / unit_scale
+    y_translate = (0.0 - bmax[1]) - margin_top / unit_scale
+
+    visible_content = "".join(
+        f"\t\t\t<path d=\"{_hlr_path_data(poly)}\" />\n" for poly in visible if poly
+    )
+    hidden_content = "".join(
+        f"\t\t\t<path d=\"{_hlr_path_data(poly)}\" />\n" for poly in hidden if poly
+    )
+
+    return (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n"
+        "<svg\n"
+        "   xmlns:svg=\"http://www.w3.org/2000/svg\"\n"
+        "   xmlns=\"http://www.w3.org/2000/svg\"\n"
+        f"   width=\"{width}\"\n"
+        f"   height=\"{height}\"\n"
+        "\n"
+        ">\n"
+        f"    <g transform=\"scale({unit_scale}, -{unit_scale})   "
+        f"translate({x_translate},{y_translate})\" "
+        f"stroke-width=\"{stroke_width}\"  fill=\"none\">\n"
+        "       <!-- hidden lines (HLR) -->\n"
+        f"       <g class=\"hlr-hidden\" stroke=\"rgb({hidden_color})\" fill=\"none\" "
+        f"stroke-dasharray=\"{stroke_width},{stroke_width}\" >\n"
+        f"{hidden_content}"
+        "       </g>\n"
+        "\n"
+        "       <!-- solid lines (HLR) -->\n"
+        f"       <g class=\"hlr-visible\" stroke=\"rgb({stroke_color})\" fill=\"none\">\n"
+        f"{visible_content}"
+        "       </g>\n"
+        "    </g>\n"
+        "\n"
+        "</svg>\n"
+    )
+
+
+def _project_to_drawing_hlr(
+    workplane: Any, view: str, opts: Dict[str, Any]
+) -> Optional[str]:
+    """Build the inline HLR SVG for ``view``, or ``None`` to signal fallback.
+
+    Resolves the workplane's solid, runs ``cadquery_hlr.project_view_edges``
+    with the view's projection direction, and composes the SVG via
+    :func:`_build_hlr_svg`. Returns ``None`` (caller falls back to the standard
+    ``getSVG`` path) when:
+
+      * the OCP HLR bindings are unavailable (``ocp_hlr_not_available``), or
+      * the handle has no resolvable solid (a bare sketch / wire).
+
+    A genuine mid-pipeline OCCT failure re-raises as ``drawing_error`` so the
+    operator sees the error rather than a silently-degraded drawing.
+    """
+    from .cadquery_hlr import project_view_edges  # noqa: PLC0415 - lazy / optional
+
+    direction = _validate_view(view)
+    try:
+        shape = workplane.findSolid().wrapped
+    except Exception:  # noqa: BLE001 - no solid (sketch/wire) -> fall back
+        return None
+
+    try:
+        projected = project_view_edges(shape, direction, tolerance_mm=0.1)
+    except _CadHandlerError as exc:
+        if exc.code == "ocp_hlr_not_available":
+            return None  # graceful degradation to getSVG (which also does HLR)
+        raise _CadHandlerError(
+            "drawing_error",
+            f"HLR drawing projection failed: {exc}",
+            detail=getattr(exc, "detail", None),
+        ) from exc
+
+    return _build_hlr_svg(
+        projected.get("visible", []),
+        projected.get("hidden", []),
+        projected.get("bbox2d", {"min": [0.0, 0.0], "max": [0.0, 0.0]}),
+        opts,
+    )
 
 
 # ── Export-to-disk projection ───────────────────────────────────────────

@@ -255,9 +255,14 @@ describe('DrawingView — onPersistTitleBlock seam + projection honesty', () => 
     )
   })
 
-  it('surfaces the "not certified HLR" projection caveat honestly', () => {
+  it('surfaces the projection-fidelity caveat honestly (HLR-state-aware)', () => {
     expect(DRAWING_VIEW_SRC).toContain('data-testid="design-drawing-projection-caveat"')
-    expect(DRAWING_VIEW_SRC).toContain('not certified hidden-line')
+    // Wave 6: the static "not certified hidden-line" text became a DYNAMIC
+    // caveat -- mesh-edge preview guidance when HLR is off, verify-dimensions
+    // guidance when true HLR is on. Pin both branches so neither silently drops.
+    expect(DRAWING_VIEW_SRC).toContain('mesh-edge previews')
+    expect(DRAWING_VIEW_SRC).toContain('True hidden-line removal is ON')
+    expect(DRAWING_VIEW_SRC).toContain('Verify critical dimensions against the model.')
     // exactly once (the splice-double-apply guard)
     const count = DRAWING_VIEW_SRC.split('design-drawing__projection-caveat').length - 1
     expect(count).toBe(1)

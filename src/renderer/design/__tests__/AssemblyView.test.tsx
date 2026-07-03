@@ -1067,3 +1067,67 @@ describe('AssemblyView — Phase-4 Mate constraints panel', () => {
     expect(html).not.toContain('design-assembly-mate-constraint-md-editor"')
   })
 })
+
+// ── (K) Assembly 3D viewport wiring (AssemblyViewport3D) ────────────────────
+//
+// The viewport column now mounts the real R3F scene component. In node/SSR that
+// component degrades to the summary placeholder (the Canvas needs WebGL), so the
+// legacy `design-assembly-summary` pins keep working — these tests assert the
+// column is wired to the new component AND the view-only explode slider ships.
+describe('AssemblyView — 3D viewport + explode wiring', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate', transform: { position: [25, 0, 0] } }),
+  ]
+  const coincidentMate = {
+    id: 'mc',
+    kind: 'coincident' as const,
+    part1Id: 'p1',
+    feature1: { x: 0, y: 0, z: 0 },
+    part2Id: 'p2',
+    feature2: { x: 0, y: 0, z: 0 },
+  }
+
+  it('still renders the summary fallback (Assembly preview) via the guard in node', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, onAddPart: vi.fn() }),
+    )
+    // The AssemblyViewport3D node-guard degrades to the SAME placeholder markup.
+    expect(html).toContain('data-testid="design-assembly-viewport"')
+    expect(html).toContain('data-testid="design-assembly-summary"')
+    expect(html).toContain('Assembly preview')
+    // The Canvas must NOT mount in node — no <canvas> element leaks.
+    expect(html).not.toContain('<canvas')
+  })
+
+  it('renders the view-only explode slider with its readout', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, onAddPart: vi.fn() }),
+    )
+    expect(html).toContain('data-testid="design-assembly-explode"')
+    expect(html).toContain('data-testid="design-assembly-explode-slider"')
+    expect(html).toContain('data-testid="design-assembly-explode-readout"')
+    // Default factor is 0 → the readout reads 0%.
+    expect(html).toContain('0%')
+  })
+
+  it('seeds the explode slider at 0 (assembled) on mount', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, onAddPart: vi.fn() }),
+    )
+    // The range input value is the rounded 0..100 percentage.
+    expect(html).toMatch(/data-testid="design-assembly-explode-slider"[^>]*value="0"/)
+  })
+
+  it('surfaces the mate-count line through the viewport fallback', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        mateConstraints: [coincidentMate],
+      }),
+    )
+    // A non-empty mateConstraints list drives the mate-count caption.
+    expect(html).toContain('data-testid="design-assembly-mate-count"')
+    expect(html).toContain('1 mate positioning parts')
+  })
+})

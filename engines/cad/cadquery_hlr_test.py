@@ -252,3 +252,71 @@ def test_result_shape_is_json_friendly_and_complete() -> None:
     assert set(result["bbox"].keys()) == {"min", "max"}
     assert len(result["bbox"]["min"]) == 3
     assert len(result["bbox"]["max"]) == 3
+
+
+# -- project_view_edges (view-only HLR for 2D drawing linework) --------------
+
+
+def test_project_view_edges_bad_view_dir_raises_bad_params() -> None:
+    """A zero-length view direction is rejected with ``bad_params`` (no shape
+    needed — validation happens before the OCP import path is exercised)."""
+    with pytest.raises(_CadHandlerError) as excinfo:
+        cadquery_hlr.project_view_edges(object(), [0.0, 0.0, 0.0])
+    assert excinfo.value.code == "bad_params"
+
+
+@requires_cadquery
+def test_project_view_edges_returns_2d_visible_and_hidden() -> None:
+    """A box with a through-hole projected front-on yields 2D visible + hidden
+    linework, with the occluded hole captured in the hidden group."""
+    import cadquery as cq
+
+    body = (
+        cq.Workplane("XY").box(30.0, 20.0, 10.0).faces(">Z").workplane().hole(6.0)
+    )
+    shape = body.findSolid().wrapped
+    result = cadquery_hlr.project_view_edges(shape, [0.0, 1.0, 0.0], 0.1)
+
+    assert set(result.keys()) == {"visible", "hidden", "bbox2d", "truncated"}
+    assert isinstance(result["visible"], list)
+    assert isinstance(result["hidden"], list)
+    assert isinstance(result["truncated"], bool)
+    # Every emitted point is a 2-tuple (Z dropped by the projection).
+    for group in (result["visible"], result["hidden"]):
+        for poly in group:
+            for pt in poly:
+                assert len(pt) == 2
+    # Outer rectangle -> at least 4 visible edges; through-hole -> hidden edges.
+    assert len(result["visible"]) >= 4
+    assert len(result["hidden"]) > 0
+    # bbox2d spans the 30x20 block's front face (10 wide in X, 30 tall in Z-view
+    # ... actually front view of a 30x20x10 box shows width 30 -> X extent, and
+    # height 10 -> ... wait, front looks down +Y so it shows XZ: width 30, height
+    # 10). Assert the 2D bbox is a plausible, finite, non-zero rectangle.
+    bb = result["bbox2d"]
+    assert set(bb.keys()) == {"min", "max"}
+    assert bb["max"][0] > bb["min"][0]
+    assert bb["max"][1] > bb["min"][1]
+
+
+@requires_cadquery
+def test_project_view_edges_hidden_group_disjoint_from_visible() -> None:
+    """The hidden group carries edges the visible group does not (the occluded
+    through-hole), proving the two classes are meaningfully separated."""
+    import cadquery as cq
+
+    body = (
+        cq.Workplane("XY").box(30.0, 20.0, 10.0).faces(">Z").workplane().hole(6.0)
+    )
+    shape = body.findSolid().wrapped
+    result = cadquery_hlr.project_view_edges(shape, [0.0, 1.0, 0.0], 0.1)
+
+    def _key(poly: list) -> tuple:
+        return tuple((round(p[0], 3), round(p[1], 3)) for p in poly)
+
+    visible_keys = set(_key(p) for p in result["visible"])
+    hidden_only = [p for p in result["hidden"] if _key(p) not in visible_keys]
+    assert len(hidden_only) > 0
+    # The hole projects as curved polylines (>2 sampled points) in hidden.
+    curved_hidden = [p for p in result["hidden"] if len(p) > 2]
+    assert len(curved_hidden) > 0

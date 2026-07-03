@@ -112,6 +112,8 @@ import {
   type AssemblyJointLimitsKey,
   type JointLimitsDraft,
 } from './assembly-joint-limits'
+import { AssemblyViewport3D } from './AssemblyViewport3D'
+import type { ExplodeConfig } from './assembly-viewport-transforms'
 
 /**
  * One row in the assembly's parts list.
@@ -1236,6 +1238,12 @@ export function AssemblyView({
   const [playbackT, setPlaybackT] = useState<number>(clamp01(initialPlaybackT))
   const [playing, setPlaying] = useState(false)
 
+  // Explode (VIEW-only) - a 0..1 factor separates the 3D parts along the
+  // configured axis (reuses the shared explodeOffsetMm via AssemblyViewport3D).
+  // The durable explodeView metadata (axis/step) lives in assembly.json; this
+  // UI factor is view-only and never persisted (schema-additive rule honoured).
+  const [explodeFactor, setExplodeFactor] = useState<number>(0)
+
   const exitPlayback = useCallback((): void => {
     setPlaying(false)
     setMotionPoses(null)
@@ -1296,6 +1304,13 @@ export function AssemblyView({
   const drivenJointRange = useMemo<DrivenJointRange | null>(
     () => firstDrivenJointRange(parts),
     [parts]
+  )
+  // View-only explode config for the 3D viewport. Axis + step mirror the
+  // schema explodeView defaults (+Z, 10 mm); the factor is the live slider.
+  // Never persisted - the viewport reads it, nothing writes it back.
+  const explodeConfig = useMemo<ExplodeConfig>(
+    () => ({ axis: 'z', stepMm: 10, factor: explodeFactor }),
+    [explodeFactor]
   )
   const handleMotionStudy = useCallback((): void => {
     if (parts.length === 0 || motionStudying) return
@@ -2350,50 +2365,65 @@ export function AssemblyView({
           data-testid="design-assembly-viewport"
         >
           {/*
-            DOM-free render path: the live Three.js viewport (Viewport3D)
-            requires `window` / `document` / WebGL, which the project's
-            node-env vitest does NOT provide. We surface the tessellation
-            summary instead — same pattern the Part view uses for its
-            "build result" pane. When the renderer lands a DOM-aware
-            test harness, swapping this for the real Viewport3D is a
-            one-line change.
+            Real Three.js / R3F scene (AssemblyViewport3D). Each part draws as a
+            nominal box placed by its 6-DOF pose (the renderer carries no per-part
+            mesh — see the component header for the honesty contract). The wave-2
+            motion-study `playbackOverlay` OVERRIDES the poses while a study plays,
+            interference `clashIds` tint the offending boxes, and a selected row
+            highlights its box (row ↔ viewport sync). In node/vitest the component
+            degrades to the SAME summary placeholder (design-assembly-summary +
+            "Assembly preview") the render pins expect — the Canvas can't mount
+            without WebGL. The parts-list rows on the left stay the editing surface.
+          */}
+          <AssemblyViewport3D
+            parts={parts}
+            playbackOverlay={playbackOverlay}
+            clashIds={clashIds}
+            selectedId={selectedPartId}
+            onSelectPart={handleRowClick}
+            explode={explodeConfig}
+            busy={busy}
+            triangleSummary={triangleSummary}
+            stlPath={tessellation?.stlPath ?? null}
+            mateConstraintCount={mateConstraints.length}
+            playbackActive={playbackOverlay !== null}
+          />
+          {/*
+            Explode slider — VIEW-only 0..1 factor. Parts separate along the
+            configured axis (schema `explodeView`, defaulting to +Z / 10 mm step).
+            Not persisted: dragging never writes assembly.json (the schema block is
+            untouched by this control).
           */}
           <div
-            className="design-assembly__viewport-summary"
-            data-testid="design-assembly-summary"
+            className="design-assembly__explode"
+            data-testid="design-assembly-explode"
+            role="group"
+            aria-label="Explode view"
           >
-            <div className="design-assembly__viewport-title">
-              {'▢'} Assembly preview
-            </div>
-            <div className="design-assembly__viewport-meta">
-              {busy
-                ? 'Building assembly…'
-                : triangleSummary ?? `${parts.length} part${parts.length === 1 ? '' : 's'}`}
-            </div>
-            {playbackOverlay !== null && (
-              <div
-                className="design-assembly__viewport-playback-note"
-                data-testid="design-assembly-playback-note"
-              >
-                Motion playback — preview overlay, not saved
-              </div>
-            )}
-            {mateConstraints.length > 0 && (
-              <div
-                className="design-assembly__viewport-mates"
-                data-testid="design-assembly-mate-count"
-              >
-                {`${mateConstraints.length} mate${mateConstraints.length === 1 ? '' : 's'} positioning parts`}
-              </div>
-            )}
-            {tessellation?.stlPath && (
-              <div
-                className="design-assembly__viewport-path"
-                title={tessellation.stlPath}
-              >
-                {tessellation.stlPath}
-              </div>
-            )}
+            <label
+              className="design-assembly__explode-label"
+              htmlFor="design-assembly-explode-slider"
+            >
+              Explode
+            </label>
+            <input
+              id="design-assembly-explode-slider"
+              type="range"
+              className="design-assembly__explode-slider"
+              data-testid="design-assembly-explode-slider"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(explodeFactor * 100)}
+              onChange={(e) => setExplodeFactor(Number(e.target.value) / 100)}
+              aria-label="Explode separation factor"
+            />
+            <span
+              className="design-assembly__explode-readout"
+              data-testid="design-assembly-explode-readout"
+            >
+              {`${Math.round(explodeFactor * 100)}%`}
+            </span>
           </div>
         </section>
       </div>

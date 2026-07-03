@@ -465,10 +465,17 @@ def _require_view_param(params: dict[str, Any]) -> str:
 
 
 def project_drawing(params: dict[str, Any]) -> dict[str, Any]:
-    """Project a body handle into a 2D SVG drawing string (inline)."""
+    """Project a body handle into a 2D SVG drawing string (inline).
+
+    ``includeHlr`` (optional bool, default ``False`` for back-compat) selects
+    the true hidden-line-removal path: visible edges render solid, hidden edges
+    render in a separate dashed layer (distinct CSS class). The false path is
+    byte-identical to the pre-``includeHlr`` output.
+    """
     handle = _require_str(params, "handle")
     view = _require_view_param(params)
-    return _project_to_drawing_core(handle, view=view)
+    include_hlr = _optional_bool(params, "includeHlr", False)
+    return _project_to_drawing_core(handle, view=view, include_hlr=include_hlr)
 
 
 def export_drawing(params: dict[str, Any]) -> dict[str, Any]:

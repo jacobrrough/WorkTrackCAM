@@ -191,6 +191,13 @@ export const APP_KEYBOARD_SHORTCUT_GROUPS: AppShortcutGroup[] = [
         context: 'When focused in the Design workspace script editor'
       },
       {
+        action: 'Save CadQuery script',
+        keysWin: 'Ctrl+S',
+        keysMac: '⌘S',
+        context:
+          'Persists the Design script to disk; fires from the script editor or any non-typable Design surface (ignored while typing in another field)'
+      },
+      {
         action: 'Cancel constraint / pick point mode',
         keysWin: 'Esc',
         keysMac: 'Esc',
