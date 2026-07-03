@@ -314,11 +314,16 @@ export async function dispatch2dStrategy(
             safeZMm: job.safeZMm,
             wallStockMm: regionWallStockMm,
             finishEachDepth,
-            // The offset-spiral path has no region-clamped helix; map a helix
-            // request to its inclined ramp entry (closest non-plunge it supports).
-            entryMode: entryMode === 'helix' ? 'ramp' : entryMode,
+            // The offset-spiral path now supports the SAME region-clamped helix as
+            // the raster pocket (buildEntryMoves): a helix request bores at each
+            // loop start and degrades to ramp/plunge where it cannot fit.
+            entryMode,
             rampMm,
-            rampMaxAngleDeg
+            rampMaxAngleDeg,
+            // Helix-entry knobs (no-op unless entryMode === 'helix').
+            ...(helixRadiusMm != null ? { helixRadiusMm } : {}),
+            ...(entryAngleDeg != null ? { entryAngleDeg } : {}),
+            ...(entryToolRadiusMm != null ? { toolRadiusMm: entryToolRadiusMm } : {})
           })
         : generatePocket2dLines({
             contourPoints: regionOuter,
@@ -381,12 +386,6 @@ export async function dispatch2dStrategy(
     if (pocketZCapped && pocketStockThickness != null) {
       pocketResultHints = [
         `Pocket: depth cap reduced from ${Math.abs(job.zPassMm).toFixed(3)} mm to the ${pocketStockThickness.toFixed(3)} mm stock thickness so the cutter does not plunge past the material.`,
-        ...pocketResultHints
-      ]
-    }
-    if (entryMode === 'helix' && pocketStrategy === 'offset_spiral') {
-      pocketResultHints = [
-        'Pocket helix entry is only available with the raster clearing strategy; the offset-spiral strategy used an inclined ramp entry instead. Switch pocketStrategy to "raster" for a region-clamped helical bore.',
         ...pocketResultHints
       ]
     }
@@ -455,15 +454,22 @@ export async function dispatch2dStrategy(
     const islandRings = islandRingsParam(p['islandRings'])
     const wallStockMm = typeof p['wallStockMm'] === 'number' && Number.isFinite(p['wallStockMm']) ? Math.max(0, p['wallStockMm']) : 0
     const zStepMm = typeof p['zStepMm'] === 'number' && Number.isFinite(p['zStepMm']) ? Math.max(0.01, p['zStepMm']) : undefined
-    const entryMode = p['entryMode'] === 'ramp' ? 'ramp' : 'plunge'
+    const entryMode = p['entryMode'] === 'ramp' ? 'ramp' : p['entryMode'] === 'helix' ? 'helix' : 'plunge'
     const rampMm = typeof p['rampMm'] === 'number' && Number.isFinite(p['rampMm']) ? Math.max(0.01, p['rampMm']) : undefined
     const rampMaxAngleDeg =
       typeof p['rampMaxAngleDeg'] === 'number' && Number.isFinite(p['rampMaxAngleDeg'])
         ? p['rampMaxAngleDeg']
         : undefined
+    // Helix-entry knobs (only consumed when entryMode === 'helix'). Tool radius is
+    // derived from the materialized tool diameter so the CUTTER stays inside the
+    // pocket -- same contract as the raster/offset-spiral pocket.
+    const adaptiveHelixRadiusMm = positiveParamNumber(p['helixRadiusMm'])
+    const adaptiveEntryAngleDeg =
+      typeof p['entryAngleDeg'] === 'number' && Number.isFinite(p['entryAngleDeg']) ? p['entryAngleDeg'] : undefined
     const finishPass = p['finishPass'] !== false
     // Same fallback diameter the OCL config writer uses for tool-less jobs.
     const toolDiameterMm = job.toolDiameterMm ?? 6
+    const adaptiveEntryToolRadiusMm = toolDiameterMm / 2
     // `cnc_trochoidal_hsm` is the SAME engine with a trochoid-heavy default
     // cap (TROCHOIDAL_HSM_ENGAGEMENT_FRACTION of tool diameter); an explicit
     // `maxEngagementMm` param always wins for both kinds.
@@ -522,7 +528,11 @@ export async function dispatch2dStrategy(
         entryMode,
         rampMm,
         rampMaxAngleDeg,
-        stockBoxZMm: adaptiveStockThickness
+        stockBoxZMm: adaptiveStockThickness,
+        // Helix-entry knobs (no-op unless entryMode === 'helix').
+        ...(adaptiveHelixRadiusMm != null ? { helixRadiusMm: adaptiveHelixRadiusMm } : {}),
+        ...(adaptiveEntryAngleDeg != null ? { entryAngleDeg: adaptiveEntryAngleDeg } : {}),
+        toolRadiusMm: adaptiveEntryToolRadiusMm
       })
     if (restModeAdaptive.kind === 'rest') {
       // `wallStockMm` is folded into the rest solve; regions are cleared with

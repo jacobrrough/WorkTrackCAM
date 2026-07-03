@@ -64,6 +64,7 @@ import {
   type CamPoint2d,
   type Pocket2dGenerateResult
 } from './cam-local'
+import { buildEntryMoves, formatEntryMove, type EntryFallbackReason } from './cam-entry-move'
 
 /** One closed toolpath loop of an inset level (loop is implicitly closed). */
 export type PocketOffsetLoop = {
@@ -258,8 +259,16 @@ export type PocketOffsetSpiral2dParams = {
   wallStockMm?: number
   /** Optional finish contour (outer ring) at each depth step. */
   finishEachDepth?: boolean
-  /** Per-loop entry mode (same semantics as the raster pocket). */
-  entryMode?: 'plunge' | 'ramp'
+  /**
+   * Per-loop entry mode (same semantics as the raster pocket).
+   * - `'plunge'` (default): straight vertical G1 plunge to the pass depth.
+   * - `'ramp'`: inclined ramp along the loop's first segment (run bounded by span).
+   * - `'helix'`: a region-clamped helical bore (G2 arcs) at each loop start,
+   *   delegated to {@link buildEntryMoves}. The helix radius is clamped so the
+   *   whole helix stays INSIDE the pocket (outer ring minus islands); if it cannot
+   *   fit it degrades to a ramp, then a plunge (NEVER-DEGRADE). Routers only.
+   */
+  entryMode?: 'plunge' | 'ramp' | 'helix'
   /** Ramp run length in XY (mm) when `entryMode` is `ramp`. */
   rampMm?: number
   /**
@@ -268,6 +277,23 @@ export type PocketOffsetSpiral2dParams = {
    * possible. Default 45 (same contract as the raster pocket).
    */
   rampMaxAngleDeg?: number
+  /**
+   * Requested helix radius (mm) when `entryMode` is `'helix'`. Clamped DOWN to fit
+   * the pocket region at the loop start (see `maxHelixRadiusForRegionMm`). Absent →
+   * the {@link buildEntryMoves} default (2 mm, then clamped).
+   */
+  helixRadiusMm?: number
+  /**
+   * Entry incline from horizontal (deg) for `'helix'` / `'ramp'` via
+   * {@link buildEntryMoves}. Clamped to the safe `[1, 30]` band. Absent → 3°.
+   * (Distinct from {@link rampMaxAngleDeg}, which governs the legacy per-loop ramp.)
+   */
+  entryAngleDeg?: number
+  /**
+   * Tool radius (mm) for the helix region-fit margin (so the CUTTER, not just the
+   * tool centre, stays inside the pocket). Absent → centre-only fit.
+   */
+  toolRadiusMm?: number
 }
 
 /**
@@ -300,7 +326,8 @@ export function generatePocketOffsetSpiralLines(params: PocketOffsetSpiral2dPara
   const step = Math.max(MIN_OFFSET_STEP_MM, params.stepoverMm)
   const stepDown = Math.max(0.01, Math.abs(params.zStepMm ?? params.zPassMm))
   const depths = computeNegativeZDepthPasses(params.zPassMm, stepDown)
-  const entryMode = params.entryMode === 'ramp' ? 'ramp' : 'plunge'
+  const entryMode =
+    params.entryMode === 'ramp' ? 'ramp' : params.entryMode === 'helix' ? 'helix' : 'plunge'
   const rampMm = Math.max(0.01, params.rampMm ?? 2)
   const rampMaxAngleDeg =
     typeof params.rampMaxAngleDeg === 'number' && Number.isFinite(params.rampMaxAngleDeg)
@@ -308,6 +335,15 @@ export function generatePocketOffsetSpiralLines(params: PocketOffsetSpiral2dPara
       : 45
   let rampExtendedForAngle = false
   let rampSteepDespiteSpan = false
+  // Helix-entry telemetry (entryMode === 'helix' only): which downgrades happened
+  // so the operator hint is honest about any never-degrade fallback. Mirrors the
+  // raster pocket (generatePocket2dLines) exactly.
+  const helixFallbacks = new Set<EntryFallbackReason>()
+  let helixUsedCount = 0
+  let helixEntryCount = 0
+  // The FULL pocket region the helix must stay inside (outer ring minus islands).
+  // Islands are keep-outs the helix-radius clamp measures clearance against.
+  const helixIslandRings = (params.islandRings ?? []).filter((r) => r.length >= 3)
 
   const totalLoops = levels.reduce((n, l) => n + l.loops.length, 0)
   const lines: string[] = []
@@ -323,33 +359,76 @@ export function generatePocketOffsetSpiralLines(params: PocketOffsetSpiral2dPara
       for (const loop of levels[li]!.loops) {
         const pts = loop.points
         const [x0, y0] = pts[0]!
-        // EVERY loop transition is a safe-Z lift before the XY rapid -- an
-        // island can split a level into disjoint loops, so no XY motion ever
-        // happens at cut depth between loops.
-        lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
-        lines.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}`)
-        if (entryMode === 'ramp' && pts.length >= 2) {
-          const [x1, y1] = pts[1]!
-          const span = Math.hypot(x1 - x0, y1 - y0)
-          const requested = Math.min(rampMm, span)
-          let run: number
-          if (minRunForAngle > span + 1e-6) {
-            run = span
-            rampSteepDespiteSpan = true
+        if (entryMode === 'helix') {
+          // Region-clamped helical bore at the loop start, mirroring the raster
+          // pocket (generatePocket2dLines) exactly. Each offset loop start sits an
+          // inset (wallStock + k*stepover) inside the FULL pocket region, so the
+          // helix is anchored there and its radius is clamped so the WHOLE helix
+          // (cutter included) stays inside outer-minus-islands. Never-degrade: it
+          // falls back to a bounded ramp, then a straight plunge, where a usable
+          // helix cannot fit. The fallback ramp points along the loop's first
+          // segment (cleared span on inner levels). The final descent lands
+          // EXACTLY on [x0,y0] at depth, so the loop cut below continues from the
+          // loop start unchanged.
+          helixEntryCount += 1
+          const rampDir: CamPoint2d =
+            pts.length >= 2 ? [pts[1]![0] - x0, pts[1]![1] - y0] : [1, 0]
+          const entryRes = buildEntryMoves({
+            entry: [x0, y0],
+            safeZMm: params.safeZMm,
+            targetZMm: z,
+            plungeMmMin: params.plungeMmMin,
+            mode: 'helix',
+            region: params.outerRing,
+            islandRings: helixIslandRings,
+            rampDir,
+            ...(typeof params.helixRadiusMm === 'number' ? { helixRadiusMm: params.helixRadiusMm } : {}),
+            ...(typeof params.entryAngleDeg === 'number' ? { rampAngleDeg: params.entryAngleDeg } : {}),
+            ...(typeof params.rampMm === 'number' ? { rampRunMm: params.rampMm } : {}),
+            ...(typeof params.toolRadiusMm === 'number' ? { toolRadiusMm: params.toolRadiusMm } : {})
+          })
+          if (entryRes.usedMode === 'helix') helixUsedCount += 1
+          if (entryRes.fallbackReason) helixFallbacks.add(entryRes.fallbackReason)
+          // EVERY loop transition is a safe-Z lift before the XY rapid.
+          lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
+          lines.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}`)
+          if (entryRes.moves.length > 0) {
+            for (const mv of entryRes.moves) lines.push(formatEntryMove(mv, params.plungeMmMin))
           } else {
-            run = Math.min(span, Math.max(requested, minRunForAngle))
-            if (run > requested + 1e-3) rampExtendedForAngle = true
+            // Defensive: buildEntryMoves returns no moves only for a degenerate
+            // (zero) descent, which cannot happen here (zDrop > 0). Keep a straight
+            // plunge so a loop is never left without reaching depth.
+            lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
           }
-          const ux = span > 1e-9 ? (x1 - x0) / span : 1
-          const uy = span > 1e-9 ? (y1 - y0) / span : 0
-          // Ramp out along the loop's first segment, then feed back to the
-          // start at depth (the back-track recuts the ramp floor flat).
-          lines.push(
-            `G1 X${(x0 + ux * run).toFixed(3)} Y${(y0 + uy * run).toFixed(3)} Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`
-          )
-          lines.push(`G1 X${x0.toFixed(3)} Y${y0.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
         } else {
-          lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+          // EVERY loop transition is a safe-Z lift before the XY rapid -- an
+          // island can split a level into disjoint loops, so no XY motion ever
+          // happens at cut depth between loops.
+          lines.push(`G0 Z${params.safeZMm.toFixed(3)}`)
+          lines.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}`)
+          if (entryMode === 'ramp' && pts.length >= 2) {
+            const [x1, y1] = pts[1]!
+            const span = Math.hypot(x1 - x0, y1 - y0)
+            const requested = Math.min(rampMm, span)
+            let run: number
+            if (minRunForAngle > span + 1e-6) {
+              run = span
+              rampSteepDespiteSpan = true
+            } else {
+              run = Math.min(span, Math.max(requested, minRunForAngle))
+              if (run > requested + 1e-3) rampExtendedForAngle = true
+            }
+            const ux = span > 1e-9 ? (x1 - x0) / span : 1
+            const uy = span > 1e-9 ? (y1 - y0) / span : 0
+            // Ramp out along the loop's first segment, then feed back to the
+            // start at depth (the back-track recuts the ramp floor flat).
+            lines.push(
+              `G1 X${(x0 + ux * run).toFixed(3)} Y${(y0 + uy * run).toFixed(3)} Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`
+            )
+            lines.push(`G1 X${x0.toFixed(3)} Y${y0.toFixed(3)} F${params.feedMmMin.toFixed(0)}`)
+          } else {
+            lines.push(`G1 Z${z.toFixed(3)} F${params.plungeMmMin.toFixed(0)}`)
+          }
         }
         for (let i = 1; i < pts.length; i++) {
           const [x, y] = pts[i]!
@@ -382,6 +461,22 @@ export function generatePocketOffsetSpiralLines(params: PocketOffsetSpiral2dPara
     if (rampSteepDespiteSpan) {
       hints.push(
         `Pocket ramp: some loop first-segments are shorter than the horizontal run needed for rampMaxAngleDeg (${rampMaxAngleDeg.toFixed(0)} deg); those entries may be steeper than the limit.`
+      )
+    }
+  }
+  if (entryMode === 'helix' && helixEntryCount > 0) {
+    if (helixUsedCount === helixEntryCount) {
+      hints.push(
+        `Pocket offset-spiral helix entry: ${helixUsedCount}/${helixEntryCount} loop entries descended on a region-clamped helix (radius clamped to fit inside the pocket).`
+      )
+    } else {
+      hints.push(
+        `Pocket offset-spiral helix entry: ${helixUsedCount}/${helixEntryCount} loop entries used a helix; the rest fell back to a ramp/plunge where a helix could not fit the pocket at that loop start (never-degrade).`
+      )
+    }
+    if (helixFallbacks.has('helix_radius_too_small_for_region')) {
+      hints.push(
+        'Pocket offset-spiral helix entry: some loop starts were too close to a wall/island for a usable helix; those descended on a bounded ramp (or a plunge). Use a smaller tool or a coarser stepover so inner loops sit further inside the pocket.'
       )
     }
   }

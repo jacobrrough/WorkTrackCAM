@@ -323,3 +323,137 @@ describe('HELIX entry posted on Makera Carvera 3-axis (carvera_3axis)', () => {
     await unlink(explicit.out).catch(() => {})
   })
 })
+
+// ══════════════════════════════════════════════════════════════════════════
+// Phase 6 Change 2 — the SAME helix entry, now on the OFFSET-SPIRAL and
+// ADAPTIVE pocket generators (previously helix-less). Posted through the real
+// Laguna (vcarve_mach3) + Carvera-3 (carvera_3axis) posts via dispatch2dStrategy.
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('HELIX entry posted — OFFSET-SPIRAL pocketStrategy (Laguna + Carvera-3)', () => {
+  const LAGUNA_POCKET = squarePocket(100, 100, 60)
+  const CARVERA_POCKET = squarePocket(40, 40, 40)
+  const CARVERA_OVERRIDES: Partial<CamJobConfig> = { feedMmMin: 1200, plungeMmMin: 300 }
+
+  it('Laguna: offset-spiral + helix emits a region-clamped helix satisfying every entry invariant', async () => {
+    const machine = await loadLaguna()
+    const { gcode, out } = await postPocket(machine, {
+      contourPoints: LAGUNA_POCKET,
+      pocketStrategy: 'offset_spiral',
+      entryMode: 'helix',
+      helixRadiusMm: 4,
+      finishPass: false
+    })
+    const [maxX, maxY] = machine.workAreaMm ? [machine.workAreaMm.x, machine.workAreaMm.y] : [1524, 3048]
+    assertEntrySafety(gcode, LAGUNA_POCKET, { maxX, maxY }, 6, 400)
+    // No "helix only with raster" hint anymore — offset-spiral now bores a helix.
+    expect(gcode).toMatch(/^M30\b/m)
+    await unlink(out).catch(() => {})
+  })
+
+  it('Laguna: offset-spiral + helix posted program is stable (snapshot)', async () => {
+    const { gcode, out } = await postPocket(
+      await loadLaguna(),
+      {
+        contourPoints: squarePocket(100, 100, 40),
+        pocketStrategy: 'offset_spiral',
+        entryMode: 'helix',
+        helixRadiusMm: 3,
+        finishPass: false
+      },
+      { stepoverMm: 12, zPassMm: -2 }
+    )
+    expect(gcode).toMatchSnapshot()
+    await unlink(out).catch(() => {})
+  })
+
+  it('Carvera-3: offset-spiral + helix satisfies every entry invariant and ends with M2 (never M30)', async () => {
+    const machine = await loadCarvera3()
+    const { gcode, out } = await postPocket(
+      machine,
+      {
+        contourPoints: CARVERA_POCKET,
+        pocketStrategy: 'offset_spiral',
+        entryMode: 'helix',
+        helixRadiusMm: 3,
+        finishPass: false
+      },
+      CARVERA_OVERRIDES
+    )
+    const [maxX, maxY] = machine.workAreaMm ? [machine.workAreaMm.x, machine.workAreaMm.y] : [360, 240]
+    assertEntrySafety(gcode, CARVERA_POCKET, { maxX, maxY }, 6, 300)
+    expect(gcode).toMatch(/^M2\b/m)
+    expect(gcode).not.toMatch(/^M30\b/m)
+    expect(gcode).not.toMatch(/\bA-?\d/)
+    await unlink(out).catch(() => {})
+  })
+
+  it('NO-REGRESSION: offset-spiral with no entry mode is BYTE-IDENTICAL to entryMode plunge (Laguna)', async () => {
+    const machine = await loadLaguna()
+    const legacy = await postPocket(machine, { contourPoints: LAGUNA_POCKET, pocketStrategy: 'offset_spiral' })
+    const explicit = await postPocket(machine, {
+      contourPoints: LAGUNA_POCKET,
+      pocketStrategy: 'offset_spiral',
+      entryMode: 'plunge'
+    })
+    expect(explicit.gcode).toBe(legacy.gcode)
+    expect(legacy.gcode).not.toMatch(/^G2 /m)
+    await unlink(legacy.out).catch(() => {})
+    await unlink(explicit.out).catch(() => {})
+  })
+})
+
+describe('HELIX entry posted — ADAPTIVE (cnc_adaptive) (Laguna + Carvera-3)', () => {
+  const LAGUNA_POCKET = squarePocket(100, 100, 60)
+  const CARVERA_POCKET = squarePocket(40, 40, 40)
+  const CARVERA_OVERRIDES: Partial<CamJobConfig> = { feedMmMin: 1200, plungeMmMin: 300, operationKind: 'cnc_adaptive' }
+  const LAGUNA_OVERRIDES: Partial<CamJobConfig> = { operationKind: 'cnc_adaptive' }
+
+  it('Laguna: adaptive + helix emits a region-clamped helix satisfying every entry invariant', async () => {
+    const machine = await loadLaguna()
+    const { gcode, out } = await postPocket(
+      machine,
+      { contourPoints: LAGUNA_POCKET, entryMode: 'helix', helixRadiusMm: 4, finishPass: false },
+      LAGUNA_OVERRIDES
+    )
+    const [maxX, maxY] = machine.workAreaMm ? [machine.workAreaMm.x, machine.workAreaMm.y] : [1524, 3048]
+    assertEntrySafety(gcode, LAGUNA_POCKET, { maxX, maxY }, 6, 400)
+    expect(gcode).toMatch(/^M30\b/m)
+    await unlink(out).catch(() => {})
+  })
+
+  it('Laguna: adaptive + helix posted program is stable (snapshot)', async () => {
+    const { gcode, out } = await postPocket(
+      await loadLaguna(),
+      { contourPoints: squarePocket(100, 100, 40), entryMode: 'helix', helixRadiusMm: 3, finishPass: false },
+      { stepoverMm: 12, zPassMm: -2, operationKind: 'cnc_adaptive' }
+    )
+    expect(gcode).toMatchSnapshot()
+    await unlink(out).catch(() => {})
+  })
+
+  it('Carvera-3: adaptive + helix satisfies every entry invariant and ends with M2 (never M30)', async () => {
+    const machine = await loadCarvera3()
+    const { gcode, out } = await postPocket(
+      machine,
+      { contourPoints: CARVERA_POCKET, entryMode: 'helix', helixRadiusMm: 3, finishPass: false },
+      CARVERA_OVERRIDES
+    )
+    const [maxX, maxY] = machine.workAreaMm ? [machine.workAreaMm.x, machine.workAreaMm.y] : [360, 240]
+    assertEntrySafety(gcode, CARVERA_POCKET, { maxX, maxY }, 6, 300)
+    expect(gcode).toMatch(/^M2\b/m)
+    expect(gcode).not.toMatch(/^M30\b/m)
+    expect(gcode).not.toMatch(/\bA-?\d/)
+    await unlink(out).catch(() => {})
+  })
+
+  it('NO-REGRESSION: adaptive with no entry mode is BYTE-IDENTICAL to entryMode plunge (Laguna)', async () => {
+    const machine = await loadLaguna()
+    const legacy = await postPocket(machine, { contourPoints: LAGUNA_POCKET }, LAGUNA_OVERRIDES)
+    const explicit = await postPocket(machine, { contourPoints: LAGUNA_POCKET, entryMode: 'plunge' }, LAGUNA_OVERRIDES)
+    expect(explicit.gcode).toBe(legacy.gcode)
+    expect(legacy.gcode).not.toMatch(/^G2 /m)
+    await unlink(legacy.out).catch(() => {})
+    await unlink(explicit.out).catch(() => {})
+  })
+})

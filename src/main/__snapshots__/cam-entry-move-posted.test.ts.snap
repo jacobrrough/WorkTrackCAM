@@ -144,3 +144,185 @@ M30              ; program end + rewind (Mach3 expects M30, not M2)
 %
 "
 `;
+
+exports[`HELIX entry posted — ADAPTIVE (cnc_adaptive) (Laguna + Carvera-3) > Laguna: adaptive + helix posted program is stable (snapshot) 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 24000 RPM
+; Operation: cnc_adaptive
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+; Adaptive clearing -- 2 inset level(s), 2 loop(s), 0 trochoid circle(s) per depth pass, stepover 12.000 mm, engagement cap 1.200 mm, wall stock 0.000 mm
+; adaptive entry slot loop -- level 1 inset 12.000 mm (region core; fully buried entry pass)
+G0 Z6.000
+G0 X128.000 Y128.000
+G2 X122.000 Y128.000 Z5.556 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z5.111 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z4.667 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z4.222 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z3.778 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z3.333 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z2.889 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z2.444 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z2.000 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z1.556 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z1.111 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z0.667 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z0.222 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-0.222 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z-0.667 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-1.111 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z-1.556 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-2.000 I3.000 J0.000 F400
+G1 X128.000 Y128.000 Z-2.000 F400
+G1 X112.000 Y128.000 F1200
+G1 X112.000 Y112.000 F1200
+G1 X128.000 Y112.000 F1200
+G1 X128.000 Y128.000 F1200
+G0 Z6.000
+G0 X128.571 Y140.000
+G1 Z-2.000 F400
+G1 X113.333 Y140.000 F1200
+; adaptive skip -- engagement spike at wall level left uncut (no level-0 relief in v1)
+G0 Z6.000
+G0 X100.000 Y128.571
+G1 Z-2.000 F400
+G1 X100.000 Y113.333 F1200
+; adaptive skip -- engagement spike at wall level left uncut (no level-0 relief in v1)
+G0 Z6.000
+G0 X111.429 Y100.000
+G1 Z-2.000 F400
+G1 X126.667 Y100.000 F1200
+; adaptive skip -- engagement spike at wall level left uncut (no level-0 relief in v1)
+G0 Z6.000
+G0 X140.000 Y111.429
+G1 Z-2.000 F400
+G1 X140.000 Y126.667 F1200
+; adaptive skip -- engagement spike at wall level left uncut (no level-0 relief in v1)
+G0 Z6.000
+G0 X130.476 Y140.000
+G1 Z-2.000 F400
+G1 X128.571 Y140.000 F1200
+G0 Z6.000
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;
+
+exports[`HELIX entry posted — OFFSET-SPIRAL pocketStrategy (Laguna + Carvera-3) > Laguna: offset-spiral + helix posted program is stable (snapshot) 1`] = `
+"%
+; VCarve Pro post — Laguna Swift 5×10 (laguna-swift-5x10)
+; ---------------------------------------------------------------------------
+; UNVERIFIED G-CODE — verify every line against your Mach3/Mach4 setup before
+; running on the machine. Output is not guaranteed safe for any real machine.
+; ---------------------------------------------------------------------------
+; Wood routing checklist:
+; [1] Material clamped flat to spoilboard, no warps under bit path
+; [2] Tool-length set: V-bit at sharp tip, end mill at flute bottom, drill at tip
+; [3] WCS X0/Y0 at workpiece corner per VCarve Pro setup; Z0 = top of stock
+; [4] Dust collection ON (set \`dustCollection: true\` to emit M7/M9, or
+;     uncomment manually if your controller wires different M-codes)
+; [5] Air-cut first: spindle off, Z high, 25–50% feed override
+; ---------------------------------------------------------------------------
+; Work area (mm): 1524 x 3048 x 203
+; Spindle max: 24000 RPM
+; Operation: cnc_pocket
+; ---------------------------------------------------------------------------
+G21        ; G21=mm / G20=inch — must match controller defaults at power-on
+G90              ; absolute distance mode
+G17              ; XY plane (typical for G2/G3 arcs)
+G94              ; feed in units/min
+; Active work offset — verify fixture zero matches G54–G59 selection
+G54
+; ---------------------------------------------------------------------------
+; Spindle on (dialect snippet — Mach3 emits M3 S<rpm>)
+M3
+G4 P2.0          ; dwell 2 s for spindle to reach commanded RPM (wood router warmup)
+; M7              ; coolant/mist OFF — set dustCollection flag to emit M7 here
+; M8              ; flood coolant — typically OFF for wood; uncomment for wet ops
+; ---------------------------------------------------------------------------
+; [ID-0110] Pre-cut safe-Z lift -- mirrors carvera_3axis.hbs / carvera_4axis.hbs
+; so the first XY/Z move below executes from a known clearance regardless of
+; what Z the controller booted into or where the previous job left it.
+G0 Z203 ; safe Z retract before toolpath -- uses machine work area Z height
+; Pocket offset-spiral -- 2 inset level(s), 2 loop(s), inside-out, stepover 12.000 mm, wall stock 0.000 mm
+G0 Z6.000
+G0 X128.000 Y128.000
+G2 X122.000 Y128.000 Z5.556 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z5.111 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z4.667 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z4.222 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z3.778 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z3.333 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z2.889 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z2.444 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z2.000 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z1.556 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z1.111 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z0.667 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z0.222 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-0.222 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z-0.667 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-1.111 I3.000 J0.000 F400
+G2 X122.000 Y128.000 Z-1.556 I-3.000 J0.000 F400
+G2 X128.000 Y128.000 Z-2.000 I3.000 J0.000 F400
+G1 X128.000 Y128.000 Z-2.000 F400
+G1 X112.000 Y128.000 F1200
+G1 X112.000 Y112.000 F1200
+G1 X128.000 Y112.000 F1200
+G1 X128.000 Y128.000 F1200
+G0 Z6.000
+G0 X140.000 Y140.000
+G1 Z-2.000 F400
+G1 X100.000 Y140.000 F1200
+G1 X100.000 Y100.000 F1200
+G1 X140.000 Y100.000 F1200
+G1 X140.000 Y140.000 F1200
+G0 Z6.000
+; ---------------------------------------------------------------------------
+; M9              ; coolant/dust OFF — set dustCollection flag to emit M9 here
+; Spindle off (dialect snippet — usually M5)
+M5
+G4 P3.0          ; dwell 3 s — spindle cool-down ramp before safe-Z retract
+G0 Z203 ; safe Z retract — uses machine work area Z height
+G0 X0 Y0                     ; park X Y at WCS origin (adjust to your preferred home)
+M30              ; program end + rewind (Mach3 expects M30, not M2)
+%
+"
+`;

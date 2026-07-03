@@ -172,7 +172,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - [ ] **True waterline/adaptive via OCL in bundled venv (env/M)** — install into the 3.11 sidecar
   venv; fallback chain already honest.
 - [ ] **True gouge detection (L)** — SDF/BVH toolpath-vs-model check (voxel approximation today).
-- [ ] **Helical/orbital entry for face/pocket (M)** — tool-life win on Laguna sheet work.
+- ✅ **Helical/orbital entry for POCKET (M)** — offset-spiral + adaptive delegate entry to the proven
+  region-clamped, never-degrade `buildEntryMoves` helix (the adaptive fully-buried region core no
+  longer straight-plunges); byte-identical for non-helix entry; gcode-safety SAFE for Laguna +
+  Carvera-3. Face descoped (no containment ring — filed). *(done 2026-07-03, Phase 6 Change 2)*
 
 ### Explicitly out of scope (do not build)
 5-axis, turning, thread-mill + scallop engines (dead-engine gated), 3D sketch, surface/NURBS
