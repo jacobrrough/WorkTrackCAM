@@ -102,6 +102,23 @@ export interface FeatureTreeParameter {
 }
 
 /**
+ * Named user parameter row (Phase-3 — the Fusion "User Parameters" table).
+ * Structurally identical to design-schema's `UserParameterView`; declared
+ * separately so FeatureTree keeps its wire isolation (same rationale as
+ * `FeatureTreeParameter` vs the sidecar's `CadDeclaredParameter`).
+ */
+export interface FeatureTreeUserParameter {
+  /** Identifier usable inside other parameters' expressions. */
+  readonly name: string
+  /** Arithmetic expression over numbers + other parameter names. */
+  readonly expression: string
+  /** Resolved numeric value, or `null` when the row has an error. */
+  readonly resolvedValue: number | null
+  /** Why the row did not resolve (bad expression, unknown ref, cycle). */
+  readonly errorMessage?: string
+}
+
+/**
  * Human-readable label for a kernel timeline op. The `kind` discriminator is a
  * snake_case wire token (`boolean_union_box`, `fillet_select`); operators want
  * a verb + noun. Pure mapping — no geometry, no truncation.
@@ -258,6 +275,22 @@ export interface FeatureTreeProps {
    * button renders disabled (read-only timeline).
    */
   readonly onKernelDelete?: (index: number) => void
+  /**
+   * Named user parameters (Phase-3). The Parameters section renders when ANY
+   * of these five props is supplied — an EMPTY `userParameters` array still
+   * shows the add row (the "type your first parameter" affordance). When all
+   * five are omitted (the splash preview, every legacy render-pin), the
+   * section does not render and the pre-existing contract holds unchanged.
+   */
+  readonly userParameters?: ReadonlyArray<FeatureTreeUserParameter>
+  /** Add `name = expression`. When omitted the add row is hidden. */
+  readonly onUserParameterAdd?: (name: string, expression: string) => void
+  /** Replace the named parameter's expression (commits on blur / Enter). */
+  readonly onUserParameterEdit?: (name: string, expression: string) => void
+  /** Rename a parameter (the host rewrites references in dependents). */
+  readonly onUserParameterRename?: (from: string, to: string) => void
+  /** Remove the named parameter. */
+  readonly onUserParameterDelete?: (name: string) => void
 }
 
 /**
@@ -780,6 +813,226 @@ function KernelTimeline({
   )
 }
 
+/** Compact display for a resolved parameter value (trims float noise). */
+function formatUserParameterValue(value: number | null): string {
+  if (value === null) return '—'
+  if (Number.isInteger(value)) return String(value)
+  return String(Number(value.toFixed(4)))
+}
+
+/** Blur the input on Enter so the blur-commit path runs (one commit path). */
+function blurOnEnter(e: ReactKeyboardEvent<HTMLInputElement>): void {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    e.currentTarget.blur()
+  }
+}
+
+interface UserParameterRowProps {
+  readonly param: FeatureTreeUserParameter
+  readonly onEdit: ((name: string, expression: string) => void) | undefined
+  readonly onRename: ((from: string, to: string) => void) | undefined
+  readonly onDelete: ((name: string) => void) | undefined
+}
+
+/**
+ * One named-parameter row: name · expression · resolved value (or the row's
+ * error) · delete. Name + expression are draft-buffered inputs that commit on
+ * blur / Enter; the drafts re-seed when the committed row changes underneath
+ * (e.g. a rename of ANOTHER parameter rewrote this row's expression) via the
+ * render-phase derived-state pattern — no effect needed.
+ */
+function UserParameterRow({ param, onEdit, onRename, onDelete }: UserParameterRowProps): JSX.Element {
+  const [nameDraft, setNameDraft] = useState(param.name)
+  const [exprDraft, setExprDraft] = useState(param.expression)
+  const [seenParam, setSeenParam] = useState(param)
+  if (seenParam !== param) {
+    setSeenParam(param)
+    if (seenParam.name !== param.name) setNameDraft(param.name)
+    if (seenParam.expression !== param.expression) setExprDraft(param.expression)
+  }
+
+  const commitRename = (): void => {
+    if (onRename == null) return
+    const trimmed = nameDraft.trim()
+    if (trimmed.length === 0 || trimmed === param.name) {
+      setNameDraft(param.name)
+      return
+    }
+    onRename(param.name, trimmed)
+    // Success re-keys/remounts the row with the new name; rejection leaves the
+    // committed row unchanged — either way the honest display is the committed
+    // name, so revert the draft rather than showing a name that didn't land.
+    setNameDraft(param.name)
+  }
+
+  const commitExpression = (): void => {
+    if (onEdit == null) return
+    if (exprDraft === param.expression) return
+    onEdit(param.name, exprDraft)
+  }
+
+  return (
+    <li
+      className="cad-user-params__row"
+      data-testid="cad-user-param-row"
+      data-param-name={param.name}
+      data-param-error={param.errorMessage !== undefined ? 'true' : 'false'}
+    >
+      {onRename != null ? (
+        <input
+          className="cad-user-params__input cad-user-params__input--name"
+          data-testid="cad-user-param-name"
+          type="text"
+          value={nameDraft}
+          aria-label={`Rename parameter ${param.name}`}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setNameDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={blurOnEnter}
+        />
+      ) : (
+        <span className="cad-user-params__name">{param.name}</span>
+      )}
+      {onEdit != null ? (
+        <input
+          className="cad-user-params__input cad-user-params__input--expr"
+          data-testid="cad-user-param-expr"
+          type="text"
+          value={exprDraft}
+          aria-label={`Expression for ${param.name}`}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setExprDraft(e.target.value)}
+          onBlur={commitExpression}
+          onKeyDown={blurOnEnter}
+        />
+      ) : (
+        <span className="cad-user-params__expr">{param.expression}</span>
+      )}
+      {param.errorMessage !== undefined ? (
+        <span
+          className="cad-user-params__error"
+          data-testid="cad-user-param-error"
+          role="alert"
+          title={param.errorMessage}
+        >
+          {param.errorMessage}
+        </span>
+      ) : (
+        <span className="cad-user-params__value" data-testid="cad-user-param-value">
+          = {formatUserParameterValue(param.resolvedValue)}
+        </span>
+      )}
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs cad-user-params__delete"
+        data-testid="cad-user-param-delete"
+        disabled={onDelete == null}
+        aria-label={`Delete parameter ${param.name}`}
+        title="Delete this parameter"
+        onClick={() => onDelete?.(param.name)}
+      >
+        {'✕'}
+      </button>
+    </li>
+  )
+}
+
+interface UserParametersSectionProps {
+  readonly userParameters: ReadonlyArray<FeatureTreeUserParameter>
+  readonly onAdd: ((name: string, expression: string) => void) | undefined
+  readonly onEdit: ((name: string, expression: string) => void) | undefined
+  readonly onRename: ((from: string, to: string) => void) | undefined
+  readonly onDelete: ((name: string) => void) | undefined
+}
+
+/**
+ * Named user parameters section (Phase-3). Owns the add-row draft state, so —
+ * like `EditableParameters` — it lives in a dedicated component the top-level
+ * `FeatureTree` only mounts when the host threads the user-parameter props,
+ * keeping the op-only render path hook-free for the legacy render-pin tests.
+ * Presentational: every gesture is reported through the callbacks; the host
+ * owns the design model (and rejects invalid gestures with its own message).
+ */
+function UserParametersSection({
+  userParameters,
+  onAdd,
+  onEdit,
+  onRename,
+  onDelete,
+}: UserParametersSectionProps): JSX.Element {
+  const [newName, setNewName] = useState('')
+  const [newExpression, setNewExpression] = useState('')
+
+  const canAdd = onAdd != null && newName.trim().length > 0 && newExpression.trim().length > 0
+
+  const handleAdd = (): void => {
+    if (!canAdd || onAdd == null) return
+    onAdd(newName.trim(), newExpression.trim())
+    setNewName('')
+    setNewExpression('')
+  }
+
+  const addOnEnter = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleAdd()
+    }
+  }
+
+  return (
+    <section className="cad-user-params" data-testid="cad-user-params" aria-label="User parameters">
+      <div className="cad-user-params__head">
+        <span className="cad-user-params__title">Parameters</span>
+      </div>
+      {userParameters.length > 0 && (
+        <ul className="cad-user-params__list">
+          {userParameters.map((param) => (
+            <UserParameterRow
+              key={param.name}
+              param={param}
+              onEdit={onEdit}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      )}
+      {onAdd != null && (
+        <div className="cad-user-params__add">
+          <input
+            className="cad-user-params__input cad-user-params__input--name"
+            data-testid="cad-user-param-new-name"
+            type="text"
+            placeholder="name"
+            aria-label="New parameter name"
+            value={newName}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)}
+            onKeyDown={addOnEnter}
+          />
+          <input
+            className="cad-user-params__input cad-user-params__input--expr"
+            data-testid="cad-user-param-new-expr"
+            type="text"
+            placeholder="expression, e.g. 25 + 5"
+            aria-label="New parameter expression"
+            value={newExpression}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewExpression(e.target.value)}
+            onKeyDown={addOnEnter}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs cad-user-params__add-btn"
+            data-testid="cad-user-param-add"
+            disabled={!canAdd}
+            onClick={handleAdd}
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function FeatureTree(props: FeatureTreeProps): JSX.Element {
   const {
     operations,
@@ -795,18 +1048,32 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
     onKernelSetRollback,
     onKernelClearRollback,
     onKernelDelete,
+    userParameters,
+    onUserParameterAdd,
+    onUserParameterEdit,
+    onUserParameterRename,
+    onUserParameterDelete,
   } = props
 
   const editable = onParamsChange != null
   const hasParameters = parameters != null && parameters.length > 0
   const hasKernelOps = kernelOps != null && kernelOps.length > 0
+  // Phase-3 named user parameters: presence of ANY of the five props mounts
+  // the section (an empty array still shows the add row), so the gate is
+  // prop presence, not array length.
+  const hasUserParams =
+    userParameters != null ||
+    onUserParameterAdd != null ||
+    onUserParameterEdit != null ||
+    onUserParameterRename != null ||
+    onUserParameterDelete != null
 
   // The empty-state pin: empty operations, no parameters, AND no kernel
   // timeline fall back to the canonical EmptyState. When parameters or a
   // kernel timeline are present we keep those sections visible even when the
   // sidecar operations list is empty (a built model whose script has been
   // cleared still has a timeline worth editing).
-  if (operations.length === 0 && !hasParameters && !hasKernelOps) {
+  if (operations.length === 0 && !hasParameters && !hasKernelOps && !hasUserParams) {
     return (
       <EmptyState
         testId="cad-feature-empty-state"
@@ -818,6 +1085,16 @@ export function FeatureTree(props: FeatureTreeProps): JSX.Element {
 
   return (
     <div className="cad-feature-tree-root" data-testid="cad-feature-tree-root">
+      {hasUserParams && (
+        <UserParametersSection
+          userParameters={userParameters ?? []}
+          onAdd={onUserParameterAdd}
+          onEdit={onUserParameterEdit}
+          onRename={onUserParameterRename}
+          onDelete={onUserParameterDelete}
+        />
+      )}
+
       {hasParameters && parameters != null && (
         editable ? (
           <EditableParameters

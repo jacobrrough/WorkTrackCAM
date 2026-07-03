@@ -833,6 +833,7 @@ export function sketchToDesign(sketch: Sketch): DesignFileV2 {
     loftSeparationMm: 20,
     revolve: { angleDeg: 360, axisX: 0 },
     parameters,
+    userParameters: [],
     points,
     entities,
     constraints,
