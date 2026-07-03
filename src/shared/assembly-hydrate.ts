@@ -91,6 +91,16 @@ export type AssemblyPartView = {
   readonly joint?: AssemblyComponent['joint']
   readonly grounded?: boolean
   readonly jointLimits?: AssemblyJointLimits
+  /**
+   * VIEW-ONLY visibility, persisted (wave-8; mirrors `AssemblyComponent.hidden`).
+   * `true` hides the instance from the 3D viewport + dims its row while it stays
+   * solved / in the BOM / interference-checked (distinct from suppress). Optional
+   * + additive: an OMITTED field leaves any prior persisted `hidden` intact on an
+   * in-place update, while a view that CARRIES `false` explicitly UN-hides the row
+   * (the eye-toggle write). A legacy view/row that never modelled visibility
+   * round-trips unchanged (no key), so the part defaults visible.
+   */
+  readonly hidden?: boolean
 }
 
 /** Hydrate output: the renderer-shaped parts + mate constraints from a loaded file. */
@@ -215,6 +225,10 @@ export function persistParts(
         // EMPTY object `{}` is an explicit clear-to-unlimited and REPLACES the
         // prior limits (an omitted field still preserves them).
         ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {}),
+        // Visibility mirrors joint/grounded: a view CARRYING `hidden` (true OR
+        // false — false is the explicit eye-toggle un-hide) refreshes the prior
+        // value; an OMITTED field leaves the prior persisted `hidden` intact.
+        ...(part.hidden !== undefined ? { hidden: part.hidden } : {}),
         ...(part.geometry != null
           ? { geometrySource: part.geometry }
           : prior.geometrySource != null
@@ -239,6 +253,10 @@ export function persistParts(
     if (part.joint !== undefined) raw.joint = part.joint
     if (part.grounded !== undefined) raw.grounded = part.grounded
     if (part.jointLimits !== undefined) raw.jointLimits = part.jointLimits
+    // Carry the persisted visibility onto the fresh row. Omitted → the schema
+    // leaves `hidden` absent (part is visible), so a row that never toggled
+    // visibility round-trips exactly as before.
+    if (part.hidden !== undefined) raw.hidden = part.hidden
     return assemblyComponentSchemaParse(raw)
   })
 
@@ -295,6 +313,7 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
       joint?: AssemblyComponent['joint']
       grounded?: boolean
       jointLimits?: AssemblyJointLimits
+      hidden?: boolean
     } = {
       id: c.id,
       name: c.name,
@@ -315,6 +334,11 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
     if (c.jointLimits !== undefined && Object.keys(c.jointLimits).length > 0) {
       view.jointLimits = c.jointLimits
     }
+    // Persisted visibility rides back only when the row is actually HIDDEN — a
+    // visible row (absent or `false`) hydrates without the key so a legacy row
+    // gains no spurious field and the renderer's "seed hidden set from rows"
+    // stays a simple `hidden === true` filter (mirrors the grounded rule above).
+    if (c.hidden === true) view.hidden = true
     return view
   })
 

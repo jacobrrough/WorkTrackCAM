@@ -775,6 +775,20 @@
   text-decoration: line-through;
   text-decoration-color: var(--txt2);
 }
+/* A dangling external-STEP row: its file could not be found on disk. Tinted (not
+   faded) like --clash so it reads as a problem to fix, while staying fully
+   interactive (it draws its cached bbox + is deletable). */
+.design-assembly__row--dangling {
+  box-shadow: inset 2px 0 0 var(--err);
+  background: var(--err-dim);
+}
+.design-assembly__row-dangling {
+  margin-left: var(--sp-3);
+  font-size: var(--text-sm);
+  color: var(--err);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .assembly-mate-panel__deferred {
   margin: var(--sp-4) 0 0;
   font-size: var(--text-sm);

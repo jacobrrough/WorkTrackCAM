@@ -50,6 +50,7 @@ import {
   type DrawingBomRow,
   type DrawingCenterMark,
   type DrawingCenterline,
+  type DrawingHoleTable,
   type DrawingDimension,
   type DrawingNote,
   type DrawingRevision,
@@ -97,6 +98,7 @@ export type DrawingViewState = {
   readonly notes: readonly DrawingNote[]
   readonly centerMarks: readonly DrawingCenterMark[]
   readonly centerlines: readonly DrawingCenterline[]
+  readonly holeTables: readonly DrawingHoleTable[]
   readonly revisions: readonly DrawingRevision[]
   readonly bom: readonly DrawingBomRow[]
 }
@@ -111,6 +113,7 @@ export function emptyDrawingViewState(): DrawingViewState {
     notes: [],
     centerMarks: [],
     centerlines: [],
+    holeTables: [],
     revisions: [],
     bom: []
   }
@@ -162,7 +165,11 @@ export function foldDrawingState(
     centerMarks: [...state.centerMarks],
     centerlines: [...state.centerlines],
     revisions: [...state.revisions],
-    bom: [...state.bom]
+    bom: [...state.bom],
+    // Phase-5 hole tables now fold through the state (wave 8 completed the
+    // handoff): the renderer's `DrawingViewState` carries `holeTables` and the
+    // workspace threads them, so a placed hole table survives save + reload.
+    holeTables: [...state.holeTables]
   }
   const titleBlock: DrawingTitleBlock = { ...state.titleBlock }
 
@@ -240,6 +247,7 @@ function sheetToViewState(sheet: DrawingSheet | undefined): DrawingViewState {
     notes: annotations.notes,
     centerMarks: annotations.centerMarks,
     centerlines: annotations.centerlines,
+    holeTables: annotations.holeTables,
     revisions: annotations.revisions,
     bom: annotations.bom
   }

@@ -612,17 +612,131 @@ function centerlineToEntities(
   ]
 }
 
+// ---------------------------------------------------------------------------
+// Surface-finish (ISO 1302 / ASME Y14.36) → DXF composite
+// ---------------------------------------------------------------------------
+//
+// R12 DXF has no ISO 1302 surface-texture symbol primitive, so the on-screen
+// check-mark glyph (drawn as an SVG <polyline> + optional bar / circle / Ra
+// text by `drawing-surface-finish-model.ts`) is re-composed here as a FAITHFUL
+// GEOMETRIC COMPOSITE of R12 primitives — the tick + long-leg as LINE segments,
+// the "machining required" bar as a LINE, the "machining prohibited" circle as
+// a real CIRCLE entity, plus a TEXT read-out for the Ra value + lay code. This
+// is an honest drawing of the symbol, not a mislabeled box (the wave-7 GD&T
+// de-glyphing box was the fallback for a symbol with NO geometric form; the
+// surface-finish check-mark DOES have one, so we draw it).
+//
+// Glyph metrics mirror `surfaceFinishToSvg` EXACTLY so the DXF looks like the
+// screen symbol. The SVG model works in SVG-mm (Y-DOWN, glyph points UP =
+// smaller y); `annPoint` applies the same single Y-flip every other annotation
+// uses, so the check-mark reads upright in DXF model space (Y-UP).
+
+/** Vee-to-short-leg X delta (SVG-mm) — matches `surfaceFinishToSvg`. */
+const SF_SHORT_DX = -3.5
+/** Vee-to-short-leg Y delta (SVG-mm, up = negative). */
+const SF_SHORT_DY = -6
+/** Vee-to-long-leg X delta (SVG-mm). */
+const SF_LONG_DX = 7
+/** Vee-to-long-leg Y delta (SVG-mm, up = negative). */
+const SF_LONG_DY = -12
+/** "Machining required" bar length past the long-leg top (SVG-mm). */
+const SF_BAR_DX = 9
+/** "Machining prohibited" circle radius (SVG-mm) — matches the SVG r=1.6. */
+const SF_CIRCLE_R = 1.6
+
+/**
+ * ASCII lay-direction codes for the DXF TEXT read-out. R12 ASCII DXF cannot
+ * carry the `⟂` (perpendicular) glyph the SVG model uses, so lay is spelled
+ * with a stable single-character ASCII code per ISO 1302 convention (`=` `_|_`
+ * → here just the ASCII letter/symbol shops read): a faithful de-glyphing that
+ * survives an ASCII-only importer. Keyed by the closed `lay` enum, so no
+ * free-text ever reaches the stream.
+ */
+const SF_LAY_DXF_CODE: Record<NonNullable<DrawingSheetAnnotations['surfaceFinishes'][number]['lay']>, string> = {
+  parallel: '=',
+  perpendicular: 'PERP',
+  crossed: 'X',
+  multidirectional: 'M',
+  circular: 'C',
+  radial: 'R',
+  particulate: 'P'
+}
+
+/**
+ * Map one persisted surface-finish symbol into a DXF composite on the
+ * ANNOTATIONS layer: the check-mark as two LINE legs, the material-disposition
+ * modifier (required → a bar LINE; prohibited → a CIRCLE), and a single TEXT
+ * read-out carrying the Ra value + optional allowance + optional lay code. The
+ * bare `any` disposition draws just the check-mark. Points are SVG-mm, flipped
+ * to DXF model space via `annPoint` (the wave-7 transform). Empty-omit is
+ * handled by the caller (a symbol always emits at least the check-mark legs).
+ */
+function surfaceFinishToEntities(
+  sf: DrawingSheetAnnotations['surfaceFinishes'][number]
+): DxfEntity[] {
+  const layer: DxfLayer = DXF_LAYERS.ANNOTATIONS
+  const p = sf.placement
+  // Vee + leg endpoints in SVG-mm (matching surfaceFinishToSvg).
+  const vee: Pt = { x: p.x, y: p.y }
+  const shortEnd: Pt = { x: p.x + SF_SHORT_DX, y: p.y + SF_SHORT_DY }
+  const longEnd: Pt = { x: p.x + SF_LONG_DX, y: p.y + SF_LONG_DY }
+
+  const out: DxfEntity[] = []
+  // The check-mark: short leg → vee, then vee → long leg (two LINE segments,
+  // the R12 form of the SVG <polyline> tick).
+  out.push({ type: 'line', layer, start: annPoint(shortEnd), end: annPoint(vee) })
+  out.push({ type: 'line', layer, start: annPoint(vee), end: annPoint(longEnd) })
+
+  if (sf.material === 'required') {
+    // Horizontal bar across the top of the long leg (material removal required).
+    const barEnd: Pt = { x: longEnd.x + SF_BAR_DX, y: longEnd.y }
+    out.push({ type: 'line', layer, start: annPoint(longEnd), end: annPoint(barEnd) })
+  } else if (sf.material === 'prohibited') {
+    // Small circle seated in the vee (material removal prohibited). Centre
+    // matches surfaceFinishToSvg: veeX + (shortDX+longDX)/4, veeY + (shortDY+longDY)/4.
+    const cx = vee.x + (SF_SHORT_DX + SF_LONG_DX) / 4
+    const cy = vee.y + (SF_SHORT_DY + SF_LONG_DY) / 4
+    out.push({ type: 'circle', layer, center: annPoint({ x: cx, y: cy }), radius: SF_CIRCLE_R })
+  }
+
+  // Read-out text: Ra value + optional allowance + optional lay code, drawn
+  // above the long leg (matching the SVG Ra placement). Every fragment is a
+  // formatted number or a closed lay code — no operator free-text — but the
+  // TEXT emitter escapes it regardless (Safety Rule 4).
+  const bits: string[] = []
+  if (sf.ra !== undefined) bits.push(`Ra ${formatDxfNumber(sf.ra)}`)
+  if (sf.machiningAllowanceMm !== undefined) bits.push(`+${formatDxfNumber(sf.machiningAllowanceMm)}`)
+  if (sf.lay !== undefined) bits.push(SF_LAY_DXF_CODE[sf.lay])
+  if (bits.length > 0) {
+    out.push({
+      type: 'text',
+      layer,
+      at: annPoint({ x: longEnd.x + 1, y: longEnd.y - 1.5 }),
+      height: ANN_TEXT_HEIGHT,
+      value: bits.join(' '),
+      hAlign: 'left'
+    })
+  }
+  return out
+}
+
 /**
  * Compose EVERY persisted annotation into a flat DXF entity list, in a stable
- * order (dimensions → GD&T frames → notes → center marks → centerlines). Pure.
- * Surface finishes are intentionally NOT rendered as DXF geometry v1 — the ISO
- * 1302 check-mark glyph has no faithful R12 primitive form; a mislabeled box
- * would be worse than an honest omission. (Documented in the return report.)
+ * order (dimensions → GD&T frames → surface finishes → notes → center marks →
+ * centerlines). Pure.
+ *
+ * Surface finishes are rendered as a REAL geometric composite (check-mark LINE
+ * legs + a material-disposition modifier + a Ra/lay TEXT read-out) on the
+ * ANNOTATIONS layer — see {@link surfaceFinishToEntities}. (The wave-7 honest
+ * omission is now closed: the ISO 1302 check-mark, unlike a GD&T glyph, has a
+ * faithful R12 primitive form.) When the sheet has no surface finishes, nothing
+ * is emitted for them and the rest of the document is byte-identical.
  */
 export function annotationsToDxfEntities(annotations: DrawingSheetAnnotations): DxfEntity[] {
   const out: DxfEntity[] = []
   for (const dim of annotations.dimensions) out.push(...dimensionToEntities(dim))
   for (const frame of annotations.featureControlFrames) out.push(...gdtFrameToEntities(frame))
+  for (const sf of annotations.surfaceFinishes) out.push(...surfaceFinishToEntities(sf))
   for (const note of annotations.notes) out.push(...noteToEntities(note))
   for (const mark of annotations.centerMarks) out.push(...centerMarkToEntities(mark))
   for (const line of annotations.centerlines) out.push(...centerlineToEntities(line))

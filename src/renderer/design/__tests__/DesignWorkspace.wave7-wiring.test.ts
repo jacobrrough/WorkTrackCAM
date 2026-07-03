@@ -39,4 +39,18 @@ describe('DesignWorkspace wave-7 AssemblyView wiring', () => {
   it('maps the import result to a distinct part carrying the durable stepPath', () => {
     expect(SRC).toContain('geometrySource: r.geometrySource.stepPath ?? undefined')
   })
+
+  // Wave 8 — the imported part also carries the STRUCTURED source ref so the
+  // cachedBounds/kind survive persist → hydrate (dangling badge + cached bbox).
+  it('carries the structured geometrySourceRef so STEP cachedBounds round-trip', () => {
+    expect(SRC).toContain('geometrySourceRef: r.geometrySource')
+  })
+
+  // Wave 8 — hole tables thread through the controlled drawing seam so a placed
+  // table persists to drawing.json (mirrors notes/center-marks).
+  it('threads persistedHoleTables/onPersistHoleTables so the hole table persists', () => {
+    expect(SRC).toContain('persistedHoleTables={effectiveDrawingHoleTables}')
+    expect(SRC).toContain('const handlePersistDrawingHoleTables = useCallback')
+    expect(SRC).toContain('onDrawing?.({ ...base, holeTables: next })')
+  })
 })

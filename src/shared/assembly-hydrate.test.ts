@@ -29,6 +29,7 @@ import {
   syntheticPartPath,
   type AssemblyPartView
 } from './assembly-hydrate'
+import { stepImportSourceIsDangling } from './assembly-step-import'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -431,6 +432,53 @@ describe('hydrateAssembly — dangling mate refs', () => {
   })
 })
 
+// ── (E) Persisted visibility (`hidden`) survives the round-trip (wave-8) ──────
+
+describe('persisted visibility — hidden survives save→load→hydrate', () => {
+  it('persistParts writes hidden onto the component (true and explicit false)', () => {
+    const out = persistParts(emptyAsm(), [
+      { id: 'h', name: 'H', geometry: { handle: 'h' }, hidden: true },
+      { id: 'v', name: 'V', geometry: { handle: 'v' }, hidden: false }
+    ])
+    expect(out.components.find((c) => c.id === 'h')!.hidden).toBe(true)
+    expect(out.components.find((c) => c.id === 'v')!.hidden).toBe(false)
+  })
+
+  it('a hidden part round-trips (hydrated view keeps hidden: true)', () => {
+    const withParts = persistParts(emptyAsm(), [{ id: 'h', name: 'H', geometry: { handle: 'h' }, hidden: true }])
+    const hydrated = hydrateAssembly(saveLoadRoundTrip(withParts))
+    expect(hydrated.parts[0]!.hidden).toBe(true)
+  })
+
+  it('LEGACY DEFAULT VISIBLE: a row with no hidden field hydrates WITHOUT the key', () => {
+    // A part that never toggled visibility (or a pre-wave-8 file) must hydrate to
+    // the same shape as before — no spurious hidden key — so it defaults visible.
+    const withParts = persistParts(emptyAsm(), [{ id: 'p', name: 'P', geometry: { handle: 'h' } }])
+    const view = hydrateAssembly(saveLoadRoundTrip(withParts)).parts[0]!
+    expect(view).not.toHaveProperty('hidden')
+  })
+
+  it('a VISIBLE (hidden:false) row hydrates WITHOUT the key (only true rides back)', () => {
+    // The hydrate emits hidden only when the row is actually hidden, mirroring the
+    // grounded === true rule — so a false persists on disk but hydrates clean.
+    const withParts = persistParts(emptyAsm(), [{ id: 'p', name: 'P', geometry: { handle: 'h' }, hidden: false }])
+    expect(withParts.components[0]!.hidden).toBe(false)
+    const view = hydrateAssembly(saveLoadRoundTrip(withParts)).parts[0]!
+    expect(view).not.toHaveProperty('hidden')
+  })
+
+  it('an omitted hidden on an in-place update PRESERVES the prior persisted value', () => {
+    const seeded = parseAssemblyFile({
+      version: 2,
+      name: 'Seed',
+      components: [{ id: 'p', name: 'P', partPath: 'design/p.json', transform: {}, hidden: true, geometrySource: { handle: 'h' } }]
+    })
+    // Re-persist with a view that does NOT carry hidden → prior true survives.
+    const out = persistParts(seeded, [{ id: 'p', name: 'P2' }])
+    expect(out.components[0]!.hidden).toBe(true)
+  })
+})
+
 // ── (D) External STEP source survives the round-trip (Phase-4) ───────────────
 
 describe('external STEP geometrySource — save→load→hydrate round-trip', () => {
@@ -467,5 +515,37 @@ describe('external STEP geometrySource — save→load→hydrate round-trip', ()
     expect(g?.stepPath).toBe('C:/vendor/M6-bolt.step')
     expect(g?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
     expect(g?.cachedDims).toEqual([6, 6, 30])
+  })
+
+  it('a reloaded STEP row whose file is MISSING reads as dangling (fixture)', () => {
+    // Simulate the hydrate/load path: a saved external-STEP row, reloaded, then
+    // the file-exists probe reports FALSE (moved / deleted). The hydrated source
+    // drives the pure dangling predicate → the renderer paints an honest badge.
+    const folded = persistParts(emptyAsm(), [
+      {
+        id: 'motor',
+        name: 'Stepper',
+        geometry: {
+          kind: 'step',
+          stepPath: 'D:/vendor/moved/stepper.step',
+          cachedBounds: { min: [0, 0, 0], max: [42, 42, 60] },
+          cachedDims: [42, 42, 60]
+        }
+      }
+    ])
+    const g = hydrateAssembly(saveLoadRoundTrip(folded)).parts[0]!.geometry
+    // File exists → NOT dangling; file missing → dangling. cachedBounds still
+    // present in BOTH cases so the row can draw its schematic either way.
+    expect(stepImportSourceIsDangling(g, true)).toBe(false)
+    expect(stepImportSourceIsDangling(g, false)).toBe(true)
+    expect(g?.cachedBounds).toEqual({ min: [0, 0, 0], max: [42, 42, 60] })
+  })
+
+  it('a STEP source with kind but NO stepPath is dangling regardless of the probe', () => {
+    // An unresolvable STEP source (kind:'step', no stepPath — the source carries
+    // designModelId instead, but is marked external) is always dangling.
+    const source = { kind: 'step' as const, designModelId: 'dm-1' }
+    expect(stepImportSourceIsDangling(source, true)).toBe(true)
+    expect(stepImportSourceIsDangling(source, false)).toBe(true)
   })
 })

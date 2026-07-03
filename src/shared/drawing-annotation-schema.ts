@@ -443,6 +443,80 @@ export const drawingBomRowSchema = z.object({
 export type DrawingBomRow = z.infer<typeof drawingBomRowSchema>
 
 // ---------------------------------------------------------------------------
+// Hole table (Phase-5 — drawings)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which orthographic / iso view a hole table was scanned in. Mirrors the
+ * sidecar's `CadDrawingView` (`sidecar-protocol.ts`) and the renderer's
+ * `DrawingViewAxis` (`DrawingView.tsx`) so a persisted table threads straight
+ * back into `cad.hole_table` for a re-scan with no field remap.
+ */
+export const drawingHoleTableViewSchema = z.enum(['front', 'top', 'right', 'iso'])
+
+export type DrawingHoleTableView = z.infer<typeof drawingHoleTableViewSchema>
+
+/**
+ * One row of a hole table — the persisted form of a `cad.hole_table`
+ * `CadHoleTableRow`. Byte-identical to the wire shape so a scan result folds in
+ * with no adapter:
+ *
+ *  * `tag`        — the hole's stable label ("A1", "A2" …), assigned by the
+ *    deterministic scan ordering (descending diameter, then position). The
+ *    renderer stamps this same tag as a marker at (`x`, `y`) on the view.
+ *  * `x` / `y`    — the hole centre in the scanned view's 2D SVG-mm frame (the
+ *    same frame the projection linework lives in), so the marker lands on the
+ *    projected circle.
+ *  * `diameterMm` — the primary / through bore diameter (mm), finite + positive.
+ *  * `depthMm`    — blind-hole depth (mm), or `null` for a through hole (drawing
+ *    convention: a through hole is "THRU", not a depth number). Finite +
+ *    positive when present.
+ *  * `through`    — true when the hole passes fully through the material.
+ *
+ * No free text reaches markup — `tag` is a scanner-minted `A<n>` and every other
+ * field is a number or a boolean, so there is no Safety-Rule-4 escaping surface.
+ */
+export const drawingHoleTableRowSchema = z.object({
+  tag: z.string().min(1),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  diameterMm: z.number().finite().positive(),
+  depthMm: z.number().finite().positive().nullable(),
+  through: z.boolean()
+})
+
+export type DrawingHoleTableRow = z.infer<typeof drawingHoleTableRowSchema>
+
+/**
+ * A placed hole table on a sheet — the persisted form of the renderer's "Hole
+ * table" affordance. Records the scanned rows, WHICH view was scanned (so a
+ * re-scan targets the same projection), and WHERE the table block sits on the
+ * sheet (top-left corner, SVG-mm) so it round-trips its position.
+ *
+ *  * `id`        — stable table id (the renderer mints one per placed table).
+ *  * `view`      — the view the rows were scanned in (a hole is only tabled in a
+ *    view where it projects to a circle, so the view is load-bearing metadata).
+ *  * `rows`      — the scanned {@link drawingHoleTableRowSchema} rows. An empty
+ *    array is legal (a part with no view-parallel holes — the renderer shows an
+ *    honest empty table rather than dropping the annotation).
+ *  * `placement` — where the table block's top-left corner sits in sheet space.
+ *
+ * Additive (Safety Rule 2): lives in a new `.default([])` array on
+ * {@link drawingSheetAnnotationsSchema}, so a legacy `drawing.json` (saved
+ * before hole tables existed) parses unchanged and gains an empty array in
+ * memory. Documentation overlay only (Safety Rule 1) — never read by CAM/G-code.
+ */
+export const drawingHoleTableSchema = z.object({
+  id: z.string(),
+  view: drawingHoleTableViewSchema,
+  rows: z.array(drawingHoleTableRowSchema).default([]),
+  /** Top-left corner of the table block in sheet space (SVG-mm). */
+  placement: drawingPoint2DSchema
+})
+
+export type DrawingHoleTable = z.infer<typeof drawingHoleTableSchema>
+
+// ---------------------------------------------------------------------------
 // Sheet annotations container
 // ---------------------------------------------------------------------------
 
@@ -466,6 +540,11 @@ export type DrawingBomRow = z.infer<typeof drawingBomRowSchema>
  * chain-dashed centerline layers, added with the same `.default([])` pattern
  * so a legacy `drawing.json` (saved before they existed) parses unchanged
  * (Safety Rule 2 -- additive, no version bump, no migration).
+ *
+ * `holeTables` is the Phase-5 hole-table layer (scanned hole rows + on-sheet
+ * placement + scanned view), added with the same `.default([])` pattern so a
+ * legacy `drawing.json` parses unchanged (Safety Rule 2 -- additive, no version
+ * bump, no migration).
  */
 export const drawingSheetAnnotationsSchema = z.object({
   dimensions: z.array(drawingDimensionSchema).default([]),
@@ -475,7 +554,8 @@ export const drawingSheetAnnotationsSchema = z.object({
   centerMarks: z.array(drawingCenterMarkSchema).default([]),
   centerlines: z.array(drawingCenterlineSchema).default([]),
   revisions: z.array(drawingRevisionSchema).default([]),
-  bom: z.array(drawingBomRowSchema).default([])
+  bom: z.array(drawingBomRowSchema).default([]),
+  holeTables: z.array(drawingHoleTableSchema).default([])
 })
 
 export type DrawingSheetAnnotations = z.infer<typeof drawingSheetAnnotationsSchema>

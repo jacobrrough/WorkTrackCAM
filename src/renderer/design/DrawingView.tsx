@@ -120,6 +120,12 @@ import {
   reanchorGdtFrames,
 } from './drawing-gdt-model'
 import {
+  buildHoleTable,
+  composeHoleTablesIntoSvg,
+  formatHoleDepth,
+  removeHoleTable,
+} from './drawing-hole-table-model'
+import {
   buildSurfaceFinish,
   composeSurfaceFinishIntoSvg,
   reanchorSurfaceFinishes,
@@ -130,6 +136,8 @@ import type {
   DrawingCenterMark,
   DrawingCenterline,
   DrawingDimension,
+  DrawingHoleTable,
+  DrawingHoleTableRow,
   DrawingNote,
   GdtCharacteristic,
   GdtFeatureControlFrame,
@@ -137,6 +145,7 @@ import type {
   SurfaceFinishMaterial,
   SurfaceFinishSymbol,
 } from '../../shared/drawing-annotation-schema'
+import { isCadHoleTableRow } from '../../shared/sidecar-protocol'
 
 /**
  * Standard projection axes exposed in the toolbar. Each maps to the
@@ -365,6 +374,28 @@ export interface DrawingViewProps {
    */
   readonly onPersistCenterlines?: (next: readonly DrawingCenterline[]) => void
   /**
+   * Phase-5 Hole tables -- the persisted hole-table annotations for this sheet
+   * (`sheet.annotations.holeTables`). When supplied (controlled mode), the "Hole
+   * table" tool is enabled: clicking it runs `cad.hole_table` for the active
+   * view, mints a `DrawingHoleTable` (scan rows + placement + scanned view)
+   * pushed up via {@link onPersistHoleTables}, and every persisted table composes
+   * onto the projection client-side (a pure SVG `<g>` overlay -- the table block
+   * at its placement + a tag marker at each hole centre -- no sidecar round-trip
+   * on render, exactly like center marks / notes). Re-clicking re-scans and
+   * replaces the active-view table. No free text -- tags are scanner-minted, so
+   * there is no Safety-Rule-4 escaping surface (ids are still escaped
+   * defensively in the pure emitter).
+   */
+  readonly persistedHoleTables?: readonly DrawingHoleTable[]
+  /**
+   * Phase-5 Hole tables -- called whenever the persisted hole-table list changes
+   * (a table scanned / re-scanned / deleted / cleared). The host writes the
+   * result into `sheet.annotations.holeTables`. Optional + readonly (additive):
+   * when omitted the tool still renders but placement is inert (mirrors
+   * {@link onPersistCenterMarks}).
+   */
+  readonly onPersistHoleTables?: (next: readonly DrawingHoleTable[]) => void
+  /**
    * CAD V1.5 Detail -- called when a detail (crop) view is produced. The host
    * owns what to do with the magnified crop SVG (open in a new sheet, export,
    * etc.); this component only generates it via `cad.detailDrawing` and signals
@@ -517,6 +548,16 @@ type DrawingBridge = {
     | { ok: true; result: { svg: string } }
     | { ok: false; error: string; hint?: string }
   >
+  // Phase-5 -- hole-table scan. Enumerates the part's view-parallel cylindrical
+  // holes and returns tagged rows in the SAME 2D SVG-mm frame as the projection,
+  // so a tag marker lands on each projected hole.
+  readonly holeTable?: (payload: {
+    readonly handle: string
+    readonly view: DrawingViewAxis
+  }) => Promise<
+    | { ok: true; result: Record<string, unknown> }
+    | { ok: false; error: string; hint?: string }
+  >
 }
 
 /**
@@ -544,7 +585,34 @@ function readDrawingBridge(): DrawingBridge {
     drawingBomTable: cadAny.drawingBomTable,
     annotateGdt: cadAny.annotateGdt,
     detailDrawing: cadAny.detailDrawing,
+    holeTable: cadAny.holeTable,
   }
+}
+
+/**
+ * Pull the `holes` array out of a raw `cad.hole_table` result envelope, dropping
+ * any entry the shared {@link isCadHoleTableRow} guard rejects. Returns [] when
+ * the field is missing or not an array. The bridge envelope is permissive
+ * (`Record<string, unknown>`), so this re-validates defensively before the rows
+ * reach the persisted schema.
+ */
+function readHoleRowsFromResult(result: Record<string, unknown>): DrawingHoleTableRow[] {
+  const raw = result.holes
+  if (!Array.isArray(raw)) return []
+  const out: DrawingHoleTableRow[] = []
+  for (const entry of raw) {
+    if (isCadHoleTableRow(entry)) {
+      out.push({
+        tag: entry.tag,
+        x: entry.x,
+        y: entry.y,
+        diameterMm: entry.diameterMm,
+        depthMm: entry.depthMm,
+        through: entry.through,
+      })
+    }
+  }
+  return out
 }
 
 /** GD&T characteristic ids in the toolbar dropdown order (ASME Y14.5). Mirrors
@@ -1157,6 +1225,8 @@ export function DrawingView({
   onPersistCenterMarks,
   persistedCenterlines,
   onPersistCenterlines,
+  persistedHoleTables,
+  onPersistHoleTables,
   onDetail,
   onPersistTitleBlock,
   sheets,
@@ -1325,6 +1395,13 @@ export function DrawingView({
   /** Ids of persisted centerlines with at least one dangling endpoint anchor. */
   const [centerlineDanglingIds, setCenterlineDanglingIds] =
     useState<ReadonlySet<string>>(new Set())
+
+  // -- Phase-5 Hole table state ---------------------------------------------
+
+  /** Whether this instance is in CONTROLLED (persisted) hole-table mode. */
+  const holeTableControlled = persistedHoleTables !== undefined
+  /** True while a `cad.hole_table` scan is in flight (disables the button). */
+  const [holeTableScanning, setHoleTableScanning] = useState<boolean>(false)
 
   // -- CAD V2 placement state -----------------------------------------------
 
@@ -2286,6 +2363,77 @@ export function DrawingView({
   }, [svg, bomRows, bomColumns, toast])
 
   /**
+   * Scan the part for holes visible in the active view via `cad.hole_table` and
+   * persist the result as a `DrawingHoleTable`. Re-clicking re-scans and REPLACES
+   * the existing table for the active view (one table per view) so the table
+   * tracks the current geometry. The table block is placed near the top-left of
+   * the sheet-mm frame; the operator can't drag it yet (placement is persisted so
+   * a future drag is additive). No-op without a part handle, without the bridge,
+   * or when hole tables are not controlled.
+   */
+  const handleHoleTable = useCallback((): void => {
+    if (!holeTableControlled) {
+      toast('warn', 'Hole-table placement is unavailable -- no persistence host wired.')
+      return
+    }
+    if (partHandle === null) {
+      toast('warn', 'Generate a drawing view before scanning for holes.')
+      return
+    }
+    const bridge = readDrawingBridge()
+    if (!bridge.holeTable) {
+      toast('err', 'Hole-table bridge not available -- sidecar handler pending.')
+      return
+    }
+    setHoleTableScanning(true)
+    void (async () => {
+      try {
+        const res = await bridge.holeTable!({ handle: partHandle, view: activeView })
+        if (!res.ok) {
+          const detail = res.hint ? ` -- ${res.hint}` : ''
+          toast('err', `Hole scan failed: ${res.error}${detail}`)
+          return
+        }
+        const rows = readHoleRowsFromResult(res.result)
+        // Place the table block near the top-left of the projected content.
+        const table = buildHoleTable({
+          rows,
+          view: activeView,
+          placement: { x: 10, y: 10 },
+        })
+        // Replace any existing table for THIS view (one table per view); keep
+        // tables scanned in other views untouched.
+        const kept = (persistedHoleTables ?? []).filter((t) => t.view !== activeView)
+        onPersistHoleTables?.([...kept, table])
+        toast(
+          'ok',
+          rows.length === 0
+            ? `No holes found in the ${activeView} view.`
+            : `Hole table scanned (${rows.length} hole${rows.length === 1 ? '' : 's'}).`,
+        )
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        toast('err', `Hole scan threw: ${message}`)
+      } finally {
+        setHoleTableScanning(false)
+      }
+    })()
+  }, [holeTableControlled, partHandle, activeView, persistedHoleTables, onPersistHoleTables, toast])
+
+  /** Delete one persisted hole table by id. */
+  const deleteHoleTable = useCallback(
+    (id: string): void => {
+      onPersistHoleTables?.(removeHoleTable(persistedHoleTables ?? [], id))
+    },
+    [onPersistHoleTables, persistedHoleTables],
+  )
+
+  /** Clear every persisted hole table. */
+  const clearHoleTables = useCallback((): void => {
+    onPersistHoleTables?.([])
+  }, [onPersistHoleTables])
+
+  /**
    * The dimension specs that actually get drawn through the
    * `cad.dimension_drawing` SVG path. In controlled mode these are the
    * persisted, associative dimensions mapped back to the handler's coordinate
@@ -2361,6 +2509,11 @@ export function DrawingView({
       // plain linear / radial / diameter / angular dimensions.
       composed = composeDimensionSetsIntoSvg(composed, persistedDimensions, danglingIds)
     }
+    // Hole tables compose LAST so their tag markers + table block sit on top of
+    // the linework + every other annotation layer.
+    if (persistedHoleTables !== undefined && persistedHoleTables.length > 0) {
+      composed = composeHoleTablesIntoSvg(composed, persistedHoleTables)
+    }
     return composed
   }, [
     svg,
@@ -2374,6 +2527,7 @@ export function DrawingView({
     centerlineDanglingIds,
     persistedDimensions,
     danglingIds,
+    persistedHoleTables,
   ])
 
   // Re-project whenever `partHandle` or the active view changes.
@@ -2858,6 +3012,13 @@ export function DrawingView({
   const centerMarkCount = (persistedCenterMarks ?? []).length
   /** Persisted centerline count (controlled mode). */
   const centerlineCount = (persistedCenterlines ?? []).length
+  /** Persisted hole-table count (controlled mode). Drives the count readout + Clear. */
+  const holeTableCount = (persistedHoleTables ?? []).length
+  /** Total hole rows across every persisted table (for the count readout). */
+  const holeTableRowCount = (persistedHoleTables ?? []).reduce(
+    (sum, t) => sum + t.rows.length,
+    0,
+  )
   /** How many center marks are currently dangling (lost their anchor). */
   const centerMarkDanglingCount = centerMarkDanglingIds.size
   /** How many centerlines are currently dangling (either endpoint lost). */
@@ -3699,6 +3860,89 @@ export function DrawingView({
                   aria-label="Delete centerline"
                   title="Delete this centerline"
                   onClick={() => deleteCenterline(line.id)}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Phase-5 -- Hole table tool */}
+      <div
+        className="design-drawing__gdt-toolbar design-drawing__hole-table-toolbar"
+        role="toolbar"
+        aria-label="Hole table"
+        data-testid="design-drawing-hole-table-toolbar"
+      >
+        <div
+          className="design-drawing__gdt-group"
+          role="group"
+          aria-label="Scan and place a hole table"
+        >
+          <button
+            type="button"
+            className={
+              holeTableScanning
+                ? 'btn btn-primary design-drawing__gdt-btn design-drawing__gdt-btn--placing'
+                : 'btn btn-secondary design-drawing__gdt-btn'
+            }
+            data-testid="design-drawing-hole-table-scan"
+            onClick={handleHoleTable}
+            disabled={svg === null || holeTableScanning}
+            aria-disabled={svg === null || holeTableScanning}
+            title={
+              holeTableControlled
+                ? 'Scan the part for holes in the current view and place a hole table'
+                : 'Hole-table placement needs a persistence host'
+            }
+          >
+            {holeTableScanning ? 'Scanning...' : 'Hole table'}
+          </button>
+          {holeTableCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost design-drawing__gdt-clear"
+              data-testid="design-drawing-hole-table-clear"
+              onClick={clearHoleTables}
+              title="Remove every hole table"
+            >
+              Clear tables
+            </button>
+          )}
+        </div>
+        <div
+          className="design-drawing__gdt-count"
+          data-testid="design-drawing-hole-table-count"
+          aria-live="polite"
+        >
+          {holeTableCount === 0
+            ? 'No hole table'
+            : `${holeTableCount} hole table${holeTableCount === 1 ? '' : 's'}, ${holeTableRowCount} hole${holeTableRowCount === 1 ? '' : 's'}`}
+        </div>
+        {holeTableCount > 0 && (
+          <ul
+            className="design-drawing__note-list design-drawing__hole-table-list"
+            data-testid="design-drawing-hole-table-list"
+            aria-label="Placed hole tables"
+          >
+            {(persistedHoleTables ?? []).map((table) => (
+              <li key={table.id} className="design-drawing__note-row">
+                <span className="design-drawing__centermark-row-label">
+                  {table.rows.length === 0
+                    ? `Hole table (${table.view}) -- no holes`
+                    : `Hole table (${table.view}) -- ${table.rows.length} hole${table.rows.length === 1 ? '' : 's'}: ${table.rows
+                        .map((r) => `${r.tag} ${formatHoleDepth(r)}`)
+                        .join(', ')}`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost design-drawing__note-delete"
+                  data-testid={`design-drawing-hole-table-delete-${table.id}`}
+                  aria-label="Delete hole table"
+                  title="Delete this hole table"
+                  onClick={() => deleteHoleTable(table.id)}
                 >
                   <span aria-hidden="true">x</span>
                 </button>

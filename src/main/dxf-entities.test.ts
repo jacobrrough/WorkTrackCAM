@@ -310,6 +310,51 @@ describe('emitEntity: TEXT', () => {
 })
 
 // ---------------------------------------------------------------------------
+// emitEntity — CIRCLE
+// ---------------------------------------------------------------------------
+
+describe('emitEntity: CIRCLE', () => {
+  it('emits the CIRCLE group codes in order (0/8/10/20/30/40)', () => {
+    const e: DxfEntity = {
+      type: 'circle',
+      layer: DXF_LAYERS.ANNOTATIONS,
+      center: { x: 5, y: 6 },
+      radius: 1.6
+    }
+    expect(emitEntity(e)).toEqual([
+      '0', 'CIRCLE',
+      '8', 'ANNOTATIONS',
+      '10', '5', '20', '6', '30', '0',
+      '40', '1.6'
+    ])
+  })
+
+  it('includes a group-6 linetype override when present', () => {
+    const e: DxfEntity = {
+      type: 'circle',
+      layer: DXF_LAYERS.CENTERLINES,
+      linetype: 'CENTER',
+      center: { x: 0, y: 0 },
+      radius: 2
+    }
+    const out = emitEntity(e)
+    const i6 = out.indexOf('6')
+    expect(i6).toBeGreaterThan(-1)
+    expect(out[i6 + 1]).toBe('CENTER')
+  })
+
+  it('omits group-6 when no linetype override', () => {
+    const e: DxfEntity = {
+      type: 'circle',
+      layer: DXF_LAYERS.ANNOTATIONS,
+      center: { x: 0, y: 0 },
+      radius: 2
+    }
+    expect(emitEntity(e)).not.toContain('6')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // assembleDxfDocument — section order, tables, header, EOF
 // ---------------------------------------------------------------------------
 
@@ -430,6 +475,14 @@ describe('assembleDxfDocument', () => {
     const b = assembleDxfDocument(sampleEntities)
     expect(a).toBe(b)
   })
+
+  it('emits a CIRCLE entity in the ENTITIES section on its layer', () => {
+    const dxf = assembleDxfDocument([
+      { type: 'circle', layer: DXF_LAYERS.ANNOTATIONS, center: { x: 1, y: 2 }, radius: 1.6 }
+    ])
+    expect(countEntities(dxf, 'CIRCLE')).toBe(1)
+    expect(entityLayers(dxf)).toEqual([{ type: 'CIRCLE', layer: 'ANNOTATIONS' }])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -456,5 +509,12 @@ describe('computeEntitiesExtents', () => {
       { type: 'text', layer: DXF_LAYERS.ANNOTATIONS, at: { x: 4, y: 12 }, height: 3, value: 'x' }
     ])
     expect(ext).toEqual({ min: { x: -5, y: -1 }, max: { x: 10, y: 12 } })
+  })
+
+  it('bounds a circle by its centre ± radius', () => {
+    const ext = computeEntitiesExtents([
+      { type: 'circle', layer: DXF_LAYERS.ANNOTATIONS, center: { x: 10, y: 20 }, radius: 3 }
+    ])
+    expect(ext).toEqual({ min: { x: 7, y: 17 }, max: { x: 13, y: 23 } })
   })
 })

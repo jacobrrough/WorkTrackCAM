@@ -1406,3 +1406,84 @@ describe('AssemblyView — visibility (view-only) render contract', () => {
     }
   })
 })
+
+// ── (N) wave-8 — persisted visibility seed + dangling badge render pins ───────
+
+describe('AssemblyView — persisted visibility seed (from parts[].hidden)', () => {
+  it('seeds the hidden set from a row carrying hidden:true (no initialHiddenPartIds)', () => {
+    // The reload path hands AssemblyView rows whose `hidden` flag came off disk.
+    // Without the render-pin override, the mount-time seed must dim those rows.
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', hidden: true }),
+      samplePart({ id: 'p2', name: 'Plate' }),
+    ]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    const p2Row = html.match(/<li[^>]*data-testid="design-assembly-part-p2"[^>]*>/)?.[0] ?? ''
+    expect(p1Row).toContain('design-assembly__row--hidden')
+    expect(p1Row).toContain('data-hidden="true"')
+    expect(p2Row).not.toContain('design-assembly__row--hidden')
+    // The persisted-hidden row's eye reads pressed (Show), the visible one Hide.
+    expect(html).toMatch(/data-testid="design-assembly-part-p1-visibility"[\s\S]*?>Show</)
+    expect(html).toMatch(/data-testid="design-assembly-part-p2-visibility"[\s\S]*?>Hide</)
+  })
+
+  it('initialHiddenPartIds OVERRIDES the row-derived seed (render-pin escape hatch)', () => {
+    // A row is persisted hidden:true, but the explicit render-pin seed hides a
+    // DIFFERENT row — the override wins so static tests stay deterministic.
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', hidden: true }),
+      samplePart({ id: 'p2', name: 'Plate' }),
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, initialHiddenPartIds: ['p2'] }),
+    )
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    const p2Row = html.match(/<li[^>]*data-testid="design-assembly-part-p2"[^>]*>/)?.[0] ?? ''
+    // The explicit seed hides p2 and leaves p1 visible (override, not merge).
+    expect(p2Row).toContain('design-assembly__row--hidden')
+    expect(p1Row).not.toContain('design-assembly__row--hidden')
+  })
+})
+
+describe('AssemblyView — dangling external-STEP badge render contract', () => {
+  it('renders the dangling badge + row modifier via initialDanglingPartIds', () => {
+    const parts: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'M6 bolt' }),
+      samplePart({ id: 'p2', name: 'Plate' }),
+    ]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, initialDanglingPartIds: ['p1'] }),
+    )
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    const p2Row = html.match(/<li[^>]*data-testid="design-assembly-part-p2"[^>]*>/)?.[0] ?? ''
+    // The dangling row is flagged + carries the badge; the other row is clean.
+    expect(p1Row).toContain('design-assembly__row--dangling')
+    expect(p1Row).toContain('data-dangling="true"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-dangling"')
+    expect(p2Row).not.toContain('design-assembly__row--dangling')
+    expect(html).not.toContain('data-testid="design-assembly-part-p2-dangling"')
+    // The dangling row is STILL deletable (never silently dropped) when a remove
+    // handler is wired.
+  })
+
+  it('a dangling row stays deletable (remove button rendered when onRemovePart wired)', () => {
+    const parts: readonly AssemblyPart[] = [samplePart({ id: 'p1', name: 'M6 bolt' })]
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, {
+        parts,
+        initialDanglingPartIds: ['p1'],
+        onRemovePart: vi.fn(),
+      }),
+    )
+    expect(html).toContain('data-testid="design-assembly-part-p1-dangling"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-remove"')
+  })
+
+  it('no dangling badge when nothing is flagged (default)', () => {
+    const parts: readonly AssemblyPart[] = [samplePart({ id: 'p1', name: 'Bracket' })]
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).not.toContain('data-testid="design-assembly-part-p1-dangling"')
+    expect(html).not.toContain('design-assembly__row--dangling')
+  })
+})

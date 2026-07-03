@@ -837,3 +837,128 @@ describe('solveMateConstraints — universal joint wiring', () => {
     expect(Math.abs(worldDir(b, [1, 0, 0])[0])).toBeLessThan(1e-2)
   })
 })
+
+// -- Phase-4 close-out proof: SE(3) free-body rotation is SAFE (Cycle 276 deferral) ---------------
+//
+// The 6-DOF free-body machinery landed with commit 60b0728. These tests are the explicit
+// stability proof the deferral demanded: a free body with an orientation mate now REACHES its
+// target (residual ~0), a free body with no orientation mate NEVER spins (zero rotation, byte-
+// stable), and the honest under/over classification is preserved. They pin the exact assertions
+// the earlier suite left implicit -- not new behaviour, but the guardrail that the behaviour holds.
+describe('solveMateConstraints -- SE(3) free-body rotation safety (Phase-4 close-out)', () => {
+  it('a free body with a single angle mate to a grounded ref REACHES the target angle (residual ~0, was unreachable pre-6-DOF)', () => {
+    // Before free-body rotation, a no-joint body had no rotational handle, so this angle mate could
+    // NOT be satisfied -- it stalled with a positive residual. Now the angle mate activates all 3
+    // rotational DOF: the body rotates so its local +X is perpendicular (90 deg) to the grounded +X
+    // and the residual collapses to ~0. Still under_constrained by count (E=1 < F=6) -- honest -- but
+    // the mate IS met (the pre-6-DOF solver could not deliver this).
+    const components = [comp({ id: 'a', grounded: true }), comp({ id: 'b', grounded: false })]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'ang', kind: 'angle', part1Id: 'a', feature1: { axis: 'x' }, part2Id: 'b', feature2: { axis: 'x' }, value: 90 }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('under_constrained')
+    expect(report.freeVariableCount).toBe(5) // 6 DOF - rank 1
+    // The KEY proof the pre-6-DOF solver could not deliver: the orientation target is actually reached.
+    expect(report.finalResidual).toBeLessThan(1e-6)
+    const b = transforms.get('b')!
+    // B's local +X is now perpendicular to world +X (cos 90 = 0).
+    expect(Math.abs(worldDir(b, [1, 0, 0])[0])).toBeLessThan(1e-3)
+    // Translation was never constrained by an angle mate -> it stays exactly at the start (no drift).
+    expect(b.x).toBe(0)
+    expect(b.y).toBe(0)
+    expect(b.z).toBe(0)
+  })
+
+  it('a free body with ONLY an origin coincident is fully-constrained in translation AND keeps identity rotation (no spurious spin)', () => {
+    // The non-negotiable stability contract: a coincident on the body ORIGIN leaves rotation an
+    // unconstrained null-space. The solver must NOT wire a rotational handle (rotation counted only
+    // when a mate activates it), so the anti-singularity seed has nothing to perturb and the body's
+    // orientation stays byte-exactly identity while translation solves. F stays 3 -> E=3=F, rank 3,
+    // so it reports converged (translation fully pinned) with NO orientation free-DOF inflation.
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 8, y: -3, z: 2, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'c1', kind: 'coincident', part1Id: 'a', feature1: { x: 5, y: 0, z: 0 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    // Origin coincident pins all 3 translational DOF (F=3) -> fully constrained translation, converged.
+    expect(report.status).toBe('converged')
+    expect(report.freeVariableCount).toBeUndefined()
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(5, 5)
+    expect(b.y).toBeCloseTo(0, 5)
+    expect(b.z).toBeCloseTo(0, 5)
+    // The heart of the deferral: rotation stays byte-exactly identity -- no spurious spin, ever.
+    expect(b.rxDeg).toBe(0)
+    expect(b.ryDeg).toBe(0)
+    expect(b.rzDeg).toBe(0)
+  })
+
+  it('a free body fully constrained in SE(3) (coincident + three 90 deg angle mates) converges WITHOUT spinning off', () => {
+    // Enough orientation mates to pin all 3 rotational DOF, plus a coincident pinning translation:
+    // E=6=F, rank 6 -> converged. The solved orientation is the intended one (each axis perpendicular
+    // to its same-named world axis), NOT some runaway multi-turn pose -- the reported Euler angles
+    // stay canonical and finite. Proves "enough orientation mates -> converges, no spin-off".
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 2, y: -1, z: 4, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'pos', kind: 'coincident', part1Id: 'a', feature1: { x: 3, y: 3, z: 3 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } },
+      { id: 'ax', kind: 'angle', part1Id: 'a', feature1: { axis: 'x' }, part2Id: 'b', feature2: { axis: 'x' }, value: 90 },
+      { id: 'ay', kind: 'angle', part1Id: 'a', feature1: { axis: 'y' }, part2Id: 'b', feature2: { axis: 'y' }, value: 90 },
+      { id: 'az', kind: 'angle', part1Id: 'a', feature1: { axis: 'z' }, part2Id: 'b', feature2: { axis: 'z' }, value: 90 }
+    ]
+    const { transforms, report } = solveMateConstraints(components, mates)
+    expect(report.status).toBe('converged')
+    expect(report.freeVariableCount).toBeUndefined()
+    expect(report.finalResidual).toBeLessThan(1e-5)
+    const b = transforms.get('b')!
+    expect(b.x).toBeCloseTo(3, 3)
+    expect(b.y).toBeCloseTo(3, 3)
+    expect(b.z).toBeCloseTo(3, 3)
+    // Each body axis ended perpendicular to the same-named world axis.
+    expect(Math.abs(worldDir(b, [1, 0, 0])[0])).toBeLessThan(1e-2)
+    expect(Math.abs(worldDir(b, [0, 1, 0])[1])).toBeLessThan(1e-2)
+    expect(Math.abs(worldDir(b, [0, 0, 1])[2])).toBeLessThan(1e-2)
+    // The reported Euler angles are canonical (folded into (-180, 180]) -- not a runaway wound pose.
+    for (const ang of [b.rxDeg, b.ryDeg, b.rzDeg]) {
+      expect(Number.isFinite(ang)).toBe(true)
+      expect(ang).toBeGreaterThan(-180)
+      expect(ang).toBeLessThanOrEqual(180)
+    }
+  })
+
+  it('REGRESSION FIXTURE: two origin coincidents that solve translation-only produce byte-identical, zero-rotation transforms', () => {
+    // The exact deferral hazard ("would destabilize converging cases"): two coincident mates on the
+    // body ORIGIN that previously converged as pure translation must still do so, with ZERO rotation
+    // drift and byte-for-byte reproducibility. Both mates pin B.origin to the SAME world point -> a
+    // redundant-consistent E=6 > F=3 that converges; no rotational handle is ever wired.
+    const components = [
+      comp({ id: 'a', grounded: true }),
+      comp({ id: 'b', grounded: false, transform: { x: 10, y: -4, z: 3, rxDeg: 0, ryDeg: 0, rzDeg: 0 } })
+    ]
+    const mates: AssemblyMateConstraint[] = [
+      { id: 'c1', kind: 'coincident', part1Id: 'a', feature1: { x: 5, y: 2, z: -1 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } },
+      { id: 'c2', kind: 'coincident', part1Id: 'a', feature1: { x: 5, y: 2, z: -1 }, part2Id: 'b', feature2: { x: 0, y: 0, z: 0 } }
+    ]
+    const run1 = solveMateConstraints(components, mates)
+    const run2 = solveMateConstraints(components, mates)
+    const b1 = run1.transforms.get('b')!
+    const b2 = run2.transforms.get('b')!
+    expect(run1.report.status).toBe('converged')
+    // Byte-identical across runs (deterministic -- no Math.random / Date.now).
+    expect(JSON.stringify(b1)).toBe(JSON.stringify(b2))
+    expect(run1.report.finalResidual).toBe(run2.report.finalResidual)
+    // Landed on the analytic translation with ZERO rotation drift -- rotation stayed byte-exact identity.
+    expect(b1.x).toBeCloseTo(5, 5)
+    expect(b1.y).toBeCloseTo(2, 5)
+    expect(b1.z).toBeCloseTo(-1, 5)
+    expect(b1.rxDeg).toBe(0)
+    expect(b1.ryDeg).toBe(0)
+    expect(b1.rzDeg).toBe(0)
+  })
+})

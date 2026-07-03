@@ -131,9 +131,14 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
 - ✅ **External STEP part import as component (L)** — "Import STEP…" → file dialog →
   path-validated (traversal/null-byte/ext/size-cap) `assembly:importStepPart` IPC → cad.import_step
   → tessellate → distinct component carrying the durable stepPath. In-session reachable + persists
-  its path. FOLLOW-UP: cachedBounds round-trip + dangling-on-reload badge needs an assembly file-
-  exists IPC (pure pipeline + hydrate honesty already shipped). *(done 2026-07-03, wave 7)*
-- [ ] **Free-body SE(3) rotation (L)** — deferred from Cycle 276; destabilization risk documented.
+  its path. Wave 8 completed the round-trip: durable geometrySourceRef (stepPath + cachedBounds)
+  now persists→hydrates, a new `assembly:fileExists` IPC drives an honest dangling badge on reload,
+  and per-part visibility persists. *(done 2026-07-03, waves 7–8)*
+- ✅ **Free-body SE(3) rotation (L)** — a free (no-joint) body carries full SE(3): 3 rotational DOF
+  wired ONLY when an orientation mate constrains it, so an angle/tangent mate on a free body now
+  converges while an unconstrained body provably stays at identity (zero spurious spin — every
+  prior converging solve is byte-identical). Wave 8 added the explicit stability-proof test layer
+  the deferral demanded. *(done 2026-07-03, wave 8 — PHASE 4 COMPLETE)*
 
 ### Phase 5 — Drawings output
 - ✅ **Ordinate/baseline/chain toolbar (M)** — run-style placement (prime datum, then click-click
@@ -154,7 +159,13 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   CENTER-linetype LINEs; proper layers + linetype table + mm units header; escaped, byte-stable.
   Surface-finish glyphs omitted (no faithful R12 primitive — honest). *(done 2026-07-03, wave 7 —
   the top shop-ROI drawing item; feeds lasers/other CAM)*
-- [ ] **Hole table (M)** — topology scan for bored holes.
+- ✅ **Hole table (M)** — sidecar cylindrical-face scan (axis ∥ view → circle), coaxial grouping
+  (counterbore tabled once), projected into the view's frame so tags land on the holes; deterministic
+  tags; persisted + on-sheet table + tag markers; venv-verified against the real HLR projection.
+  *(done 2026-07-03, wave 8 — PHASE 5 COMPLETE)*
+- ✅ **Surface-finish in DXF (S)** — the wave-7 honest omission closed: ISO 1302 check-mark as real
+  LINE/CIRCLE composite + Ra/lay TEXT on the ANNOTATIONS layer; byte-stable (no-finish docs
+  unchanged). *(done 2026-07-03, wave 8)*
 
 ### Phase 6 — CAM frontier (already strongest; polish last)
 - [ ] **G2/G3 arcs at adaptive source (M)** — today post-side arc-fitting only.

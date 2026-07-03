@@ -517,6 +517,52 @@ describe('geometrySource — external STEP variant (Phase-4, additive)', () => {
   })
 })
 
+describe('component hidden — persisted visibility (wave-8, additive)', () => {
+  it('a legacy row with NO hidden field parses (default visible = undefined)', () => {
+    // Safety Rule 2: an assembly.json written before wave-8 must parse unchanged
+    // and gain no spurious hidden key (the AssemblyView treats absent === visible).
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Legacy',
+      components: [{ id: 'c1', name: 'Foot', partPath: 'design/sketch.json', transform: {} }]
+    })
+    expect(a.components[0]!.hidden).toBeUndefined()
+    expect('hidden' in a.components[0]!).toBe(false)
+    // Round-trips through the canonical save schema still without the key.
+    const saved = assemblyFileSchema.parse(a).components[0]!
+    expect(saved.hidden).toBeUndefined()
+  })
+
+  it('persists an explicit hidden:true and hidden:false', () => {
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Vis',
+      components: [
+        { id: 'h', name: 'H', partPath: 'p', transform: {}, hidden: true },
+        { id: 'v', name: 'V', partPath: 'q', transform: {}, hidden: false }
+      ]
+    })
+    expect(a.components[0]!.hidden).toBe(true)
+    expect(a.components[1]!.hidden).toBe(false)
+    // Round-trips through the canonical file schema.
+    const back = assemblyFileSchema.parse(a)
+    expect(back.components[0]!.hidden).toBe(true)
+    expect(back.components[1]!.hidden).toBe(false)
+  })
+
+  it('hidden does NOT affect suppressed (distinct flags)', () => {
+    // A hidden part is NOT suppressed — it stays active (BOM / solve). Proves the
+    // two flags are independent so hidden never silently drops a part.
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Split',
+      components: [{ id: 'h', name: 'H', partPath: 'p', transform: {}, hidden: true }]
+    })
+    expect(a.components[0]!.hidden).toBe(true)
+    expect(a.components[0]!.suppressed).toBe(false)
+  })
+})
+
 describe('parent graph helpers', () => {
   it('counts self-parent and treats it as a cycle', () => {
     const asm = parseAssemblyFile({

@@ -99,6 +99,7 @@ import {
 import type {
   DrawingCenterMark,
   DrawingCenterline,
+  DrawingHoleTable,
   DrawingDimension,
   DrawingNote,
   GdtFeatureControlFrame,
@@ -1025,6 +1026,9 @@ export function DesignWorkspace({
   const effectiveDrawingCenterlines: readonly DrawingCenterline[] | undefined = effectiveDrawing
     ? effectiveDrawing.centerlines
     : undefined
+  const effectiveDrawingHoleTables: readonly DrawingHoleTable[] | undefined = effectiveDrawing
+    ? effectiveDrawing.holeTables
+    : undefined
   const effectiveDrawingTitleBlock: DrawingTitleBlock | undefined = effectiveDrawing
     ? effectiveDrawing.titleBlock
     : undefined
@@ -1083,6 +1087,14 @@ export function DesignWorkspace({
       if (!drawingControlled) return
       const base = drawing ?? emptyDrawingViewState()
       onDrawing?.({ ...base, centerlines: next })
+    },
+    [drawingControlled, drawing, onDrawing],
+  )
+  const handlePersistDrawingHoleTables = useCallback(
+    (next: readonly DrawingHoleTable[]): void => {
+      if (!drawingControlled) return
+      const base = drawing ?? emptyDrawingViewState()
+      onDrawing?.({ ...base, holeTables: next })
     },
     [drawingControlled, drawing, onDrawing],
   )
@@ -1499,6 +1511,7 @@ export function DesignWorkspace({
           name: r.name,
           handle: r.handle,
           geometrySource: r.geometrySource.stepPath ?? undefined,
+          geometrySourceRef: r.geometrySource,
           transform: offsetX !== 0 ? { position: [offsetX, 0, 0] as const } : undefined,
           transformSummary: offsetX !== 0 ? `@(${offsetX}, 0, 0)` : 'identity',
         }
@@ -2386,6 +2399,10 @@ export function DesignWorkspace({
             persistedCenterlines={effectiveDrawingCenterlines}
             onPersistCenterlines={
               drawingControlled ? handlePersistDrawingCenterlines : undefined
+            }
+            persistedHoleTables={effectiveDrawingHoleTables}
+            onPersistHoleTables={
+              drawingControlled ? handlePersistDrawingHoleTables : undefined
             }
             initialTitleBlock={effectiveDrawingTitleBlock}
             onPersistTitleBlock={

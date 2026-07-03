@@ -224,6 +224,18 @@ export const assemblyComponentSchema = z.object({
   /** Excluded from interference / motion stubs when true */
   suppressed: z.boolean().default(false),
   /**
+   * VIEW-ONLY visibility (persisted). `true` hides this instance from the 3D
+   * viewport + dims its row; it is STILL solved, STILL counted in the BOM, STILL
+   * interference-checked — that separation from {@link suppressed} (which excludes
+   * a part from kinematics + the bill of materials) is deliberate. Additive +
+   * optional with NO `.default()`: a legacy row omits it and is treated as visible
+   * (the AssemblyView seeds its hidden set only from rows where `hidden === true`),
+   * so Safety Rule 2 holds — an existing assembly.json parses byte-for-byte and
+   * every part stays visible. Persisting it (wave-8) upgrades the wave-7 view-only
+   * `hiddenPartIds` so the eye-toggle survives reload.
+   */
+  hidden: z.boolean().optional(),
+  /**
    * Optional path to a **binary** STL (relative to project root) used for mesh/AABB interference checks.
    * Omit for sketch-only rows; ASCII STL is not parsed in main yet.
    */

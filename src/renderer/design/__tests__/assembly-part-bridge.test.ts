@@ -347,6 +347,113 @@ describe('assembly-part-bridge — #9 hydrateAssembly', () => {
   })
 })
 
+// ── (I) wave-8 — external-STEP structured source round-trip (cachedBounds) ────
+
+describe('assembly-part-bridge — external-STEP geometrySourceRef round-trip', () => {
+  const stepRef = {
+    kind: 'step' as const,
+    stepPath: 'C:/vendor/M6-bolt.step',
+    handle: 'step:live',
+    cachedBounds: { min: [-3, -3, 0] as [number, number, number], max: [3, 3, 30] as [number, number, number] },
+    cachedDims: [6, 6, 30] as [number, number, number]
+  }
+
+  it('partToView emits the WHOLE structured source (not a flattened handle)', () => {
+    const v = partToView(part({ handle: 'step:live', geometrySourceRef: stepRef }))
+    // The full object rides through so cachedBounds survive persist ⇄ hydrate.
+    expect(v.geometry?.kind).toBe('step')
+    expect(v.geometry?.stepPath).toBe('C:/vendor/M6-bolt.step')
+    expect(v.geometry?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+    expect(v.geometry?.cachedDims).toEqual([6, 6, 30])
+  })
+
+  it('a full row → component → hydrate → row preserves the STEP source + cachedBounds', () => {
+    const original = part({ id: 'bolt', name: 'M6 bolt', handle: 'step:live', geometrySourceRef: stepRef })
+    const file = parseAssemblyFile({
+      version: 2,
+      name: 'RT-step',
+      components: partsToComponents([original]),
+      mateConstraints: []
+    })
+    // Persisted onto the component verbatim (the flat string cannot hold this).
+    expect(file.components[0]!.geometrySource?.kind).toBe('step')
+    expect(file.components[0]!.geometrySource?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+
+    const back = hydrateAssembly(file).parts.find((p) => p.id === 'bolt')!
+    // The reloaded row keeps the STRUCTURED source so the viewport can draw the
+    // cached box + the dangling badge reads off it.
+    expect(back.geometrySourceRef?.kind).toBe('step')
+    expect(back.geometrySourceRef?.stepPath).toBe('C:/vendor/M6-bolt.step')
+    expect(back.geometrySourceRef?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+    expect(back.geometrySourceRef?.cachedDims).toEqual([6, 6, 30])
+    // The flat token prefers the durable stepPath after reload (live handle gone).
+    expect(back.geometrySource).toBe('C:/vendor/M6-bolt.step')
+    // Hydrated rows carry no live handle (geometry-not-loaded honesty).
+    expect(back.handle).toBe('')
+  })
+
+  it('viewToPart restores geometrySourceRef ONLY for an external-STEP source', () => {
+    // A plain in-project (handle-only) source stays flat — no structured ref, so a
+    // non-STEP row round-trips exactly as before (pinned).
+    const plain = viewToPart({ id: 'p', name: 'Plate', geometry: { handle: 'design/p.json' } })
+    expect(plain.geometrySource).toBe('design/p.json')
+    expect(plain.geometrySourceRef).toBeUndefined()
+    // A STEP source restores the structured ref.
+    const step = viewToPart({ id: 'b', name: 'Bolt', geometry: stepRef })
+    expect(step.geometrySourceRef).toEqual(stepRef)
+  })
+
+  it('a non-STEP row does NOT gain a geometrySourceRef on partToView', () => {
+    // #11 / legacy path: a handle-only row keeps the flat { handle } geometry and
+    // carries no structured ref, so existing components are byte-identical.
+    const v = partToView(part({ handle: 'script:body1' }))
+    expect(v.geometry).toEqual({ handle: 'script:body1' })
+    expect(v).not.toHaveProperty('geometrySourceRef')
+  })
+})
+
+// ── (J) wave-8 — persisted visibility (hidden) round-trip ─────────────────────
+
+describe('assembly-part-bridge — hidden (persisted visibility) round-trip', () => {
+  it('partToView forwards hidden (both true and the explicit false un-hide)', () => {
+    expect(partToView(part({ hidden: true })).hidden).toBe(true)
+    expect(partToView(part({ hidden: false })).hidden).toBe(false)
+    // A row with no hidden field forwards nothing (persistParts preserves prior).
+    expect(partToView(part({ hidden: undefined }))).not.toHaveProperty('hidden')
+  })
+
+  it('a hidden row → component → hydrate → row stays hidden', () => {
+    const original = part({ id: 'h', name: 'H', handle: 'script:h', hidden: true })
+    const file = parseAssemblyFile({
+      version: 2,
+      name: 'RT-hidden',
+      components: partsToComponents([original]),
+      mateConstraints: []
+    })
+    expect(file.components[0]!.hidden).toBe(true)
+    const back = hydrateAssembly(file).parts.find((p) => p.id === 'h')!
+    expect(back.hidden).toBe(true)
+  })
+
+  it('a visible row (no hidden field) hydrates WITHOUT a hidden key (legacy default visible)', () => {
+    const original = part({ id: 'v', name: 'V', handle: 'script:v' })
+    const file = parseAssemblyFile({
+      version: 2,
+      name: 'RT-visible',
+      components: partsToComponents([original]),
+      mateConstraints: []
+    })
+    expect(file.components[0]!.hidden).toBeUndefined()
+    const back = hydrateAssembly(file).parts.find((p) => p.id === 'v')!
+    expect(back).not.toHaveProperty('hidden')
+  })
+
+  it('viewToPart restores hidden so the AssemblyView seeds its hidden set', () => {
+    const back = viewToPart({ id: 'p1', name: 'P', geometry: { handle: 'h' }, hidden: true })
+    expect(back.hidden).toBe(true)
+  })
+})
+
 // ── (H) wave-7 geometry descriptors — bbox (tier b) + mesh (tier a) capture ────
 
 describe('assembly-part-bridge — bboxToDescriptor', () => {

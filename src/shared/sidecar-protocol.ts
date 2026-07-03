@@ -57,6 +57,9 @@ export type SidecarMethod =
   // stable ids (for snap-point resolution) + a BOM-table SVG stamp.
   | 'cad.extract_drawing_geometry'
   | 'cad.drawing_bom_table'
+  // Phase-5 — hole-table scan: coaxial cylindrical faces → tagged holes in the
+  // active view's 2D SVG-mm frame (so tags land on the projected holes).
+  | 'cad.hole_table'
   // CAD V1.5 — GD&T feature-control-frame SVG stamp.
   | 'cad.annotate_gdt'
   // CAD V1.5 — detail (crop) view: circular crop of a parent projection,
@@ -1652,6 +1655,90 @@ export type CadHlrSectionResult = {
    * renderer surfaces a "section simplified" notice.
    */
   truncated: boolean
+}
+
+// ── cad.hole_table (Phase-5 — Hole table) ────────────────────────────────
+//
+// Scans the body behind `handle` for holes visible in `view` and returns a
+// table of tagged holes in the SAME 2D SVG-mm frame as `cad.project_drawing` /
+// `cad.extract_drawing_geometry` for that view — so the renderer's DrawingView
+// can drop a matching tag (A1, A2 …) on each projected hole.
+//
+// HONEST SCOPE (v1, mirrored in `cadquery_hole_table.py`): a "hole" is a set of
+// coaxial cylindrical faces whose axis is PARALLEL to the view direction (so it
+// projects to a circle). Holes whose axis is not view-parallel are dropped from
+// THIS view's table (switch to a view down their axis to table them). A
+// counterbore / countersink sitting on a cylindrical bore is grouped into that
+// bore — the bore is tabled once, its `diameterMm` the primary/through bore and
+// its depth the full coaxial axial extent. Non-cylindrical pockets are not holes.
+//
+// Tag ordering is deterministic (descending diameter, then position) so re-runs
+// are byte-stable and a persisted table never churns.
+//
+// Errors:
+//   * 'bad_params'            — empty handle / unknown view
+//   * 'invalid_handle'        — handle not in the sidecar's table
+//   * 'ocp_hlr_not_available' — OCP surface/topology binding missing
+//   * 'drawing_error'         — no resolvable solid / OCCT raised mid-scan
+//
+// Safety Rule 1: this path does NOT touch STL / G-code; the table is
+// renderer-only (a drawing overlay), never read by CAM.
+
+export type CadHoleTableParams = {
+  /** Opaque handle from cad.execute_script or cad.import_step. */
+  handle: string
+  /** View direction; see CadDrawingView for the standard names. */
+  view: CadDrawingView
+}
+
+/**
+ * One scanned hole row. `x` / `y` are the hole centre projected into the view's
+ * 2D SVG-mm frame (a tag drawn here lands on the projected circle). `diameterMm`
+ * is the primary/through bore diameter. A THROUGH hole reports `through: true`
+ * with `depthMm: null` (drawing convention — "THRU", not a number); a BLIND hole
+ * reports `through: false` with `depthMm` the measured axial extent (mm).
+ */
+export type CadHoleTableRow = {
+  /** Deterministic tag: "A1", "A2", … in descending-diameter / position order. */
+  tag: string
+  /** Hole centre X in the view's 2D SVG-mm frame. */
+  x: number
+  /** Hole centre Y in the view's 2D SVG-mm frame. */
+  y: number
+  /** Primary/through bore diameter in mm. */
+  diameterMm: number
+  /** Blind-hole depth in mm, or `null` for a through hole. */
+  depthMm: number | null
+  /** True when the hole passes fully through the material along its axis. */
+  through: boolean
+}
+
+export type CadHoleTableResult = {
+  /** Echoed view name for round-trip diagnostics. */
+  view: CadDrawingView
+  /** Tagged holes; EMPTY when no view-parallel holes were found (honest state). */
+  holes: CadHoleTableRow[]
+}
+
+/**
+ * Type guard: a single well-formed {@link CadHoleTableRow}. Mirrors the sidecar
+ * emitter contract — a non-empty `tag`, finite `x` / `y` / `diameterMm`, a
+ * `depthMm` that is either `null` or a finite number, and a boolean `through`.
+ * Consumers drop a row this rejects rather than trusting a malformed entry into
+ * the persisted hole table.
+ */
+export function isCadHoleTableRow(value: unknown): value is CadHoleTableRow {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const r = value as Record<string, unknown>
+  if (typeof r.tag !== 'string' || r.tag.length === 0) return false
+  if (typeof r.x !== 'number' || !Number.isFinite(r.x)) return false
+  if (typeof r.y !== 'number' || !Number.isFinite(r.y)) return false
+  if (typeof r.diameterMm !== 'number' || !Number.isFinite(r.diameterMm)) return false
+  if (r.depthMm !== null && (typeof r.depthMm !== 'number' || !Number.isFinite(r.depthMm))) {
+    return false
+  }
+  if (typeof r.through !== 'boolean') return false
+  return true
 }
 
 /** Type guard: is this a valid sidecar response envelope? */

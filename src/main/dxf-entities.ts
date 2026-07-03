@@ -151,6 +151,19 @@ export interface DxfPolylineEntity {
   readonly linetype?: string
 }
 
+/**
+ * A full CIRCLE entity — R12 has a native CIRCLE (group 0 = CIRCLE, 10/20/30 =
+ * center, 40 = radius), so a round symbol (e.g. the ISO 1302 "machining
+ * prohibited" circle) is a REAL primitive, not a faceted polyline approximation.
+ */
+export interface DxfCircleEntity {
+  readonly type: 'circle'
+  readonly layer: DxfLayer
+  readonly center: DxfPoint
+  readonly radius: number
+  readonly linetype?: string
+}
+
 /** Horizontal text justification (DXF group 72). */
 export type DxfTextHAlign = 'left' | 'center' | 'right'
 
@@ -171,7 +184,7 @@ export interface DxfTextEntity {
 }
 
 /** Any emittable DXF entity. */
-export type DxfEntity = DxfLineEntity | DxfPolylineEntity | DxfTextEntity
+export type DxfEntity = DxfLineEntity | DxfPolylineEntity | DxfTextEntity | DxfCircleEntity
 
 // ---------------------------------------------------------------------------
 // Numeric + text formatting
@@ -255,6 +268,8 @@ export function emitEntity(entity: DxfEntity): string[] {
       return emitPolyline(entity)
     case 'text':
       return emitText(entity)
+    case 'circle':
+      return emitCircle(entity)
   }
 }
 
@@ -326,6 +341,22 @@ function emitText(e: DxfTextEntity): string[] {
       '0'
     )
   }
+  return out
+}
+
+function emitCircle(e: DxfCircleEntity): string[] {
+  const out = ['0', 'CIRCLE', '8', e.layer]
+  if (e.linetype !== undefined) out.push('6', e.linetype)
+  out.push(
+    '10',
+    formatDxfNumber(e.center.x),
+    '20',
+    formatDxfNumber(e.center.y),
+    '30',
+    '0',
+    '40',
+    formatDxfNumber(e.radius)
+  )
   return out
 }
 
@@ -497,6 +528,10 @@ export function computeEntitiesExtents(
         break
       case 'text':
         consider(e.at)
+        break
+      case 'circle':
+        consider({ x: e.center.x - e.radius, y: e.center.y - e.radius })
+        consider({ x: e.center.x + e.radius, y: e.center.y + e.radius })
         break
     }
   }

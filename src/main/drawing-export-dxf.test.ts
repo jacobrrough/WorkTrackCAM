@@ -130,6 +130,24 @@ function fixtureAnnotations(): DrawingSheetAnnotations {
   }
 }
 
+/** The wave-7 fixture PLUS one surface finish (extends, does not replace). */
+function fixtureAnnotationsWithSurfaceFinish(): DrawingSheetAnnotations {
+  const base = fixtureAnnotations()
+  return {
+    ...base,
+    surfaceFinishes: [
+      {
+        id: 'sf-1',
+        material: 'required',
+        ra: 1.6,
+        lay: 'parallel',
+        anchor: anchor(260, 260),
+        placement: { x: 260, y: 260 }
+      }
+    ]
+  }
+}
+
 function fixtureProjection(): ProjectedModelViewForExport[] {
   return [
     {
@@ -259,6 +277,135 @@ describe('annotationsToDxfEntities', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Surface finish → DXF composite (ISO 1302 check-mark)
+// ---------------------------------------------------------------------------
+
+describe('annotationsToDxfEntities: surface finish', () => {
+  it('maps a bare (any) surface finish to two check-mark LINE legs on ANNOTATIONS', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'any', anchor: anchor(200, 200), placement: { x: 200, y: 200 } }
+    ]
+    const out = annotationsToDxfEntities(ann)
+    // Two legs of the check-mark, no bar/circle/text for a bare symbol.
+    expect(out).toHaveLength(2)
+    expect(out.every((e) => e.type === 'line' && e.layer === 'ANNOTATIONS')).toBe(true)
+  })
+
+  it('emits the check-mark legs meeting at the (Y-flipped) vee', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'any', anchor: anchor(200, 200), placement: { x: 200, y: 200 } }
+    ]
+    const lines = annotationsToDxfEntities(ann) as Array<{
+      type: string
+      start: { x: number; y: number }
+      end: { x: number; y: number }
+    }>
+    // The vee sits at placement (200, 200) → Y-flip → (200, 600-200=400).
+    const veeDxf = { x: 200, y: SVG_SHEET_HEIGHT_MM - 200 }
+    // Leg 1: shortEnd → vee. shortEnd SVG = (200-3.5, 200-6) = (196.5, 194)
+    //        → Y-flip → (196.5, 600-194=406).
+    expect(lines[0]!.start).toEqual({ x: 196.5, y: SVG_SHEET_HEIGHT_MM - 194 })
+    expect(lines[0]!.end).toEqual(veeDxf)
+    // Leg 2: vee → longEnd. longEnd SVG = (200+7, 200-12) = (207, 188)
+    //        → Y-flip → (207, 600-188=412).
+    expect(lines[1]!.start).toEqual(veeDxf)
+    expect(lines[1]!.end).toEqual({ x: 207, y: SVG_SHEET_HEIGHT_MM - 188 })
+  })
+
+  it('adds a horizontal bar LINE for material "required"', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'required', anchor: anchor(0, 0), placement: { x: 100, y: 100 } }
+    ]
+    const out = annotationsToDxfEntities(ann)
+    // 2 check-mark legs + 1 bar = 3 lines, no circle.
+    expect(out.filter((e) => e.type === 'line')).toHaveLength(3)
+    expect(out.filter((e) => e.type === 'circle')).toHaveLength(0)
+    // The bar starts at the long-leg top and runs +9 mm in X (constant DXF Y).
+    const bar = out[2] as { start: { x: number; y: number }; end: { x: number; y: number } }
+    expect(bar.start).toEqual({ x: 107, y: SVG_SHEET_HEIGHT_MM - 88 })
+    expect(bar.end).toEqual({ x: 116, y: SVG_SHEET_HEIGHT_MM - 88 })
+  })
+
+  it('adds a CIRCLE for material "prohibited" (real R12 circle, r=1.6)', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'prohibited', anchor: anchor(0, 0), placement: { x: 100, y: 100 } }
+    ]
+    const out = annotationsToDxfEntities(ann)
+    const circle = out.find((e) => e.type === 'circle') as {
+      layer: string
+      center: { x: number; y: number }
+      radius: number
+    }
+    expect(circle).toBeDefined()
+    expect(circle.layer).toBe('ANNOTATIONS')
+    expect(circle.radius).toBe(1.6)
+    // Centre = vee + ((shortDX+longDX)/4, (shortDY+longDY)/4)
+    //        = (100 + (-3.5+7)/4, 100 + (-6-12)/4) = (100.875, 95.5) → Y-flip.
+    expect(circle.center).toEqual({ x: 100.875, y: SVG_SHEET_HEIGHT_MM - 95.5 })
+  })
+
+  it('emits a Ra + lay TEXT read-out beside the check-mark on ANNOTATIONS', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      {
+        id: 'sf',
+        material: 'required',
+        ra: 1.6,
+        lay: 'perpendicular',
+        anchor: anchor(0, 0),
+        placement: { x: 100, y: 100 }
+      }
+    ]
+    const out = annotationsToDxfEntities(ann)
+    const text = out.find((e) => e.type === 'text') as { layer: string; value: string }
+    expect(text).toBeDefined()
+    expect(text.layer).toBe('ANNOTATIONS')
+    // Ra formatted + ASCII lay code (perpendicular → PERP, NOT the ⟂ glyph).
+    expect(text.value).toBe('Ra 1.6 PERP')
+  })
+
+  it('includes the machining allowance in the read-out when present', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      {
+        id: 'sf',
+        material: 'any',
+        ra: 3.2,
+        machiningAllowanceMm: 0.5,
+        anchor: anchor(0, 0),
+        placement: { x: 10, y: 10 }
+      }
+    ]
+    const text = annotationsToDxfEntities(ann).find((e) => e.type === 'text') as { value: string }
+    expect(text.value).toBe('Ra 3.2 +0.5')
+  })
+
+  it('draws no read-out TEXT for a bare symbol (no Ra / allowance / lay)', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'any', anchor: anchor(0, 0), placement: { x: 10, y: 10 } }
+    ]
+    const out = annotationsToDxfEntities(ann)
+    expect(out.filter((e) => e.type === 'text')).toHaveLength(0)
+  })
+
+  it('keeps the lay read-out ASCII-only (no non-ASCII glyph reaches the stream)', () => {
+    const ann = emptyDrawingSheetAnnotations()
+    ann.surfaceFinishes = [
+      { id: 'sf', material: 'any', lay: 'perpendicular', anchor: anchor(0, 0), placement: { x: 0, y: 0 } }
+    ]
+    const text = annotationsToDxfEntities(ann).find((e) => e.type === 'text') as { value: string }
+    // The ⟂ glyph the SVG model uses must NOT appear; a clean ASCII code does.
+    expect(text.value).not.toContain('⟂')
+    expect([...text.value].every((ch) => ch.charCodeAt(0) <= 126)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Coordinate mapping — SVG-mm → DXF Y-flip
 // ---------------------------------------------------------------------------
 
@@ -356,6 +503,110 @@ describe('buildPlaceholderDxf: full document', () => {
       annotations: fixtureAnnotations()
     })
     expect(a).toBe(b)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Full document — surface finish integration
+// ---------------------------------------------------------------------------
+
+describe('buildPlaceholderDxf: surface finish integration', () => {
+  const dxf = buildPlaceholderDxf({
+    projectTitle: 'Bracket',
+    generatedAtIso: '2026-07-03T00:00:00.000Z',
+    sheetTitle: 'Sheet 1',
+    sheetScale: '1:1',
+    projectedModelViews: fixtureProjection(),
+    annotations: fixtureAnnotationsWithSurfaceFinish()
+  })
+
+  it('places the surface-finish check-mark + bar + Ra/lay TEXT on ANNOTATIONS', () => {
+    const ann = entitiesOnLayer(dxf, 'ANNOTATIONS')
+    // The note ("BREAK ALL EDGES") is 1 TEXT; the surface finish adds
+    // 3 LINEs (2 legs + required bar) + 1 TEXT read-out. No circle (required).
+    const lines = ann.filter((e) => e.type === 'LINE')
+    expect(lines).toHaveLength(3)
+    expect(ann.filter((e) => e.type === 'CIRCLE')).toHaveLength(0)
+    const texts = ann.flatMap((e) => e.texts)
+    expect(texts).toContain('Ra 1.6 =') // lay "parallel" → "="
+    expect(texts).toContain('BREAK ALL EDGES') // note still present
+  })
+
+  it('keeps the surface-finish geometry off every non-ANNOTATIONS layer', () => {
+    // No surface-finish primitive leaks onto DIMENSIONS / CENTERLINES / TITLE.
+    expect(entitiesOnLayer(dxf, 'DIMENSIONS').filter((e) => e.type === 'CIRCLE')).toHaveLength(0)
+    expect(entitiesOnLayer(dxf, 'CENTERLINES').flatMap((e) => e.texts)).not.toContain('Ra 1.6 =')
+  })
+
+  it('renders a prohibited surface finish as a real CIRCLE entity', () => {
+    const base = fixtureAnnotations()
+    const withProhibited = buildPlaceholderDxf({
+      projectTitle: 'x',
+      generatedAtIso: 'now',
+      annotations: {
+        ...base,
+        surfaceFinishes: [
+          { id: 'sf-p', material: 'prohibited', anchor: anchor(50, 50), placement: { x: 50, y: 50 } }
+        ]
+      }
+    })
+    expect(count(withProhibited, '0', 'CIRCLE')).toBe(1)
+    expect(entitiesOnLayer(withProhibited, 'ANNOTATIONS').filter((e) => e.type === 'CIRCLE')).toHaveLength(1)
+  })
+
+  it('is byte-stable with a surface finish: same input → identical output', () => {
+    const a = buildPlaceholderDxf({
+      projectTitle: 'Bracket',
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      annotations: fixtureAnnotationsWithSurfaceFinish()
+    })
+    const b = buildPlaceholderDxf({
+      projectTitle: 'Bracket',
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      annotations: fixtureAnnotationsWithSurfaceFinish()
+    })
+    expect(a).toBe(b)
+  })
+
+  it('is PURELY ADDITIVE: adding a surface finish only appends its entities — the wave-7 document is unchanged when none are present', () => {
+    // `fixtureAnnotations()` (the wave-7 fixture) already carries a schema-
+    // defaulted empty `surfaceFinishes: []`, so the surface-finish code path is
+    // reached (the for-loop runs zero times) and must contribute NOTHING.
+    const wave7 = buildPlaceholderDxf({
+      projectTitle: 'Bracket',
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      sheetTitle: 'Sheet 1',
+      sheetScale: '1:1',
+      projectedModelViews: fixtureProjection(),
+      annotations: fixtureAnnotations()
+    })
+    // Re-stating the empty array explicitly must be byte-identical (proves the
+    // empty-omit branch adds no bytes).
+    const withExplicitEmpty = buildPlaceholderDxf({
+      projectTitle: 'Bracket',
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      sheetTitle: 'Sheet 1',
+      sheetScale: '1:1',
+      projectedModelViews: fixtureProjection(),
+      annotations: { ...fixtureAnnotations(), surfaceFinishes: [] }
+    })
+    expect(withExplicitEmpty).toBe(wave7)
+    // No CIRCLE / no "Ra " read-out ever appears when no surface finish is present.
+    expect(count(wave7, '0', 'CIRCLE')).toBe(0)
+    expect(wave7).not.toContain('Ra ')
+    // And the WITH-surface-finish document is a strict SUPERSET: every byte of
+    // the wave-7 document's HEADER/TABLES/BLOCKS structure is unchanged (the
+    // layer table gains no new row — surface finishes reuse ANNOTATIONS).
+    const withSf = buildPlaceholderDxf({
+      projectTitle: 'Bracket',
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      sheetTitle: 'Sheet 1',
+      sheetScale: '1:1',
+      projectedModelViews: fixtureProjection(),
+      annotations: fixtureAnnotationsWithSurfaceFinish()
+    })
+    // Same layer count (7 layer rows) with or without a surface finish.
+    expect(count(withSf, '0', 'LAYER')).toBe(count(wave7, '0', 'LAYER'))
   })
 })
 

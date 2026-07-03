@@ -274,7 +274,8 @@ describe('drawingSheetAnnotationsSchema', () => {
       centerMarks: [],
       centerlines: [],
       revisions: [],
-      bom: []
+      bom: [],
+      holeTables: []
     })
   })
 
@@ -320,7 +321,18 @@ describe('drawingSheetAnnotationsSchema', () => {
       centerMarks: [{ id: 'cm1', anchor: anchor('hole-1', 5, 5), sizeMm: 3 }],
       centerlines: [{ id: 'cl1', start: anchor('hole-1', 5, 5), end: anchor('hole-2', 25, 5) }],
       revisions: [{ rev: 'A', date: '2026-06-04', desc: 'Init', author: 'JR' }],
-      bom: [{ item: 1, qty: 2, partNumber: 'PN-1', description: 'Widget' }]
+      bom: [{ item: 1, qty: 2, partNumber: 'PN-1', description: 'Widget' }],
+      holeTables: [
+        {
+          id: 'ht1',
+          view: 'top',
+          rows: [
+            { tag: 'A1', x: 10, y: 5, diameterMm: 6, depthMm: null, through: true },
+            { tag: 'A2', x: 20, y: 5, diameterMm: 3, depthMm: 4, through: false }
+          ],
+          placement: { x: 10, y: 10 }
+        }
+      ]
     }
     expect(drawingSheetAnnotationsSchema.parse(full)).toEqual(full)
   })

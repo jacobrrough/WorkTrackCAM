@@ -41,6 +41,7 @@ import type {
   DrawingCenterline,
   DrawingCenterMark,
   DrawingDimension,
+  DrawingHoleTable,
   GdtFeatureControlFrame,
   SurfaceFinishSymbol,
   DrawingNote,
@@ -138,6 +139,16 @@ const BOM_ROW: DrawingBomRow = {
   description: 'Aluminium plate'
 }
 
+const HOLE_TABLE: DrawingHoleTable = {
+  id: 'ht-1',
+  view: 'top',
+  rows: [
+    { tag: 'A1', x: 10, y: 10, diameterMm: 5, depthMm: null, through: true },
+    { tag: 'A2', x: 30, y: 10, diameterMm: 5, depthMm: 4, through: false }
+  ],
+  placement: { x: 120, y: 20 }
+}
+
 /** A fully-populated renderer drawing state (every piece non-empty). */
 function fullViewState(): DrawingViewState {
   return {
@@ -148,6 +159,7 @@ function fullViewState(): DrawingViewState {
     notes: [NOTE],
     centerMarks: [CENTER_MARK],
     centerlines: [CENTERLINE],
+    holeTables: [HOLE_TABLE],
     revisions: [REVISION],
     bom: [BOM_ROW]
   }
@@ -276,11 +288,13 @@ describe('fold → save/load → hydrate round-trip', () => {
     const state: DrawingViewState = {
       ...emptyDrawingViewState(),
       centerMarks: [CENTER_MARK],
-      centerlines: [CENTERLINE]
+      centerlines: [CENTERLINE],
+      holeTables: [HOLE_TABLE]
     }
     const hydrated = hydrateDrawingFile(saveLoadRoundTrip(foldDrawingState(state)))
     expect(hydrated.centerMarks).toEqual([CENTER_MARK])
     expect(hydrated.centerlines).toEqual([CENTERLINE])
+    expect(hydrated.holeTables).toEqual([HOLE_TABLE])
     expect(hydrated.centerMarks[0]?.anchor.refId).toBe('hole-1')
     expect(hydrated.centerlines[0]?.end.refId).toBe('hole-2')
   })

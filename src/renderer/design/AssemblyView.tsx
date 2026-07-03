@@ -63,12 +63,14 @@ import { useDesignSessionOptional } from './DesignSessionContext'
 import type {
   AssemblyComponent,
   AssemblyFile,
+  AssemblyGeometrySource,
   AssemblyInterferenceReport,
   AssemblyJointLimits,
   AssemblySummaryReport,
 } from '../../shared/assembly-schema'
 import { emptyAssembly } from '../../shared/assembly-schema'
-import { partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
+import { bboxToDescriptor, partHasLiveGeometry, partPathForRow } from './assembly-part-bridge'
+import { isExternalStepSource, stepImportSourceIsDangling } from '../../shared/assembly-step-import'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import {
   MATE_CONSTRAINT_KIND_LABELS,
@@ -155,6 +157,19 @@ export type AssemblyPart = {
    */
   readonly geometrySource?: string
   /**
+   * DURABLE, STRUCTURED geometry source (wave-8). The flat {@link geometrySource}
+   * string only names a handle / path token; an EXTERNAL vendor STEP import
+   * ("Insert from file") additionally carries `{ kind:'step', stepPath,
+   * cachedBounds, cachedDims }` that the flat string cannot represent. This field
+   * preserves that WHOLE object through the persist ⇄ hydrate round-trip so a
+   * reloaded external-STEP row can draw its cached-bbox schematic + report its
+   * dimensions WITHOUT a live re-tessellation (and render an honest dangling badge
+   * when its file has moved). Optional + additive: a plain in-project part (handle
+   * / design-model / relPath) leaves it undefined and rides the flat string exactly
+   * as before, so every existing row round-trips unchanged.
+   */
+  readonly geometrySourceRef?: AssemblyGeometrySource
+  /**
    * Optional 4×4 transform applied before the part is welded into the
    * assembly. Omit for identity. The summary string below is what the
    * operator sees in the UI.
@@ -199,6 +214,16 @@ export type AssemblyPart = {
    * on-disk limits (`persistParts` preserves omitted fields).
    */
   readonly jointLimits?: AssemblyJointLimits
+  /**
+   * VIEW-ONLY visibility, PERSISTED (wave-8; mirrors `AssemblyComponent.hidden`).
+   * `true` hides this instance from the 3D viewport + dims its row, while it stays
+   * solved, in the BOM, and interference-checked — the deliberate split from
+   * SUPPRESS. The AssemblyView seeds its `hiddenPartIds` set from rows where
+   * `hidden === true` on mount, and the eye-toggle writes the flipped value back
+   * through the parts-persist seam so the state survives reload. Optional +
+   * additive: a legacy row omits it and defaults visible.
+   */
+  readonly hidden?: boolean
 }
 
 /**
@@ -431,6 +456,15 @@ export interface AssemblyViewProps {
    * (that is what SUPPRESS is for). Defaults to none hidden.
    */
   readonly initialHiddenPartIds?: readonly string[]
+  /**
+   * Render-pin / test escape hatch: seeds the set of DANGLING external-STEP part
+   * ids so a static render (or a test with no `window.fab`) can assert the
+   * dangling badge WITHOUT the async `assembly:fileExists` probe. In the running
+   * app this is undefined and the probe effect populates the set from disk (an
+   * external-STEP row whose `stepPath` no longer resolves is dangling; the row
+   * still renders its cached-bbox schematic + stays deletable). Defaults to none.
+   */
+  readonly initialDanglingPartIds?: readonly string[]
 }
 
 /**
@@ -895,15 +929,30 @@ export function AssemblyView({
   onPartsChange,
   geometryDescriptors,
   initialHiddenPartIds,
+  initialDanglingPartIds,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
-  // VIEW-ONLY visibility (like selection / explode): the set of part ids hidden
-  // from the 3D viewport + dimmed in the row. NEVER persisted and NEVER fed to
-  // the solver / BOM -- that distinction is what SUPPRESS is for (suppress
-  // excludes a part from kinematics + the bill of materials; hidden only stops
-  // DRAWING it). Seeded from `initialHiddenPartIds` for render-pin tests.
-  const [hiddenPartIds, setHiddenPartIds] = useState<ReadonlySet<string>>(
-    () => new Set(initialHiddenPartIds ?? [])
+  // VIEW visibility: the set of part ids hidden from the 3D viewport + dimmed in
+  // the row. Distinct from SUPPRESS (suppress excludes a part from kinematics +
+  // the bill of materials; hidden only stops DRAWING it — a hidden part is still
+  // solved, still in the BOM). Wave-8 PERSISTS this: the seed derives from the
+  // hydrated rows' `hidden` flag so the eye-toggle state survives a reload, and
+  // the toggle writes the flip back through the parts-persist seam
+  // (`onPartsChange`). `initialHiddenPartIds` remains a render-pin escape hatch
+  // that OVERRIDES the row-derived seed for static tests.
+  const [hiddenPartIds, setHiddenPartIds] = useState<ReadonlySet<string>>(() =>
+    initialHiddenPartIds !== undefined
+      ? new Set(initialHiddenPartIds)
+      : new Set(parts.filter((pt) => pt.hidden === true).map((pt) => pt.id))
+  )
+  // DANGLING external-STEP rows: ids of parts whose durable external-STEP source
+  // (`geometrySourceRef.stepPath`) no longer resolves on disk. Populated by the
+  // probe effect below (`assembly:fileExists`); the row still renders its
+  // cached-bbox schematic + stays deletable — an honest badge, never a silent
+  // drop or crash. Seeded from `initialDanglingPartIds` for static render pins /
+  // tests that do not mock `window.fab`.
+  const [danglingPartIds, setDanglingPartIds] = useState<ReadonlySet<string>>(
+    () => new Set(initialDanglingPartIds ?? [])
   )
   const [error, setError] = useState<string | null>(null)
   const [tessellation, setTessellation] = useState<AssemblyTessellation | null>(null)
@@ -1081,6 +1130,99 @@ export function AssemblyView({
     [parts, hiddenPartIds]
   )
 
+  // -- External-STEP rows + dangling probe -----------------------------------
+  // Rows whose durable source is an EXTERNAL vendor STEP ("Insert from file").
+  // Only these carry a `stepPath` that can dangle after a reload (an in-project
+  // handle / design-model source never does). `stepImportSourceIsDangling` (pure)
+  // treats a `kind:'step'` source with a MISSING stepPath as always-dangling; the
+  // probe below resolves the file-exists fact for the rest.
+  const stepRows = useMemo(
+    () =>
+      parts
+        .filter((pt) => isExternalStepSource(pt.geometrySourceRef))
+        .map((pt) => ({
+          id: pt.id,
+          source: pt.geometrySourceRef!,
+          stepPath: pt.geometrySourceRef!.stepPath,
+        })),
+    [parts]
+  )
+  // Stable key: re-probe only when the (id, stepPath) membership changes, not on
+  // every unrelated re-render (mirrors the build effect's `assemblyKey` posture).
+  const stepProbeKey = useMemo(
+    () => stepRows.map((r) => `${r.id} ${r.stepPath ?? ''}`).join('|'),
+    [stepRows]
+  )
+  useEffect(() => {
+    // A row with `kind:'step'` but NO stepPath can never resolve -- mark it
+    // dangling immediately (no IO), matching `stepImportSourceIsDangling(src, *)`.
+    const alwaysDangling = new Set(
+      stepRows.filter((r) => stepImportSourceIsDangling(r.source, true)).map((r) => r.id)
+    )
+    const probeable = stepRows.filter(
+      (r) => typeof r.stepPath === 'string' && r.stepPath.length > 0
+    )
+    if (probeable.length === 0) {
+      // Nothing to probe -- settle to just the always-dangling set.
+      setDanglingPartIds(alwaysDangling)
+      return undefined
+    }
+    // Guard: the file-exists bridge may be absent (unit render / early merge).
+    const probe = (
+      globalThis as unknown as {
+        window?: { fab?: { assemblyFileExists?: (p: string) => Promise<boolean> } }
+      }
+    ).window?.fab?.assemblyFileExists
+    if (typeof probe !== 'function') {
+      // No probe available: do not fabricate dangling state for existing files --
+      // only the definitely-unresolvable (missing-path) rows are flagged.
+      setDanglingPartIds(alwaysDangling)
+      return undefined
+    }
+    let cancelled = false
+    void (async () => {
+      const next = new Set(alwaysDangling)
+      await Promise.all(
+        probeable.map(async (r) => {
+          try {
+            const exists = await probe(r.stepPath!)
+            if (stepImportSourceIsDangling(r.source, exists)) next.add(r.id)
+          } catch {
+            // A probe failure means "cannot confirm it exists" -> dangling, so the
+            // operator sees an honest badge rather than a false-OK row.
+            next.add(r.id)
+          }
+        })
+      )
+      if (!cancelled) setDanglingPartIds(next)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepProbeKey])
+
+  // -- Descriptors handed to the viewport (host descriptors + STEP cached-bbox) --
+  // The host builds `geometryDescriptors` from the LIVE tessellation. An external-
+  // STEP row that was hydrated from disk (or whose file has since moved) has no
+  // live mesh, but its durable source carries `cachedBounds` captured at import
+  // time. Derive a true-proportion bbox descriptor from that cache for any STEP
+  // row the host did not already describe, so a reloaded / dangling STEP part
+  // still draws its real box instead of collapsing to the nominal cube. Falls back
+  // silently (no key added) when the cache is missing / degenerate.
+  const effectiveDescriptors = useMemo<ReadonlyMap<string, PartGeometryDescriptor> | null>(() => {
+    if (stepRows.length === 0) return geometryDescriptors ?? null
+    const merged = new Map<string, PartGeometryDescriptor>(geometryDescriptors ?? [])
+    for (const r of stepRows) {
+      if (merged.has(r.id)) continue
+      const cached = r.source.cachedBounds
+      if (!cached) continue
+      const descriptor = bboxToDescriptor({ min: cached.min, max: cached.max })
+      if (descriptor) merged.set(r.id, descriptor)
+    }
+    return merged.size > 0 ? merged : geometryDescriptors ?? null
+  }, [geometryDescriptors, stepRows])
+
   const toast = useCallback(
     (kind: 'ok' | 'err' | 'warn', message: string): void => {
       onToast?.(kind, message)
@@ -1244,19 +1386,39 @@ export function AssemblyView({
     [onPartsChange, parts, mintPartId, toast]
   )
 
-  // ── Visibility (view-only eye toggle) ─────────────────────────────────────
-  // Toggles a part id in / out of the hidden set. The viewport receives only
-  // the VISIBLE parts (filtered below), and a hidden row dims + shows a closed
-  // eye. This never persists and never changes solve / BOM -- a hidden part is
-  // still solved, still counted in the BOM, still interference-checked.
-  const handleToggleVisibility = useCallback((id: string): void => {
-    setHiddenPartIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  // ── Visibility (persisted eye toggle) ─────────────────────────────────────
+  // Toggles a part id in / out of the hidden set. The viewport receives only the
+  // VISIBLE parts (filtered below), and a hidden row dims + shows a closed eye.
+  // This never changes solve / BOM -- a hidden part is still solved, still counted
+  // in the BOM, still interference-checked (that split from SUPPRESS is the point).
+  //
+  // Wave-8 PERSISTS the flip: alongside the local view-set (which drives the
+  // immediate dim + viewport filter), when `onPartsChange` is wired we write the
+  // new `hidden` value onto the toggled row and push the list through the SAME
+  // persist seam copy / mirror use, so the state survives a reload. When
+  // `onPartsChange` is absent (read-only host / render-pin tests) the toggle stays
+  // view-only exactly as before — no crash, no lost affordance.
+  const handleToggleVisibility = useCallback(
+    (id: string): void => {
+      // Compute the flip from the CURRENT set (captured in the closure) so it is
+      // deterministic — reading it inside the setState updater is unreliable
+      // because the updater may run asynchronously after the persist call below.
+      const nowHidden = !hiddenPartIds.has(id)
+      setHiddenPartIds((prev) => {
+        const next = new Set(prev)
+        if (nowHidden) next.add(id)
+        else next.delete(id)
+        return next
+      })
+      // Persist the flip through the parts seam. Set the explicit boolean (not
+      // an omit) so the shared persistParts REPLACES the prior on-disk `hidden`
+      // — `false` is the meaningful un-hide, not a no-op.
+      if (onPartsChange) {
+        onPartsChange(parts.map((pt) => (pt.id === id ? { ...pt, hidden: nowHidden } : pt)))
+      }
+    },
+    [onPartsChange, parts, hiddenPartIds]
+  )
 
   // ── V1.5 mate modal handlers ───────────────────────────────────────────
   // Pure UI plumbing: open / close / commit + per-mate row remove. The
@@ -2045,6 +2207,10 @@ export function AssemblyView({
               // Distinct from suppress (which excludes from solve / BOM) -- a
               // hidden part is still solved, still in the BOM, just not drawn.
               const isHidden = hiddenPartIds.has(part.id)
+              // DANGLING external-STEP row: its durable stepPath no longer
+              // resolves on disk (probed above). The row still renders (its
+              // cached-bbox schematic + this badge) and stays deletable.
+              const isDangling = danglingPartIds.has(part.id)
               const rowId = rowTestId(part.id)
               // Joint-limits editor: only joint kinds with limitable DOF get
               // the affordance (rigid / no-joint rows have nothing to bound).
@@ -2070,6 +2236,8 @@ export function AssemblyView({
                 isClashing ? 'design-assembly__row--clash' : '',
                 // Dim a view-hidden row (does NOT remove it from solve / BOM).
                 isHidden ? 'design-assembly__row--hidden' : '',
+                // Flag a dangling external-STEP row (its file could not be found).
+                isDangling ? 'design-assembly__row--dangling' : '',
               ]
                 .filter((c) => c.length > 0)
                 .join(' ')
@@ -2081,6 +2249,7 @@ export function AssemblyView({
                   data-clash={isClashing ? 'true' : undefined}
                   data-motion={playbackPose !== undefined ? 'true' : undefined}
                   data-hidden={isHidden ? 'true' : undefined}
+                  data-dangling={isDangling ? 'true' : undefined}
                   role="listitem"
                   aria-selected={isSelected}
                 >
@@ -2108,6 +2277,15 @@ export function AssemblyView({
                         title="This part was loaded from a saved assembly. Re-run or re-send its source model to rebuild its geometry; its placement and mates are preserved."
                       >
                         geometry not loaded
+                      </span>
+                    )}
+                    {isDangling && (
+                      <span
+                        className="design-assembly__row-dangling"
+                        data-testid={`${rowId}-dangling`}
+                        title="The external STEP file for this part could not be found (moved or deleted). It is drawn from its cached bounding box; re-import the file to restore its geometry, or delete the row."
+                      >
+                        file missing
                       </span>
                     )}
                   </button>
@@ -2720,7 +2898,7 @@ export function AssemblyView({
             explode={explodeConfig}
             busy={busy}
             triangleSummary={triangleSummary}
-            descriptors={geometryDescriptors ?? null}
+            descriptors={effectiveDescriptors}
             stlPath={tessellation?.stlPath ?? null}
             mateConstraintCount={mateConstraints.length}
             playbackActive={playbackOverlay !== null}

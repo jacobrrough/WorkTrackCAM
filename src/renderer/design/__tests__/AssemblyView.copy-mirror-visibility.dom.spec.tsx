@@ -28,8 +28,8 @@
 
 import { useState } from 'react'
 import type { JSX } from 'react'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AssemblyView, type AssemblyPart } from '../AssemblyView'
 
 // ── window.fab shim: the build effect reads fab().cad; give it a bare object so
@@ -205,5 +205,112 @@ describe('AssemblyView (DOM) — Visibility eye toggle (view-only)', () => {
     expect(p2.className).not.toContain('design-assembly__row--hidden')
     // within() sanity: p2's own eye still offers Hide.
     expect(within(p2).getByTestId('design-assembly-part-p2-visibility').textContent).toBe('Hide')
+  })
+})
+
+describe('AssemblyView (DOM) — Visibility PERSISTS through the parts seam (wave-8)', () => {
+  it('the eye toggle commits the flipped hidden flag onto the part via onPartsChange', () => {
+    // The wave-8 persist: clicking the eye writes `hidden` onto the toggled row and
+    // pushes the list through the SAME seam copy / mirror use, so a reload keeps it.
+    const committed: Array<readonly AssemblyPart[]> = []
+    render(<Harness onParts={(p) => committed.push(p)} />)
+
+    fireEvent.click(screen.getByTestId('design-assembly-part-p1-visibility'))
+    // First commit: p1 hidden:true, p2 untouched.
+    expect(committed).toHaveLength(1)
+    const afterHide = committed[0]!
+    expect(afterHide.find((pt) => pt.id === 'p1')!.hidden).toBe(true)
+    expect(afterHide.find((pt) => pt.id === 'p2')!.hidden).toBeUndefined()
+
+    // Toggling again commits the explicit un-hide (hidden:false), so the persist
+    // seam REPLACES the prior on-disk true rather than leaving it stale.
+    fireEvent.click(screen.getByTestId('design-assembly-part-p1-visibility'))
+    expect(committed).toHaveLength(2)
+    expect(committed[1]!.find((pt) => pt.id === 'p1')!.hidden).toBe(false)
+  })
+
+  it('seeds the hidden set from a part hydrated with hidden:true (survives reload)', () => {
+    // Simulate a reloaded assembly: a row arrives already carrying hidden:true.
+    // The mount-time seed must dim it WITHOUT any click (the persisted state).
+    render(
+      <Harness
+        initialParts={[
+          { id: 'p1', name: 'Bracket', handle: '', geometrySource: 'design/bracket.step', hidden: true },
+          { id: 'p2', name: 'Plate', handle: '', geometrySource: 'design/plate.step' },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('design-assembly-part-p1').className).toContain(
+      'design-assembly__row--hidden',
+    )
+    expect(screen.getByTestId('design-assembly-part-p1-visibility').textContent).toBe('Show')
+    expect(screen.getByTestId('design-assembly-part-p2').className).not.toContain(
+      'design-assembly__row--hidden',
+    )
+  })
+})
+
+describe('AssemblyView (DOM) — external-STEP dangling probe (wave-8)', () => {
+  afterEach(() => {
+    // Restore the bare fab shim the other specs rely on.
+    const g = globalThis as unknown as Record<string, unknown>
+    const win = (g['window'] ?? globalThis) as unknown as Record<string, unknown>
+    win['fab'] = { cad: {} }
+    g['fab'] = win['fab']
+  })
+
+  /** Install a stubbed assembly:fileExists that answers from a path→bool map. */
+  function installFileExists(map: Record<string, boolean>): void {
+    const g = globalThis as unknown as Record<string, unknown>
+    const win = (g['window'] ?? globalThis) as unknown as Record<string, unknown>
+    win['fab'] = {
+      cad: {},
+      assemblyFileExists: (p: string) => Promise.resolve(map[p] ?? false),
+    }
+    g['fab'] = win['fab']
+  }
+
+  const STEP_ROW = (id: string, stepPath: string): AssemblyPart => ({
+    id,
+    name: `${id} body`,
+    handle: '',
+    geometrySource: stepPath,
+    geometrySourceRef: {
+      kind: 'step',
+      stepPath,
+      cachedBounds: { min: [0, 0, 0], max: [10, 10, 10] },
+      cachedDims: [10, 10, 10],
+    },
+  })
+
+  it('flags a reloaded STEP row whose file is MISSING after the async probe', async () => {
+    installFileExists({ 'C:/vendor/present.step': true, 'C:/vendor/gone.step': false })
+    render(
+      <Harness
+        initialParts={[STEP_ROW('present', 'C:/vendor/present.step'), STEP_ROW('gone', 'C:/vendor/gone.step')]}
+      />,
+    )
+    // The probe is async; wait for the dangling badge on the missing-file row.
+    await waitFor(() =>
+      expect(screen.getByTestId('design-assembly-part-gone-dangling')).toBeInTheDocument(),
+    )
+    // The present-file row is NOT flagged.
+    expect(screen.queryByTestId('design-assembly-part-present-dangling')).toBeNull()
+    // The dangling row is dimmed-with-error + still deletable (remove handler wired).
+    expect(screen.getByTestId('design-assembly-part-gone').className).toContain(
+      'design-assembly__row--dangling',
+    )
+    expect(screen.getByTestId('design-assembly-part-gone-remove')).toBeInTheDocument()
+  })
+
+  it('does NOT flag STEP rows when every file resolves', async () => {
+    installFileExists({ 'C:/vendor/ok.step': true })
+    render(<Harness initialParts={[STEP_ROW('ok', 'C:/vendor/ok.step')]} />)
+    // Give the probe a tick, then assert no badge appeared.
+    await waitFor(() => expect(screen.getByTestId('design-assembly-part-ok')).toBeInTheDocument())
+    expect(screen.queryByTestId('design-assembly-part-ok-dangling')).toBeNull()
+    expect(screen.getByTestId('design-assembly-part-ok').className).not.toContain(
+      'design-assembly__row--dangling',
+    )
   })
 })

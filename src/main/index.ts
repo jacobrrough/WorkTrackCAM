@@ -9,6 +9,7 @@ import { registerModelingIpc } from './ipc-modeling'
 import { registerRecoveryIpc } from './ipc-recovery'
 import { registerDesignScriptIpc } from './ipc-design-script'
 import { registerAssemblyStepImportIpc } from './ipc-assembly-step-import'
+import { registerAssemblyFileExistsIpc } from './ipc-assembly-file-exists'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
 import {
   checkPythonDeps,
@@ -149,6 +150,12 @@ app.whenReady().then(async () => {
   // geometrySource {kind:'step', stepPath, cachedBounds}). Registered next to
   // the other IPC namespaces so the ordering invariant above keeps holding.
   registerAssemblyStepImportIpc(ipcCtx)
+  // WAVE-8 external-STEP dangling probe: assembly:fileExists — an existence-only
+  // check (null-byte-rejected, no read / no size) the assembly hydrate/load path
+  // uses to decide whether a reloaded external-STEP row's file has moved (→ honest
+  // dangling badge). Registered next to the other IPC namespaces so the ordering
+  // invariant above keeps holding.
+  registerAssemblyFileExistsIpc(ipcCtx)
 
   createWindow()
 

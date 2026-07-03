@@ -263,6 +263,17 @@ export type Api = {
    */
   assemblyImportStepPart: (stepPath: string) => Promise<AssemblyImportStepPartResponse>
   /**
+   * WAVE-8 external-STEP dangling probe: existence-only check for a single file
+   * path (typically a reloaded assembly row's `geometrySource.stepPath`, which may
+   * live outside the project tree). Resolves `true` iff the path resolves to an
+   * existing regular file; a missing / moved / directory / null-byte / non-string
+   * path resolves `false`. Performs NO read and reports NO size. The assembly
+   * hydrate/load path uses it to decide whether to render an honest dangling badge
+   * (the row still shows its cached-bbox schematic + stays deletable). Delegates to
+   * `assembly:fileExists`. SAFETY: read-only stat, emits no G-code.
+   */
+  assemblyFileExists: (path: string) => Promise<boolean>
+  /**
    * Load `<projectDir>/drawing/drawing.json`, parsed + normalized through
    * `drawingFileSchema` (a missing file resolves to an empty drawing file).
    * Delegates to `drawing:load`. Used by the Drawings workspace to HYDRATE the
@@ -1094,6 +1105,7 @@ const api: Api = {
   assemblySave: (projectDir, json) => ipcRenderer.invoke('assembly:save', projectDir, json),
   assemblyImportStepPart: (stepPath) =>
     ipcRenderer.invoke('assembly:importStepPart', stepPath) as Promise<AssemblyImportStepPartResponse>,
+  assemblyFileExists: (path) => ipcRenderer.invoke('assembly:fileExists', path) as Promise<boolean>,
   drawingLoad: (projectDir) => ipcRenderer.invoke('drawing:load', projectDir),
   drawingSave: (projectDir, json) => ipcRenderer.invoke('drawing:save', projectDir, json),
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),

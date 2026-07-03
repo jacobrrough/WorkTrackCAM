@@ -127,6 +127,12 @@ try:
     from engines.cad.cadquery_drawing_geometry import (
         extract_drawing_geometry as _extract_drawing_geometry_core,
     )
+    # Phase-5 — hole-table scan (drawings). Enumerates coaxial cylindrical faces
+    # into holes projected into the active view's 2D frame. Prefixed ``_ht_`` so
+    # this block stays diff-isolated from the drawing surfaces above.
+    from engines.cad.cadquery_hole_table import (
+        scan_hole_table as _ht_scan_hole_table_core,
+    )
     from engines.cad.cadquery_assembly import (
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
         ALLOWED_MATE_KINDS as _ALLOWED_MATE_KINDS,
@@ -184,6 +190,10 @@ except ImportError:  # pragma: no cover - frozen-app import path
     # CAD V2 — frozen-app fallback for the projected-geometry module.
     from cad.cadquery_drawing_geometry import (  # type: ignore[no-redef]
         extract_drawing_geometry as _extract_drawing_geometry_core,
+    )
+    # Phase-5 — frozen-app fallback for the hole-table scan.
+    from cad.cadquery_hole_table import (  # type: ignore[no-redef]
+        scan_hole_table as _ht_scan_hole_table_core,
     )
     from cad.cadquery_assembly import (  # type: ignore[no-redef]
         ALLOWED_ASSEMBLY_FORMATS as _ALLOWED_ASSEMBLY_FORMATS,
@@ -1053,6 +1063,50 @@ def extract_drawing_geometry(params: dict[str, Any]) -> dict[str, Any]:
     return _extract_drawing_geometry_core(handle, view=view)
 
 
+# ── Phase-5 (Hole table — drawings) ──────────────────────────────────────
+#
+# ``cad.hole_table`` scans the body behind ``handle`` for holes (coaxial
+# cylindrical faces whose axis is parallel to the view direction) and returns a
+# table of ``{tag, x, y, diameterMm, depthMm|null, through}`` rows in the SAME
+# 2D SVG-mm frame as ``cad.project_drawing`` / ``cad.extract_drawing_geometry``
+# for that view — so the renderer can drop a matching tag on each projected hole.
+# Numerics live in ``engines/cad/cadquery_hole_table.py``.
+#
+# Wire result::
+#
+#     {"view": str,
+#      "holes": [{"tag": str, "x": float, "y": float,
+#                 "diameterMm": float, "depthMm": float|null,
+#                 "through": bool}, ...]}
+#
+# ``holes`` is EMPTY (honest state) when the part has no view-parallel holes.
+# Tag ordering is deterministic (descending diameter, then position) so re-runs
+# are byte-stable and a persisted table never churns.
+#
+# Error vocabulary mirrors the drawing-geometry path:
+#   * 'bad_params'            — unknown view / empty handle.
+#   * 'invalid_handle'        — handle missing from the table.
+#   * 'ocp_hlr_not_available' — OCP surface/topology binding missing.
+#   * 'drawing_error'         — no resolvable solid / OCCT raised mid-scan.
+#
+# Safety Rule 1 reminder: this method does NOT touch G-code / STL. The hole
+# table is renderer-only; no downstream CAM logic reads it.
+
+
+def hole_table(params: dict[str, Any]) -> dict[str, Any]:
+    """Scan a body handle for holes visible in ``view`` and table them.
+
+    The renderer's DrawingView calls this once per (handle, view) when the
+    operator clicks "Hole table"; each returned row's ``(x, y)`` lands on the
+    projected hole so the renderer can stamp a tag marker there. Thin wrapper
+    posture (validate the envelope here, defer geometry to the core) matching
+    ``extract_drawing_geometry`` / ``project_drawing``.
+    """
+    handle = _require_str(params, "handle")
+    view = _require_v15_view_param(params)
+    return _ht_scan_hole_table_core(handle, view=view)
+
+
 def drawing_bom_table(params: dict[str, Any]) -> dict[str, Any]:
     """Stamp a BOM-table ``<g>`` into an SVG from caller-supplied rows.
 
@@ -1235,6 +1289,8 @@ HANDLERS: dict[str, HandlerFn] = {
     # BUILD 9 — Associative-dimension geometry + BOM-table stamp (CAD V1.5)
     "extract_drawing_geometry": extract_drawing_geometry,
     "drawing_bom_table": drawing_bom_table,
+    # Phase-5 — Hole table (drawings)
+    "hole_table": hole_table,
     # BUILD 10 — GD&T feature control frames (CAD V1.5)
     "annotate_gdt": annotate_gdt,
 }

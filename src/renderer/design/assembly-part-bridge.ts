@@ -39,7 +39,12 @@ import {
   syntheticPartPath,
   type AssemblyPartView
 } from '../../shared/assembly-hydrate'
-import type { AssemblyComponent, AssemblyFile } from '../../shared/assembly-schema'
+import type {
+  AssemblyComponent,
+  AssemblyFile,
+  AssemblyGeometrySource
+} from '../../shared/assembly-schema'
+import { isExternalStepSource } from '../../shared/assembly-step-import'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import type { AssemblyPart } from './AssemblyView'
 import type {
@@ -109,17 +114,31 @@ export function partToView(part: AssemblyPart): AssemblyPartView {
   const view: {
     id: string
     name: string
-    geometry?: { handle: string }
+    geometry?: AssemblyGeometrySource
     transform?: NonNullable<AssemblyPartView['transform']>
     partPath?: string
     joint?: AssemblyPart['joint']
     grounded?: boolean
     jointLimits?: AssemblyPart['jointLimits']
+    hidden?: boolean
   } = {
     id: part.id,
     name: part.name
   }
-  if (ref) view.geometry = { handle: ref }
+  // Geometry ref precedence:
+  //   1. The STRUCTURED `geometrySourceRef` (wave-8) — an external-STEP source
+  //      carries `{ kind:'step', stepPath, cachedBounds, cachedDims }` the flat
+  //      string cannot hold. Emit the WHOLE object so cachedBounds survive the
+  //      persist ⇄ hydrate round-trip (the durable-source test proves this in
+  //      `assembly-hydrate.test.ts`). A live handle rides along inside the object
+  //      when the row still has one, so a re-persist keeps the in-session hint.
+  //   2. Otherwise the FLAT handle/path ref, wrapped as `{ handle }` exactly as
+  //      before — every non-STEP row round-trips byte-for-byte (pinned).
+  if (part.geometrySourceRef != null) {
+    view.geometry = ref ? { ...part.geometrySourceRef, handle: ref } : part.geometrySourceRef
+  } else if (ref) {
+    view.geometry = { handle: ref }
+  }
   // Carry the durable gating fields onto the view so a persist writes them to the
   // component (the rotational-mate gate `joint === 'revolute' && !grounded` then
   // survives a reload without the operator re-setting the joint). Only forward the
@@ -131,6 +150,10 @@ export function partToView(part: AssemblyPart): AssemblyPartView {
   // object `{}` is forwarded as-is — that is the explicit "cleared to unlimited"
   // write the shared persistParts uses to REPLACE prior on-disk limits.
   if (part.jointLimits !== undefined) view.jointLimits = part.jointLimits
+  // Persisted visibility rides the same seam. Forward BOTH `true` and `false`
+  // (false is the explicit eye-toggle un-hide), so persistParts refreshes the
+  // stored value; an omitted field lets persistParts preserve the prior state.
+  if (part.hidden !== undefined) view.hidden = part.hidden
   if (part.transform) {
     view.transform = {
       position: part.transform.position
@@ -177,23 +200,37 @@ export function summarizeViewTransform(t: AssemblyPartView['transform']): string
  * row id + name).
  */
 export function viewToPart(view: AssemblyPartView): AssemblyPart {
-  const geometrySource = view.geometry?.handle ?? view.partPath
+  const g = view.geometry
+  // Flat string token for `partPathForRow` / display. For an external-STEP source
+  // whose live handle is gone after reload, prefer the durable `stepPath` so the
+  // token stays meaningful (else fall back to handle, then partPath).
+  const geometrySource =
+    (isExternalStepSource(g) ? g.stepPath : undefined) ?? g?.handle ?? view.partPath
   const part: {
     id: string
     name: string
     handle: string
     geometrySource?: string
+    geometrySourceRef?: AssemblyGeometrySource
     transform?: AssemblyPart['transform']
     transformSummary?: string
     joint?: AssemblyPart['joint']
     grounded?: boolean
     jointLimits?: AssemblyPart['jointLimits']
+    hidden?: boolean
   } = {
     id: view.id,
     name: view.name,
     handle: ''
   }
   if (geometrySource) part.geometrySource = geometrySource
+  // Restore the STRUCTURED source (wave-8) so a reloaded external-STEP row keeps
+  // its `{ kind:'step', stepPath, cachedBounds, cachedDims }` — the AssemblyView
+  // draws the cached-bbox schematic + the dangling badge off THIS object, not the
+  // flat token. Only external-STEP sources carry data the flat string can't hold;
+  // a plain in-project source (handle-only) leaves `geometrySourceRef` undefined so
+  // a non-STEP row round-trips exactly as before (pinned).
+  if (isExternalStepSource(g)) part.geometrySourceRef = g
   // Restore the gating fields onto the row so the AssemblyMatePanel's angle/tangent
   // gate (`joint === 'revolute' && !grounded`) is correct immediately after a
   // reload. Only set what the view carries (the shared hydrate emits `joint` only
@@ -204,6 +241,10 @@ export function viewToPart(view: AssemblyPartView): AssemblyPart {
   // Authored joint limits ride back so the Limits editor (and the solve /
   // motion-study threading) see the persisted bounds immediately after reload.
   if (view.jointLimits !== undefined) part.jointLimits = view.jointLimits
+  // Persisted visibility rides back so the AssemblyView seeds its hidden set from
+  // the hydrated rows (the eye-toggle state survives reload). The shared hydrate
+  // emits `hidden` only when `true`, so a visible row leaves the field undefined.
+  if (view.hidden !== undefined) part.hidden = view.hidden
   if (view.transform) {
     part.transform = {
       position: view.transform.position,
