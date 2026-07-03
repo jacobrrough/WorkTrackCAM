@@ -111,8 +111,10 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   explode slider, grounded styling, row↔viewport highlight sync; node-env guard degrades to the
   summary placeholder (all pins held). HONEST LIMIT: parts render as labeled nominal schematic
   boxes, not real meshes. *(done 2026-07-02, wave 6)*
-- [ ] **Assembly viewport real meshes (M)** — thread per-part tessellations (or bboxes) into
-  AssemblyViewport3D; computePartRenderStates already accepts per-part half-extents.
+- ✅ **Assembly viewport real meshes (M)** — per-part geometry descriptors (real mesh / true AABB /
+  nominal-box fallback, tiered with a 200k-triangle budget + honest HUD "N of M schematic" count),
+  threaded from the live tessellation's per-handle bbox (view-only memo, auto-prunes); the
+  transform/playback/interference pipeline is tier-independent (pinned). *(done 2026-07-03, wave 7)*
 - ✅ **Mate list/edit/delete panel (M)** — Mates section in AssemblyView: kind/parts/scalar rows,
   DELETE + scalar EDIT + SUPPRESS (solver skips suppressed — proven via save->load->solve residuals),
   dangling flags, shared EmptyState; persists through the same serialized mate chain authoring
@@ -121,8 +123,16 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   (validated, clear-to-unlimited), persisted through the solve seam; authored limits now thread
   into BOTH assembly:solve clamps and assembly:simulate sweeps (the "LIMIT COUPLING" gap closed —
   motion playback sweeps the real authored range). *(done 2026-07-02, wave 4)*
-- [ ] **Copy/mirror component + visibility toggles (M)**.
-- [ ] **External STEP part import as component (L)** — vendor hardware in assemblies.
+- ✅ **Copy/mirror component + visibility toggles (M)** — per-row Copy (distinct instance, offset,
+  shared body), Mirror-position across XY/XZ/YZ (honestly position-only — full geometric mirror
+  needs a reflected mesh, filed), and an eye toggle (view-only, distinct from suppress: hidden
+  stays in solve/BOM). Persists through the same setAssemblyParts seam add uses. *(done 2026-07-03,
+  wave 7)*
+- ✅ **External STEP part import as component (L)** — "Import STEP…" → file dialog →
+  path-validated (traversal/null-byte/ext/size-cap) `assembly:importStepPart` IPC → cad.import_step
+  → tessellate → distinct component carrying the durable stepPath. In-session reachable + persists
+  its path. FOLLOW-UP: cachedBounds round-trip + dangling-on-reload badge needs an assembly file-
+  exists IPC (pure pipeline + hydrate honesty already shipped). *(done 2026-07-03, wave 7)*
 - [ ] **Free-body SE(3) rotation (L)** — deferred from Cycle 276; destabilization risk documented.
 
 ### Phase 5 — Drawings output
@@ -138,8 +148,12 @@ runs the full gates, and checks items off here. Effort: S(<1d) M(1–3d) L(3d+).
   DrawingView "Hidden lines" toggle + state-aware fidelity caveat. Orchestrator reconciled the
   cad:projectDrawing IPC (single-view {handle,view,includeHlr} variant added beside the sheet
   envelope) so the toggle is live end-to-end. *(done 2026-07-02, wave 6)*
-- [ ] **Real DXF export (L)** — dimensions/GD&T/notes as DXF entities (currently frame + mesh only).
-  Highest shop ROI in this phase: DXF feeds lasers/other CAM.
+- ✅ **Real DXF export (L)** — R12 ASCII DXF now carries the drawing's real annotation content:
+  projection LINE/LWPOLYLINE (+ HIDDEN layer), notes/GD&T/dimension read-outs as TEXT, dimensions
+  as exploded primitives (honest — not associative DIMENSION entities), center marks/centerlines as
+  CENTER-linetype LINEs; proper layers + linetype table + mm units header; escaped, byte-stable.
+  Surface-finish glyphs omitted (no faithful R12 primitive — honest). *(done 2026-07-03, wave 7 —
+  the top shop-ROI drawing item; feeds lasers/other CAM)*
 - [ ] **Hole table (M)** — topology scan for bored holes.
 
 ### Phase 6 — CAM frontier (already strongest; polish last)

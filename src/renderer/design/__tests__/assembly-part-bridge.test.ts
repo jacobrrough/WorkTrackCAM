@@ -20,7 +20,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   FALLBACK_PART_PATH_PREFIX,
+  bboxToDescriptor,
   hydrateAssembly,
+  meshToDescriptor,
   partHasLiveGeometry,
   partPathForRow,
   partsToComponents,
@@ -342,5 +344,88 @@ describe('assembly-part-bridge — #9 hydrateAssembly', () => {
     expect(h.parts).toEqual([])
     expect(h.mateConstraints).toEqual([])
     expect(h.danglingMateIds).toEqual([])
+  })
+})
+
+// ── (H) wave-7 geometry descriptors — bbox (tier b) + mesh (tier a) capture ────
+
+describe('assembly-part-bridge — bboxToDescriptor', () => {
+  it('derives half-extents + center offset from a min/max bbox', () => {
+    const d = bboxToDescriptor({ min: [0, 0, 0], max: [10, 20, 30] })
+    expect(d).not.toBeNull()
+    expect(d!.kind).toBe('bbox')
+    expect(d!.halfExtentsMm).toEqual([5, 10, 15])
+    expect(d!.centerOffsetMm).toEqual([5, 10, 15])
+  })
+
+  it('captures an OFF-ORIGIN bbox center (real part not centred on its origin)', () => {
+    const d = bboxToDescriptor({ min: [10, 10, -5], max: [30, 10 + 40, 5] })
+    // half = (max-min)/2; center = (max+min)/2
+    expect(d!.halfExtentsMm).toEqual([10, 20, 5])
+    expect(d!.centerOffsetMm).toEqual([20, 30, 0])
+  })
+
+  it('returns null for a degenerate (zero-extent) bbox so the part falls back to nominal', () => {
+    expect(bboxToDescriptor({ min: [1, 1, 1], max: [1, 5, 5] })).toBeNull()
+  })
+
+  it('returns null for a non-finite / missing bbox', () => {
+    expect(bboxToDescriptor({ min: [0, 0, 0], max: [Number.NaN, 5, 5] })).toBeNull()
+    expect(bboxToDescriptor(null)).toBeNull()
+    expect(bboxToDescriptor(undefined)).toBeNull()
+  })
+})
+
+describe('assembly-part-bridge — meshToDescriptor', () => {
+  it('captures a flat vertices/indices mesh into a mesh-tier descriptor', () => {
+    const d = meshToDescriptor({
+      vertices: [0, 0, 0, 2, 0, 0, 0, 2, 4],
+      indices: [0, 1, 2],
+      triangleCount: 1,
+      bbox: { min: [0, 0, 0], max: [2, 2, 4] }
+    })
+    expect(d).not.toBeNull()
+    expect(d!.kind).toBe('mesh')
+    expect(d!.triangleCount).toBe(1)
+    expect(d!.positions).toHaveLength(9)
+    expect(d!.indices).toEqual([0, 1, 2])
+    // A well-formed 3D wire bbox rides along as the mesh's own AABB (used for the
+    // budget-degrade tier + the drawn center).
+    expect(d!.halfExtentsMm).toEqual([1, 1, 2])
+    expect(d!.centerOffsetMm).toEqual([1, 1, 2])
+  })
+
+  it('falls back to a vertex-scan bbox when the wire bbox is absent', () => {
+    const d = meshToDescriptor({
+      vertices: [0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0, 10],
+      indices: [0, 1, 2, 0, 2, 3]
+    })
+    // scanned bbox min [0,0,0] max [6,8,10] → half [3,4,5], center [3,4,5]
+    expect(d!.halfExtentsMm).toEqual([3, 4, 5])
+    expect(d!.centerOffsetMm).toEqual([3, 4, 5])
+  })
+
+  it('derives triangleCount from indices when the count is absent', () => {
+    const d = meshToDescriptor({
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0],
+      indices: [0, 1, 2, 0, 2, 3]
+    })
+    expect(d!.triangleCount).toBe(2)
+  })
+
+  it('derives a real half-extent + center from the wire bbox (off-origin part)', () => {
+    const d = meshToDescriptor({
+      vertices: [10, 10, 10, 20, 10, 10, 10, 30, 10, 10, 10, 40],
+      triangleCount: 2,
+      bbox: { min: [10, 10, 10], max: [20, 30, 40] }
+    })
+    expect(d!.halfExtentsMm).toEqual([5, 10, 15])
+    expect(d!.centerOffsetMm).toEqual([15, 20, 25])
+  })
+
+  it('returns null for empty / malformed vertices so the caller drops to the bbox tier', () => {
+    expect(meshToDescriptor({ vertices: [] })).toBeNull()
+    expect(meshToDescriptor({ vertices: [1, 2] })).toBeNull()
+    expect(meshToDescriptor(null)).toBeNull()
   })
 })

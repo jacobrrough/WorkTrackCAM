@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DrawingViewPlaceholder } from '../shared/drawing-sheet-schema'
 import { resolveExportViewRows } from '../shared/drawing-sheet-schema'
+import type { DrawingSheetAnnotations } from '../shared/drawing-annotation-schema'
 import { normalizeDesign } from '../shared/design-schema'
 import { partFeaturesFileSchema } from '../shared/part-features-schema'
 import { extractKernelProfiles } from '../shared/sketch-profile'
@@ -117,6 +118,7 @@ export async function runDrawingExport(
   let meshTier: 'A' | 'B' | 'C' | undefined
   let viewPlaceholders: { kind: string; label: string; detailLine?: string }[] | undefined
   let rawPlaceholders: DrawingViewPlaceholder[] | undefined
+  let sheetAnnotations: DrawingSheetAnnotations | undefined
   if (payload.projectDir) {
     try {
       const df = await loadDrawingFile(payload.projectDir)
@@ -125,6 +127,10 @@ export async function runDrawingExport(
         sheetTitle = sh.name
         sheetScale = sh.scale
         meshTier = sh.meshProjectionTier
+        // Persisted 2D annotations (dimensions, GD&T, notes, center marks) —
+        // the REAL drawing content the DXF export carries. Optional on the
+        // schema, so undefined for a legacy sheet authored before annotations.
+        sheetAnnotations = sh.annotations
         if (sh.viewPlaceholders?.length) {
           rawPlaceholders = sh.viewPlaceholders
           viewPlaceholders = resolveExportViewRows(sh.viewPlaceholders)
@@ -157,7 +163,8 @@ export async function runDrawingExport(
             sheetTitle,
             sheetScale,
             viewPlaceholders,
-            projectedModelViews
+            projectedModelViews,
+            annotations: sheetAnnotations
           })
       await writeFile(outPath, body, 'utf-8')
       return { ok: true, path: outPath }

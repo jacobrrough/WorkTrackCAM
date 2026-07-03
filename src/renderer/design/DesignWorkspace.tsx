@@ -118,6 +118,8 @@ import {
   type FeatureDialogSpec
 } from './feature-dialogs'
 import { profileOptions, pathOptions } from './feature-dialogs/profile-path-options'
+import { bboxToDescriptor } from './assembly-part-bridge'
+import type { PartGeometryDescriptor } from './assembly-viewport-transforms'
 import { fab } from '../src/shop-types'
 import type {
   CadExecuteScriptMesh,
@@ -832,6 +834,8 @@ export function DesignWorkspace({
    * `cad.tessellateAssembly` on every change.
    */
   const [assemblyParts, setAssemblyParts] = useState<readonly AssemblyPart[]>(initialAssemblyParts)
+  const [importingStepPart, setImportingStepPart] = useState(false)
+
   /**
    * CAD V1 mate-wiring — the opaque assembly handle from the most recent
    * `cad.createAssembly` round-trip. Lifted out of {@link AssemblyView}'s
@@ -854,6 +858,23 @@ export function DesignWorkspace({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastTessellation, setLastTessellation] = useState<CadExecuteScriptResult | null>(null)
+  // Wave 7 — per-part REAL geometry descriptors for the 3D assembly viewport,
+  // keyed by part id, derived from the live tessellation's per-handle bbox.
+  // View-only (never persisted); auto-prunes with the parts list; instances of
+  // the same body share a bbox. Omitted parts fall back to schematic boxes.
+  const assemblyDescriptors = useMemo<ReadonlyMap<string, PartGeometryDescriptor> | null>(() => {
+    const meshes = lastTessellation?.meshes ?? []
+    if (meshes.length === 0 || assemblyParts.length === 0) return null
+    const bboxByHandle = new Map<string, { min: readonly [number, number, number]; max: readonly [number, number, number] }>()
+    for (const mesh of meshes) bboxByHandle.set(mesh.handle, mesh.bbox)
+    const out = new Map<string, PartGeometryDescriptor>()
+    for (const part of assemblyParts) {
+      const bbox = part.handle ? bboxByHandle.get(part.handle) : undefined
+      const desc = bboxToDescriptor(bbox)
+      if (desc) out.set(part.id, desc)
+    }
+    return out.size > 0 ? out : null
+  }, [assemblyParts, lastTessellation])
   const [operations, setOperations] = useState<readonly CadOperationSummary[]>([])
   const [parameters, setParameters] = useState<readonly CadDeclaredParameter[]>([])
   const [parseError, setParseError] = useState<CadParseError | null>(null)
@@ -1453,6 +1474,43 @@ export function DesignWorkspace({
       return [...prev, next]
     })
   }, [firstMesh, lastTessellation, toast])
+
+  // Wave 7 — "Insert from file": pick an external STEP/STP, import it via the
+  // main-process `assembly:importStepPart` IPC (path-validated, sandboxed), and
+  // append it as a distinct assembly component. In-session reachable; the part
+  // persists its durable stepPath through the existing parts seam.
+  const handleImportStepPart = useCallback(async (): Promise<void> => {
+    if (importingStepPart) return
+    setImportingStepPart(true)
+    try {
+      const chosen = await fab().dialogOpenFile([{ name: 'STEP', extensions: ['step', 'stp'] }])
+      if (!chosen) return
+      const response = await fab().assemblyImportStepPart(chosen)
+      if (!response.ok) {
+        const detail = response.hint ? ` — ${response.hint}` : ''
+        toast('err', `STEP import failed: ${response.error}${detail}`)
+        return
+      }
+      const r = response.result
+      setAssemblyParts((prev) => {
+        const offsetX = prev.length * ASSEMBLY_PART_OFFSET_MM
+        const part: AssemblyPart = {
+          id: r.id,
+          name: r.name,
+          handle: r.handle,
+          geometrySource: r.geometrySource.stepPath ?? undefined,
+          transform: offsetX !== 0 ? { position: [offsetX, 0, 0] as const } : undefined,
+          transformSummary: offsetX !== 0 ? `@(${offsetX}, 0, 0)` : 'identity',
+        }
+        return [...prev, part]
+      })
+      toast('ok', `Imported ${r.name}`)
+    } catch (e) {
+      toast('err', `STEP import failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setImportingStepPart(false)
+    }
+  }, [importingStepPart, toast])
 
   const handleRemoveAssemblyPart = useCallback((id: string): void => {
     setAssemblyParts((prev) => prev.filter((p) => p.id !== id))
@@ -2264,6 +2322,9 @@ export function DesignWorkspace({
             mateConstraints={assemblyMates}
             onAddPart={handleAddPartToAssembly}
             onRemovePart={handleRemoveAssemblyPart}
+            onPartsChange={setAssemblyParts}
+            onImportStepPart={handleImportStepPart}
+            geometryDescriptors={assemblyDescriptors}
             onAssemblyHandle={setAssemblyHandle}
             onSolvedTransforms={handleSolvedTransforms}
             onMateConstraintsChange={

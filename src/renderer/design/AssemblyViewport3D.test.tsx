@@ -101,12 +101,28 @@ describe('AssemblyViewport3D — scene source pins', () => {
     expect(SRC).toContain('makeDefault')
   })
 
-  it('draws one box per part via PartBox in the scene', () => {
+  it('draws one primitive per part via PartMesh in the scene', () => {
     expect(SRC).toContain('renderStates.map')
-    expect(SRC).toContain('<PartBox')
-    // Every part draws the shared nominal box geometry (one instance, no churn).
+    expect(SRC).toContain('<PartMesh')
+    // Box-tier parts reuse the SHARED unit box (scaled to real extents); mesh-tier
+    // parts build a per-part BufferGeometry.
     expect(SRC).toContain('SHARED_BOX_GEOMETRY')
     expect(SRC).toContain('new THREE.BoxGeometry')
+    expect(SRC).toContain('buildMeshGeometry')
+    expect(SRC).toContain('new THREE.BufferGeometry')
+  })
+
+  it('threads per-part geometry descriptors + a triangle budget into the render-state build', () => {
+    expect(SRC).toContain('descriptors')
+    expect(SRC).toContain('triangleBudget')
+    // Honest HUD tier tally (mesh vs. schematic = bbox + nominal).
+    expect(SRC).toContain('summarizeRenderTiers')
+    expect(SRC).toContain('hudTierLabel')
+  })
+
+  it('disposes per-part mesh geometry on removal (no GPU leak)', () => {
+    expect(SRC).toContain('meshGeometry?.dispose()')
+    expect(SRC).toContain('useEffect')
   })
 
   it('threads the wave-2 playback overlay + explode into the render-state build', () => {

@@ -35,6 +35,10 @@ import type {
   CadTessellateResult,
 } from '../../shared/sidecar-protocol'
 import { PythonBridge } from './python-bridge'
+import {
+  buildStepImportPart,
+  type StepImportBridge,
+} from '../../shared/assembly-step-import'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
 
@@ -377,6 +381,90 @@ cq.exporters.export(box, ${JSON.stringify(stepPath)})
 
       // File size on disk matches what we asserted from the buffer length.
       expect(statSync(outStl).size).toBe(bytes.length)
+    } finally {
+      await bridge.stop()
+    }
+  }, 180_000)
+})
+
+// ── C. Phase-4 "Insert from file" end-to-end pipeline ────────────────────────
+//
+// Drives the SHARED pure ``buildStepImportPart`` against a ``StepImportBridge``
+// backed by the REAL sidecar (import_step → tessellate_with_ids on one bridge),
+// so the production import→tessellate→shape sequence is exercised end-to-end
+// without pulling in electron (the IPC handler ``runStepImportPipeline`` wraps
+// this exact adapter, but importing it here would drag in ``ipc-cad`` →
+// ``electron``). Runs only when CadQuery is installed in the Python env.
+
+describeIfPython('buildStepImportPart — real sidecar end-to-end', () => {
+  it('imports a real cube STEP into an AssemblyPart-shaped result with a durable STEP source', async () => {
+    const probe = spawnSync(PYTHON!, ['-c', 'import cadquery'], { cwd: PROJECT_ROOT })
+    if (probe.status !== 0) {
+      // CadQuery not installed — the mock-bridge pure test covers the shaping;
+      // this real-sidecar branch is skipped. (The env probe is the same guard
+      // the "produces a well-formed binary STL" test uses.)
+      return
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), 'wtcam-step-part-'))
+    const stepPath = join(dir, 'vendor-cube.step')
+    const writeStepScript = `
+import cadquery as cq
+box = cq.Workplane('XY').box(20, 10, 5)
+cq.exporters.export(box, ${JSON.stringify(stepPath)})
+`
+    const writeR = spawnSync(PYTHON!, ['-c', writeStepScript], { cwd: PROJECT_ROOT })
+    if (writeR.status !== 0) {
+      throw new Error(`cadquery STEP export failed: ${writeR.stderr.toString()}`)
+    }
+
+    const bridge = PythonBridge.start({ pythonPath: PYTHON!, appRoot: PROJECT_ROOT })
+    try {
+      const importBridge: StepImportBridge = {
+        async importStep(path: string) {
+          const r = await bridge.call<CadImportStepResult>(
+            'cad.import_step',
+            { path } satisfies CadImportStepParams,
+            { timeoutMs: 120_000 }
+          )
+          return { handle: r.handle, bbox: r.bbox }
+        },
+        async tessellateWithIds(handle: string) {
+          const r = await bridge.call<{
+            vertices: number[]
+            indices: number[]
+            faceIds: number[]
+            triangleCount: number
+            bbox: { min: [number, number, number]; max: [number, number, number] }
+          }>('cad.tessellate_with_ids', { handle }, { timeoutMs: 120_000 })
+          return r
+        },
+      }
+
+      const out = await buildStepImportPart(stepPath, 'row-e2e', importBridge)
+      expect(out.ok).toBe(true)
+      if (!out.ok) return
+      const r = out.result
+      // AssemblyPart-shaped fields.
+      expect(r.id).toBe('row-e2e')
+      expect(r.name).toBe('vendor-cube')
+      expect(r.handle).toMatch(/^step:/)
+      // Durable external-STEP geometry source.
+      expect(r.geometrySource.kind).toBe('step')
+      expect(r.geometrySource.stepPath).toBe(stepPath)
+      expect(r.geometrySource.cachedBounds).toBeDefined()
+      // A 20×10×5 box → dims are close to those extents (allow tessellation slack).
+      const dims = r.geometrySource.cachedDims!
+      expect(dims[0]).toBeGreaterThan(19)
+      expect(dims[1]).toBeGreaterThan(9)
+      expect(dims[2]).toBeGreaterThan(4)
+      // Real mesh for the viewport.
+      expect(r.mesh.triangleCount).toBeGreaterThan(0)
+      expect(r.mesh.vertices.length % 3).toBe(0)
+      expect(r.mesh.indices.length % 3).toBe(0)
+      for (const v of [...r.mesh.bbox.min, ...r.mesh.bbox.max]) {
+        expect(Number.isFinite(v)).toBe(true)
+      }
     } finally {
       await bridge.stop()
     }

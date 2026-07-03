@@ -33,8 +33,15 @@ import {
   AssemblyView,
   applySolvedTransforms,
   formatTransformSummary,
+  copyPart,
+  mirrorPartPosition,
+  mirrorPositionAcrossPlane,
+  ASSEMBLY_COPY_OFFSET_MM,
+  MIRROR_PLANES,
+  MIRROR_PLANE_LABEL,
   type AssemblyMate,
   type AssemblyPart,
+  type MirrorPlane,
 } from '../AssemblyView'
 
 // ── window.fab shim (matches existing renderer-test convention) ────────────
@@ -1129,5 +1136,273 @@ describe('AssemblyView — 3D viewport + explode wiring', () => {
     // A non-empty mateConstraints list drives the mate-count caption.
     expect(html).toContain('data-testid="design-assembly-mate-count"')
     expect(html).toContain('1 mate positioning parts')
+  })
+})
+
+// ── (L) Phase-4 (Assemble): Copy / Mirror position (pure folds) ──────────────
+//
+// copyPart / mirrorPartPosition are the node-unit-testable pure helpers (mirror
+// of applySolvedTransforms): a copy duplicates an instance with a fresh id +
+// non-overlapping offset; a mirror reflects the TRANSLATION across a principal
+// plane (perpendicular axis negated) and preserves orientation. These prove the
+// math + the mate-non-follow contract without a DOM.
+
+describe('copyPart — duplicates an instance with a fresh id + offset', () => {
+  const source: AssemblyPart = {
+    id: 'src',
+    name: 'Bracket',
+    handle: 'script:abc',
+    geometrySource: 'script:abc',
+    transform: { position: [10, 20, 30], rotation: [0, 45, 0] },
+    joint: 'revolute',
+    grounded: false,
+    jointLimits: { scalarMinDeg: -90, scalarMaxDeg: 90 },
+  }
+
+  it('gives the copy a distinct id (mates on the original do NOT follow it)', () => {
+    const copy = copyPart(source, 'copy-1')
+    expect(copy.id).toBe('copy-1')
+    expect(copy.id).not.toBe(source.id)
+  })
+
+  it('offsets the copy +X by ASSEMBLY_COPY_OFFSET_MM so it does not z-fight', () => {
+    const copy = copyPart(source, 'copy-1')
+    expect(copy.transform?.position).toEqual([10 + ASSEMBLY_COPY_OFFSET_MM, 20, 30])
+    // Rotation is carried unchanged (a copy is the same part, re-placed).
+    expect(copy.transform?.rotation).toEqual([0, 45, 0])
+  })
+
+  it('keeps the same geometrySource (distinct instance, shared body — not a new body)', () => {
+    const copy = copyPart(source, 'copy-1')
+    expect(copy.geometrySource).toBe('script:abc')
+    expect(copy.handle).toBe('script:abc')
+  })
+
+  it('carries joint kind + grounded + jointLimits across unchanged', () => {
+    const copy = copyPart(source, 'copy-1')
+    expect(copy.joint).toBe('revolute')
+    expect(copy.grounded).toBe(false)
+    expect(copy.jointLimits).toEqual({ scalarMinDeg: -90, scalarMaxDeg: 90 })
+  })
+
+  it('suffixes the name with " copy" and recomputes the transform summary', () => {
+    const copy = copyPart(source, 'copy-1')
+    expect(copy.name).toBe('Bracket copy')
+    expect(copy.transformSummary).toBe(`@(${10 + ASSEMBLY_COPY_OFFSET_MM}, 20, 30)`)
+  })
+
+  it('defaults a part with no transform to identity + the +X offset', () => {
+    const copy = copyPart({ id: 'x', name: 'Solo', handle: 'h' }, 'copy-2')
+    expect(copy.transform?.position).toEqual([ASSEMBLY_COPY_OFFSET_MM, 0, 0])
+    expect(copy.transform?.rotation).toEqual([0, 0, 0])
+  })
+
+  it('does not carry any mate reference (the copy is mate-free by construction)', () => {
+    // The AssemblyPart shape has no mate field — the mate list is host-owned and
+    // keyed by part id. A fresh id therefore cannot inherit the original's mates.
+    const copy = copyPart(source, 'copy-3')
+    expect(Object.keys(copy)).not.toContain('mates')
+    expect(Object.keys(copy)).not.toContain('mateConstraints')
+  })
+})
+
+describe('mirrorPositionAcrossPlane — reflects the perpendicular axis', () => {
+  it('xy plane negates Z', () => {
+    expect(mirrorPositionAcrossPlane([1, 2, 3], 'xy')).toEqual([1, 2, -3])
+  })
+  it('xz plane negates Y', () => {
+    expect(mirrorPositionAcrossPlane([1, 2, 3], 'xz')).toEqual([1, -2, 3])
+  })
+  it('yz plane negates X', () => {
+    expect(mirrorPositionAcrossPlane([1, 2, 3], 'yz')).toEqual([-1, 2, 3])
+  })
+  it('exposes exactly the three principal planes with labels', () => {
+    expect(MIRROR_PLANES).toEqual(['xy', 'xz', 'yz'])
+    expect(MIRROR_PLANE_LABEL).toEqual({ xy: 'XY', xz: 'XZ', yz: 'YZ' })
+  })
+})
+
+describe('mirrorPartPosition — reflects translation, preserves orientation', () => {
+  const source: AssemblyPart = {
+    id: 'src',
+    name: 'Bracket',
+    handle: 'script:abc',
+    geometrySource: 'script:abc',
+    transform: { position: [10, 20, 30], rotation: [15, 0, 0] },
+  }
+
+  it('reflects across YZ (negate X) then nudges +X so it separates from the source', () => {
+    const m = mirrorPartPosition(source, 'yz', 'mir-1')
+    // -10 reflected, then + offset.
+    expect(m.transform?.position).toEqual([-10 + ASSEMBLY_COPY_OFFSET_MM, 20, 30])
+  })
+
+  it('reflects across XY (negate Z)', () => {
+    const m = mirrorPartPosition(source, 'xy', 'mir-2')
+    expect(m.transform?.position).toEqual([10 + ASSEMBLY_COPY_OFFSET_MM, 20, -30])
+  })
+
+  it('reflects across XZ (negate Y)', () => {
+    const m = mirrorPartPosition(source, 'xz', 'mir-3')
+    expect(m.transform?.position).toEqual([10 + ASSEMBLY_COPY_OFFSET_MM, -20, 30])
+  })
+
+  it('preserves orientation (position mirror only — the documented honesty rule)', () => {
+    const m = mirrorPartPosition(source, 'yz', 'mir-4')
+    // Rotation is NOT reflected: a true geometric mirror needs a reflected mesh
+    // the kernel does not expose, so orientation is carried across unchanged.
+    expect(m.transform?.rotation).toEqual([15, 0, 0])
+  })
+
+  it('gives the mirror a fresh id + a plane-labelled name (mates do NOT follow)', () => {
+    const m = mirrorPartPosition(source, 'xz', 'mir-5')
+    expect(m.id).toBe('mir-5')
+    expect(m.id).not.toBe(source.id)
+    expect(m.name).toBe('Bracket mirror XZ')
+    // Same geometry body (shared source), distinct instance.
+    expect(m.geometrySource).toBe('script:abc')
+  })
+
+  MIRROR_PLANES.forEach((plane: MirrorPlane) => {
+    it(`round-trips a double mirror across ${plane} back to the source translation (modulo the +X offset)`, () => {
+      const once = mirrorPartPosition(source, plane, 'a')
+      // Strip the offset the mirror added so a second reflection lands cleanly.
+      const stripped: AssemblyPart = {
+        ...once,
+        transform: {
+          position: [
+            (once.transform!.position![0] as number) - ASSEMBLY_COPY_OFFSET_MM,
+            once.transform!.position![1] as number,
+            once.transform!.position![2] as number,
+          ],
+          rotation: once.transform!.rotation,
+        },
+      }
+      const twice = mirrorPartPosition(stripped, plane, 'b')
+      expect(twice.transform?.position).toEqual([
+        10 + ASSEMBLY_COPY_OFFSET_MM,
+        20,
+        30,
+      ])
+    })
+  })
+})
+
+// ── (M) Copy / Mirror / Visibility — render pins (renderToStaticMarkup) ──────
+//
+// The click handlers never fire under SSR, so these prove the AFFORDANCES render
+// (Copy / Mirror buttons only when onPartsChange is wired; the eye toggle always;
+// a view-hidden row dims + shows a pressed eye via initialHiddenPartIds).
+
+describe('AssemblyView — Copy / Mirror row actions render contract', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate', transform: { position: [25, 0, 0] } }),
+  ]
+
+  it('renders Copy + Mirror (three planes) per row when onPartsChange is wired', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, onPartsChange: vi.fn() }),
+    )
+    expect(html).toContain('data-testid="design-assembly-part-p1-copy"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-mirror"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-mirror-xy"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-mirror-xz"')
+    expect(html).toContain('data-testid="design-assembly-part-p1-mirror-yz"')
+    // The action is labelled "Mirror position" to keep the honesty contract.
+    expect(html).toContain('Mirror position')
+  })
+
+  it('HIDES Copy + Mirror when onPartsChange is NOT wired (additive / read-only)', () => {
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).not.toContain('data-testid="design-assembly-part-p1-copy"')
+    expect(html).not.toContain('data-testid="design-assembly-part-p1-mirror"')
+  })
+
+  it('always renders the visibility eye toggle (view-only — needs no host wiring)', () => {
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(html).toContain('data-testid="design-assembly-part-p1-visibility"')
+    expect(html).toContain('data-testid="design-assembly-part-p2-visibility"')
+  })
+})
+
+describe('AssemblyView — visibility (view-only) render contract', () => {
+  const parts: readonly AssemblyPart[] = [
+    samplePart({ id: 'p1', name: 'Bracket' }),
+    samplePart({ id: 'p2', name: 'Plate' }),
+  ]
+
+  it('dims a view-hidden row (--hidden modifier + data-hidden) and presses its eye', () => {
+    const html = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, initialHiddenPartIds: ['p1'] }),
+    )
+    const p1Row = html.match(/<li[^>]*data-testid="design-assembly-part-p1"[^>]*>/)?.[0] ?? ''
+    const p2Row = html.match(/<li[^>]*data-testid="design-assembly-part-p2"[^>]*>/)?.[0] ?? ''
+    expect(p1Row).toContain('design-assembly__row--hidden')
+    expect(p1Row).toContain('data-hidden="true"')
+    // The other row is NOT hidden.
+    expect(p2Row).not.toContain('design-assembly__row--hidden')
+    // The hidden row's eye toggle reads pressed + offers "Show".
+    const eye = html.match(/data-testid="design-assembly-part-p1-visibility"[^>]*>/)?.[0] ?? ''
+    expect(eye).toContain('aria-pressed="true"')
+    expect(html).toMatch(/data-testid="design-assembly-part-p1-visibility"[\s\S]*?>Show</)
+  })
+
+  it('a visible row offers "Hide" and is not pressed (default: nothing hidden)', () => {
+    const html = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    const eye = html.match(/data-testid="design-assembly-part-p1-visibility"[^>]*>/)?.[0] ?? ''
+    expect(eye).toContain('aria-pressed="false"')
+    expect(html).toMatch(/data-testid="design-assembly-part-p1-visibility"[\s\S]*?>Hide</)
+  })
+
+  it('filters hidden parts out of the 3D viewport (summary fallback counts only visible)', () => {
+    // In node-env the viewport degrades to the summary fallback, which reports the
+    // count of the parts it was HANDED — so a hidden part drops the count by one.
+    const shown = renderToStaticMarkup(createElement(AssemblyView, { parts }))
+    expect(shown).toContain('2 parts')
+    const oneHidden = renderToStaticMarkup(
+      createElement(AssemblyView, { parts, initialHiddenPartIds: ['p1'] }),
+    )
+    // Only the visible part reaches the viewport → "1 part".
+    expect(oneHidden).toContain('1 part')
+    expect(oneHidden).not.toContain('2 parts')
+  })
+
+  it('SUPPRESS vs HIDDEN distinction: a hidden part STAYS in the BOM (hidden != suppressed)', () => {
+    // Hidden is view-only. The BOM (and solve / interference) still count the
+    // part — that separation is the whole point of keeping hidden distinct from
+    // suppress. A hidden part therefore still produces a BOM line.
+    const sourced: readonly AssemblyPart[] = [
+      samplePart({ id: 'p1', name: 'Bracket', geometrySource: 'design/bracket.step' }),
+    ]
+    const shown = renderToStaticMarkup(createElement(AssemblyView, { parts: sourced }))
+    const hidden = renderToStaticMarkup(
+      createElement(AssemblyView, { parts: sourced, initialHiddenPartIds: ['p1'] }),
+    )
+    // The BOM row is present in BOTH renders (hiding does not drop the line).
+    expect(shown).toContain('data-testid="design-assembly-bom-row-p1"')
+    expect(hidden).toContain('data-testid="design-assembly-bom-row-p1"')
+    expect(hidden).toContain('1 line')
+  })
+
+  it('does not emit console errors rendering copy/mirror/visibility affordances', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => { /* swallow */ })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ })
+    try {
+      renderToStaticMarkup(
+        createElement(AssemblyView, {
+          parts,
+          onPartsChange: vi.fn(),
+          onRemovePart: vi.fn(),
+          onToast: vi.fn(),
+          initialHiddenPartIds: ['p2'],
+        }),
+      )
+      expect(errSpy).not.toHaveBeenCalled()
+      expect(warnSpy).not.toHaveBeenCalled()
+    } finally {
+      errSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
   })
 })

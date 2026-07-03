@@ -430,3 +430,42 @@ describe('hydrateAssembly — dangling mate refs', () => {
     expect(hydrated.danglingMateIds).toEqual(['m1'])
   })
 })
+
+// ── (D) External STEP source survives the round-trip (Phase-4) ───────────────
+
+describe('external STEP geometrySource — save→load→hydrate round-trip', () => {
+  it('preserves the full {kind, stepPath, cachedBounds, cachedDims} object', () => {
+    // A part row carrying a Phase-4 external-STEP source (as buildStepImportPart
+    // produces). The renderer folds it via persistParts; the file is saved,
+    // reloaded, and hydrated — the durable source must ride through intact so a
+    // moved-file row can still render its schematic box + dangling badge.
+    const view: AssemblyPartView = {
+      id: 'bolt',
+      name: 'M6 bolt',
+      geometry: {
+        kind: 'step',
+        stepPath: 'C:/vendor/M6-bolt.step',
+        handle: 'step:live',
+        cachedBounds: { min: [-3, -3, 0], max: [3, 3, 30] },
+        cachedDims: [6, 6, 30]
+      }
+    }
+    const folded = persistParts(emptyAsm(), [view])
+    // Persisted onto the component verbatim.
+    const comp = folded.components[0]!
+    expect(comp.geometrySource?.kind).toBe('step')
+    expect(comp.geometrySource?.stepPath).toBe('C:/vendor/M6-bolt.step')
+    expect(comp.geometrySource?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+
+    // Full disk round-trip → hydrate. The hydrated view keeps the whole source
+    // object (NOT flattened), so the renderer can read stepPath + cachedBounds.
+    const reloaded = saveLoadRoundTrip(folded)
+    const hydrated = hydrateAssembly(reloaded)
+    expect(hydrated.parts).toHaveLength(1)
+    const g = hydrated.parts[0]!.geometry
+    expect(g?.kind).toBe('step')
+    expect(g?.stepPath).toBe('C:/vendor/M6-bolt.step')
+    expect(g?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+    expect(g?.cachedDims).toEqual([6, 6, 30])
+  })
+})

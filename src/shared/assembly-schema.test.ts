@@ -426,6 +426,97 @@ describe('parseAssemblyFile', () => {
   })
 })
 
+describe('geometrySource — external STEP variant (Phase-4, additive)', () => {
+  it('parses a legacy geometrySource with only handle (no STEP fields) unchanged', () => {
+    // Safety Rule 2: a source written before Phase-4 must still parse and keep
+    // its exact shape (no spurious kind / stepPath keys added).
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Legacy',
+      components: [
+        {
+          id: 'c1',
+          name: 'Body',
+          partPath: 'design/sketch.json',
+          transform: {},
+          geometrySource: { handle: 'script:abc' }
+        }
+      ]
+    })
+    const src = a.components[0]!.geometrySource
+    expect(src).toEqual({ handle: 'script:abc' })
+    expect(src && 'kind' in src).toBe(false)
+    expect(src && 'stepPath' in src).toBe(false)
+    // Round-trips through the canonical file schema unchanged.
+    expect(assemblyFileSchema.parse(a).components[0]!.geometrySource).toEqual({ handle: 'script:abc' })
+  })
+
+  it('accepts an external STEP source with cached bounds + dims and round-trips', () => {
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Vendor',
+      components: [
+        {
+          id: 'bolt',
+          name: 'M6 bolt',
+          partPath: 'assembly/parts/bolt.ref',
+          transform: {},
+          geometrySource: {
+            kind: 'step',
+            stepPath: 'C:/vendor/M6-bolt.step',
+            handle: 'step:live',
+            cachedBounds: { min: [-3, -3, 0], max: [3, 3, 30] },
+            cachedDims: [6, 6, 30]
+          }
+        }
+      ]
+    })
+    const src = a.components[0]!.geometrySource
+    expect(src?.kind).toBe('step')
+    expect(src?.stepPath).toBe('C:/vendor/M6-bolt.step')
+    expect(src?.cachedBounds).toEqual({ min: [-3, -3, 0], max: [3, 3, 30] })
+    expect(src?.cachedDims).toEqual([6, 6, 30])
+    const again = assemblyFileSchema.parse(a).components[0]!.geometrySource
+    expect(again?.stepPath).toBe('C:/vendor/M6-bolt.step')
+  })
+
+  it('accepts an external STEP source with ONLY stepPath (no other ref)', () => {
+    // stepPath alone satisfies the "at least one ref" refine.
+    const a = parseAssemblyFile({
+      version: 2,
+      name: 'Vendor',
+      components: [
+        {
+          id: 'p',
+          name: 'Part',
+          partPath: 'assembly/parts/p.ref',
+          transform: {},
+          geometrySource: { kind: 'step', stepPath: '/lib/motor.stp' }
+        }
+      ]
+    })
+    expect(a.components[0]!.geometrySource?.stepPath).toBe('/lib/motor.stp')
+  })
+
+  it('rejects a geometrySource with none of handle / designModelId / relPath / stepPath', () => {
+    expect(() =>
+      parseAssemblyFile({
+        version: 2,
+        name: 'Bad',
+        components: [
+          {
+            id: 'p',
+            name: 'Part',
+            partPath: 'assembly/parts/p.ref',
+            transform: {},
+            geometrySource: { kind: 'step' } // stepPath missing → no ref present
+          }
+        ]
+      })
+    ).toThrow()
+  })
+})
+
 describe('parent graph helpers', () => {
   it('counts self-parent and treats it as a cycle', () => {
     const asm = parseAssemblyFile({

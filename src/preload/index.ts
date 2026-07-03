@@ -29,6 +29,7 @@ import type {
   AssemblyInterferenceReport,
   AssemblySummaryReport
 } from '../shared/assembly-schema'
+import type { AssemblyImportStepPartResponse } from '../main/ipc-assembly-step-import'
 import type { DrawingFile } from '../shared/drawing-sheet-schema'
 import type { KernelManifest } from '../shared/kernel-manifest-schema'
 import type { KernelPickFile } from '../shared/kernel-pick-file'
@@ -248,6 +249,19 @@ export type Api = {
    * emits no G-code.
    */
   assemblySave: (projectDir: string, json: string) => Promise<void>
+  /**
+   * PHASE-4 "Insert from file": import an EXTERNAL vendor STEP (`.step` / `.stp`)
+   * as an assembly component. The main handler validates the path (exists,
+   * extension whitelist, no null byte / traversal, ~100 MB cap), runs
+   * `cad.import_step` → `cad.tessellate_with_ids` on one sidecar, and returns an
+   * AssemblyPart-shaped envelope: `{ id, name, handle, geometrySource, mesh }`.
+   * `geometrySource` durably records `{ kind:'step', stepPath, cachedBounds,
+   * cachedDims }` so the row survives reload (and can render an honest dangling
+   * badge when the file later moves). Never throws — failures fold into
+   * `{ ok:false, error, hint }`. Delegates to `assembly:importStepPart`.
+   * SAFETY: emits no G-code; produces an in-memory mesh + JSON only.
+   */
+  assemblyImportStepPart: (stepPath: string) => Promise<AssemblyImportStepPartResponse>
   /**
    * Load `<projectDir>/drawing/drawing.json`, parsed + normalized through
    * `drawingFileSchema` (a missing file resolves to an empty drawing file).
@@ -1078,6 +1092,8 @@ const api: Api = {
   designLoad: (projectDir) => ipcRenderer.invoke('design:load', projectDir),
   assemblyLoad: (projectDir) => ipcRenderer.invoke('assembly:load', projectDir),
   assemblySave: (projectDir, json) => ipcRenderer.invoke('assembly:save', projectDir, json),
+  assemblyImportStepPart: (stepPath) =>
+    ipcRenderer.invoke('assembly:importStepPart', stepPath) as Promise<AssemblyImportStepPartResponse>,
   drawingLoad: (projectDir) => ipcRenderer.invoke('drawing:load', projectDir),
   drawingSave: (projectDir, json) => ipcRenderer.invoke('drawing:save', projectDir, json),
   assemblyReadStlBase64: (projectDir, meshPath) => ipcRenderer.invoke('assembly:readStlBase64', projectDir, meshPath),

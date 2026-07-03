@@ -113,7 +113,7 @@ import {
   type JointLimitsDraft,
 } from './assembly-joint-limits'
 import { AssemblyViewport3D } from './AssemblyViewport3D'
-import type { ExplodeConfig } from './assembly-viewport-transforms'
+import type { ExplodeConfig, PartGeometryDescriptor } from './assembly-viewport-transforms'
 
 /**
  * One row in the assembly's parts list.
@@ -247,6 +247,12 @@ export interface AssemblyViewProps {
    * render-pin tests for the empty-state branch).
    */
   readonly onAddPart?: () => void
+  /**
+   * Wave 7 — "Insert from file": import an EXTERNAL vendor STEP/STP file as a
+   * new assembly component. The host owns the file dialog + `assembly:importStepPart`
+   * IPC + append; this surface only renders the button. Omitted → hidden.
+   */
+  readonly onImportStepPart?: () => void
   /**
    * Fired when the operator clicks the toolbar "Remove" button OR a
    * per-row `×`. Receives the row id so the host can drop the matching
@@ -396,6 +402,35 @@ export interface AssemblyViewProps {
    * draft seeds from that row's current `jointLimits`.
    */
   readonly initialLimitsOpenPartId?: string | null
+  // -- Phase-4 (Assemble): copy / mirror / visibility ----------------------
+  /**
+   * Fired when a per-row COPY or "Mirror position" produces a new instance.
+   * Receives the FULL desired parts list (the source-of-truth array with the
+   * new row appended) so the host persists it through the SAME seam the add /
+   * solve paths use (setState -> onAssemblyPartsChange -> assembly.json
+   * components). The pure fold already ran in this component (see {@link copyPart}
+   * / {@link mirrorPartPosition}); the host only mirrors the list into its state.
+   * Optional + additive: when omitted the Copy / Mirror row actions are HIDDEN
+   * (a caller that only lists parts stays read-only), so every existing render
+   * pin holds. Distinct from `onRemovePart` (which drops one row by id) because a
+   * copy/mirror must carry the fully-formed new row, not just an id.
+   */
+  readonly onPartsChange?: (next: readonly AssemblyPart[]) => void
+  /**
+   * Wave 7 — per-part REAL geometry descriptors (mesh or true bbox), keyed by
+   * part id, built by the host from the live tessellation. Threaded straight
+   * to {@link AssemblyViewport3D}; omitted → schematic nominal boxes (the
+   * pre-wave-7 fallback, honestly HUD-labeled).
+   */
+  readonly geometryDescriptors?: ReadonlyMap<string, PartGeometryDescriptor> | null
+  /**
+   * Render-pin escape hatch: seeds the set of VIEW-HIDDEN part ids so a static
+   * render can assert the dimmed row + closed-eye toggle without simulating a
+   * click. Visibility is view-only (like selection / explode): it hides the part
+   * from the 3D viewport and dims its row, but never touches solve / BOM / persist
+   * (that is what SUPPRESS is for). Defaults to none hidden.
+   */
+  readonly initialHiddenPartIds?: readonly string[]
 }
 
 /**
@@ -483,6 +518,152 @@ export function applySolvedTransforms(
     }
     return { ...base, transformSummary: formatTransformSummary(base) }
   })
+}
+
+/**
+ * Fixed +X stacking offset (mm) applied to a COPY / MIRROR so the new instance
+ * does not z-fight the original. Mirrors the add-part flow's stacking step
+ * (`DesignWorkspace.ASSEMBLY_PART_OFFSET_MM`); kept as a local const here so
+ * this file stays self-contained (DesignWorkspace imports AssemblyView, so the
+ * dependency must not run the other way). A COPY lands one step along +X from
+ * the source; a MIRROR reflects the source position across the chosen plane and
+ * then nudges +X by this step so a symmetric part (which reflects onto itself)
+ * still separates from its source.
+ */
+export const ASSEMBLY_COPY_OFFSET_MM = 60
+
+/** The three principal planes a "Mirror position" can reflect a part across. */
+export type MirrorPlane = 'xy' | 'xz' | 'yz'
+
+/** Declaration-order list of mirror planes for the row's three actions. */
+export const MIRROR_PLANES: ReadonlyArray<MirrorPlane> = ['xy', 'xz', 'yz']
+
+/** Short UI label for a mirror plane (the axis pair it reflects across). */
+export const MIRROR_PLANE_LABEL: Record<MirrorPlane, string> = {
+  xy: 'XY',
+  xz: 'XZ',
+  yz: 'YZ'
+}
+
+/** A finite number, or the supplied fallback when missing / NaN / +/-Infinity. */
+function finiteOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+/** Read a part's position tuple, each axis defaulting to 0 (identity). Pure. */
+function positionOf(part: AssemblyPart): [number, number, number] {
+  const pos = part.transform?.position
+  return [finiteOr(pos?.[0], 0), finiteOr(pos?.[1], 0), finiteOr(pos?.[2], 0)]
+}
+
+/** Read a part's rotation tuple (Euler degrees), each axis defaulting to 0. Pure. */
+function rotationOf(part: AssemblyPart): [number, number, number] {
+  const rot = part.transform?.rotation
+  return [finiteOr(rot?.[0], 0), finiteOr(rot?.[1], 0), finiteOr(rot?.[2], 0)]
+}
+
+/**
+ * Duplicate a part instance as a NEW row: same geometry source, the source name
+ * with a `" copy"` suffix so the operator can tell them apart, a fresh `id`, and
+ * the source's pose translated +X by {@link ASSEMBLY_COPY_OFFSET_MM} so the copy
+ * does not z-fight the original. Rotation, joint kind, grounded flag, and authored
+ * joint limits carry across unchanged (a copy is the same part, re-placed).
+ *
+ * MATE NON-FOLLOW (documented + pinned): a mate references parts by id, and the
+ * copy gets a brand-new id, so any mate on the ORIGINAL does NOT apply to the copy
+ * -- the copy starts mate-free. This mirrors Fusion (copy-paste yields an
+ * unconstrained instance) and is intentional: silently cloning mates onto a new
+ * id could over-constrain the solve. Pure: returns a fresh object, mutates nothing.
+ *
+ * @param part   the source instance to duplicate
+ * @param newId  a caller-supplied stable id for the copy (renderer owns id minting)
+ */
+export function copyPart(part: AssemblyPart, newId: string): AssemblyPart {
+  const [x, y, z] = positionOf(part)
+  const rotation = rotationOf(part)
+  const position: [number, number, number] = [x + ASSEMBLY_COPY_OFFSET_MM, y, z]
+  const next: AssemblyPart = {
+    id: newId,
+    name: `${part.name} copy`,
+    // A copy shares the source's geometry identity (same body) but is a DISTINCT
+    // instance with its own id + pose -- never a silent alias (mirrors the add
+    // flow's distinct-instance discipline, #11). The live handle rides along so
+    // the copy renders immediately in-session; after a reload it hydrates from
+    // geometrySource exactly like any other row.
+    handle: part.handle,
+    ...(part.geometrySource !== undefined ? { geometrySource: part.geometrySource } : {}),
+    transform: { position, rotation },
+    ...(part.joint !== undefined ? { joint: part.joint } : {}),
+    ...(part.grounded !== undefined ? { grounded: part.grounded } : {}),
+    ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {})
+  }
+  return { ...next, transformSummary: formatTransformSummary(next) }
+}
+
+/**
+ * Reflect a position tuple across a principal plane. The reflected axis is the
+ * one PERPENDICULAR to the plane:
+ *   - `xy` (the z = 0 plane) negates Z,
+ *   - `xz` (the y = 0 plane) negates Y,
+ *   - `yz` (the x = 0 plane) negates X.
+ * Pure -- returns a fresh tuple.
+ */
+export function mirrorPositionAcrossPlane(
+  position: readonly [number, number, number],
+  plane: MirrorPlane
+): [number, number, number] {
+  const [x, y, z] = position
+  switch (plane) {
+    case 'xy':
+      return [x, y, -z]
+    case 'xz':
+      return [x, -y, z]
+    case 'yz':
+      return [-x, y, z]
+  }
+}
+
+/**
+ * Create a MIRRORED instance of a part across a principal plane, as a NEW row.
+ *
+ * HONESTY -- this is a POSITION mirror, not a geometric one. A true mirror of a
+ * solid is a reflected mesh (a negative-determinant transform); the schematic-box
+ * viewport can't show it and the kernel does not expose a per-instance reflected
+ * body, so we do NOT fake one. What this DOES do: reflect the part's TRANSLATION
+ * across the plane (perpendicular axis negated), then nudge +X by
+ * {@link ASSEMBLY_COPY_OFFSET_MM} so a symmetric part (which reflects onto its own
+ * position) still separates from the source. ROTATION is carried across UNCHANGED
+ * -- reflecting Euler angles without a reflected body would misrepresent the
+ * orientation, so the documented rule is "orientation preserved; only the
+ * placement is mirrored". Full-geometry mirror (reflected mesh) is future kernel
+ * work. The UI labels the action "Mirror position" to keep this honest.
+ *
+ * Like {@link copyPart}: fresh id => mates on the original do NOT follow the mirror.
+ * Pure: returns a fresh object, mutates nothing.
+ */
+export function mirrorPartPosition(
+  part: AssemblyPart,
+  plane: MirrorPlane,
+  newId: string
+): AssemblyPart {
+  const reflected = mirrorPositionAcrossPlane(positionOf(part), plane)
+  const rotation = rotationOf(part)
+  const position: [number, number, number] = [
+    reflected[0] + ASSEMBLY_COPY_OFFSET_MM,
+    reflected[1],
+    reflected[2]
+  ]
+  const next: AssemblyPart = {
+    id: newId,
+    name: `${part.name} mirror ${MIRROR_PLANE_LABEL[plane]}`,
+    handle: part.handle,
+    ...(part.geometrySource !== undefined ? { geometrySource: part.geometrySource } : {}),
+    transform: { position, rotation },
+    ...(part.joint !== undefined ? { joint: part.joint } : {}),
+    ...(part.grounded !== undefined ? { grounded: part.grounded } : {}),
+    ...(part.jointLimits !== undefined ? { jointLimits: part.jointLimits } : {})
+  }
+  return { ...next, transformSummary: formatTransformSummary(next) }
 }
 
 /**
@@ -693,6 +874,7 @@ export function formatInterferenceResultSummary(report: AssemblyInterferenceRepo
 export function AssemblyView({
   parts,
   onAddPart,
+  onImportStepPart,
   onRemovePart,
   onToast,
   initialSelectedPartId = null,
@@ -710,8 +892,19 @@ export function AssemblyView({
   initialMotionPoses = null,
   initialPlaybackT = 0,
   initialLimitsOpenPartId = null,
+  onPartsChange,
+  geometryDescriptors,
+  initialHiddenPartIds,
 }: AssemblyViewProps): JSX.Element {
   const [selectedPartId, setSelectedPartId] = useState<string | null>(initialSelectedPartId)
+  // VIEW-ONLY visibility (like selection / explode): the set of part ids hidden
+  // from the 3D viewport + dimmed in the row. NEVER persisted and NEVER fed to
+  // the solver / BOM -- that distinction is what SUPPRESS is for (suppress
+  // excludes a part from kinematics + the bill of materials; hidden only stops
+  // DRAWING it). Seeded from `initialHiddenPartIds` for render-pin tests.
+  const [hiddenPartIds, setHiddenPartIds] = useState<ReadonlySet<string>>(
+    () => new Set(initialHiddenPartIds ?? [])
+  )
   const [error, setError] = useState<string | null>(null)
   const [tessellation, setTessellation] = useState<AssemblyTessellation | null>(null)
   const [busy, setBusy] = useState(false)
@@ -878,6 +1071,16 @@ export function AssemblyView({
   // table (shared engine `deriveBom` via the seam). Pure + synchronous.
   const bomRows = useMemo<BomRow[]>(() => bomForParts(parts).rows, [parts])
 
+  // ── Visible parts for the 3D viewport (view-hidden rows filtered out) ────────
+  // The viewport draws only the VISIBLE parts. Hidden rows stay in `parts` (and
+  // thus in the BOM, the interference check, and the solve input) -- they are
+  // just not DRAWN. `parts` when nothing is hidden (same reference), so the
+  // viewport memo below does not churn on an unrelated re-render.
+  const visibleParts = useMemo<readonly AssemblyPart[]>(
+    () => (hiddenPartIds.size === 0 ? parts : parts.filter((pt) => !hiddenPartIds.has(pt.id))),
+    [parts, hiddenPartIds]
+  )
+
   const toast = useCallback(
     (kind: 'ok' | 'err' | 'warn', message: string): void => {
       onToast?.(kind, message)
@@ -1000,6 +1203,60 @@ export function AssemblyView({
     },
     [onRemovePart],
   )
+
+  // ── Copy / Mirror (persisted through onPartsChange) ───────────────────────
+  // Both compute the FULL desired parts list (source array + the new instance)
+  // via the pure folds `copyPart` / `mirrorPartPosition`, then hand it to the
+  // host's `onPartsChange` seam -- the SAME setState -> onAssemblyPartsChange
+  // persist round-trip the add / solve paths use. Nothing here writes to disk;
+  // the host owns persistence. The new instance keeps the source's geometry
+  // source (same body, distinct instance) and is offset so it never z-fights.
+  // A brand-new id means mates on the original do NOT follow the copy/mirror.
+
+  /** Mint a stable, collision-resistant id for a new instance (mirrors the mate id). */
+  const mintPartId = useCallback((prefix: 'copy' | 'mirror'): string => {
+    return `part-${prefix}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`
+  }, [])
+
+  const handleCopyPart = useCallback(
+    (part: AssemblyPart): void => {
+      if (!onPartsChange) return
+      const copy = copyPart(part, mintPartId('copy'))
+      onPartsChange([...parts, copy])
+      // Select the new row so the operator sees where it landed.
+      setSelectedPartId(copy.id)
+      toast('ok', `Copied ${part.name} -> ${copy.name}`)
+    },
+    [onPartsChange, parts, mintPartId, toast]
+  )
+
+  const handleMirrorPart = useCallback(
+    (part: AssemblyPart, plane: MirrorPlane): void => {
+      if (!onPartsChange) return
+      const mirrored = mirrorPartPosition(part, plane, mintPartId('mirror'))
+      onPartsChange([...parts, mirrored])
+      setSelectedPartId(mirrored.id)
+      toast(
+        'ok',
+        `Mirrored ${part.name} across ${MIRROR_PLANE_LABEL[plane]} (position only)`
+      )
+    },
+    [onPartsChange, parts, mintPartId, toast]
+  )
+
+  // ── Visibility (view-only eye toggle) ─────────────────────────────────────
+  // Toggles a part id in / out of the hidden set. The viewport receives only
+  // the VISIBLE parts (filtered below), and a hidden row dims + shows a closed
+  // eye. This never persists and never changes solve / BOM -- a hidden part is
+  // still solved, still counted in the BOM, still interference-checked.
+  const handleToggleVisibility = useCallback((id: string): void => {
+    setHiddenPartIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
 
   // ── V1.5 mate modal handlers ───────────────────────────────────────────
   // Pure UI plumbing: open / close / commit + per-mate row remove. The
@@ -1560,6 +1817,17 @@ export function AssemblyView({
             Add part to assembly
           </button>
         )}
+        {onImportStepPart && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            data-testid="design-assembly-import-step"
+            onClick={onImportStepPart}
+            title="Insert an external STEP/STP file as a component"
+          >
+            Import STEP…
+          </button>
+        )}
         {onRemovePart && (
           <button
             type="button"
@@ -1773,6 +2041,10 @@ export function AssemblyView({
             {parts.map((part) => {
               const isSelected = part.id === selectedPartId
               const isClashing = clashIds.has(part.id)
+              // VIEW-only hidden: dims the row + hides the box from the viewport.
+              // Distinct from suppress (which excludes from solve / BOM) -- a
+              // hidden part is still solved, still in the BOM, just not drawn.
+              const isHidden = hiddenPartIds.has(part.id)
               const rowId = rowTestId(part.id)
               // Joint-limits editor: only joint kinds with limitable DOF get
               // the affordance (rigid / no-joint rows have nothing to bound).
@@ -1796,6 +2068,8 @@ export function AssemblyView({
                 // list below. Reuses the existing row-highlight mechanism rather
                 // than a bespoke overlay.
                 isClashing ? 'design-assembly__row--clash' : '',
+                // Dim a view-hidden row (does NOT remove it from solve / BOM).
+                isHidden ? 'design-assembly__row--hidden' : '',
               ]
                 .filter((c) => c.length > 0)
                 .join(' ')
@@ -1806,6 +2080,7 @@ export function AssemblyView({
                   data-testid={rowId}
                   data-clash={isClashing ? 'true' : undefined}
                   data-motion={playbackPose !== undefined ? 'true' : undefined}
+                  data-hidden={isHidden ? 'true' : undefined}
                   role="listitem"
                   aria-selected={isSelected}
                 >
@@ -1847,6 +2122,65 @@ export function AssemblyView({
                     >
                       Limits
                     </button>
+                  )}
+                  <button
+                    type="button"
+                    className="design-assembly__row-visibility"
+                    data-testid={`${rowId}-visibility`}
+                    aria-pressed={isHidden}
+                    aria-label={
+                      isHidden
+                        ? `Show ${part.name} in the viewport`
+                        : `Hide ${part.name} from the viewport`
+                    }
+                    onClick={() => handleToggleVisibility(part.id)}
+                    title={
+                      isHidden
+                        ? 'Hidden from the 3D view (still solved + in the BOM). Click to show.'
+                        : 'Visible. Click to hide from the 3D view (does NOT suppress it from solve / BOM).'
+                    }
+                  >
+                    {isHidden ? 'Show' : 'Hide'}
+                  </button>
+                  {onPartsChange && (
+                    <button
+                      type="button"
+                      className="design-assembly__row-copy"
+                      data-testid={`${rowId}-copy`}
+                      aria-label={`Copy ${part.name}`}
+                      onClick={() => handleCopyPart(part)}
+                      title="Duplicate this instance (offset so it does not overlap). Mates on the original do not follow the copy."
+                    >
+                      Copy
+                    </button>
+                  )}
+                  {onPartsChange && (
+                    <div
+                      className="design-assembly__row-mirror"
+                      data-testid={`${rowId}-mirror`}
+                      role="group"
+                      aria-label={`Mirror ${part.name} position across a principal plane`}
+                    >
+                      <span
+                        className="design-assembly__row-mirror-label"
+                        title="Reflect the placement across a principal plane (position only -- orientation preserved; a full geometric mirror needs a reflected mesh the kernel does not expose yet)."
+                      >
+                        Mirror position
+                      </span>
+                      {MIRROR_PLANES.map((plane) => (
+                        <button
+                          key={plane}
+                          type="button"
+                          className="design-assembly__row-mirror-plane"
+                          data-testid={`${rowId}-mirror-${plane}`}
+                          aria-label={`Mirror ${part.name} across the ${MIRROR_PLANE_LABEL[plane]} plane (position only)`}
+                          onClick={() => handleMirrorPart(part, plane)}
+                          title={`Reflect across ${MIRROR_PLANE_LABEL[plane]} (position only)`}
+                        >
+                          {MIRROR_PLANE_LABEL[plane]}
+                        </button>
+                      ))}
+                    </div>
                   )}
                   {onRemovePart && (
                     <button
@@ -2376,7 +2710,9 @@ export function AssemblyView({
             without WebGL. The parts-list rows on the left stay the editing surface.
           */}
           <AssemblyViewport3D
-            parts={parts}
+            /* View-hidden parts are filtered out of the scene (they remain in
+               the BOM / solve / interference -- hidden != suppressed). */
+            parts={visibleParts}
             playbackOverlay={playbackOverlay}
             clashIds={clashIds}
             selectedId={selectedPartId}
@@ -2384,6 +2720,7 @@ export function AssemblyView({
             explode={explodeConfig}
             busy={busy}
             triangleSummary={triangleSummary}
+            descriptors={geometryDescriptors ?? null}
             stlPath={tessellation?.stlPath ?? null}
             mateConstraintCount={mateConstraints.length}
             playbackActive={playbackOverlay !== null}

@@ -1,4 +1,15 @@
-/** Pure title-block HTML + minimal DXF for drawing export (optional Tier A mesh projection). */
+/** Pure title-block HTML + real DXF for drawing export (mesh projection + persisted annotations). */
+
+import type { DrawingSheetAnnotations } from '../shared/drawing-annotation-schema'
+import {
+  assembleDxfDocument,
+  computeEntitiesExtents,
+  DXF_LAYERS,
+  formatDxfNumber,
+  type DxfEntity,
+  type DxfLayer,
+  type DxfPoint
+} from './dxf-entities'
 
 export type ProjectedSegment = { x1: number; y1: number; x2: number; y2: number }
 
@@ -220,53 +231,414 @@ ${opts.projectedModelViews!.map((v, i) => projectedViewSvgFragment(v, i)).join('
 </html>`
 }
 
-function dxfEmitProjectedLines(push: (...xs: string[]) => void, views: ProjectedModelViewForExport[]): void {
-  for (let vi = 0; vi < views.length; vi++) {
-    const view = views[vi]!
-    const box = view.layout
-    const px = box?.originXMM ?? defaultViewBoxMm(vi).x
-    const py = box?.originYMM ?? defaultViewBoxMm(vi).y
-    const pw = box?.widthMM ?? defaultViewBoxMm(vi).w
-    const ph = box?.heightMM ?? defaultViewBoxMm(vi).h
-    const bb = bboxFromSegments(view.segments)
-    if (!bb) continue
-    const pad = Math.max(0.5, Math.min(pw, ph) * 0.04)
-    const bw = bb.maxX - bb.minX + 2 * pad
-    const bh = bb.maxY - bb.minY + 2 * pad
-    const sc = Math.min(pw / bw, ph / bh)
-    const ox = px + (pw - bw * sc) / 2
-    const oy = py + (ph - bh * sc) / 2
-    const tx = -bb.minX + pad
-    const ty = -bb.minY + pad
+/**
+ * Map one projected view's segments into DXF LINE entities, using the SAME
+ * layout-box transform (scale-to-fit + Y-flip) the SVG fragment / PDF path use,
+ * so the DXF projection linework lands in the same coherent title-block model
+ * space. All projection segments are VISIBLE edges today (the mesh projector
+ * carries no hidden-line flag), so they route to the PROJECTION layer; the
+ * HIDDEN layer + linetype exist for when hidden-line removal lands.
+ */
+function projectedViewToEntities(view: ProjectedModelViewForExport, index: number): DxfEntity[] {
+  const box = view.layout
+  const px = box?.originXMM ?? defaultViewBoxMm(index).x
+  const py = box?.originYMM ?? defaultViewBoxMm(index).y
+  const pw = box?.widthMM ?? defaultViewBoxMm(index).w
+  const ph = box?.heightMM ?? defaultViewBoxMm(index).h
+  const bb = bboxFromSegments(view.segments)
+  if (!bb) return []
+  const pad = Math.max(0.5, Math.min(pw, ph) * 0.04)
+  const bw = bb.maxX - bb.minX + 2 * pad
+  const bh = bb.maxY - bb.minY + 2 * pad
+  const sc = Math.min(pw / bw, ph / bh)
+  const ox = px + (pw - bw * sc) / 2
+  const oy = py + (ph - bh * sc) / 2
+  const tx = -bb.minX + pad
+  const ty = -bb.minY + pad
 
-    for (const s of view.segments) {
-      const x1 = ox + (s.x1 + tx) * sc
-      const y1 = oy + ph - (s.y1 + ty) * sc
-      const x2 = ox + (s.x2 + tx) * sc
-      const y2 = oy + ph - (s.y2 + ty) * sc
-      push(
-        '0',
-        'LINE',
-        '8',
-        'PROJECTION',
-        '10',
-        String(x1),
-        '20',
-        String(y1),
-        '30',
-        '0',
-        '11',
-        String(x2),
-        '21',
-        String(y2),
-        '31',
-        '0'
-      )
-    }
+  const entities: DxfEntity[] = []
+  for (const s of view.segments) {
+    entities.push({
+      type: 'line',
+      layer: DXF_LAYERS.PROJECTION,
+      start: { x: ox + (s.x1 + tx) * sc, y: oy + ph - (s.y1 + ty) * sc },
+      end: { x: ox + (s.x2 + tx) * sc, y: oy + ph - (s.y2 + ty) * sc }
+    })
   }
+  return entities
 }
 
-/** Minimal ASCII DXF (R12-style) with a frame and labels — opens in most CAD viewers. */
+// ---------------------------------------------------------------------------
+// Annotation → DXF coordinate mapping
+// ---------------------------------------------------------------------------
+//
+// Persisted annotations (dimensions, GD&T frames, surface finishes, notes,
+// center marks, centerlines) store coordinates in SVG-mm SHEET space — the
+// CadQuery `getSVG(width=800, height=600)` frame the drawing renderer and
+// `drawing-snap.ts` operate in (Y-DOWN, origin top-left). DXF model space is
+// Y-UP. Annotations therefore map into DXF with a SINGLE Y-flip about the SVG
+// sheet height so text reads upright and geometry is never mirrored:
+//
+//     dxfX = svgX
+//     dxfY = SVG_SHEET_HEIGHT_MM - svgY
+//
+// This is a DIFFERENT frame from the per-view projection boxes above (which are
+// laid out in title-block mm): the annotations were authored against the live
+// drawing SVG, not against the export's title-block layout, so honestly they
+// occupy the SVG sheet frame. The two coexist in one DXF model space; a shop
+// reads projection linework from the PROJECTION layer and annotations from
+// their dedicated layers, each internally coherent. Documented in the return
+// report as "annotations in the 800x600 SVG sheet frame, Y-flipped".
+
+/** SVG sheet height (mm) — the `getSVG(width=800, height=600)` frame Y-extent. */
+export const SVG_SHEET_HEIGHT_MM = 600
+
+/** Map one SVG-mm annotation point into DXF model space (single Y-flip). */
+function annPoint(p: { x: number; y: number }): DxfPoint {
+  return { x: p.x, y: SVG_SHEET_HEIGHT_MM - p.y }
+}
+
+/** Annotation text height (mm) for dimension read-outs / notes / GD&T text. */
+const ANN_TEXT_HEIGHT = 3
+/** Arrow/oblique-tick half-length (mm) at dimension-line ends. */
+const ANN_TICK_MM = 1.2
+/** Extension-line gap past the dimension line (mm). */
+const ANN_EXT_MM = 1.5
+
+type Pt = { x: number; y: number }
+
+function sub(a: Pt, b: Pt): Pt {
+  return { x: a.x - b.x, y: a.y - b.y }
+}
+function len(v: Pt): number {
+  return Math.hypot(v.x, v.y)
+}
+function unit(v: Pt): Pt {
+  const l = len(v)
+  return l === 0 ? { x: 1, y: 0 } : { x: v.x / l, y: v.y / l }
+}
+function perp(v: Pt): Pt {
+  return { x: -v.y, y: v.x }
+}
+function add(a: Pt, b: Pt): Pt {
+  return { x: a.x + b.x, y: a.y + b.y }
+}
+function scale(v: Pt, s: number): Pt {
+  return { x: v.x * s, y: v.y * s }
+}
+
+/** Human-readable read-out for a dimension: label override, else formatted value. */
+function dimensionReadout(value: number, label: string | undefined): string {
+  if (label !== undefined && label.trim() !== '') return label
+  return formatDxfNumber(value)
+}
+
+/**
+ * Explode ONE persisted dimension into DXF primitives on the DIMENSIONS layer.
+ * R12 has no portable associative DIMENSION explode, so each dimension renders
+ * as its rendered geometry: extension lines from the measured points out to the
+ * dimension line, the dimension line itself, oblique ticks at both ends, and a
+ * TEXT read-out — exactly what `drawing-annotation-model.ts` paints in SVG,
+ * honestly de-associated for the DXF. Angular/radial/diameter reduce to a leader
+ * line from the reference point to the value text. Points are pre-flipped SVG-mm.
+ */
+function dimensionToEntities(
+  dim: DrawingSheetAnnotations['dimensions'][number]
+): DxfEntity[] {
+  const layer: DxfLayer = DXF_LAYERS.DIMENSIONS
+  const text = dimensionReadout(dim.value, dim.label)
+  const out: DxfEntity[] = []
+
+  // A linear span (a→b) drawn on the dimension-line row through `placement`.
+  const linearSpan = (aRaw: Pt, bRaw: Pt, placementRaw: Pt): void => {
+    const a = aRaw
+    const b = bRaw
+    const dir = unit(sub(b, a))
+    const n = perp(dir)
+    // Signed offset from the a→b line to placement along the normal.
+    const d = (placementRaw.x - a.x) * n.x + (placementRaw.y - a.y) * n.y
+    const a2 = add(a, scale(n, d))
+    const b2 = add(b, scale(n, d))
+    // Extension lines (from the measured points, past the dim line by ANN_EXT_MM).
+    const extA = add(a2, scale(n, d >= 0 ? ANN_EXT_MM : -ANN_EXT_MM))
+    const extB = add(b2, scale(n, d >= 0 ? ANN_EXT_MM : -ANN_EXT_MM))
+    out.push({ type: 'line', layer, start: annPoint(a), end: annPoint(extA) })
+    out.push({ type: 'line', layer, start: annPoint(b), end: annPoint(extB) })
+    // Dimension line.
+    out.push({ type: 'line', layer, start: annPoint(a2), end: annPoint(b2) })
+    // Oblique 45° ticks at both ends.
+    const tick = scale(unit(add(dir, n)), ANN_TICK_MM)
+    out.push({
+      type: 'line',
+      layer,
+      start: annPoint(sub(a2, tick)),
+      end: annPoint(add(a2, tick))
+    })
+    out.push({
+      type: 'line',
+      layer,
+      start: annPoint(sub(b2, tick)),
+      end: annPoint(add(b2, tick))
+    })
+    // Read-out text centred just off the dimension line, on the placement side.
+    const mid = { x: (a2.x + b2.x) / 2, y: (a2.y + b2.y) / 2 }
+    const textPt = add(mid, scale(n, (d >= 0 ? 1 : -1) * 1.5))
+    out.push({
+      type: 'text',
+      layer,
+      at: annPoint(textPt),
+      height: ANN_TEXT_HEIGHT,
+      value: text,
+      hAlign: 'center'
+    })
+  }
+
+  switch (dim.kind) {
+    case 'linear':
+      linearSpan(dim.start.cachedPoint, dim.end.cachedPoint, dim.placement)
+      break
+    case 'baseline':
+      linearSpan(dim.origin.cachedPoint, dim.feature.cachedPoint, dim.placement)
+      break
+    case 'chain':
+      linearSpan(dim.start.cachedPoint, dim.end.cachedPoint, dim.placement)
+      break
+    case 'ordinate': {
+      // Leader from the feature to the placement, plus the coordinate text.
+      out.push({
+        type: 'line',
+        layer,
+        start: annPoint(dim.feature.cachedPoint),
+        end: annPoint(dim.placement)
+      })
+      out.push({
+        type: 'text',
+        layer,
+        at: annPoint({ x: dim.placement.x, y: dim.placement.y - 1 }),
+        height: ANN_TEXT_HEIGHT,
+        value: text,
+        hAlign: 'center'
+      })
+      break
+    }
+    case 'radial':
+    case 'diameter': {
+      // Leader from center to the on-curve point, value text at the placement.
+      out.push({
+        type: 'line',
+        layer,
+        start: annPoint(dim.center.cachedPoint),
+        end: annPoint(dim.on.cachedPoint)
+      })
+      const prefix = dim.kind === 'radial' ? 'R' : 'D'
+      out.push({
+        type: 'text',
+        layer,
+        at: annPoint(dim.placement),
+        height: ANN_TEXT_HEIGHT,
+        value: `${prefix}${text}`,
+        hAlign: 'center'
+      })
+      break
+    }
+    case 'angular': {
+      // Two arms from the vertex, value text at the placement.
+      out.push({
+        type: 'line',
+        layer,
+        start: annPoint(dim.vertex.cachedPoint),
+        end: annPoint(dim.arm1.cachedPoint)
+      })
+      out.push({
+        type: 'line',
+        layer,
+        start: annPoint(dim.vertex.cachedPoint),
+        end: annPoint(dim.arm2.cachedPoint)
+      })
+      out.push({
+        type: 'text',
+        layer,
+        at: annPoint(dim.placement),
+        height: ANN_TEXT_HEIGHT,
+        value: `${text}°`,
+        hAlign: 'center'
+      })
+      break
+    }
+  }
+  return out
+}
+
+/** Short human abbreviation for a GD&T geometric characteristic (DXF has no glyph). */
+const GDT_CHAR_ABBREV: Record<
+  DrawingSheetAnnotations['featureControlFrames'][number]['characteristic'],
+  string
+> = {
+  straightness: 'STR',
+  flatness: 'FLAT',
+  circularity: 'CIRC',
+  cylindricity: 'CYL',
+  profile_of_a_line: 'PROFL',
+  profile_of_a_surface: 'PROFS',
+  perpendicularity: 'PERP',
+  angularity: 'ANG',
+  parallelism: 'PARA',
+  position: 'POS',
+  concentricity: 'CONC',
+  symmetry: 'SYM',
+  circular_runout: 'RUNO',
+  total_runout: 'TRUNO'
+}
+
+/**
+ * Map one GD&T feature control frame into a box outline + a single TEXT row on
+ * the ANNOTATIONS layer: `CHAR | tol | A B C`. DXF R12 has no drafting glyphs,
+ * so the characteristic is spelled with a stable abbreviation ({@link
+ * GDT_CHAR_ABBREV}) — an honest, readable de-glyphing. Placement is the frame
+ * box top-left in SVG-mm (Y-flipped to DXF).
+ */
+function gdtFrameToEntities(
+  frame: DrawingSheetAnnotations['featureControlFrames'][number]
+): DxfEntity[] {
+  const layer: DxfLayer = DXF_LAYERS.ANNOTATIONS
+  const abbrev = GDT_CHAR_ABBREV[frame.characteristic]
+  const tol = formatDxfNumber(frame.toleranceMm)
+  const datums = frame.datums.length > 0 ? ` ${frame.datums.join(' ')}` : ''
+  const value = `${abbrev} ${tol}${datums}`
+  // Approximate box: height = text + padding; width scales with content length.
+  const boxH = ANN_TEXT_HEIGHT + 2
+  const boxW = Math.max(12, value.length * ANN_TEXT_HEIGHT * 0.65 + 2)
+  const x = frame.placement.x
+  const y = frame.placement.y
+  // Box corners in SVG-mm (top-left origin, +y down); flipped by annPoint.
+  const tl = { x, y }
+  const tr = { x: x + boxW, y }
+  const br = { x: x + boxW, y: y + boxH }
+  const bl = { x, y: y + boxH }
+  return [
+    {
+      type: 'polyline',
+      layer,
+      closed: true,
+      points: [annPoint(tl), annPoint(tr), annPoint(br), annPoint(bl)]
+    },
+    {
+      type: 'text',
+      layer,
+      at: annPoint({ x: x + 1, y: y + boxH - 1 }),
+      height: ANN_TEXT_HEIGHT,
+      value,
+      hAlign: 'left'
+    }
+  ]
+}
+
+/** Map one free-text note into TEXT entities on the ANNOTATIONS layer (one per line). */
+function noteToEntities(note: DrawingSheetAnnotations['notes'][number]): DxfEntity[] {
+  const layer: DxfLayer = DXF_LAYERS.ANNOTATIONS
+  const out: DxfEntity[] = []
+  // Leader line to the anchored feature, when present.
+  if (note.leader !== undefined) {
+    out.push({
+      type: 'line',
+      layer,
+      start: annPoint(note.placement),
+      end: annPoint(note.leader.cachedPoint)
+    })
+  }
+  const lineHeight = ANN_TEXT_HEIGHT * 1.35
+  const lines = note.text.replace(/\r\n?/g, '\n').split('\n')
+  lines.forEach((line, i) => {
+    // Note placement is the text-block TOP-LEFT in SVG-mm (+y down), so each
+    // subsequent line steps DOWN in SVG-mm (larger y).
+    out.push({
+      type: 'text',
+      layer,
+      at: annPoint({ x: note.placement.x, y: note.placement.y + (i + 1) * lineHeight }),
+      height: ANN_TEXT_HEIGHT,
+      value: line,
+      hAlign: 'left'
+    })
+  })
+  return out
+}
+
+/** Map one center mark into two crossed LINE entities on the CENTERLINES layer. */
+function centerMarkToEntities(
+  mark: DrawingSheetAnnotations['centerMarks'][number]
+): DxfEntity[] {
+  const layer: DxfLayer = DXF_LAYERS.CENTERLINES
+  const c = mark.anchor.cachedPoint
+  const s = mark.sizeMm
+  return [
+    {
+      type: 'line',
+      layer,
+      linetype: 'CENTER',
+      start: annPoint({ x: c.x - s, y: c.y }),
+      end: annPoint({ x: c.x + s, y: c.y })
+    },
+    {
+      type: 'line',
+      layer,
+      linetype: 'CENTER',
+      start: annPoint({ x: c.x, y: c.y - s }),
+      end: annPoint({ x: c.x, y: c.y + s })
+    }
+  ]
+}
+
+/**
+ * Map one centerline into a single LINE entity on the CENTERLINES layer,
+ * extended past both anchors (the drafting overshoot), with the CENTER linetype.
+ */
+function centerlineToEntities(
+  line: DrawingSheetAnnotations['centerlines'][number]
+): DxfEntity[] {
+  const a = line.start.cachedPoint
+  const b = line.end.cachedPoint
+  const dir = unit(sub(b, a))
+  const ext = 3
+  const p1 = { x: a.x - dir.x * ext, y: a.y - dir.y * ext }
+  const p2 = { x: b.x + dir.x * ext, y: b.y + dir.y * ext }
+  return [
+    {
+      type: 'line',
+      layer: DXF_LAYERS.CENTERLINES,
+      linetype: 'CENTER',
+      start: annPoint(p1),
+      end: annPoint(p2)
+    }
+  ]
+}
+
+/**
+ * Compose EVERY persisted annotation into a flat DXF entity list, in a stable
+ * order (dimensions → GD&T frames → notes → center marks → centerlines). Pure.
+ * Surface finishes are intentionally NOT rendered as DXF geometry v1 — the ISO
+ * 1302 check-mark glyph has no faithful R12 primitive form; a mislabeled box
+ * would be worse than an honest omission. (Documented in the return report.)
+ */
+export function annotationsToDxfEntities(annotations: DrawingSheetAnnotations): DxfEntity[] {
+  const out: DxfEntity[] = []
+  for (const dim of annotations.dimensions) out.push(...dimensionToEntities(dim))
+  for (const frame of annotations.featureControlFrames) out.push(...gdtFrameToEntities(frame))
+  for (const note of annotations.notes) out.push(...noteToEntities(note))
+  for (const mark of annotations.centerMarks) out.push(...centerMarkToEntities(mark))
+  for (const line of annotations.centerlines) out.push(...centerlineToEntities(line))
+  return out
+}
+
+/**
+ * Build the REAL drawing DXF: mesh projection linework (PROJECTION layer) +
+ * every persisted annotation exploded to primitives on its dedicated layer,
+ * plus a sheet frame + title/sub-title on the TITLE layer. R12-compatible ASCII
+ * DXF that opens in any CAD/CAM importer.
+ *
+ * The exported name stays `buildPlaceholderDxf` so the export-service call seam
+ * is unchanged; the body no longer emits a placeholder. Pure: same input →
+ * byte-identical output.
+ */
 export function buildPlaceholderDxf(opts: {
   projectTitle: string
   generatedAtIso: string
@@ -274,6 +646,8 @@ export function buildPlaceholderDxf(opts: {
   sheetScale?: string
   viewPlaceholders?: { kind: string; label: string; detailLine?: string }[]
   projectedModelViews?: ProjectedModelViewForExport[]
+  /** Persisted annotations for the sheet (dimensions, GD&T, notes, center marks). */
+  annotations?: DrawingSheetAnnotations
 }): string {
   const title = opts.projectTitle.slice(0, 80).replace(/\r|\n/g, ' ')
   const sheetBit =
@@ -291,81 +665,57 @@ export function buildPlaceholderDxf(opts: {
           .join('; ')}.`
       : ''
   const hasProj = !!(opts.projectedModelViews && opts.projectedModelViews.length > 0)
-  const note = `Generated ${opts.generatedAtIso} — ${hasProj ? 'Tier A mesh projection on PROJECTION layer' : 'placeholder sheet'}.${sheetBit}${viewBit}`.slice(
+  const note = `Generated ${opts.generatedAtIso} — ${hasProj ? 'mesh projection on PROJECTION layer' : 'no projected linework'}.${sheetBit}${viewBit}`.slice(
     0,
     250
   )
 
-  const lines: string[] = []
-  const push = (...xs: string[]) => {
-    for (const x of xs) lines.push(x)
+  const entities: DxfEntity[] = []
+
+  // Sheet frame (A4-landscape-ish, mm) on the TITLE layer.
+  const frameCorners: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 297, y: 0 },
+    { x: 297, y: 210 },
+    { x: 0, y: 210 }
+  ]
+  entities.push({
+    type: 'polyline',
+    layer: DXF_LAYERS.TITLE,
+    closed: true,
+    points: frameCorners
+  })
+
+  // Title + sub-title (near the top of the frame, TITLE layer).
+  entities.push({
+    type: 'text',
+    layer: DXF_LAYERS.TITLE,
+    at: { x: 12, y: 198 },
+    height: 4,
+    value: title
+  })
+  entities.push({
+    type: 'text',
+    layer: DXF_LAYERS.TITLE,
+    at: { x: 12, y: 188 },
+    height: 2.5,
+    value: note
+  })
+
+  // Projection linework.
+  if (opts.projectedModelViews) {
+    opts.projectedModelViews.forEach((view, i) => {
+      entities.push(...projectedViewToEntities(view, i))
+    })
   }
 
-  push('0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1012', '0', 'ENDSEC')
-  push('0', 'SECTION', '2', 'TABLES')
-  push('0', 'TABLE', '2', 'LAYER', '70', hasProj ? '2' : '1')
-  push('0', 'LAYER', '2', '0', '70', '0', '62', '7', '6', 'CONTINUOUS')
-  if (hasProj) {
-    push('0', 'LAYER', '2', 'PROJECTION', '70', '0', '62', '250', '6', 'CONTINUOUS')
-  }
-  push('0', 'ENDTAB', '0', 'ENDSEC')
-  push('0', 'SECTION', '2', 'BLOCKS', '0', 'ENDSEC')
-  push('0', 'SECTION', '2', 'ENTITIES')
-
-  // Outer frame (mm-ish units)
-  const frame = [
-    [0, 0, 297, 0],
-    [297, 0, 297, 210],
-    [297, 210, 0, 210],
-    [0, 210, 0, 0]
-  ] as const
-  for (const [x1, y1, x2, y2] of frame) {
-    push('0', 'LINE', '8', '0', '62', '250', '10', String(x1), '20', String(y1), '30', '0', '11', String(x2), '21', String(y2), '31', '0')
+  // Persisted annotations, exploded to primitives.
+  if (opts.annotations) {
+    entities.push(...annotationsToDxfEntities(opts.annotations))
   }
 
-  push(
-    '0',
-    'TEXT',
-    '8',
-    '0',
-    '62',
-    '7',
-    '10',
-    '12',
-    '20',
-    '198',
-    '30',
-    '0',
-    '40',
-    '4',
-    '1',
-    title
-  )
-  push(
-    '0',
-    'TEXT',
-    '8',
-    '0',
-    '62',
-    '8',
-    '10',
-    '12',
-    '20',
-    '188',
-    '30',
-    '0',
-    '40',
-    '2.5',
-    '1',
-    note
-  )
-
-  if (hasProj) {
-    dxfEmitProjectedLines(push, opts.projectedModelViews!)
-  }
-
-  push('0', 'ENDSEC', '0', 'EOF')
-  return lines.join('\r\n')
+  const extents = computeEntitiesExtents(entities)
+  return assembleDxfDocument(entities, extents ? { extents } : undefined)
 }
 
 export function buildFlatPatternDxf(opts: {

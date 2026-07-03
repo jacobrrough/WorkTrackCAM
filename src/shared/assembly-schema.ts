@@ -97,12 +97,29 @@ export const assemblyJointLimitsSchema = z
   .optional()
 
 /**
+ * Cached axis-aligned bounds (mm) + overall dimensions of an imported body.
+ *
+ * Persisted alongside an EXTERNAL geometry source (see {@link
+ * assemblyGeometrySourceSchema}'s `stepPath`) so a hydrated row can render its
+ * schematic box + report dimensions in the parts list WITHOUT re-tessellating —
+ * critical when the source file has since moved or gone missing (the row still
+ * shows an honest, dimensioned placeholder instead of collapsing to nothing).
+ * All fields required when the object exists; the object is `.optional()`.
+ */
+export const assemblyCachedBoundsSchema = z.object({
+  min: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
+  max: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()])
+})
+
+export type AssemblyCachedBounds = z.infer<typeof assemblyCachedBoundsSchema>
+
+/**
  * Per-component **geometry source** — the body THIS instance is built from.
  *
  * Closes the "N copies of one body" defect (#11): every assembly component must
  * carry its *own* geometry reference instead of all rows pointing at one shared
- * handle. The three (all optional) refs cover every way a part can name its
- * geometry, so the renderer can persist whatever it has on hand:
+ * handle. The refs (all optional) cover every way a part can name its geometry,
+ * so the renderer can persist whatever it has on hand:
  *
  *   - `handle`        — opaque CadQuery session handle from a prior
  *                       `cad.execute_script` (the live in-session body; matches
@@ -114,10 +131,22 @@ export const assemblyJointLimitsSchema = z
  *                       after reload.
  *   - `relPath`       — project-relative path to an exported body (e.g. an STL
  *                       under `assets/designs/<id>/`). The portable on-disk ref.
+ *   - `stepPath`      — Phase-4 "Insert from file": an EXTERNAL vendor STEP file
+ *                       (fasteners / motors / brackets) imported as a component.
+ *                       Durable on-disk ref to a `.step` / `.stp` file the user
+ *                       picked; unlike `relPath` it need not live inside the
+ *                       project tree (vendor libraries commonly sit elsewhere).
+ *                       When set, `kind === 'step'` marks the source as external
+ *                       so hydrate + the parts list can render an honest dangling
+ *                       badge if the file has moved. `cachedBounds` / `cachedDims`
+ *                       ride along so the row + schematic viewport work without a
+ *                       live re-tessellation (which stays a documented limit).
  *
  * At least one ref must be present when the object exists (an empty source is
  * meaningless). The object itself is `.optional()` so a legacy `assembly.json`
- * with no `geometrySource` on its rows parses unchanged (Safety Rule 2).
+ * with no `geometrySource` on its rows parses unchanged (Safety Rule 2). Every
+ * NEW field below is `.optional()` too, so a `geometrySource` written before
+ * Phase-4 (handle / designModelId / relPath only) still parses byte-for-byte.
  */
 export const assemblyGeometrySourceSchema = z
   .object({
@@ -126,11 +155,39 @@ export const assemblyGeometrySourceSchema = z
     /** Stable `DesignModel.id` (project `designModels`) — durable cross-session ref. */
     designModelId: z.string().trim().min(1).optional(),
     /** Project-relative path to an exported body (portable on-disk ref). */
-    relPath: z.string().trim().min(1).optional()
+    relPath: z.string().trim().min(1).optional(),
+    /**
+     * External STEP / STP file path for a "Insert from file" vendor component
+     * (Phase-4). Durable; may point outside the project tree. Presence marks
+     * this source external — pair with `kind: 'step'`.
+     */
+    stepPath: z.string().trim().min(1).optional(),
+    /**
+     * Source-kind discriminator. Only `'step'` today (external STEP import).
+     * Additive: absent on every pre-Phase-4 source, so a legacy row's source
+     * is treated as an internal (handle / designModel / relPath) body.
+     */
+    kind: z.literal('step').optional(),
+    /**
+     * Cached bounds (mm) captured at import time — lets a hydrated row draw its
+     * schematic box + report size even when `stepPath` no longer resolves.
+     */
+    cachedBounds: assemblyCachedBoundsSchema.optional(),
+    /**
+     * Cached overall dimensions (mm) = `max - min` per axis, captured at import
+     * time. Redundant with `cachedBounds` but cheap and convenient for the row.
+     */
+    cachedDims: z
+      .tuple([z.number().finite(), z.number().finite(), z.number().finite()])
+      .optional()
   })
-  .refine((g) => g.handle != null || g.designModelId != null || g.relPath != null, {
-    message: 'A geometry source must carry at least one of handle / designModelId / relPath.'
-  })
+  .refine(
+    (g) => g.handle != null || g.designModelId != null || g.relPath != null || g.stepPath != null,
+    {
+      message:
+        'A geometry source must carry at least one of handle / designModelId / relPath / stepPath.'
+    }
+  )
 
 export type AssemblyGeometrySource = z.infer<typeof assemblyGeometrySourceSchema>
 

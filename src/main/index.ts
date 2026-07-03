@@ -8,6 +8,7 @@ import { registerMachineIpc } from './ipc-machine'
 import { registerModelingIpc } from './ipc-modeling'
 import { registerRecoveryIpc } from './ipc-recovery'
 import { registerDesignScriptIpc } from './ipc-design-script'
+import { registerAssemblyStepImportIpc } from './ipc-assembly-step-import'
 import { registerMainProcessDiagnostics } from './main-process-diagnostics'
 import {
   checkPythonDeps,
@@ -142,6 +143,12 @@ app.whenReady().then(async () => {
   // (designScript:recovery*). Registered next to the other IPC namespaces
   // so the ordering invariant above keeps holding.
   registerDesignScriptIpc(ipcCtx)
+  // PHASE-4 "Insert from file": assembly:importStepPart — validate an external
+  // vendor STEP path, run cad.import_step → cad.tessellate_with_ids on one
+  // sidecar, and return an AssemblyPart-shaped envelope (durable
+  // geometrySource {kind:'step', stepPath, cachedBounds}). Registered next to
+  // the other IPC namespaces so the ordering invariant above keeps holding.
+  registerAssemblyStepImportIpc(ipcCtx)
 
   createWindow()
 

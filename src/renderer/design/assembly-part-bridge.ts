@@ -42,6 +42,10 @@ import {
 import type { AssemblyComponent, AssemblyFile } from '../../shared/assembly-schema'
 import type { AssemblyMateConstraint } from '../../shared/assembly-mate-schema'
 import type { AssemblyPart } from './AssemblyView'
+import type {
+  PartBboxGeometry,
+  PartMeshGeometry
+} from './assembly-viewport-transforms'
 
 /**
  * Prefix used by {@link partPathForRow} when a row carries no durable geometry
@@ -269,6 +273,136 @@ export function hydrateAssembly(file: AssemblyFile): HydratedAssembly {
     mateConstraints: shared.mateConstraints,
     danglingMateIds: shared.danglingMateIds
   }
+}
+
+// ── Wave-7: per-part geometry descriptors for the assembly 3D viewport ────────
+//
+// The assembly viewport (`AssemblyViewport3D`) renders each part at a tier: a real
+// mesh (a), a true-proportion bbox (b), or the nominal cube (c). The REAL data for
+// tier (a)/(b) is reachable renderer-side WITHOUT new IPC — the meshes `cad.execute`
+// already returns carry a `bbox` (always) and the selection tessellation carries
+// flat vertices/indices. These pure helpers turn those wire shapes into the
+// viewport's descriptor union so the host can build the per-part descriptor map.
+// Kept structural (no import of the sidecar-protocol types) so the module stays
+// dependency-light and testable with plain objects.
+
+/** The minimal axis-aligned bbox shape (mm) both `cad.execute` meshes + assembly tess carry. */
+export type PartBboxInput = {
+  readonly min: readonly [number, number, number]
+  readonly max: readonly [number, number, number]
+}
+
+/** All three components of a tuple finite? */
+function isFiniteTriple(t: readonly [number, number, number] | undefined): boolean {
+  return (
+    !!t &&
+    Number.isFinite(t[0]) &&
+    Number.isFinite(t[1]) &&
+    Number.isFinite(t[2])
+  )
+}
+
+/**
+ * Convert an axis-aligned bbox (min/max in mm) into a tier-(b) {@link PartBboxGeometry}
+ * descriptor: half-extents = (max − min) / 2, center offset = (max + min) / 2 (the
+ * bbox center in the part's LOCAL frame — a real part is rarely centred on its
+ * origin, so the drawn box sits where the geometry sits).
+ *
+ * Returns `null` for a missing / non-finite / degenerate (zero-or-negative extent
+ * on any axis) bbox, so the caller drops the descriptor and the part honestly falls
+ * back to the nominal cube rather than drawing a zero-size or NaN box. Pure.
+ */
+export function bboxToDescriptor(bbox: PartBboxInput | null | undefined): PartBboxGeometry | null {
+  if (!bbox || !isFiniteTriple(bbox.min as [number, number, number]) || !isFiniteTriple(bbox.max as [number, number, number])) {
+    return null
+  }
+  const half: [number, number, number] = [
+    (bbox.max[0] - bbox.min[0]) / 2,
+    (bbox.max[1] - bbox.min[1]) / 2,
+    (bbox.max[2] - bbox.min[2]) / 2
+  ]
+  if (half[0] <= 0 || half[1] <= 0 || half[2] <= 0) return null
+  const center: [number, number, number] = [
+    (bbox.max[0] + bbox.min[0]) / 2,
+    (bbox.max[1] + bbox.min[1]) / 2,
+    (bbox.max[2] + bbox.min[2]) / 2
+  ]
+  return { kind: 'bbox', halfExtentsMm: half, centerOffsetMm: center }
+}
+
+/**
+ * The minimal captured-mesh shape (flat vertices + indices + a bbox) the selection
+ * tessellation (`cad.tessellate_with_ids`) returns. Structural so a caller can pass
+ * the wire result directly without an adapter.
+ */
+export type PartMeshInput = {
+  readonly vertices: ArrayLike<number>
+  readonly indices?: ArrayLike<number>
+  readonly triangleCount?: number
+  readonly bbox?: PartBboxInput
+}
+
+/**
+ * Convert a captured tessellation (flat `vertices` + optional `indices` + `bbox`)
+ * into a tier-(a) {@link PartMeshGeometry} descriptor. The mesh's own AABB
+ * half-extents + center offset ride along (derived from `bbox` when present, else
+ * computed from the vertices) so a budget-degraded mesh falls back to correct bbox
+ * proportions and the drawn geometry sits at its real center.
+ *
+ * Returns `null` when there are no usable triangles (empty / malformed vertices),
+ * so the caller can drop the mesh descriptor and try the bbox tier instead. Pure.
+ */
+export function meshToDescriptor(mesh: PartMeshInput | null | undefined): PartMeshGeometry | null {
+  if (!mesh) return null
+  const vertices = mesh.vertices
+  if (!vertices || vertices.length < 9 || vertices.length % 3 !== 0) return null
+  const indices =
+    mesh.indices && mesh.indices.length >= 3 && mesh.indices.length % 3 === 0
+      ? mesh.indices
+      : undefined
+  const triangleCount =
+    typeof mesh.triangleCount === 'number' && Number.isFinite(mesh.triangleCount) && mesh.triangleCount > 0
+      ? Math.floor(mesh.triangleCount)
+      : indices
+        ? indices.length / 3
+        : vertices.length / 9
+  if (triangleCount <= 0) return null
+  // Prefer the wire bbox; else derive it from the vertices so the tier-b degrade
+  // path + the drawn center are still correct.
+  const box = bboxToDescriptor(mesh.bbox) ?? deriveBboxFromVertices(vertices)
+  const descriptor: PartMeshGeometry = {
+    kind: 'mesh',
+    positions: vertices,
+    triangleCount,
+    halfExtentsMm: box?.halfExtentsMm ?? [10, 10, 10],
+    ...(indices ? { indices } : {}),
+    ...(box?.centerOffsetMm ? { centerOffsetMm: box.centerOffsetMm } : {})
+  }
+  return descriptor
+}
+
+/** Derive a tier-(b) descriptor by scanning a flat vertex array. `null` when empty. */
+function deriveBboxFromVertices(vertices: ArrayLike<number>): PartBboxGeometry | null {
+  const n = vertices.length
+  if (n < 3) return null
+  let minX = Infinity
+  let minY = Infinity
+  let minZ = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let maxZ = -Infinity
+  for (let i = 0; i + 2 < n; i += 3) {
+    const x = vertices[i]!
+    const y = vertices[i + 1]!
+    const z = vertices[i + 2]!
+    if (x < minX) minX = x
+    if (y < minY) minY = y
+    if (z < minZ) minZ = z
+    if (x > maxX) maxX = x
+    if (y > maxY) maxY = y
+    if (z > maxZ) maxZ = z
+  }
+  return bboxToDescriptor({ min: [minX, minY, minZ], max: [maxX, maxY, maxZ] })
 }
 
 // Re-export the shared synthetic-path helper so renderer call sites can reference

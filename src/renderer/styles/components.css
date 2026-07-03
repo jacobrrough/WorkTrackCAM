@@ -720,6 +720,61 @@
   gap: var(--sp-2);
   margin-top: var(--sp-1);
 }
+
+/* ── Copy / Mirror position / Visibility row actions (AssemblyView) ────
+   Per-row affordances that duplicate an instance, mirror its placement, or
+   hide it from the 3D view. Reuse the row-limits-toggle idiom (transparent
+   button, hairline border, accent on hover) so the whole row-action strip
+   reads consistently -- no inline styles (CLAUDE.md design-token rule). */
+.design-assembly__row-visibility,
+.design-assembly__row-copy,
+.design-assembly__row-mirror-plane {
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.design-assembly__row-visibility:hover,
+.design-assembly__row-copy:hover,
+.design-assembly__row-mirror-plane:hover {
+  color: var(--txt1);
+  border-color: var(--accent);
+}
+/* A pressed (part-hidden) eye toggle reads as the active state. */
+.design-assembly__row-visibility[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Mirror group: an inline label + the three plane buttons. */
+.design-assembly__row-mirror {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: var(--sp-2);
+}
+.design-assembly__row-mirror-label {
+  font-size: var(--text-sm);
+  color: var(--txt2);
+  white-space: nowrap;
+}
+.design-assembly__row-mirror-plane {
+  margin-left: var(--sp-1);
+  font-variant-numeric: tabular-nums;
+}
+/* A view-hidden row dims (but stays fully interactive -- it is still in the
+   BOM / solve; only its viewport box is hidden). Distinct from --clash /
+   --selected, which tint rather than fade. */
+.design-assembly__row--hidden {
+  opacity: 0.5;
+}
+.design-assembly__row--hidden .design-assembly__row-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--txt2);
+}
 .assembly-mate-panel__deferred {
   margin: var(--sp-4) 0 0;
   font-size: var(--text-sm);
