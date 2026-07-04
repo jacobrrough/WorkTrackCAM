@@ -251,38 +251,33 @@ describe('[ID-0200] check-no-dump-stubs ALLOWLIST set semantics', () => {
   })
 })
 
-describe('[ID-0200] check-no-dump-stubs perf-threshold tripwire ([ID-0194] guard)', () => {
-  // [ID-0194] (perf rotation, Cycle 118) declared the spawn-shave
-  // refactor "ACTIONABLE WHEN: file's runGate(...) invocation count
-  // grows beyond 5". Before this pin the only way to detect threshold
-  // crossing was a perf-cycle inventory refresh (Cycle 130 earliest).
-  // The next two tests count runGate( invocations in the sibling test
-  // file's source and fail loudly when threshold crossed -- making
-  // [ID-0194] self-tripping.
-  const RUNGATE_THRESHOLD = 5
-
-  it('sibling test file currently has at most 5 runGate( invocations (pulls [ID-0194] when crossed)', () => {
-    // Count `runGate(` literal in the sibling test source, EXCLUDING
-    // the helper's own definition `function runGate(` (one match) and
-    // any commented-out occurrences in JSDoc. This counts call sites.
-    const all = (SIBLING_TEST_SRC.match(/runGate\(/g) ?? []).length
-    const defs = (SIBLING_TEST_SRC.match(/function runGate\(/g) ?? []).length
-    const callSites = all - defs
-    expect(
-      callSites,
-      `[ID-0194] perf-shave is now ACTIONABLE -- sibling test file has ${callSites} runGate(...) call sites (threshold > ${RUNGATE_THRESHOLD}). ` +
-        `Pull [ID-0194] next perf cycle: hoist a single spawnSync into a beforeAll-cached const + read fields off the cached {status, stdout, stderr}; ` +
-        `only re-spawn for cases that intentionally mutate cwd or env. Expected shave ~70 ms.`
-    ).toBeLessThanOrEqual(RUNGATE_THRESHOLD)
+describe('[ID-0200] check-no-dump-stubs gate runs IN-PROCESS ([ID-0194] resolved, Cycle 289)', () => {
+  // [ID-0194] (perf rotation, Cycle 118) flagged the gate test's `spawnSync` as a
+  // perf cost with an "ACTIONABLE WHEN runGate() > 5" tripwire. Cycle 289 resolved
+  // it the strongest possible way -- and in doing so fixed a hard CI failure:
+  // spawning a SECOND node process during peak `npm run test:coverage` load on the
+  // constrained CI runner returned `status: null` (spawn EAGAIN / signal-kill), so
+  // the whole coverage step failed on every CI run. The gate script now EXPORTS its
+  // pure `findDumpStubViolations()` scan (behind a `require.main === module` CLI
+  // guard so the pretest hook is byte-identical), and the sibling verifies it
+  // IN-PROCESS with ZERO subprocess spawns. These pins prevent a regression back to
+  // the fragile spawn.
+  it('sibling test file spawns NO subprocess (no child_process import, no spawnSync call)', () => {
+    // Target the actual spawn MECHANISM (import + call site), not the word --
+    // the sibling's comment legitimately mentions why it no longer spawnSyncs.
+    expect(SIBLING_TEST_SRC).not.toMatch(/from 'node:child_process'/)
+    expect(SIBLING_TEST_SRC).not.toMatch(/spawnSync\(/)
   })
 
-  it('records the [ID-0194] threshold value (= 5) so it cannot drift silently', () => {
-    expect(RUNGATE_THRESHOLD).toBe(5)
+  it('sibling verifies the gate IN-PROCESS via the exported findDumpStubViolations', () => {
+    expect(SIBLING_TEST_SRC).toMatch(/findDumpStubViolations/)
+    expect(SIBLING_TEST_SRC).toMatch(/createRequire/)
   })
 
-  it('sibling test file imports spawnSync (so the helper actually does spawn)', () => {
-    expect(SIBLING_TEST_SRC).toMatch(/import \{ spawnSync \} from 'node:child_process'/)
-    expect(SIBLING_TEST_SRC).toMatch(/spawnSync\(process\.execPath, \[SCRIPT\]/)
+  it('gate script exports its pure scan behind a require.main CLI guard', () => {
+    expect(SCRIPT_SRC).toMatch(/function findDumpStubViolations\(\)/)
+    expect(SCRIPT_SRC).toMatch(/module\.exports = \{[\s\S]*?findDumpStubViolations[\s\S]*?\}/)
+    expect(SCRIPT_SRC).toMatch(/require\.main === module/)
   })
 })
 
