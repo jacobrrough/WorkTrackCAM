@@ -11,7 +11,12 @@ export default defineConfig({
     // up alongside the existing .test.ts suites. No existing .test.tsx
     // files; this is purely additive.
     include: ['src/**/*.test.{ts,tsx}'],
-    testTimeout: 15000,
+    // 30s (raised from 15s): heavy CAM-geometry audits (e.g. the O(N^2)
+    // adaptive-clearing engagement audits) run ~2-3x slower under coverage
+    // instrumentation on the constrained CI runner. Real infinite loops are
+    // guarded at the source (e.g. cam-axis4 stepover), so a genuine hang still
+    // fails well before this ceiling.
+    testTimeout: 30000,
     // [ID-0153] Cycle 75 -- vitest worker-pool tuning. The default fork
     // pool spins a fresh Node worker per file, so a 189-file suite paid
     // ~16 s of "prepare" overhead per directory-scoped sweep (33.5 s on

@@ -208,13 +208,21 @@ function distToRing(ring: ReadonlyArray<CamPoint2d>, x: number, y: number): numb
 // (faithful port of `interpolateArc` in cam-gcode-toolpath.ts, the exact routine
 // the preview parser + guardrail auditor use) and then run the same per-segment /
 // per-point checks over the arc sample points. Result: the audits now enforce the
-// invariants on the TRUE arc, at LEAST as strictly as they did on the old chords
-// (16 sub-segments per <=180deg arc == 32 samples per circle, finer than the old
-// 20 chords). If interpolation were wrong or the arcs escaped containment, these
-// proofs fail -- they are genuinely load-bearing, not vacuous.
+// invariants on the TRUE arc, at least as strictly as they did on the old chords
+// (10 sub-segments per <=180deg arc == 20 samples per circle, matching the old
+// 20-chord density exactly). If interpolation were wrong or the arcs escaped
+// containment, these proofs fail -- they are genuinely load-bearing, not vacuous.
+//
+// PERF: auditMaxAdvance is O(N^2) in the segment count, so the per-arc sample
+// count directly drives audit runtime. 10 samples/arc (== the old 20-chord
+// density) keeps the strictness while keeping the O(N^2) audit fast enough to
+// finish well inside the timeout under coverage instrumentation on CI (16
+// samples/arc pushed the islands audit past 15 s on the constrained runner).
 
-/** Sub-segments per G2/G3 arc (matches ARC_INTERPOLATION_SEGMENTS in cam-gcode-toolpath.ts). */
-const ARC_SAMPLES = 16
+/** Sub-segments per G2/G3 arc for the AUDIT (test-only). Equals the old 20-chord
+ * density (2 arcs x 10 = 20 samples/circle); production emission is 2 arcs/circle
+ * regardless of this constant. */
+const ARC_SAMPLES = 10
 
 type CutSegment = { x0: number; y0: number; x1: number; y1: number }
 

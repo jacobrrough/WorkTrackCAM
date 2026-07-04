@@ -77,11 +77,15 @@ describe('[ID-0153] vitest.config.ts worker-pool pin', () => {
     expect(vitestConfig.test?.include).toEqual(['src/**/*.test.{ts,tsx}'])
   })
 
-  it('keeps the 15s testTimeout (long-running CAM-engine integration tests rely on it)', () => {
+  it('keeps a >=30s testTimeout (heavy CAM-engine audits run 2-3x slower under CI coverage)', () => {
     if (!isResolvedConfig(vitestConfig)) {
       throw new Error('vitest config did not narrow to the authored object shape')
     }
-    expect(vitestConfig.test?.testTimeout).toBe(15000)
+    // Raised 15s -> 30s: the O(N^2) adaptive-clearing engagement audits time out
+    // at 15s under coverage instrumentation on the constrained CI runner. Real
+    // infinite loops are guarded at the source (cam-axis4 stepover), so a genuine
+    // hang still fails well before 30s.
+    expect(vitestConfig.test?.testTimeout).toBe(30000)
   })
 
   it('keeps environment: "node" (the suite is not a jsdom suite; renderer tests use shallow component pins)', () => {
