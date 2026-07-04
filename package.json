@@ -49,6 +49,7 @@
     "electron": "^39.8.5",
     "electron-builder": "^26.8.1",
     "electron-vite": "^3.0.0",
+    "fast-check": "^3.23.2",
     "happy-dom": "^20.10.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

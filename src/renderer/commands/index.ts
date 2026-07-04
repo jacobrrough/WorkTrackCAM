@@ -17,6 +17,7 @@ export {
   type ResolveCommandsOptions,
   type DeepLinkRequest,
   type DeepLinkRouter,
+  type ParsedKeybinding,
   CommandRegistry,
   commandRegistry,
   DEFAULT_COMMAND_CONTEXT,
@@ -24,6 +25,9 @@ export {
   registerCommand,
   getHandler,
   runCommand,
+  dispatchKeybinding,
+  parseKeybinding,
+  matchesKeybinding,
   isCommandEnabled,
   resolveCommands,
   resolveCommandGroups,
@@ -44,6 +48,10 @@ export {
   useOptionalCommandSurface,
   useResolvedCommands
 } from './CommandContextProvider'
+
+// Global shell keyboard seam — palette / shortcuts reference + the registered
+// command-keybinding dispatch layer (the runtime side of `keybinding`).
+export { useShellKeyboardShortcuts } from './useShellKeyboardShortcuts'
 
 // Starter handlers — shell-level commands + host-action contract.
 export {

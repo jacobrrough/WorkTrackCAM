@@ -39,9 +39,9 @@ describe('A. Module shape -- drawing-snap.ts exported symbols', () => {
     expect(typeof clientToSvgCoord).toBe('function')
   })
 
-  it('SNAP_KIND_PRIORITY is an object with exactly the four snap kinds', () => {
+  it('SNAP_KIND_PRIORITY is an object with exactly the five snap kinds', () => {
     const keys = Object.keys(SNAP_KIND_PRIORITY).sort()
-    expect(keys).toEqual(['center', 'endpoint', 'midpoint', 'vertex'])
+    expect(keys).toEqual(['center', 'endpoint', 'midpoint', 'quadrant', 'vertex'])
   })
 
   it('resolveSnap and clientToSvgCoord are accessible via namespace import', () => {
@@ -57,10 +57,20 @@ describe('A. Module shape -- drawing-snap.ts exported symbols', () => {
 // ---------------------------------------------------------------------------
 describe('B. SNAP_KIND_PRIORITY — value invariants', () => {
   it('vertex has the lowest (highest priority) number', () => {
-    const { vertex, endpoint, midpoint, center } = SNAP_KIND_PRIORITY
+    const { vertex, endpoint, midpoint, center, quadrant } = SNAP_KIND_PRIORITY
     expect(vertex).toBeLessThan(endpoint)
+    expect(vertex).toBeLessThan(quadrant)
     expect(vertex).toBeLessThan(center)
     expect(vertex).toBeLessThan(midpoint)
+  })
+
+  it('quadrant is vertex-class: outranks center and midpoint', () => {
+    const { quadrant, center, midpoint, endpoint } = SNAP_KIND_PRIORITY
+    // Vertex-class means it sits above the curve-derived center/midpoint kinds.
+    expect(quadrant).toBeLessThan(center)
+    expect(quadrant).toBeLessThan(midpoint)
+    // It slots right after endpoint in the total order.
+    expect(quadrant).toBeGreaterThan(endpoint)
   })
 
   it('vertex priority value is 0', () => {
@@ -71,17 +81,21 @@ describe('B. SNAP_KIND_PRIORITY — value invariants', () => {
     expect(SNAP_KIND_PRIORITY.endpoint).toBe(1)
   })
 
-  it('center priority value is 2', () => {
-    expect(SNAP_KIND_PRIORITY.center).toBe(2)
+  it('quadrant priority value is 2', () => {
+    expect(SNAP_KIND_PRIORITY.quadrant).toBe(2)
   })
 
-  it('midpoint priority value is 3', () => {
-    expect(SNAP_KIND_PRIORITY.midpoint).toBe(3)
+  it('center priority value is 3', () => {
+    expect(SNAP_KIND_PRIORITY.center).toBe(3)
   })
 
-  it('all four priorities are unique non-negative integers', () => {
+  it('midpoint priority value is 4', () => {
+    expect(SNAP_KIND_PRIORITY.midpoint).toBe(4)
+  })
+
+  it('all five priorities are unique non-negative integers', () => {
     const values = Object.values(SNAP_KIND_PRIORITY)
-    expect(new Set(values).size).toBe(4)
+    expect(new Set(values).size).toBe(5)
     for (const v of values) {
       expect(Number.isInteger(v)).toBe(true)
       expect(v).toBeGreaterThanOrEqual(0)
@@ -119,11 +133,12 @@ describe('D. Source-text whitelist + safety', () => {
     expect(SOURCE).not.toMatch(/\bnew\s+Function\s*\(/)
   })
 
-  it('SNAP_KIND_PRIORITY literal values 0/1/2/3 appear in source', () => {
+  it('SNAP_KIND_PRIORITY literal values 0/1/2/3/4 appear in source', () => {
     expect(SOURCE).toMatch(/vertex:\s*0/)
     expect(SOURCE).toMatch(/endpoint:\s*1/)
-    expect(SOURCE).toMatch(/center:\s*2/)
-    expect(SOURCE).toMatch(/midpoint:\s*3/)
+    expect(SOURCE).toMatch(/quadrant:\s*2/)
+    expect(SOURCE).toMatch(/center:\s*3/)
+    expect(SOURCE).toMatch(/midpoint:\s*4/)
   })
 
   it('DEFAULT_SNAP_TOLERANCE_PX is assigned 12 in source', () => {

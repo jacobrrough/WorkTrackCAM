@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { machineProfileSchema } from './machine-schema'
 
@@ -260,5 +262,111 @@ describe('machineProfileSchema', () => {
     for (const [key, field] of Object.entries(shape)) {
       expect(field.description, `field '${key}' missing .describe()`).toBeTruthy()
     }
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Carvera 4-axis rotary-safety schema fields (yAxisMustBeZero,
+// rotaryHeadstockXOffsetMm)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// These two fields encode the Makera Carvera 4th-Axis HD safety constraints at
+// the SCHEMA layer so a misconfigured profile is rejected before any G-code is
+// generated. The validators in src/main/cam-axis4/validation.ts consume them.
+// Here we pin the Zod surface itself: the fields parse when present, reject bad
+// shapes/ranges, and — per Safety Rule 2 — stay optional so the other two
+// machines and existing saved profiles still validate.
+describe('machineProfileSchema — Carvera 4-axis rotary-safety fields', () => {
+  it('parses yAxisMustBeZero: true on a 4-axis profile', () => {
+    const m = machineProfileSchema.parse({
+      ...minimalCnc,
+      axisCount: 4,
+      aAxisOrientation: 'x' as const,
+      yAxisMustBeZero: true
+    })
+    expect(m.yAxisMustBeZero).toBe(true)
+  })
+
+  it('parses yAxisMustBeZero: false', () => {
+    const m = machineProfileSchema.parse({ ...minimalCnc, yAxisMustBeZero: false })
+    expect(m.yAxisMustBeZero).toBe(false)
+  })
+
+  it('rejects a non-boolean yAxisMustBeZero', () => {
+    expect(() =>
+      machineProfileSchema.parse({ ...minimalCnc, yAxisMustBeZero: 'yes' as never })
+    ).toThrow()
+  })
+
+  it('parses rotaryHeadstockXOffsetMm with the bundled Carvera value (5 mm)', () => {
+    const m = machineProfileSchema.parse({
+      ...minimalCnc,
+      axisCount: 4,
+      aAxisOrientation: 'x' as const,
+      rotaryHeadstockXOffsetMm: 5
+    })
+    expect(m.rotaryHeadstockXOffsetMm).toBe(5)
+  })
+
+  it('accepts rotaryHeadstockXOffsetMm = 0 (boundary inclusive — G54 X at chuck face)', () => {
+    const m = machineProfileSchema.parse({ ...minimalCnc, rotaryHeadstockXOffsetMm: 0 })
+    expect(m.rotaryHeadstockXOffsetMm).toBe(0)
+  })
+
+  it('rejects a negative rotaryHeadstockXOffsetMm (chuck face is in front of X=0)', () => {
+    expect(() =>
+      machineProfileSchema.parse({ ...minimalCnc, rotaryHeadstockXOffsetMm: -1 })
+    ).toThrow()
+  })
+
+  it('rejects a non-numeric rotaryHeadstockXOffsetMm', () => {
+    expect(() =>
+      machineProfileSchema.parse({ ...minimalCnc, rotaryHeadstockXOffsetMm: '5' as never })
+    ).toThrow()
+  })
+
+  it('both rotary-safety fields are optional (absent from minimal profile — Safety Rule 2)', () => {
+    const m = machineProfileSchema.parse(minimalCnc)
+    expect(m.yAxisMustBeZero).toBeUndefined()
+    expect(m.rotaryHeadstockXOffsetMm).toBeUndefined()
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Bundled-profile validation — the three shipped JSON files must parse through
+// the schema unchanged. The Carvera 4-axis profile carries the new rotary-
+// safety fields; K2 Plus and Laguna must NOT (their shapes are unchanged).
+// ───────────────────────────────────────────────────────────────────────────
+describe('machineProfileSchema — bundled machine profiles validate', () => {
+  const MACHINES_DIR = join(__dirname, '..', '..', 'resources', 'machines')
+  const loadRaw = (file: string): unknown =>
+    JSON.parse(readFileSync(join(MACHINES_DIR, file), 'utf-8'))
+
+  it('Makera Carvera (4-axis) parses and carries yAxisMustBeZero + rotaryHeadstockXOffsetMm', () => {
+    const m = machineProfileSchema.parse(loadRaw('makera-carvera-4axis.json'))
+    expect(m.axisCount).toBe(4)
+    expect(m.yAxisMustBeZero).toBe(true)
+    expect(m.rotaryHeadstockXOffsetMm).toBe(5)
+  })
+
+  it('Creality K2 Plus (FDM) still validates and does NOT carry rotary-safety fields', () => {
+    const m = machineProfileSchema.parse(loadRaw('creality-k2-plus.json'))
+    expect(m.kind).toBe('fdm')
+    expect(m.yAxisMustBeZero).toBeUndefined()
+    expect(m.rotaryHeadstockXOffsetMm).toBeUndefined()
+  })
+
+  it('Laguna Swift 5x10 (CNC 3-axis) still validates and does NOT carry rotary-safety fields', () => {
+    const m = machineProfileSchema.parse(loadRaw('laguna-swift-5x10.json'))
+    expect(m.kind).toBe('cnc')
+    expect(m.yAxisMustBeZero).toBeUndefined()
+    expect(m.rotaryHeadstockXOffsetMm).toBeUndefined()
+  })
+
+  it('Makera Carvera (3-axis) still validates and does NOT carry rotary-safety fields', () => {
+    const m = machineProfileSchema.parse(loadRaw('makera-carvera-3axis.json'))
+    expect(m.axisCount).toBe(3)
+    expect(m.yAxisMustBeZero).toBeUndefined()
+    expect(m.rotaryHeadstockXOffsetMm).toBeUndefined()
   })
 })

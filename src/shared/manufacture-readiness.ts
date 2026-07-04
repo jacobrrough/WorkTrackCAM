@@ -46,7 +46,7 @@ export function evaluateManufactureReadiness(params: {
     issues.push({
       id: 'settings_cura_missing',
       severity: 'warning',
-      message: 'CuraEngine path is not set (required for slicing).'
+      message: 'OrcaSlicer path is not set (required for slicing).'
     })
   }
   if (project && !params.machines.some((m) => m.id === project.activeMachineId)) {

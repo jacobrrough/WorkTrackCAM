@@ -4,12 +4,16 @@ import {
   type CommandContext,
   type CommandHandler,
   CommandRegistry,
+  commandRegistry,
   DEFAULT_COMMAND_CONTEXT,
   deriveMachineKind,
   designArmRequest,
+  dispatchKeybinding,
   groupResolvedCommands,
   isCommandEnabled,
   isDesignArmCommand,
+  matchesKeybinding,
+  parseKeybinding,
   resolveCommandGroups,
   resolveCommands,
   workspacesForRoute
@@ -217,6 +221,118 @@ describe('deep-link routing', () => {
     // A non-arm id (e.g. a CAM op) returns null.
     expect(isDesignArmCommand('mf_op_2d_pocket')).toBe(false)
     expect(designArmRequest('mf_op_2d_pocket')).toBeNull()
+  })
+})
+
+describe('parseKeybinding — spec → modifier parts', () => {
+  it('parses a bare single key (no modifiers, lower-cased)', () => {
+    expect(parseKeybinding('L')).toEqual({ ctrl: false, shift: false, alt: false, meta: false, key: 'l' })
+  })
+
+  it('parses Ctrl+K and is order/case-insensitive on modifiers', () => {
+    expect(parseKeybinding('Ctrl+K')).toEqual({ ctrl: true, shift: false, alt: false, meta: false, key: 'k' })
+    expect(parseKeybinding('k+CTRL')).toEqual({ ctrl: true, shift: false, alt: false, meta: false, key: 'k' })
+  })
+
+  it('parses every modifier alias (Cmd/Meta/Win, Alt/Option, Shift)', () => {
+    expect(parseKeybinding('Cmd+Shift+Z')).toEqual({ ctrl: false, shift: true, alt: false, meta: true, key: 'z' })
+    expect(parseKeybinding('Win+Alt+F5')).toEqual({ ctrl: false, shift: false, alt: true, meta: true, key: 'f5' })
+    expect(parseKeybinding('Option+x')).toEqual({ ctrl: false, shift: false, alt: true, meta: false, key: 'x' })
+  })
+
+  it('rejects an empty, modifier-only, or two-key (malformed) spec', () => {
+    expect(parseKeybinding('')).toBeNull()
+    expect(parseKeybinding('Ctrl+')).toBeNull()
+    expect(parseKeybinding('Ctrl+Shift')).toBeNull()
+    expect(parseKeybinding('L+R')).toBeNull()
+  })
+})
+
+describe('matchesKeybinding — event vs spec', () => {
+  const ev = (o: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({ ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...o }) as KeyboardEvent
+
+  it('a bare key matches only when no primary modifier is held', () => {
+    expect(matchesKeybinding(ev({ key: 'l' }), 'L')).toBe(true)
+    expect(matchesKeybinding(ev({ key: 'L' }), 'l')).toBe(true) // case-insensitive key
+    // Ctrl held ⇒ a bare 'L' must NOT match (that is Ctrl+L).
+    expect(matchesKeybinding(ev({ key: 'l', ctrlKey: true }), 'L')).toBe(false)
+  })
+
+  it('a Ctrl spec accepts EITHER ctrlKey OR metaKey (Win/mac)', () => {
+    expect(matchesKeybinding(ev({ key: 'k', ctrlKey: true }), 'Ctrl+K')).toBe(true)
+    expect(matchesKeybinding(ev({ key: 'k', metaKey: true }), 'Ctrl+K')).toBe(true)
+    // No primary modifier ⇒ no match.
+    expect(matchesKeybinding(ev({ key: 'k' }), 'Ctrl+K')).toBe(false)
+  })
+
+  it('shift / alt are matched exactly', () => {
+    expect(matchesKeybinding(ev({ key: 'z', ctrlKey: true, shiftKey: true }), 'Ctrl+Shift+Z')).toBe(true)
+    expect(matchesKeybinding(ev({ key: 'z', ctrlKey: true }), 'Ctrl+Shift+Z')).toBe(false)
+    expect(matchesKeybinding(ev({ key: 'l', altKey: true }), 'L')).toBe(false)
+  })
+
+  it('a malformed spec never matches any event', () => {
+    expect(matchesKeybinding(ev({ key: 'l' }), 'L+R')).toBe(false)
+  })
+})
+
+describe('dispatchKeybinding (via CommandRegistry.dispatchKeybinding)', () => {
+  const ev = (o: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({ ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...o }) as KeyboardEvent
+
+  it('fires the handler whose keybinding matches and returns its id', () => {
+    const reg = new CommandRegistry()
+    const run = vi.fn()
+    reg.register({ id: 'sk_line', run, keybinding: 'L' })
+
+    const fired = reg.dispatchKeybinding(ev({ key: 'l' }), ctx({ workspace: 'design', sketchMode: true }))
+    expect(fired).toBe('sk_line')
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT fire a matching but DISABLED handler (returns null)', () => {
+    const reg = new CommandRegistry()
+    const run = vi.fn()
+    reg.register({
+      id: 'sk_trim',
+      run,
+      keybinding: 'T',
+      enabled: (c) => c.sketchMode === true
+    })
+
+    // sketchMode false ⇒ disabled ⇒ key ignored.
+    expect(reg.dispatchKeybinding(ev({ key: 't' }), ctx({ sketchMode: false }))).toBeNull()
+    expect(run).not.toHaveBeenCalled()
+    // sketchMode true ⇒ enabled ⇒ fires.
+    expect(reg.dispatchKeybinding(ev({ key: 't' }), ctx({ sketchMode: true }))).toBe('sk_trim')
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns null when no registered handler binds the pressed key', () => {
+    const reg = new CommandRegistry()
+    reg.register({ id: 'sk_line', run: () => {}, keybinding: 'L' })
+    expect(reg.dispatchKeybinding(ev({ key: 'q' }), ctx())).toBeNull()
+  })
+
+  it('ignores handlers that declare no keybinding', () => {
+    const reg = new CommandRegistry()
+    const run = vi.fn()
+    reg.register({ id: 'so_extrude', run }) // no keybinding
+    expect(reg.dispatchKeybinding(ev({ key: 'e' }), ctx())).toBeNull()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('the free dispatchKeybinding routes through the shared registry', () => {
+    const run = vi.fn()
+    const dispose = commandRegistry.register({ id: 'test_kb_shared', run, keybinding: 'Ctrl+Shift+J' })
+    try {
+      const fired = dispatchKeybinding(ev({ key: 'j', ctrlKey: true, shiftKey: true }), ctx())
+      expect(fired).toBe('test_kb_shared')
+      expect(run).toHaveBeenCalledTimes(1)
+    } finally {
+      dispose()
+    }
   })
 })
 

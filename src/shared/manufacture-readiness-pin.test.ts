@@ -34,8 +34,9 @@
  * Three-machine relevance:
  *   - **Creality K2 Plus** (DIRECT): the `canSlice` gate determines
  *     whether the K2 FDM slice button is enabled; settings_cura_missing
- *     fires when the CuraEngine binary path is unset. CLAUDE.md USER
- *     CONTEXT requires Moonraker upload and Cura-style slicing for K2.
+ *     fires when the OrcaSlicer path (the `curaEnginePath` setting field,
+ *     kept as the live key) is unset. CLAUDE.md USER CONTEXT requires
+ *     Moonraker upload and OrcaSlicer-driven slicing for K2.
  *   - **Laguna Swift 5x10** (DIRECT): the `canCam` gate determines
  *     whether Generate CAM is enabled. cam_cnc_machine_missing fires
  *     when no machine of `kind === 'cnc'` is loaded (Laguna profile
@@ -444,7 +445,7 @@ describe('E. settings_cura_missing -- warning severity', () => {
     expect(r.issues.some((i) => i.id === 'settings_cura_missing')).toBe(false)
   })
 
-  it('warning message exactly matches "CuraEngine path is not set (required for slicing)."', () => {
+  it('warning message exactly matches "OrcaSlicer path is not set (required for slicing)."', () => {
     const r = evaluateManufactureReadiness({
       project: mkProject(),
       settings: null,
@@ -452,7 +453,7 @@ describe('E. settings_cura_missing -- warning severity', () => {
       manufacture: null
     })
     const issue = r.issues.find((i) => i.id === 'settings_cura_missing')
-    expect(issue?.message).toBe('CuraEngine path is not set (required for slicing).')
+    expect(issue?.message).toBe('OrcaSlicer path is not set (required for slicing).')
   })
 
   it('forces canSlice=false when fired (cura required for slice)', () => {

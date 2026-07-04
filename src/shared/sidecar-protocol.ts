@@ -1305,7 +1305,7 @@ export type CadAttachTitleBlockResult = {
 
 /** Snap-point kinds the renderer's drawing-snap resolver understands. Mirrors
  * ``SnapPointKind`` in ``src/renderer/design/drawing-snap.ts``. */
-export type CadDrawingSnapKind = 'vertex' | 'endpoint' | 'midpoint' | 'center'
+export type CadDrawingSnapKind = 'vertex' | 'endpoint' | 'midpoint' | 'center' | 'quadrant'
 
 /** Projected-edge kinds. ``line`` is a straight segment; ``arc`` / ``circle``
  * are curved (the renderer may sample ``points`` for either). Kept open with a

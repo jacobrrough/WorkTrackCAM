@@ -19508,3 +19508,28 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Gates:** tsc clean; node 18,865 -> 19,192 pass (+327, the rescued feature + its brought 316-test shared-module contract); DOM 148 -> 149. 17 files (8 new + 9 additively modified).
 
 **Result:** main is confirmed to be missing nothing of value; the one genuinely-stranded feature is now captured on PR #21; the branch graveyard is cleaned. session/k2-plus-pipeline retired (its unique contribution extracted).
+## Cycle 288 - Branch consolidation: fold 10 real-unique items from 3 branches onto PR #21 (2026-07-03)
+
+**Focus:** user - "let's work on combining all the branches and worktrees." Rather than blind-merge old branches (which would reintroduce retired surfaces + regress newer HEAD features - the moonraker trap), ran a 5-agent read-only audit to produce a precise per-branch extraction plan, then folded ONLY the real-unique, non-superseded work additively onto the current branch (the most complete state). Implementer + no-HEAD-regression verifier.
+
+**Baseline -> result:** node 19,192 -> 19,291 pass / 2 skip / 0 fail (+99); DOM 149; tsc clean; npm run dev boots; gcode-safety SAFE (pattern.ts).
+
+**Audit verdict:** 5 branches -> 2 fully superseded (jovial-aryabhata = duplicate of wave-5 user-params; ui-rebuild-tabbed = old ufs_shell_v3 Phase-0 exploration), 3 with real-unique work. 10 items extracted:
+1. FG-7 command keybindings (hotkey layer went LIVE - HEAD had it display-only) [adoring-banzai]
+2. ManufactureHost tool-import + auto-arrange (real IPC replacing "coming soon" stubs) [adoring-banzai]
+3. Quadrant drawing-snap (sidecar emits kind='quadrant', HEAD silently dropped it - latent bug) [adoring-banzai]
+4. OBB 15-axis-SAT renderer narrow-phase interference (clears rotated-part false positives) [adoring-banzai]
+5. Carvera 4-axis machine-schema test coverage [adoring-banzai]
+6. pattern.ts 4-axis hang guard (non-positive/NaN stepover -> infinite main-process loop) - SAFETY [happy-northcutt]
+7. OrcaSlicer system-install binary resolution (K2 unblock: env override + Program Files + LOCALAPPDATA + macOS/linux) [happy-northcutt]
+8. Readiness reword CuraEngine->OrcaSlicer (still-stale user string) [happy-northcutt]
+9. moonraker advisory-branch test coverage (+327-line new file) [happy-northcutt]
+10. declare fast-check devDep (3 HEAD tests imported it undeclared) [npm-audit]
+
+**No HEAD regression (make-or-break, verifier + orchestrator both confirmed in the working tree):** the additive-reapply items grafted onto HEAD's CURRENT files, never taking the old branch versions. Preserved: wave-6 HLR single-view payload (includeHlr 9 refs), CAD_EXPORT_FORMATS still ['step','stl','dxf','3mf','amf','brep'], cad.hole_table, K2_OVERRIDE_TEMP_CEILINGS clamp, the WorkTrack3D rename + vitest ^4 + monaco/opentype/clipper deps (package.json diff = exactly 1 line: fast-check). assembly-part.ts NOT resurrected; OBB sourced from HEAD's geometrySourceRef.cachedBounds (not the branch's geometryDimensions). No `: any`.
+
+**gcode-safety (pattern.ts is cam-axis4):** SAFE - the guard makes degenerate stepover input SAFER (skip + warn instead of hang; no-op program keeps Y=0 rotation-centering, no cutting moves, no M6), and valid input is byte-identical (cut Xs [80,10,80] unchanged at steps 120/180). No other CAM/post/machine change.
+
+**dep smoke (fast-check):** npm run dev boots clean (renderer at :5173, [WorkTrack3D] main log) - the devDep is test-only, not in the vite optimizeDeps path, so no dev-optimizer break.
+
+**Result:** every branch's valuable work is now on PR #21. The 4 drained branches (adoring-banzai #20, happy-northcutt #13, npm-audit #12, jovial-aryabhata) + the superseded ui-rebuild Phase-0 are safe to retire; PRs #20/#13/#12 are now redundant (their unique work is folded in). Worktrees collapsing to the single unified branch.
