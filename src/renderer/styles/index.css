@@ -18,3 +18,11 @@
 @import './shell/design-cockpit.css';
 @import './shell/ribbon.css';
 @import './shell/first-run-onboarding.css';
+
+/* @worktrack/design-system — self-hosted fonts, --c-* token bridge (aliased
+   onto the app palette so the theme picker drives it), and the .ds-* component
+   recipes. All recipes are scoped under `.ds`, so nothing below restyles the
+   existing app until a subtree opts in via the DsScope wrapper. */
+@import './ds/fonts.css';
+@import './ds/ds-tokens.css';
+@import './ds/ds-components.css';

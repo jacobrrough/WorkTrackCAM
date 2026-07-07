@@ -1,0 +1,42 @@
+/* ============================================================
+   WorkTrack3D DS — self-hosted app typography (offline-safe).
+   Hanken Grotesk (body/UI) + Schibsted Grotesk 800 (display/headings),
+   the faces the @worktrack/design-system .ds-* recipes reference.
+   woff2 bundled by Vite from ./fonts/ — no network fetch.
+   ============================================================ */
+
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/hanken-grotesk-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/hanken-grotesk-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/hanken-grotesk-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/hanken-grotesk-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('./fonts/schibsted-grotesk-800.woff2') format('woff2');
+}
