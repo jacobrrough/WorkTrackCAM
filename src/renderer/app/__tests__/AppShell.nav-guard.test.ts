@@ -26,7 +26,7 @@ describe('AppShell — navigation-guard seam wiring', () => {
   it('wraps the shell body in a NavigationGuardProvider', () => {
     expect(SRC).toContain("import { NavigationGuardProvider, useNavigationGuard } from './NavigationGuardContext'")
     expect(SRC).toContain('<NavigationGuardProvider>')
-    expect(SRC).toContain('<AppShellBody />')
+    expect(SRC).toContain('<AppShellBody onGoHome={onGoHome} />')
   })
 
   it('reads the guard registry and builds guardedNavigate via the pure resolveNavIntent', () => {

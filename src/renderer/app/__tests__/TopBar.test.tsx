@@ -39,6 +39,7 @@ function render(projectName: string): string {
       createElement(TopBar, {
         machine: null,
         projectName,
+        onGoHome: () => {},
         onOpenCommand: () => {},
         onOpenSettings: () => {},
         onOpenHelp: () => {},

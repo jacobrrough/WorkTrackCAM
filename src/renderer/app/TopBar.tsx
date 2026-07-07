@@ -17,12 +17,18 @@ interface EstopBridge {
 export function TopBar({
   machine,
   projectName,
+  onGoHome,
   onOpenCommand,
   onOpenSettings,
   onOpenHelp,
   onOpenMyShop
 }: {
   machine: MachineProfile | null
+  /**
+   * Return to the outer Home surface (app dashboard). Wired to the brand logo —
+   * the standard logo→home affordance. The workspace stays mounted behind Home.
+   */
+  onGoHome: () => void
   /**
    * Fallback project name from the shell. Used only until a real project is
    * open — the live name comes from {@link useProjectSession}. Kept so the
@@ -91,13 +97,13 @@ export function TopBar({
 
   return (
     <header className="wt-topbar" role="banner">
-      <div className="wt-brand">
+      <button type="button" className="wt-brand" onClick={onGoHome} title="Home" aria-label="Go to Home">
         <svg className="wt-brand__logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12 2 3 7v10l9 5 9-5V7l-9-5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
           <path d="M3 7l9 5 9-5M12 12v10" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" opacity=".55" />
         </svg>
         WorkTrack<b>3D</b>
-      </div>
+      </button>
 
       <span className="wt-project" title={titleName}>
         {displayName}

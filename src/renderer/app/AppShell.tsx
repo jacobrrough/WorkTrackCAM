@@ -175,15 +175,25 @@ function ShellCommandKeybindings({ paletteOpen }: { paletteOpen: boolean }): nul
  * {@link AppShellBody}. The body lives UNDER the provider so its `guardedNavigate`
  * can read `hasUnsavedChanges()` synchronously at click time.
  */
-export function AppShell(): ReactElement {
+export interface AppShellProps {
+  /**
+   * Return to the outer Home surface (the app dashboard). Wired to the TopBar
+   * brand logo — the standard logo→home affordance from the handoff. The
+   * workspace stays mounted behind Home, so returning here loses no editor
+   * state.
+   */
+  onGoHome: () => void
+}
+
+export function AppShell({ onGoHome }: AppShellProps): ReactElement {
   return (
     <NavigationGuardProvider>
-      <AppShellBody />
+      <AppShellBody onGoHome={onGoHome} />
     </NavigationGuardProvider>
   )
 }
 
-function AppShellBody(): ReactElement {
+function AppShellBody({ onGoHome }: AppShellProps): ReactElement {
   const {
     sessionMachine,
     setSessionMachine,
@@ -459,6 +469,7 @@ function AppShellBody(): ReactElement {
         <TopBar
           machine={sessionMachine}
           projectName="Untitled project"
+          onGoHome={onGoHome}
           onOpenCommand={() => setCmdOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenHelp={() => setHelpOpen((x) => !x)}

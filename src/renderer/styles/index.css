@@ -26,3 +26,9 @@
 @import './ds/fonts.css';
 @import './ds/ds-tokens.css';
 @import './ds/ds-components.css';
+/* UA controls don't inherit font-family; keep .ds buttons/inputs on Hanken. */
+@import './ds/ds-controls.css';
+
+/* Home shell — DS-native app surface (sidebar + top bar + 9-screen region).
+   Structure only; appearance comes from the .ds-* recipes + --c-* bridge. */
+@import './home/home-shell.css';

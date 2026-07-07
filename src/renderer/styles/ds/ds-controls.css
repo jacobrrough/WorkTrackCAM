@@ -1,0 +1,20 @@
+/* =============================================================================
+ * DS control-font reset.
+ *
+ * UA `<button>` / `<input>` / `<select>` / `<textarea>` do NOT inherit
+ * `font-family` from their ancestors, so DS controls fall back to the UA face
+ * (Arial) even though the `.ds` root sets Hanken Grotesk. The upstream kit
+ * assumes a global `button { font: inherit }` reset; this app's `reset.css`
+ * doesn't provide one, which left every `.ds-btn` / `.ds-input` rendering in
+ * Arial (caught by hands-on verification of the Home shell). The handoff is
+ * explicit that DS buttons use Hanken Grotesk.
+ *
+ * Scoped to `.ds` so it only re-homes DS-rendered controls — the surrounding
+ * app chrome is untouched. Kept OUT of the verbatim `ds-components.css` port.
+ * ========================================================================== */
+.ds button,
+.ds input,
+.ds select,
+.ds textarea {
+  font-family: inherit;
+}

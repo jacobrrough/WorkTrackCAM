@@ -1,0 +1,521 @@
+/* =============================================================================
+ * Home shell — layout for the DS-native app surface (sidebar + top bar + the
+ * 9-screen content region). Appearance comes from the `.ds-*` recipes + the
+ * `--c-*` token bridge; only STRUCTURE (grid, sizing, hover/active states that
+ * inline styles can't express) lives here. Everything is scoped under
+ * `.wt-home`, the DsScope root the Home shell renders. Measurements are the
+ * `WorkTrack CAD - App` prototype's literal values.
+ * ========================================================================== */
+
+.wt-home {
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Monospace helper — coordinates, file names, telemetry (Cascadia + ss01). */
+.wt-home .mono {
+  font-family: var(--mono);
+  font-feature-settings: 'ss01';
+}
+
+/* ---- sidebar (248px) ------------------------------------------------------ */
+.wt-home__sidebar {
+  width: 248px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: rgb(var(--c-bg-2));
+  border-right: 1px solid rgb(var(--c-border));
+}
+
+.wt-home__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 20px 18px 16px;
+}
+
+.wt-home__brand-chip {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-on-accent));
+  flex: 0 0 auto;
+}
+
+.wt-home__brand-name {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.wt-home__brand-caption {
+  font-size: 11px;
+  color: rgb(var(--c-text-subtle));
+  letter-spacing: 0.04em;
+}
+
+.wt-home__nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  overflow: auto;
+}
+
+.wt-home__nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  background: transparent;
+  color: rgb(var(--c-text-muted));
+}
+
+.wt-home__nav-item:hover {
+  background: rgb(var(--c-surface-2));
+  color: rgb(var(--c-text));
+}
+
+.wt-home__nav-item.is-active {
+  background: rgb(var(--c-accent) / 0.13);
+  color: rgb(var(--c-accent));
+  font-weight: 650;
+}
+
+.wt-home__nav-label {
+  flex: 1;
+}
+
+.wt-home__nav-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-on-accent));
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wt-home__sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid rgb(var(--c-border));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wt-home__machine-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: rgb(var(--c-surface));
+  border: 1px solid rgb(var(--c-border));
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.wt-home__machine-card:hover {
+  border-color: rgb(var(--c-border-strong));
+}
+
+.wt-home__machine-chip {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgb(var(--c-accent) / 0.14);
+  color: rgb(var(--c-accent));
+  flex: 0 0 auto;
+}
+
+.wt-home__machine-dot {
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 2px solid rgb(var(--c-surface));
+}
+
+.wt-home__user-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 4px;
+}
+
+.wt-home__avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgb(var(--c-surface-3));
+  color: rgb(var(--c-text));
+  font-weight: 700;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+/* ---- main column ---------------------------------------------------------- */
+.wt-home__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wt-home__topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 64px;
+  flex: 0 0 auto;
+  padding: 0 24px;
+  border-bottom: 1px solid rgb(var(--c-border));
+  background: rgb(var(--c-bg) / 0.7);
+  backdrop-filter: blur(10px);
+}
+
+.wt-home__topbar-title {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.wt-home__search-wrap {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.wt-home__search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(440px, 100%);
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 11px;
+  background: rgb(var(--c-surface));
+  border: 1px solid rgb(var(--c-border));
+  color: rgb(var(--c-text-subtle));
+}
+
+.wt-home__search:focus-within {
+  border-color: rgb(var(--c-accent));
+}
+
+.wt-home__search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: rgb(var(--c-text));
+}
+
+.wt-home__kbd {
+  font-size: 11px;
+  color: rgb(var(--c-text-subtle));
+  border: 1px solid rgb(var(--c-border));
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.wt-home__topbar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wt-home__bell {
+  position: relative;
+}
+
+.wt-home__bell-dot {
+  position: absolute;
+  top: 8px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  border: 2px solid rgb(var(--c-surface));
+}
+
+.wt-home__scroll {
+  flex: 1;
+  overflow: auto;
+}
+
+/* ---- Home screen ---------------------------------------------------------- */
+.wt-home__page {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 28px;
+  padding: 28px 28px 40px;
+  align-items: start;
+}
+
+.wt-home__page-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.wt-home__greeting-sub {
+  color: rgb(var(--c-text-muted));
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.wt-home__quickstart {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.wt-home__qtile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgb(var(--c-surface));
+  border: 1px solid rgb(var(--c-border));
+  text-decoration: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.wt-home__qtile:hover {
+  border-color: rgb(var(--c-border-strong));
+  background: rgb(var(--c-surface-2));
+}
+
+.wt-home__qtile-chip {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  flex: 0 0 auto;
+}
+
+.wt-home__qtile-label {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: rgb(var(--c-text));
+  line-height: 1.2;
+}
+
+.wt-home__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.wt-home__recent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.wt-home__recent-card {
+  overflow: hidden;
+  text-decoration: none;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  display: block;
+  width: 100%;
+}
+
+.wt-home__recent-thumb {
+  height: 120px;
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid rgb(var(--c-border));
+  color: rgb(var(--c-text-muted));
+}
+
+.wt-home__recent-thumb--a {
+  background: radial-gradient(120% 120% at 30% 20%, rgb(var(--c-surface-2)), rgb(var(--c-surface)));
+}
+
+.wt-home__recent-thumb--b {
+  background: radial-gradient(120% 120% at 70% 20%, rgb(var(--c-surface-2)), rgb(var(--c-surface)));
+}
+
+.wt-home__recent-body {
+  padding: 12px 14px;
+}
+
+.wt-home__recent-name {
+  font-weight: 650;
+  font-size: 14px;
+  color: rgb(var(--c-text));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wt-home__recent-meta {
+  font-size: 11.5px;
+  color: rgb(var(--c-text-subtle));
+  margin-top: 3px;
+}
+
+/* ---- right rail ----------------------------------------------------------- */
+.wt-home__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wt-home__rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wt-home__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: rgb(var(--c-on-accent));
+}
+
+.wt-home__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+}
+
+.wt-home__progress {
+  height: 8px;
+  border-radius: 5px;
+  background: rgb(var(--c-on-accent) / 0.25);
+  margin: 14px 0 8px;
+  overflow: hidden;
+}
+
+.wt-home__progress-fill {
+  height: 100%;
+  background: rgb(var(--c-on-accent));
+}
+
+.wt-home__primary-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgb(var(--c-on-accent) / 0.85);
+}
+
+.wt-home__primary-btn {
+  width: 100%;
+  margin-top: 14px;
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: rgb(var(--c-on-accent));
+  color: rgb(var(--c-accent));
+  font: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wt-home__activity-row {
+  display: flex;
+  gap: 11px;
+  padding: 9px 0;
+  border-top: 1px solid rgb(var(--c-border));
+}
+
+.wt-home__activity-chip {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: rgb(var(--c-surface-2));
+  color: rgb(var(--c-text-muted));
+}
+
+.wt-home__activity-text {
+  font-size: 12.5px;
+  color: rgb(var(--c-text));
+  line-height: 1.35;
+}
+
+.wt-home__activity-time {
+  font-size: 11px;
+  color: rgb(var(--c-text-subtle));
+  margin-top: 2px;
+}
+
+/* ---- placeholder ("coming soon") screens ---------------------------------- */
+.wt-home__placeholder {
+  max-width: 560px;
+  margin: 48px auto;
+  padding: 32px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.wt-home__placeholder-chip {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: rgb(var(--c-surface-2));
+  color: rgb(var(--c-accent));
+  margin-bottom: 4px;
+}
+
+.wt-home__placeholder-body {
+  color: rgb(var(--c-text-muted));
+  font-size: 13.5px;
+  line-height: 1.5;
+}
