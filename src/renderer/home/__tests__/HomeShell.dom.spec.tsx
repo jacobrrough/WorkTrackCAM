@@ -20,11 +20,11 @@ describe('HomeShell — interactive (happy-dom)', () => {
     const user = userEvent.setup()
     render(<HomeShell onEnterWorkspace={() => {}} />)
 
-    // Home → Files: greeting gone, Files placeholder shown, nav marks Files active.
+    // Home → Files: greeting gone, Files screen shown, nav marks Files active.
     await user.click(screen.getByRole('button', { name: 'Files' }))
     expect(screen.queryByText('Good afternoon, Jacob')).toBeNull()
     expect(screen.getByRole('button', { name: 'Files' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.getByText(/The Files screen is coming/i)).toBeTruthy()
+    expect(screen.getByText('bracket-mount.wtc')).toBeTruthy()
 
     // Files → Home again.
     await user.click(screen.getByRole('button', { name: 'Home' }))
@@ -65,8 +65,8 @@ describe('HomeShell — interactive (happy-dom)', () => {
     const user = userEvent.setup()
     render(<HomeShell onEnterWorkspace={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Open in Jobs' }))
-    expect(screen.getByText(/The Jobs screen is coming/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Jobs/i }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText('Running now')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Jobs/ }).getAttribute('aria-current')).toBe('page')
   })
 
   it('enters the workspace from the sidebar machine card', async () => {

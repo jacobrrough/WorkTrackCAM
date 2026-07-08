@@ -17,8 +17,12 @@ import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { Button, DsScope } from '../ds'
 import { HomeIcon } from './icons'
-import type { HomeIconName } from './icons'
 import { HomeScreen } from './HomeScreen'
+import { FilesScreen } from './screens/FilesScreen'
+import { TemplatesScreen } from './screens/TemplatesScreen'
+import { MachineScreen } from './screens/MachineScreen'
+import { JobsScreen } from './screens/JobsScreen'
+import { SettingsScreen } from './screens/SettingsScreen'
 import { HOME_NAV, HOME_SCREEN_TITLES, type HomeScreenId } from './home-screens'
 
 export interface HomeShellProps {
@@ -26,23 +30,32 @@ export interface HomeShellProps {
   onEnterWorkspace: () => void
 }
 
-/** Honest placeholder for a screen not yet built in this cycle. */
-function ComingSoonScreen({ icon, title }: { icon: HomeIconName; title: string }): ReactElement {
-  return (
-    <div className="wt-home__placeholder">
-      <span className="wt-home__placeholder-chip">
-        <HomeIcon name={icon} size={26} />
-      </span>
-      <div className="ds-section-title" style={{ fontSize: 18 }}>
-        {title}
-      </div>
-      <p className="wt-home__placeholder-body">
-        The {title} screen is coming in a later cycle of the design-system
-        unification. Its layout is specified in the handoff and will be rebuilt
-        with the same DS components used on Home.
-      </p>
-    </div>
-  )
+/** Render the active app screen inside the shell content region. */
+function ScreenBody({
+  screen,
+  onEnterWorkspace,
+  onOpenScreen
+}: {
+  screen: HomeScreenId
+  onEnterWorkspace: () => void
+  onOpenScreen: (s: HomeScreenId) => void
+}): ReactElement {
+  switch (screen) {
+    case 'home':
+      return <HomeScreen onEnterWorkspace={onEnterWorkspace} onOpenScreen={onOpenScreen} />
+    case 'files':
+      return <FilesScreen />
+    case 'templates':
+      return <TemplatesScreen onEnterWorkspace={onEnterWorkspace} />
+    case 'machine':
+      return <MachineScreen />
+    case 'jobs':
+      return <JobsScreen />
+    case 'settings':
+      return <SettingsScreen />
+    default:
+      return <HomeScreen onEnterWorkspace={onEnterWorkspace} onOpenScreen={onOpenScreen} />
+  }
 }
 
 export function HomeShell({ onEnterWorkspace }: HomeShellProps): ReactElement {
@@ -150,19 +163,11 @@ export function HomeShell({ onEnterWorkspace }: HomeShellProps): ReactElement {
         </header>
 
         <div className="wt-home__scroll">
-          {screen === 'home' ? (
-            <HomeScreen onEnterWorkspace={onEnterWorkspace} onOpenScreen={setScreen} />
-          ) : (
-            <ComingSoonScreen icon={navIconFor(screen)} title={title} />
-          )}
+          <ScreenBody screen={screen} onEnterWorkspace={onEnterWorkspace} onOpenScreen={setScreen} />
         </div>
       </div>
     </DsScope>
   )
-}
-
-function navIconFor(screen: HomeScreenId): HomeIconName {
-  return HOME_NAV.find((n) => n.id === screen)?.icon ?? 'grid'
 }
 
 export default HomeShell

@@ -32,3 +32,4 @@
 /* Home shell — DS-native app surface (sidebar + top bar + 9-screen region).
    Structure only; appearance comes from the .ds-* recipes + --c-* bridge. */
 @import './home/home-shell.css';
+@import './home/home-screens.css';

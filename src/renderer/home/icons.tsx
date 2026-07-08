@@ -34,6 +34,14 @@ export type HomeIconName =
   | 'chat'
   | 'share'
   | 'bolt'
+  | 'sort'
+  | 'target'
+  | 'probe'
+  | 'lift'
+  | 'lock'
+  | 'file'
+  | 'pause'
+  | 'stop'
 
 /** Inner path content for each glyph, keyed by {@link HomeIconName}. */
 const PATHS: Record<HomeIconName, ReactElement> = {
@@ -218,7 +226,51 @@ const PATHS: Record<HomeIconName, ReactElement> = {
       strokeWidth="1.6"
       strokeLinejoin="round"
     />
-  )
+  ),
+  sort: (
+    <path d="M4 6h16M6 12h12M9 18h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  ),
+  target: (
+    <>
+      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </>
+  ),
+  probe: (
+    <>
+      <path d="M12 3v10M12 13l-3 5h6z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="M6 21h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </>
+  ),
+  lift: (
+    <path
+      d="M12 4v9M8.5 7.5 12 4l3.5 3.5M5 20h14"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  ),
+  lock: (
+    <>
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="currentColor" strokeWidth="1.7" />
+    </>
+  ),
+  file: (
+    <>
+      <path
+        d="M6 3.5h8L19 8.5V20a.5.5 0 0 1-.5.5h-13A.5.5 0 0 1 5 20V4a.5.5 0 0 1 .5-.5z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M13.5 3.7V9h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </>
+  ),
+  pause: <path d="M8.5 5v14M15.5 5v14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2.4" fill="currentColor" />
 }
 
 export interface HomeIconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
