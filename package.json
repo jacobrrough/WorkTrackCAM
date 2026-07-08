@@ -8,7 +8,10 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && electron-builder",
+    "build:app": "electron-vite build",
     "preview": "electron-vite preview",
+    "launch": "npm run build:app && npm run preview",
+    "shortcut:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop-shortcut.ps1",
     "pretest": "node scripts/check-no-dump-stubs.cjs",
     "test": "vitest run",
     "test:dom": "vitest run -c vitest.dom.config.ts",
