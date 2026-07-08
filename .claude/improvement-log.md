@@ -19604,3 +19604,22 @@ Icons extended: sort/target/probe/lift/lock/file/pause/stop. Data in `home-sampl
 **Deploy:** committed (e21548c); dist\win-unpacked robocopy'd over the installed app at `%LOCALAPPDATA%\Programs\WorkTrack3D` (app.asar hash-matched) so the user's desktop shortcut launches the full 6-screen shell.
 
 **Next cycle:** wire the real data/behaviour behind the screens (Files -> project list + open-in-workspace; Machine -> live telemetry/Moonraker; Jobs -> real queue; Settings theme/accent -> app theme system), or move to the Canvas workspace direction. Land the branch to main via PR - the shell is now a coherent, complete surface.
+
+
+## Cycle 292 - Design-system unification: wire the Home shell screens to real app data (2026-07-07)
+
+**Focus:** user - "wire it up." Replaced the placeholder machine/theme content in the DS Home shell with LIVE app data, scoped to what a real backend exists for (a read-only Explore agent mapped the wireable surfaces first: don't fake a backend that isn't there).
+
+**Baseline -> result:** typecheck 0; node 19,361 -> **19,368 pass / 2 skip / 0 fail** (+7 pure resolver pins); DOM 168 -> **169** (+1 theme-swatch spec, net after updating real-content pins); production build 0 (signed installer). **Pushed to origin/main (49c6cb2..44d8c7e)** + installed app redeployed (hash-matched).
+
+**What got wired (real):**
+- **Settings Appearance -> the real 10-theme system.** Each swatch previews its theme's accent via its own `data-theme` + the `--c-*` bridge (`background: rgb(var(--c-accent))`); click -> `applyTheme(id)` (instant whole-app re-theme) + `settingsSet({theme})`. Units segmented persists `settingsSet({units})`; hydrated from `settingsGet` on mount. Live-verified: clicking Neon flipped `<html data-theme>`, shell `--c-accent` 77,138,255 -> 0,240,208, `--c-bg` -> 5,5,9, active-nav recolor.
+- **Machine identity everywhere -> real `sessionMachine`** via new `useMachineSessionOptional()` (non-throwing; null outside a provider so tests/isolation fall back to a SAMPLE machine). Sidebar card + Home on-machine card + Machine screen show the active machine name + `MODE_LABELS` mode.
+- **Machine screen -> machine-adaptive PROFILE specs** (FDM: nozzle/bed/chamber/max-speed; CNC: spindle-rpm-or-HP/feed/work-area), a real work envelope (not a fake DRO), connection derived by kind/dialect, and a machine switcher (the canonical session-switch quad: setSessionMachine + setLastMachineId + settingsSet + loadToolsForMachine).
+- **K2 live telemetry** (`useK2Telemetry`): FDM + configured `moonrakerUrl` -> poll `moonrakerStatus`/`moonrakerInfo` for live nozzle/bed temps + print state/progress/ETA on the Machine screen + Home card; graceful fallback to specs offline. Home on-machine card shows an honest idle "Ready" (no fake 46% cut) unless a real print is running.
+
+**Deliberately NOT wired (no backend - kept honest, not faked):** recent files/projects (schema slot only, unwired), spindle/feed/position DRO, Carvera/Laguna telemetry, job queue IPC, `coordinateReadout`/`decimalPlaces` settings keys (those Settings rows stay local UI).
+
+**Testability pattern:** pure resolvers (`resolveActiveMachine`/`machineTelemetry`/`machineIdentity`/`machineConnection` in `home/active-machine.ts`) unit-pinned in node; components read the optional session + guard `window.fab`, so the same code renders live in-app and with sample data in tests (no provider/IPC needed).
+
+**Next:** thread feature dialog (the `thread_wizard` kernel op in build_part.py exists but is dialog-less) via the wire-feature-dialog skill; and remaining real-data wiring (recents MRU, real job queue) if the user wants it.
