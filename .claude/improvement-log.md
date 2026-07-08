@@ -19579,3 +19579,28 @@ analogue to bench-truth before cutting material. Files only — no engine/behavi
 **Test-pin updates from the wiring:** `AppShell.nav-guard` pin (`<AppShellBody onGoHome={onGoHome} />`) and `TopBar.test` render helper (added `onGoHome`) updated for the new prop. All new `<button>`s carry `type="button"` (new-shell button-types invariant).
 
 **Next cycle:** build the next shop screen in the same shell - Settings is the natural pick (Units & display + Appearance; flagship prefs, self-contained, exercises the theme/accent switch), or Files (folder rail + table). Reuse the extracted `.dc.html` data + specs. Still additive; land the branch to main via PR when a coherent screen set is ready.
+
+## Cycle 291 - Design-system unification (screens 2-6): Files, Templates, Machine, Jobs, Settings (2026-07-07)
+
+**Focus:** user - "cycle through and build all the screens." Built ALL five remaining shop-relevant screens in one pass, completing the DS-native app shell. Every sidebar destination is now a real screen; the ComingSoon placeholders are retired.
+
+**Baseline -> result:** typecheck 0 -> 0; node **19,355 -> 19,361 pass / 2 skip / 0 fail** (+6 render pins); DOM **162 -> 168** (+6 interaction specs); **production build 0** (signed installer). All five hand-verified LIVE in a Vite browser harness (not just tests).
+
+**What landed (`src/renderer/home/screens/*` + `styles/home/home-screens.css`, structure-only CSS):**
+- **FilesScreen** - 210px folder rail (Library eyebrow, All files/Production[active]/Prototypes/Shared/Trash, Storage 62% meter) + breadcrumb (mono) + toolbar (Sort/New folder/Upload-primary) + sticky table `1fr 130 150 100 130 44` with per-kind type icons, hover, and row-select (accent/0.07). Row is `role=button` + keydown (nested ⋯ button - avoids invalid button-in-button).
+- **TemplatesScreen** - category chip filter (All + 6 cats, active=accent tint) + 4-col card grid (150px gradient thumb + cat eyebrow overlay + title/desc + Use template -> workspace). Filters live.
+- **MachineScreen** - header (52px accent chip, Display name, mono firmware, green Online pill) + 4 telemetry tiles (Spindle/Feed/Load/Temp) + position bar (X/Y/Z mono) + Controls pills (Home/Jog/Probe/Raise Z/Unlock) + Maintenance rows (OK green / Due accent) + right rail (now-cutting preview + connection).
+- **JobsScreen** - running job in the SINGLE accent PrimaryCard (pause/stop round btns) + Queue/History underline tabs; queue rows (pos chip + mono name); history table with status badges (Completed green #34d399 / Failed danger). Tab state local.
+- **SettingsScreen** - 210px sub-nav + Units & display (units segmented, coordinate-readout switch w/ animated knob, decimals ds-input, angle dropdown) + Appearance (theme segmented, 5 accent swatches). LOCAL UI state - theme/accent NOT yet wired to the app's real 10-theme system (the SettingsDrawer owns that); flagged as follow-up.
+
+Icons extended: sort/target/probe/lift/lock/file/pause/stop. Data in `home-sample-data.ts` (design placeholders pending live feeds). HomeShell now routes 6 screens via a `ScreenBody` switch; dead `.wt-home__placeholder` CSS removed.
+
+**Hand-verification method (the headless-preview gotcha):** the Claude preview browser doesn't feed a viewport height (`100vh`->0; force a px height in the harness) and doesn't paint CSS `transition`s (getComputedStyle returns the pre-transition value after JS class changes). To verify the toggle's real static styles, disable the transition first: off=surface-3 rgb(42,47,58), on=accent - both correct. Everything else (Files grid `384 130 150 100 130 44`, telemetry, Jobs History swap + Failed-badge red, Templates Brackets filter -> L-Bracket+Motor Mount, Hanken on all DS buttons) verified via preview_inspect/eval.
+
+**Tests:** `home/__tests__/screens.test.tsx` (+6 node render pins: table/rows/single-primary-per-screen/telemetry/queue-default/settings-toggle-default) + `screens.dom.spec.tsx` (+6 DOM: sidebar routes to all 5, row-select, chip filter, Queue<->History, units segmented + coord switch aria-checked). Updated `HomeShell.dom.spec` off the retired placeholders (Files/Jobs now assert real content).
+
+**No My-Shop violation / no G-code touched:** pure renderer UI; Team/Billing/Activity stay omitted. gcode-safety not triggered.
+
+**Deploy:** committed (e21548c); dist\win-unpacked robocopy'd over the installed app at `%LOCALAPPDATA%\Programs\WorkTrack3D` (app.asar hash-matched) so the user's desktop shortcut launches the full 6-screen shell.
+
+**Next cycle:** wire the real data/behaviour behind the screens (Files -> project list + open-in-workspace; Machine -> live telemetry/Moonraker; Jobs -> real queue; Settings theme/accent -> app theme system), or move to the Canvas workspace direction. Land the branch to main via PR - the shell is now a coherent, complete surface.
