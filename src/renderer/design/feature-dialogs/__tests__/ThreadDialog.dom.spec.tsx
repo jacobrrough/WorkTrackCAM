@@ -137,4 +137,62 @@ describe('ThreadDialog — interactive (happy-dom)', () => {
 
     expect(onApply).not.toHaveBeenCalled()
   })
+
+  it('a preset fills the size + spec fields and emits the preset geometry', async () => {
+    const user = userEvent.setup()
+    const onApply = vi.fn()
+    render(<ThreadDialog params={defaultParams} onApply={onApply} {...baseProps} />)
+
+    // Picking M6 × 1 fills major radius / pitch / depth + the categorical spec.
+    await user.selectOptions(screen.getByTestId('fd-thread_wizard-preset'), 'm6')
+    expect((screen.getByTestId('fd-thread_wizard-majorRadius') as HTMLInputElement).value).toBe('3')
+    expect((screen.getByTestId('fd-thread_wizard-pitch') as HTMLInputElement).value).toBe('1')
+    expect((screen.getByTestId('fd-thread_wizard-depth') as HTMLInputElement).value).toBe('0.6')
+    // The picker reflects the live fields, so it now reads back the chosen preset.
+    expect((screen.getByTestId('fd-thread_wizard-preset') as HTMLSelectElement).value).toBe('m6')
+
+    await user.click(screen.getByTestId('fd-thread_wizard-apply'))
+    expect(onApply).toHaveBeenCalledWith({
+      target: 'kernelOp',
+      op: expect.objectContaining({
+        kind: 'thread_wizard',
+        majorRadiusMm: 3,
+        pitchMm: 1,
+        depthMm: 0.6,
+        standard: 'ISO',
+        designation: 'M',
+        class: '6g'
+      })
+    })
+  })
+
+  it('editing a size after a preset drops the picker back to Custom', async () => {
+    const user = userEvent.setup()
+    render(<ThreadDialog params={defaultParams} onApply={vi.fn()} {...baseProps} />)
+    await user.selectOptions(screen.getByTestId('fd-thread_wizard-preset'), 'm6')
+    expect((screen.getByTestId('fd-thread_wizard-preset') as HTMLSelectElement).value).toBe('m6')
+    const pitch = screen.getByTestId('fd-thread_wizard-pitch')
+    await user.clear(pitch)
+    await user.type(pitch, '1.7')
+    expect((screen.getByTestId('fd-thread_wizard-preset') as HTMLSelectElement).value).toBe('custom')
+  })
+
+  it('surfaces the operator pick in the selection banner', () => {
+    const face = { kind: 'face', faceId: 4 } as const
+    render(
+      <ThreadDialog
+        params={defaultParams}
+        onApply={vi.fn()}
+        selectionInfo={{ selection: face, label: 'Face 4 · 50.0 mm²' }}
+        busy={false}
+        disabled={false}
+      />
+    )
+    expect(screen.getByTestId('fd-thread_wizard-selection-label').textContent).toContain('Face 4 · 50.0 mm²')
+  })
+
+  it('prompts to pick a face when nothing is selected', () => {
+    render(<ThreadDialog params={defaultParams} onApply={vi.fn()} {...baseProps} />)
+    expect(screen.getByTestId('fd-thread_wizard-selection-empty')).toBeTruthy()
+  })
 })

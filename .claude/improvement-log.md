@@ -19623,3 +19623,22 @@ Icons extended: sort/target/probe/lift/lock/file/pause/stop. Data in `home-sampl
 **Testability pattern:** pure resolvers (`resolveActiveMachine`/`machineTelemetry`/`machineIdentity`/`machineConnection` in `home/active-machine.ts`) unit-pinned in node; components read the optional session + guard `window.fab`, so the same code renders live in-app and with sample data in tests (no provider/IPC needed).
 
 **Next:** thread feature dialog (the `thread_wizard` kernel op in build_part.py exists but is dialog-less) via the wire-feature-dialog skill; and remaining real-data wiring (recents MRU, real job queue) if the user wants it.
+
+
+## Cycle 293 - Thread dialog: preset thread types + surface-selection banner (2026-07-07)
+
+**Focus:** user - "add a thread modal so i can select a surface and add preset thread types to the surface." Ran the wire-feature-dialog skill. Preflight found the op is REAL (`thread_wizard` in build_part.py, a member of `kernelPostSolidOpSchema`) AND a param-driven `ThreadDialog.tsx` was already wired (catalog `so_thread` -> host -> `buildThreadOp`). So this was an ENHANCEMENT of the existing dialog, not a new one.
+
+**Baseline -> result:** typecheck 0; node 19,368 -> **19,371 pass** (+3 preset pins); DOM 169 -> **173** (+4 preset/banner interaction specs); build 0 (signed installer). All 4 pre-existing thread tests stayed green (additive change). Live-verified in a harness.
+
+**What landed (ThreadDialog.tsx):**
+- **Preset thread types** - `THREAD_PRESETS` table (14 canonical sizes: ISO metric M3-M20 + imperial 1/4"-1/2" UNC/UNF). A "Preset" `DialogSelectField` fills major RADIUS (= nominal dia / 2), pitch, modeled cut depth (~0.6*pitch), and the categorical spec (standard/designation/class). `matchThreadPreset(radius,pitch)` DERIVES the picker value from the live fields, so hand-editing a size drops it back to "Custom" (never a stale label). Live: picking 1/4"-20 UNC filled r3.175 / p1.27 / d0.762 / UNC.
+- **Surface awareness** - the dialog now surfaces the operator's live pick via the kit's `SelectionContextBanner` ("Selected: Face 4 · 50.0 mm2").
+
+**Honesty scoping (CLAUDE.md "do not fake capability" - the important call):** the kernel `thread_wizard` op is PARAM-DRIVEN - it positions the helix by centerXMm/centerYMm/zStartMm, NOT by a face reference. A cylindrical face's centroid sits ON the surface (not the axis) and its radius isn't exposed by the tessellation faceMap (only area), so auto-deriving center/radius from the pick would emit WRONG geometry. So the banner shows the selection for CONTEXT with a note that the numbers place the thread - it never fakes face-driven placement. The original dialog OMITTED the banner for this reason; the user asked for surface selection, so it's now shown honestly (context + note) rather than faked. Every field is still consumed by the op - no dead placeholders.
+
+**Tests:** Thread-op.test.ts +3 (every preset builds a schema-valid op via the REAL kernelPostSolidOpSchema; matchThreadPreset round-trips each + falls back to Custom; canonical M6=r3/p1 + 1/4"-20=r3.175/p1.27). ThreadDialog.dom.spec.tsx +4 (preset fills fields -> emits preset geometry; editing pitch drops to Custom; banner shows the pick; empty prompt when no selection).
+
+**gcode-safety:** N/A - CAD dialog, no engines/cam / posts / machines / G-code touched (skill's own rule).
+
+**Next:** if the user wants true face-driven threads, that's a BACKEND cycle (extract cylinder axis+radius from the picked face in the sidecar, add a face-ref field to the thread_wizard schema) - out of scope for a dialog-wiring pass.

@@ -13,8 +13,11 @@ import { describe, expect, it } from 'vitest'
 import { kernelPostSolidOpSchema } from '../../../../shared/part-features-schema'
 import {
   buildThreadOp,
+  matchThreadPreset,
   THREAD_CLASS_OPTIONS,
   THREAD_DESIGNATION_OPTIONS,
+  THREAD_PRESETS,
+  THREAD_PRESET_CUSTOM,
   THREAD_STANDARD_OPTIONS,
   THREAD_STARTS_MAX,
   THREAD_STARTS_MIN
@@ -109,5 +112,41 @@ describe('buildThreadOp emits a schema-valid thread_wizard op', () => {
         expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
       }
     }
+  })
+})
+
+describe('THREAD_PRESETS + matchThreadPreset', () => {
+  it('every preset has positive geometry and builds a schema-valid op', () => {
+    for (const p of THREAD_PRESETS) {
+      expect(p.majorRadiusMm).toBeGreaterThan(0)
+      expect(p.pitchMm).toBeGreaterThan(0)
+      expect(p.depthMm).toBeGreaterThan(0)
+      const op = buildThreadOp({
+        ...FULL,
+        majorRadiusMm: p.majorRadiusMm,
+        pitchMm: p.pitchMm,
+        depthMm: p.depthMm,
+        standard: p.standard,
+        designation: p.designation,
+        class: p.class
+      })
+      expect(() => kernelPostSolidOpSchema.parse(op)).not.toThrow()
+    }
+  })
+
+  it('carries the canonical standard sizes', () => {
+    const m6 = THREAD_PRESETS.find((p) => p.id === 'm6')
+    expect(m6).toMatchObject({ majorRadiusMm: 3, pitchMm: 1, standard: 'ISO', designation: 'M' })
+    const quarter20 = THREAD_PRESETS.find((p) => p.label.startsWith('1/4"-20'))
+    expect(quarter20).toMatchObject({ majorRadiusMm: 3.175, pitchMm: 1.27, designation: 'UNC' })
+  })
+
+  it('matchThreadPreset round-trips each preset and falls back to Custom', () => {
+    for (const p of THREAD_PRESETS) {
+      expect(matchThreadPreset(p.majorRadiusMm, p.pitchMm)).toBe(p.id)
+    }
+    expect(matchThreadPreset(999, 999)).toBe(THREAD_PRESET_CUSTOM)
+    expect(matchThreadPreset(null, 1)).toBe(THREAD_PRESET_CUSTOM)
+    expect(matchThreadPreset(8, 1.25)).toBe(THREAD_PRESET_CUSTOM) // r8+p1.25 is no standard size
   })
 })

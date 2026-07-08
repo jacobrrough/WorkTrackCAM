@@ -21,10 +21,23 @@
  * non-empty string, so the emitted op is always schema-valid; a later cycle that
  * adds a text field to the kit can widen these without reshaping the dialog.
  *
- * Honesty note (CLAUDE.md "do not fake capability"): no field here is a dead
- * placeholder — the op consumes all of them. The selection banner is omitted on
- * purpose: this op takes no pick, and showing a "pick a face" prompt would imply
- * a capability the kernel does not use.
+ * Preset thread types (this cycle): a "Preset" select seeded with the standard
+ * metric (ISO M3–M20) and imperial (UNC/UNF) sizes. Picking one fills the major
+ * radius, pitch, depth, and the categorical spec (standard/designation/class)
+ * from a canonical table so the operator doesn't hand-enter thread geometry;
+ * editing any size afterwards drops the picker back to "Custom" (the value is
+ * DERIVED from the live fields, never a stale label). See {@link THREAD_PRESETS}.
+ *
+ * Surface selection (this cycle): the dialog now surfaces the operator's live
+ * pick in a {@link SelectionContextBanner} so "select a surface, then thread it"
+ * reads honestly. Honesty note (CLAUDE.md "do not fake capability"): the kernel
+ * `thread_wizard` op is PARAM-DRIVEN — it positions the helix by Center X/Y +
+ * Z start, NOT by a face reference (a cylindrical face's centroid sits on the
+ * surface, not the axis, and its radius isn't exposed — deriving center/radius
+ * from the pick would emit wrong geometry). So the banner shows the pick for
+ * CONTEXT with a note that the numbers below place the thread; it never fakes
+ * face-driven placement. Every other field is consumed by the op — no dead
+ * placeholders.
  */
 
 import { useState, type JSX } from 'react'
@@ -32,7 +45,8 @@ import {
   DialogApplyRow,
   DialogNumberField,
   DialogSelectField,
-  FeatureDialogCard
+  FeatureDialogCard,
+  SelectionContextBanner
 } from './FeatureDialogKit'
 import {
   parseClampedInt,
@@ -59,6 +73,91 @@ export const THREAD_STARTS_MAX = 8
 export const THREAD_STANDARD_OPTIONS = ['ISO', 'UTS', 'BSP', 'NPT'] as const
 export const THREAD_DESIGNATION_OPTIONS = ['M', 'UNC', 'UNF', 'NPT', 'G'] as const
 export const THREAD_CLASS_OPTIONS = ['6g', '6H', '4g6g', '2A', '2B', '3A', '3B'] as const
+
+/**
+ * A canonical thread preset: the geometry (major RADIUS = nominal diameter / 2,
+ * pitch, and a modeled cut depth ≈ 0.6·pitch) plus the categorical spec. Every
+ * value is exactly what the kernel op consumes, so picking a preset is just a
+ * fast, correct fill — no new capability, no fake data.
+ */
+export interface ThreadPreset {
+  readonly id: string
+  readonly label: string
+  readonly majorRadiusMm: number
+  readonly pitchMm: number
+  readonly depthMm: number
+  readonly standard: string
+  readonly designation: string
+  readonly class: string
+}
+
+/** Sentinel value for the picker when the live fields match no preset. */
+export const THREAD_PRESET_CUSTOM = 'custom'
+
+const metric = (id: string, diaMm: number, pitchMm: number): ThreadPreset => ({
+  id,
+  label: `${id.toUpperCase()} × ${pitchMm}`,
+  majorRadiusMm: diaMm / 2,
+  pitchMm,
+  depthMm: Math.round(0.6 * pitchMm * 1000) / 1000,
+  standard: 'ISO',
+  designation: 'M',
+  class: '6g'
+})
+
+const imperial = (
+  label: string,
+  diaIn: number,
+  tpi: number,
+  designation: 'UNC' | 'UNF'
+): ThreadPreset => {
+  const pitchMm = Math.round((25.4 / tpi) * 1000) / 1000
+  return {
+    id: label.replace(/[^a-z0-9]+/gi, '_').toLowerCase(),
+    label,
+    majorRadiusMm: Math.round(((diaIn * 25.4) / 2) * 1000) / 1000,
+    pitchMm,
+    depthMm: Math.round(0.6 * pitchMm * 1000) / 1000,
+    standard: 'UTS',
+    designation,
+    class: '2A'
+  }
+}
+
+/**
+ * Standard metric coarse (ISO M) + imperial (UNC/UNF) threads. Radius is half the
+ * nominal major diameter; pitch is the coarse-series pitch (metric) or 25.4/TPI
+ * (imperial). Kept small + common — the operator can still hand-tune any field.
+ */
+export const THREAD_PRESETS: readonly ThreadPreset[] = [
+  metric('m3', 3, 0.5),
+  metric('m4', 4, 0.7),
+  metric('m5', 5, 0.8),
+  metric('m6', 6, 1.0),
+  metric('m8', 8, 1.25),
+  metric('m10', 10, 1.5),
+  metric('m12', 12, 1.75),
+  metric('m16', 16, 2.0),
+  metric('m20', 20, 2.5),
+  imperial('1/4"-20 UNC', 0.25, 20, 'UNC'),
+  imperial('5/16"-18 UNC', 0.3125, 18, 'UNC'),
+  imperial('3/8"-16 UNC', 0.375, 16, 'UNC'),
+  imperial('1/2"-13 UNC', 0.5, 13, 'UNC'),
+  imperial('1/4"-28 UNF', 0.25, 28, 'UNF')
+]
+
+/**
+ * DERIVE which preset (if any) the live major-radius + pitch match, so the picker
+ * reflects the fields rather than a stale selection. Returns the preset id or
+ * {@link THREAD_PRESET_CUSTOM}. Pure; exported for the unit test.
+ */
+export function matchThreadPreset(majorRadiusMm: number | null, pitchMm: number | null): string {
+  if (majorRadiusMm === null || pitchMm === null) return THREAD_PRESET_CUSTOM
+  const hit = THREAD_PRESETS.find(
+    (p) => Math.abs(p.majorRadiusMm - majorRadiusMm) < 1e-3 && Math.abs(p.pitchMm - pitchMm) < 1e-3
+  )
+  return hit?.id ?? THREAD_PRESET_CUSTOM
+}
 
 export interface ThreadDialogParams {
   /** Helix center X (mm, signed). */
@@ -135,13 +234,11 @@ export function buildThreadOp(params: {
 
 export function ThreadDialog({
   params,
-  selectionInfo: _selectionInfo,
+  selectionInfo,
   onApply,
   busy,
   disabled
 }: ThreadDialogProps): JSX.Element {
-  void _selectionInfo // thread_wizard is fully param-driven — it takes no pick
-
   const [centerXRaw, setCenterXRaw] = useState(String(params.centerXMm))
   const [centerYRaw, setCenterYRaw] = useState(String(params.centerYMm))
   const [majorRadiusRaw, setMajorRadiusRaw] = useState(String(params.majorRadiusMm))
@@ -179,6 +276,21 @@ export function ThreadDialog({
     depth !== null &&
     starts !== null
   const canApply = allValid && disabled !== true
+
+  // The picker reflects the LIVE size fields (derived), so hand-editing radius /
+  // pitch drops it back to Custom automatically — never a stale label.
+  const presetValue = matchThreadPreset(majorRadius, pitch)
+  const applyPreset = (id: string): void => {
+    if (id === THREAD_PRESET_CUSTOM) return
+    const p = THREAD_PRESETS.find((x) => x.id === id)
+    if (p === undefined) return
+    setMajorRadiusRaw(String(p.majorRadiusMm))
+    setPitchRaw(String(p.pitchMm))
+    setDepthRaw(String(p.depthMm))
+    setStandard(p.standard)
+    setDesignation(p.designation)
+    setThreadClass(p.class)
+  }
 
   const handleApply = (): void => {
     if (
@@ -222,6 +334,23 @@ export function ThreadDialog({
 
   return (
     <FeatureDialogCard title="Thread" testId="fd-thread_wizard">
+      <SelectionContextBanner
+        selectionInfo={selectionInfo}
+        emptyPrompt="Optionally pick a cylindrical face first — the thread is placed by the values below."
+        note="Positioned by Center X/Y + Z start (the kernel cuts a helix from these numbers, not from the pick)."
+        testId="fd-thread_wizard-selection"
+      />
+      <DialogSelectField<string>
+        label="Preset"
+        value={presetValue}
+        options={[
+          { value: THREAD_PRESET_CUSTOM, label: '— Custom —' },
+          ...THREAD_PRESETS.map((p) => ({ value: p.id, label: p.label }))
+        ]}
+        onChange={applyPreset}
+        testId="fd-thread_wizard-preset"
+        disabled={disabled}
+      />
       <DialogNumberField
         label="Center X"
         value={centerXRaw}
