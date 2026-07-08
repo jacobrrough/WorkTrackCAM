@@ -40,20 +40,20 @@ describe('TemplatesScreen', () => {
   })
 })
 
-describe('MachineScreen', () => {
+describe('MachineScreen (wired to the active machine, sample fallback)', () => {
   const html = renderToStaticMarkup(createElement(MachineScreen))
-  it('renders identity, telemetry, position, controls and maintenance', () => {
-    expect(html).toContain('Carvera')
-    expect(html).toContain('Online · Cutting')
+  it('renders real identity, machine-adaptive spec tiles, work envelope, controls', () => {
+    expect(html).toContain('Carvera') // sample fallback machine name
+    expect(html).toContain('CNC 3D') // neutral mode pill (no live session)
     expect(html).toContain('Spindle')
-    expect(html).toContain('15000')
-    expect(html).toContain('mm/min')
-    expect(html).toContain('X 42.180')
+    expect(html).toContain('15000') // sample maxSpindleRpm
+    expect(html).toContain('mm/min') // max-feed tile unit
+    expect(html).toContain('Work area')
+    expect(html).toContain('X 360') // sample work envelope, not a fake DRO
     expect(html).toContain('Controls')
     expect(html).toContain('Probe')
     expect(html).toContain('Run calibration')
-    expect(html).toContain('Now cutting')
-    expect(html).toContain('USB-C')
+    expect(html).toContain('USB') // connection interface
   })
 })
 
@@ -72,7 +72,7 @@ describe('JobsScreen', () => {
 
 describe('SettingsScreen', () => {
   const html = renderToStaticMarkup(createElement(SettingsScreen))
-  it('renders the Units & display + Appearance prefs', () => {
+  it('renders the Units & display + Appearance prefs wired to the real theme set', () => {
     expect(html).toContain('Units')
     expect(html).toContain('Coordinate readout')
     expect(html).toContain('Decimal places')
@@ -80,7 +80,10 @@ describe('SettingsScreen', () => {
     expect(html).toContain('Inches')
     expect(html).toContain('Appearance')
     expect(html).toContain('Theme')
-    expect(html).toContain('Accent')
     expect(html).toContain('wt-set__toggle is-on') // coordinate readout defaults on
+    // Appearance is the real 10-theme picker: one swatch per theme, each
+    // previewing its own accent via its own data-theme.
+    expect(html.match(/data-theme=/g)?.length).toBe(10)
+    expect(html).toContain('data-theme="neon"')
   })
 })

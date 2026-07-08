@@ -246,23 +246,5 @@ export const SETTINGS_PANES = [
 
 export const UNIT_OPTS = [
   { id: 'mm', label: 'Millimeters' },
-  { id: 'in', label: 'Inches' }
+  { id: 'inch', label: 'Inches' }
 ] as const
-
-export const MODE_OPTS = [
-  { id: 'light', label: 'Light' },
-  { id: 'dark', label: 'Dark' }
-] as const
-
-export interface AccentSwatch {
-  readonly id: string
-  readonly rgb: string
-}
-
-export const ACCENT_SWATCHES: readonly AccentSwatch[] = [
-  { id: 'signal-red', rgb: '234 68 68' },
-  { id: 'deep-ocean', rgb: '37 99 235' },
-  { id: 'forest', rgb: '22 130 92' },
-  { id: 'ember', rgb: '217 119 6' },
-  { id: 'synthwave', rgb: '190 60 200' }
-]

@@ -70,12 +70,14 @@ describe('HomeScreen — dashboard content', () => {
     expect(html).toContain('Design · 2m ago · 4.2 MB')
   })
 
-  it('uses the single PrimaryCard for the "On the machine" surface', () => {
+  it('uses the single PrimaryCard for the "On the machine" surface (wired to the active machine)', () => {
     const html = homeHtml()
     expect(html.match(/ds-primary-card/g)?.length).toBe(1)
     expect(html).toContain('On the machine')
-    expect(html).toContain('bracket-mount.nc')
-    expect(html).toContain('2D Adaptive clear')
+    // No live session in isolation → the sample fallback machine, idle (not a
+    // fabricated running job).
+    expect(html).toContain('Carvera')
+    expect(html).toContain('Ready')
     expect(html).toContain('Open in Jobs')
   })
 

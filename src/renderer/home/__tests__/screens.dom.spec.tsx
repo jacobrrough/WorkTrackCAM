@@ -25,7 +25,7 @@ describe('HomeShell — sidebar routes to each screen', () => {
     expect(screen.getByText('Parametric Enclosure')).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Machine' }))
-    expect(screen.getByText('Online · Cutting')).toBeTruthy()
+    expect(screen.getByText('Run calibration')).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: /^Jobs/ }))
     expect(screen.getByText('Running now')).toBeTruthy()
@@ -96,5 +96,13 @@ describe('Settings screen', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     await user.click(toggle)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('applies a real theme to <html data-theme> when a theme swatch is clicked', async () => {
+    const user = openShell()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Neon Shop' }))
+    expect(document.documentElement.dataset.theme).toBe('neon')
+    expect(screen.getByRole('button', { name: 'Neon Shop' }).getAttribute('aria-pressed')).toBe('true')
   })
 })

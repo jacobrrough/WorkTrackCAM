@@ -17,6 +17,7 @@ import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { Button, DsScope } from '../ds'
 import { HomeIcon } from './icons'
+import { machineIdentity, useActiveMachine } from './active-machine'
 import { HomeScreen } from './HomeScreen'
 import { FilesScreen } from './screens/FilesScreen'
 import { TemplatesScreen } from './screens/TemplatesScreen'
@@ -61,6 +62,8 @@ function ScreenBody({
 export function HomeShell({ onEnterWorkspace }: HomeShellProps): ReactElement {
   const [screen, setScreen] = useState<HomeScreenId>('home')
   const title = HOME_SCREEN_TITLES[screen]
+  const { machine } = useActiveMachine()
+  const machineMode = machineIdentity(machine).modeLabel
 
   return (
     <DsScope appBg className="wt-home">
@@ -104,9 +107,11 @@ export function HomeShell({ onEnterWorkspace }: HomeShellProps): ReactElement {
               <span className="wt-home__machine-dot" />
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'rgb(var(--c-text))' }}>Carvera</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'rgb(var(--c-text))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {machine.name}
+              </div>
               <div className="mono" style={{ fontSize: 11, color: 'rgb(var(--c-text-muted))' }}>
-                Cutting · 46%
+                {machineMode}
               </div>
             </div>
             <HomeIcon name="chevR" size={16} style={{ color: 'rgb(var(--c-text-subtle))' }} />

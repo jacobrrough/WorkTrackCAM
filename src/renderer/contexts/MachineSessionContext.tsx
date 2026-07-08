@@ -93,3 +93,13 @@ export function useMachineSession(): MachineSessionContextValue {
   if (!ctx) throw new Error('useMachineSession must be used within MachineSessionProvider')
   return ctx
 }
+
+/**
+ * Non-throwing variant: returns the machine session when a provider is present,
+ * or `null` when rendered outside one. Lets self-contained surfaces (e.g. the
+ * DS Home shell) read the live machine when mounted in the real app and fall
+ * back to placeholder content in isolation (tests, storybook-style renders).
+ */
+export function useMachineSessionOptional(): MachineSessionContextValue | null {
+  return useContext(Ctx)
+}

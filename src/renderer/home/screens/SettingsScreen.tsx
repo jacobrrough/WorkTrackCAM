@@ -1,23 +1,68 @@
 /**
- * Settings — account & display prefs. Units & display + Appearance are the
- * flagship prefs (per the handoff). Local UI state for now; wiring the theme /
- * accent to the app's real theme system (the existing SettingsDrawer owns the
- * 10-theme picker) is a follow-up — see the design-system-unification plan.
+ * Settings — account & display prefs, wired to the app's real preference store.
+ *
+ * - **Appearance → Theme**: drives the real 10-theme system. Clicking a swatch
+ *   calls `applyTheme` (instant `<html data-theme>` flip — the whole app + DS
+ *   surface re-themes) and persists via `settingsSet({ theme })`. Each swatch
+ *   previews its theme's accent by carrying its own `data-theme`, so the token
+ *   bridge resolves `--c-accent` for that theme.
+ * - **Units & display → Units**: persisted via `settingsSet({ units })`.
+ * - **Coordinate readout / Decimal places / Angle units**: local UI only — those
+ *   preference keys don't exist in the backend yet (honest placeholder controls).
+ *
+ * `fab()` is guarded so the screen still renders in isolation (tests) with
+ * defaults; persistence only runs in the real app where `window.fab` exists.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { Display, Input } from '../../ds'
+import { fab } from '../../src/shop-types'
+import { THEMES } from '../../theme/theme-registry'
+import { applyTheme } from '../../theme/useTheme'
 import { HomeIcon } from '../icons'
-import { ACCENT_SWATCHES, MODE_OPTS, SETTINGS_PANES, UNIT_OPTS } from '../home-sample-data'
+import { SETTINGS_PANES, UNIT_OPTS } from '../home-sample-data'
 
 type PaneId = (typeof SETTINGS_PANES)[number]['id']
+
+const hasFab = (): boolean => typeof window !== 'undefined' && Boolean((window as { fab?: unknown }).fab)
+
+const currentAppliedTheme = (): string =>
+  typeof document !== 'undefined' ? document.documentElement.dataset.theme ?? 'graphite' : 'graphite'
 
 export function SettingsScreen(): ReactElement {
   const [pane, setPane] = useState<PaneId>('units')
   const [units, setUnits] = useState('mm')
   const [coord, setCoord] = useState(true)
-  const [mode, setMode] = useState('dark')
-  const [accent, setAccent] = useState('signal-red')
+  const [theme, setTheme] = useState<string>(currentAppliedTheme)
+
+  // Hydrate the persisted units + reflect the live applied theme.
+  useEffect(() => {
+    setTheme(currentAppliedTheme())
+    if (!hasFab()) return
+    let cancelled = false
+    void fab()
+      .settingsGet()
+      .then((s) => {
+        if (!cancelled && (s.units === 'mm' || s.units === 'inch')) setUnits(String(s.units))
+      })
+      .catch(() => {
+        /* keep defaults */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const chooseUnits = (id: string): void => {
+    setUnits(id)
+    if (hasFab()) void fab().settingsSet({ units: id })
+  }
+
+  const chooseTheme = (id: string): void => {
+    setTheme(id)
+    applyTheme(id) // instant re-theme of the whole app + DS surface
+    if (hasFab()) void fab().settingsSet({ theme: id })
+  }
 
   return (
     <div className="wt-home__split">
@@ -53,7 +98,7 @@ export function SettingsScreen(): ReactElement {
                   role="radio"
                   aria-checked={units === u.id}
                   className={`wt-set__seg-btn${units === u.id ? ' is-active' : ''}`}
-                  onClick={() => setUnits(u.id)}
+                  onClick={() => chooseUnits(u.id)}
                 >
                   {u.label}
                 </button>
@@ -98,44 +143,27 @@ export function SettingsScreen(): ReactElement {
           </div>
 
           <Display style={{ fontSize: 20, margin: '30px 0 4px' }}>Appearance</Display>
-          <div className="wt-set__lead">Theme and accent for the whole app.</div>
-
-          <div className="wt-set__row">
-            <div>
-              <div className="wt-set__row-label">Theme</div>
-              <div className="wt-set__row-sub">Light or dark interface</div>
-            </div>
-            <div className="wt-set__seg" role="radiogroup" aria-label="Theme">
-              {MODE_OPTS.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={mode === m.id}
-                  className={`wt-set__seg-btn${mode === m.id ? ' is-active' : ''}`}
-                  onClick={() => setMode(m.id)}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+          <div className="wt-set__lead">
+            Theme for the whole app — {THEMES.find((t) => t.id === theme)?.label ?? 'Graphite Pro'}.
           </div>
 
           <div className="wt-set__row wt-set__row--last">
             <div>
-              <div className="wt-set__row-label">Accent</div>
-              <div className="wt-set__row-sub">Signal Red is the WorkTrack default</div>
+              <div className="wt-set__row-label">Theme</div>
+              <div className="wt-set__row-sub">Ten shop themes — applies instantly and is saved</div>
             </div>
             <div className="wt-set__swatches">
-              {ACCENT_SWATCHES.map((a) => (
+              {THEMES.map((t) => (
                 <button
-                  key={a.id}
+                  key={t.id}
                   type="button"
-                  aria-label={a.id}
-                  aria-pressed={accent === a.id}
-                  className={`wt-set__swatch${accent === a.id ? ' is-selected' : ''}`}
-                  style={{ background: `rgb(${a.rgb})` }}
-                  onClick={() => setAccent(a.id)}
+                  data-theme={t.id}
+                  aria-label={t.label}
+                  aria-pressed={theme === t.id}
+                  title={t.label}
+                  className={`wt-set__swatch${theme === t.id ? ' is-selected' : ''}`}
+                  style={{ background: 'rgb(var(--c-accent))' }}
+                  onClick={() => chooseTheme(t.id)}
                 />
               ))}
             </div>

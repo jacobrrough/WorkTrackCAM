@@ -13,15 +13,10 @@
 import type { ReactElement } from 'react'
 import { Button, Card, Display, Eyebrow, PrimaryCard, SectionTitle } from '../ds'
 import { HomeIcon } from './icons'
+import { machineIdentity, useActiveMachine } from './active-machine'
+import { useK2Telemetry } from './useK2Telemetry'
 import type { HomeScreenId } from './home-screens'
-import {
-  GREETING,
-  GREETING_SUB,
-  HOME_ACTIVITY,
-  ON_MACHINE,
-  QUICK_START,
-  RECENTS
-} from './home-sample-data'
+import { GREETING, GREETING_SUB, HOME_ACTIVITY, QUICK_START, RECENTS } from './home-sample-data'
 
 export interface HomeScreenProps {
   /** Open the modeling workspace (Canvas) — New design, recent files, import. */
@@ -31,6 +26,11 @@ export interface HomeScreenProps {
 }
 
 export function HomeScreen({ onEnterWorkspace, onOpenScreen }: HomeScreenProps): ReactElement {
+  const { machine } = useActiveMachine()
+  const k2 = useK2Telemetry(machine)
+  const printing = machine.kind === 'fdm' && Boolean(k2?.online) && k2?.progressPct != null && Boolean(k2?.filename)
+  const machineMode = machineIdentity(machine).modeLabel
+
   const onQuick = (key: string): void => {
     switch (key) {
       case 'new-design':
@@ -115,20 +115,31 @@ export function HomeScreen({ onEnterWorkspace, onOpenScreen }: HomeScreenProps):
           <div className="wt-home__rail-head">
             <Eyebrow style={{ color: 'rgb(var(--c-on-accent) / 0.8)' }}>On the machine</Eyebrow>
             <span className="wt-home__status">
-              <span className="wt-home__status-dot" />
-              {ON_MACHINE.status}
+              {printing || k2?.online ? <span className="wt-home__status-dot" /> : null}
+              {printing ? 'Printing' : k2?.online ? 'Online' : 'Ready'}
             </span>
           </div>
           <Display className="mono" style={{ fontSize: 19, color: 'rgb(var(--c-on-accent))', marginTop: 10 }}>
-            {ON_MACHINE.file}
+            {printing ? k2?.filename : machine.name}
           </Display>
-          <div className="wt-home__progress">
-            <div className="wt-home__progress-fill" style={{ width: `${ON_MACHINE.progressPct}%` }} />
-          </div>
-          <div className="wt-home__primary-meta">
-            <span>{ON_MACHINE.operation}</span>
-            <span className="mono">{ON_MACHINE.eta}</span>
-          </div>
+          {printing ? (
+            <>
+              <div className="wt-home__progress">
+                <div className="wt-home__progress-fill" style={{ width: `${k2?.progressPct ?? 0}%` }} />
+              </div>
+              <div className="wt-home__primary-meta">
+                <span>{k2?.state ?? 'Printing'}</span>
+                <span className="mono">{k2?.eta ?? ''}</span>
+              </div>
+            </>
+          ) : (
+            <div className="wt-home__primary-meta" style={{ marginTop: 12 }}>
+              <span>{machineMode}</span>
+              <span className="mono">
+                {machine.workAreaMm.x}×{machine.workAreaMm.y} mm
+              </span>
+            </div>
+          )}
           <button type="button" className="wt-home__primary-btn" onClick={() => onOpenScreen('jobs')}>
             Open in Jobs
           </button>
